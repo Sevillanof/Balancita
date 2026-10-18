@@ -25,7 +25,7 @@ WINDOW_MS = WINDOW * HOUR_MS
 MAX_PERIOD_AGE_MS = 71 * 60_000
 HIGH, LOW = 90.0, 10.0  # percentile bands that read "high" / "low"
 PLACEBO_SHIFT_MS = 7 * 24 * HOUR_MS
-FUNDING_QUESTION_VERSION = 5
+FUNDING_QUESTION_VERSION = 6  # v6: the funding line comes from the causal loader; v5 rows are never mixed with it
 BTC_PRODUCT = "PF_XBTUSD"
 
 
@@ -288,7 +288,7 @@ class FundingContext:
 
 
 def funding_question(question):
-    """The shipped ``trade_action`` as version 5: the same question with the ``funding`` line added (v4 untouched)."""
+    """The shipped ``trade_action`` as version 6: the same question with the ``funding`` line added (v4 untouched)."""
     fields = list(question["state_fields"])
     fields.insert(fields.index("lessons") if "lessons" in fields else len(fields), "funding")
     return dict(question, version=FUNDING_QUESTION_VERSION, state_fields=fields)

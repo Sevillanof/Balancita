@@ -183,17 +183,21 @@ def build_inventory(entries, specs, *, config_dir=None, carry=None):
 
     if qwen_exit is not None:
         strategy_id = qwen_exit["strategy_id"]
+        off = qwen_exit.get("off")  # the one switch (owner decision): shown as "off" with its reason, never hidden
         rows.append({
             "id": strategy_id, "version": 1, "name": "C31 Qwen decide salidas",
             "description": "Entradas de {}; Qwen decide cada salida.".format(
                 ", ".join(s.split("-")[0].upper() for s in qwen_exit["entry_specs"])),
             "kind": "qwen_exit", "spec_hash": None,
             # Registered in config with a start; a config does not prove the process runs now.
-            "operational": {"state": "unverified", "basis": "config", "since_ms": qwen_exit.get("start_ms"),
-                            "reason": "registered_in_qwen_exit_config"},
+            "operational": ({"state": "off", "basis": "config", "since_ms": None,
+                             "reason": "apagada desde {}: {}".format(off.get("since"), off.get("reason"))}
+                            if off else
+                            {"state": "unverified", "basis": "config", "since_ms": qwen_exit.get("start_ms"),
+                             "reason": "registered_in_qwen_exit_config"}),
             "frozen": strategy_id in frozen,
             "research": {"state": "unmeasured", "evidence_of_edge": False, "reliable": False,
-                         "investigating": True, "backtest": None},
+                         "investigating": not off, "backtest": None},
             "forward": forward_block(qwen_exit.get("start_ms"), qwen_exit.get("registered")),
             "market": {"products": len(products) or None, "horizon_minutes": None, "exit_by": "qwen"},
             "note": qwen_exit.get("note"), "no_backtest": True,

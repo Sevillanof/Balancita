@@ -91,6 +91,8 @@ export interface ObservabilityHealthOptions {
   readonly forwardProducts?: readonly string[]
   readonly processHealthPath?: string
   readonly qwenExitSummaryPath?: string
+  /** C31 switched off by the owner (`off` block of config/qwen-exit.json): shown as "apagada" with this reason. */
+  readonly qwenExitOff?: { readonly reason: string; readonly since: string }
   readonly kronosSummaryPath?: string
   readonly resilienceLogPath?: string
   /** The capture's own stale limit (`MARKET_STALE_AFTER_MS`, default 15 s). */
@@ -1399,16 +1401,24 @@ function strategiesComponent(
       ),
     )
   }
+  const qwenExitRow = experimentRow(
+    'qwen_exit_c31',
+    'C31 Qwen decide salidas',
+    processState(c, 'qwenexit'),
+    num(readJson(options.qwenExitSummaryPath)?.updated_ms) ??
+      fileMtimeMs(options.qwenExitSummaryPath),
+    now,
+    FORWARD_LOOP_MS,
+  )
+  const off = options.qwenExitOff
   const experiments = [
-    experimentRow(
-      'qwen_exit_c31',
-      'C31 Qwen decide salidas',
-      processState(c, 'qwenexit'),
-      num(readJson(options.qwenExitSummaryPath)?.updated_ms) ??
-        fileMtimeMs(options.qwenExitSummaryPath),
-      now,
-      FORWARD_LOOP_MS,
-    ),
+    off
+      ? {
+          ...qwenExitRow,
+          status: 'unknown' as const,
+          reason: `apagada: ${off.reason} (desde ${off.since})`,
+        }
+      : qwenExitRow,
     experimentRow(
       'kronos',
       'Kronos forward',

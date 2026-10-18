@@ -324,7 +324,7 @@ def main(argv=None):
                              "(+ strategy reliability), learning (+ Qwen's judged decisions) or consensus (no model: the "
                              "mean strategy consensus decides, the reference arm); default: as shipped")
     parser.add_argument("--qwen-funding", choices=("off", "on", "placebo", "contrarian", "follow"), default="off",
-                        help="funding line (trade_action@5): off (as shipped, v4), on, placebo (the line from 7 days "
+                        help="funding line (trade_action@6): off (as shipped, v4), on, placebo (the line from 7 days "
                              "earlier), or a model-free rule: contrarian (high funding sells, low buys) / follow")
     parser.add_argument("--qwen-calm-skip", action=argparse.BooleanOptionalAction, default=True,
                         help="do not ask in the calmest third of volatility (percentile of the past only); those "

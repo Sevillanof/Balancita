@@ -15,6 +15,7 @@ export type OperationalState =
   | 'tracking'
   | 'inactive'
   | 'unverified'
+  | 'off'
 
 export type ResearchState =
   | 'reliable_edge'
@@ -35,6 +36,7 @@ export const OPERATIONAL_LABELS: Record<OperationalState, string> = {
   tracking: 'En seguimiento (no opera)',
   inactive: 'Desactivada',
   unverified: 'Estado no verificado',
+  off: 'Apagada',
 }
 
 export const OPERATIONAL_TONES: Record<OperationalState, StatusTone> = {
@@ -46,6 +48,7 @@ export const OPERATIONAL_TONES: Record<OperationalState, StatusTone> = {
   tracking: 'ok',
   inactive: 'nodata',
   unverified: 'nodata',
+  off: 'nodata',
 }
 
 export const RESEARCH_LABELS: Record<ResearchState, string> = {

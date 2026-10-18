@@ -90,11 +90,11 @@ class FundingContextTests(unittest.TestCase):
 
 
 class FundingQuestionTests(unittest.TestCase):
-    def test_v5_is_v4_plus_the_funding_line_and_v4_keeps_its_pin(self):
+    def test_v6_is_v4_plus_the_funding_line_and_v4_keeps_its_pin(self):
         v4 = llm.load_questions()["trade_action"]
         self.assertEqual(llm.question_hash(v4), QUESTION_PINS["trade_action@4"])
         v5 = fc.funding_question(v4)
-        self.assertEqual(v5["version"], 5)
+        self.assertEqual(v5["version"], 6)  # v5 (pre-causal loader) rows are never mixed with v6
         self.assertEqual([f for f in v5["state_fields"] if f not in v4["state_fields"]], ["funding"])
         self.assertLess(v5["state_fields"].index("funding"), v5["state_fields"].index("lessons"))
         self.assertEqual({k: v for k, v in v5.items() if k not in ("version", "state_fields")},

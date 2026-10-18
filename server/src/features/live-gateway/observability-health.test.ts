@@ -663,6 +663,23 @@ describe('observability health', () => {
     )
   })
 
+  it('lists C31 as apagada with its reason when the owner switched it off', () => {
+    const b = box()
+    seedHealthy(b)
+    const report = createObservabilityHealth({
+      ...optionsOf(b),
+      qwenExitOff: { reason: 'funding inventado', since: '2026-10-18' },
+    }).report()
+    const c31 = check(
+      component(report, 'strategies'),
+      'experiment_qwen_exit_c31',
+    )
+    expect(c31).toMatchObject({ status: 'unknown', required: false })
+    expect(c31.detail).toContain(
+      'apagada: funding inventado (desde 2026-10-18)',
+    )
+  })
+
   it('does not trust a running optional experiment without a recent summary', () => {
     const b = box()
     seedHealthy(b)

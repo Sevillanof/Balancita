@@ -5,6 +5,7 @@ import {
   checkDevPorts,
   describeChildExit,
   devChildSpecs,
+  qwenExitSwitch,
   devProxyConfig,
   findQwenModel,
   llamaPort,
@@ -569,15 +570,26 @@ describe('optional LLM decision children (llm and q)', () => {
 
   it('starts llm and q after the other children when enabled', () => {
     const specs = devChildSpecs({ ...base, env: local, llm })
-    assert.deepEqual(names(specs).slice(-3), ['llm', 'q', 'qwenexit'])
+    assert.deepEqual(names(specs).slice(-2), ['llm', 'q'])
     assert.ok(names(specs).indexOf('news') < names(specs).indexOf('llm'))
   })
 
-  it('runs the Qwen exit book (C31) only with the local model, into its own directory', () => {
-    assert.ok(
-      !names(devChildSpecs({ ...base, env: {}, llm })).includes('qwenexit'),
-    )
-    const { qwenexit } = byName(devChildSpecs({ ...base, env: local, llm }))
+  const c31On = { off: false }
+  const c31Off = { off: true, since: '2026-10-18', reason: 'funding inventado' }
+
+  it('does not start the Qwen exit book (C31) while its switch is off, and tells the gateway why', () => {
+    const specs = devChildSpecs({ ...base, env: local, llm, qwenExit: c31Off })
+    assert.ok(!names(specs).includes('qwenexit'))
+    const { live } = byName(specs)
+    assert.equal(live.env.QWEN_EXIT_OFF_REASON, 'funding inventado')
+    assert.equal(live.env.QWEN_EXIT_OFF_SINCE, '2026-10-18')
+  })
+
+  it('runs the Qwen exit book (C31) only with the local model when its switch is on', () => {
+    const specs = (env) => devChildSpecs({ ...base, env, llm, qwenExit: c31On })
+    assert.ok(!names(specs({})).includes('qwenexit'))
+    assert.ok(!('QWEN_EXIT_OFF_REASON' in byName(specs(local)).live.env))
+    const { qwenexit } = byName(specs(local))
     assert.deepEqual(qwenexit.args.slice(0, 2), [
       '-m',
       'balancita_engine.futures_qwen_exit',
@@ -587,11 +599,24 @@ describe('optional LLM decision children (llm and q)', () => {
       qwenexit.args[qwenexit.args.indexOf('--out') + 1],
       './data/dev-live/qwen-exit',
     )
-    assert.equal(
-      qwenexit.env.LLAMA_PORT,
-      byName(devChildSpecs({ ...base, env: local, llm })).q.env.LLAMA_PORT,
-    )
+    assert.equal(qwenexit.env.LLAMA_PORT, byName(specs(local)).q.env.LLAMA_PORT)
     assert.equal(qwenexit.env.PYTHONPATH, '/repo/python')
+  })
+
+  it('reads the C31 switch from the off block of config/qwen-exit.json and fails safe', () => {
+    const read = (text) => () => text
+    assert.deepEqual(qwenExitSwitch('/r', read('{"off":{"since":"2026-10-18","reason":"x"}}')), {
+      off: true,
+      since: '2026-10-18',
+      reason: 'x',
+    })
+    assert.deepEqual(qwenExitSwitch('/r', read('{"schema":"s"}')), { off: false })
+    assert.equal(qwenExitSwitch('/r', read('{')).off, true)
+    assert.equal(
+      qwenExitSwitch(process.cwd()).off,
+      true,
+      'the shipped config is off',
+    )
   })
 
   it('runs llama-server offline on loopback with the guide flags', () => {
@@ -781,7 +806,7 @@ describe('optional news child (n)', () => {
 
   it('keeps news independent of llm and q: it starts before them and a stopped model does not matter', () => {
     const specs = devChildSpecs({ ...base, env: local, llm })
-    assert.deepEqual(names(specs).slice(-4), ['news', 'llm', 'q', 'qwenexit'])
+    assert.deepEqual(names(specs).slice(-3), ['news', 'llm', 'q'])
   })
 
   it('never hands the news child a remote LLM setting', () => {

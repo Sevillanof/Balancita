@@ -10,7 +10,7 @@ import urllib.request
 from http.server import ThreadingHTTPServer
 
 from balancita_engine.futures_spec_strategy import load_specs
-from balancita_engine.futures_strategy_inventory import build_inventory
+from balancita_engine.futures_strategy_inventory import DEFAULT_CONFIG_DIR, build_inventory
 from balancita_engine.futures_strategy_registry import StrategyRegistry, StrategyService, make_handler
 
 
@@ -67,10 +67,29 @@ class InventoryTest(unittest.TestCase):
         self.assertEqual(c31["research"]["state"], "unmeasured")
         self.assertIsNone(c31["research"]["backtest"])
         self.assertEqual(c31["operational"]["basis"], "config")
-        self.assertEqual(c31["operational"]["state"], "unverified")
+        self.assertEqual(c31["operational"]["state"], "off")
         self.assertEqual(inv["counts"]["active"], 3)
         self.assertEqual(_row(inv, "kronos-small-1h-h4-v1")["operational"]["state"], "unverified")
         self.assertTrue(_row(inv, "c32-funding-contrarian-24h-perp-v1")["no_backtest"])
+
+    def test_c31_is_listed_as_off_with_its_reason_and_returns_when_the_block_is_removed(self):
+        c31 = _row(self.inventory(), "c31-qwen-exit-perp-v1")
+        self.assertEqual(c31["operational"]["state"], "off")
+        self.assertEqual(c31["operational"]["reason"].split(":")[0], "apagada desde 2026-10-18")
+        self.assertIn("funding", c31["operational"]["reason"])
+        self.assertFalse(c31["research"]["investigating"])
+        config = os.path.join(self.dir, "config")
+        shutil.copytree(DEFAULT_CONFIG_DIR, config)
+        path = os.path.join(config, "qwen-exit.json")
+        with open(path, encoding="utf-8") as handle:
+            body = json.load(handle)
+        del body["off"]
+        with open(path, "w", encoding="utf-8") as handle:
+            json.dump(body, handle)
+        self.service.config_dir = config
+        back = _row(self.inventory(), "c31-qwen-exit-perp-v1")
+        self.assertEqual(back["operational"]["state"], "unverified")
+        self.assertTrue(back["research"]["investigating"])
 
     def test_carry_is_unverified_without_state_files(self):
         carry = _row(self.inventory(), "carry-funding-c-v1")

@@ -916,6 +916,9 @@ class LlamaCppProvider:
 # --------------------------------------------------------------------------- store
 
 
+MODEL_DOWN_REASON = "modelo local caído (llama-server no responde)"
+
+
 class DecisionStore:
     """Single writer of the decisions DB: append-only decisions and errors."""
 
@@ -970,9 +973,15 @@ class DecisionStore:
               question_id TEXT NOT NULL, question_version INTEGER NOT NULL,
               kind TEXT NOT NULL, message TEXT NOT NULL, model_ref TEXT NOT NULL, written_at INTEGER NOT NULL
             ) STRICT;
+            -- One row per bucket+question that Q did NOT decide, with a machine code and a human reason.
+            CREATE TABLE IF NOT EXISTS paper_futures_llm_skips(
+              skip_id INTEGER PRIMARY KEY, product_id TEXT NOT NULL, bucket_start INTEGER NOT NULL,
+              question_id TEXT NOT NULL, question_version INTEGER NOT NULL,
+              code TEXT NOT NULL, reason TEXT NOT NULL, written_at INTEGER NOT NULL
+            ) STRICT;
             """
         )
-        for table in ("paper_futures_llm_decisions", "paper_futures_llm_errors"):
+        for table in ("paper_futures_llm_decisions", "paper_futures_llm_errors", "paper_futures_llm_skips"):
             self.db.executescript(
                 """
                 CREATE TRIGGER IF NOT EXISTS {t}_no_update
@@ -1027,6 +1036,15 @@ class DecisionStore:
                     row["product_id"], row["bucket_start"], row["question_id"], row["question_version"],
                     row["kind"], str(row["message"])[:500], row["model_ref"], int(time.time() * 1000),
                 ),
+            )
+
+    def append_skip(self, product_id, bucket_start, question, code, reason):
+        with self.db:
+            self.db.execute(
+                "INSERT INTO paper_futures_llm_skips(product_id, bucket_start, question_id, question_version, "
+                "code, reason, written_at) VALUES(?,?,?,?,?,?,?)",
+                (product_id, bucket_start, question["id"], question["version"], code, str(reason)[:500],
+                 int(time.time() * 1000)),
             )
 
     def close(self):
@@ -1218,9 +1236,13 @@ class DecisionService:
 
     def _model_down(self, reason):
         if self._model_up is not False:
-            self.log("model unavailable: {} (nothing is stored for the buckets missed; they are not retried)".format(reason))
+            self.log("model unavailable: {} (each missed bucket is recorded as a skip; they are not retried)".format(reason))
         self._model_up = False
         self._identity = None
+
+    def _skip_all(self, items, code, reason):
+        for product_id, bucket, _hash, question in items:
+            self.store.append_skip(product_id, bucket, question, code, reason)
 
     def _readers(self):
         if (self.market is not None and self.market.replaced()) or (
@@ -1312,6 +1334,11 @@ class DecisionService:
                 for bucket, known_at, verdict_hash, written_at in rows:
                     cursor = bucket
                     if known_at - bucket - ONE_MINUTE_MS > self.max_lag_ms or now - written_at > self.max_age_ms:
+                        for question in self.questions.values():
+                            if not self.store.has(product_id, bucket, question["id"], question["version"]):
+                                self.store.append_skip(
+                                    product_id, bucket, question, "stale_verdict",
+                                    "veredicto demasiado viejo para decidir (llegó tarde o se escribió hace demasiado)")
                         continue
                     for question in self.questions.values():
                         if not self.store.has(product_id, bucket, question["id"], question["version"]):
@@ -1328,6 +1355,7 @@ class DecisionService:
             return 0
         if not self.provider.health():
             self._model_down("health check failed")
+            self._skip_all(work, "model_down", MODEL_DOWN_REASON)
             return 0
         if self._model_up is False:
             self.log("model available again")
@@ -1337,12 +1365,14 @@ class DecisionService:
         model_ref = self._identity.get("model_ref") or "unknown"
         written = 0
         calm_at = {}
-        for product_id, bucket, verdict_hash, question in work:
+        for index, (product_id, bucket, verdict_hash, question) in enumerate(work):
             if self.calm_skip:
                 if (product_id, bucket) not in calm_at:
                     calm_at[(product_id, bucket)] = self._is_calm(product_id, bucket)
                 if calm_at[(product_id, bucket)]:
-                    self.calm_skipped += 1  # nothing is stored: a calm bucket is simply not asked
+                    self.calm_skipped += 1
+                    self.store.append_skip(product_id, bucket, question, "calm_skip",
+                                           "tramo en calma: no se pregunta al modelo (filtro de volatilidad)")
                     continue
             base = {"product_id": product_id, "bucket_start": bucket, "question_id": question["id"],
                     "question_version": question["version"], "model_ref": model_ref}
@@ -1352,6 +1382,7 @@ class DecisionService:
                                 lessons=self._lessons_for(product_id, question, bucket))
             except ModelUnavailable as error:
                 self._model_down(str(error))
+                self._skip_all(work[index:], "model_down", "{}: {}".format(MODEL_DOWN_REASON, error))
                 break
             except ModelResponseError as error:
                 self.store.append_error(dict(base, kind=error.kind, message=error))
@@ -1359,6 +1390,8 @@ class DecisionService:
                 continue
             except StateError as error:
                 self._problem_once("state not ready: {}".format(error))
+                self.store.append_skip(product_id, bucket, question, "state_error",
+                                       "estado no disponible: {}".format(error))
                 continue
             result, output = done["result"], done["output"]
             self.store.append_decision(dict(

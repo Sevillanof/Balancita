@@ -99,6 +99,12 @@ async function main(): Promise<void> {
       forwardProducts: forwardProducts(process.env),
       processHealthPath: process.env.DEV_HEALTH_FILE || undefined,
       qwenExitSummaryPath: process.env.QWEN_EXIT_SUMMARY_PATH || undefined,
+      qwenExitOff: process.env.QWEN_EXIT_OFF_REASON
+        ? {
+            reason: process.env.QWEN_EXIT_OFF_REASON,
+            since: process.env.QWEN_EXIT_OFF_SINCE || 'fecha no indicada',
+          }
+        : undefined,
       kronosSummaryPath: process.env.KRONOS_SUMMARY_PATH || undefined,
       resilienceLogPath: join(
         dirname(config.futuresMarketDbPath),
