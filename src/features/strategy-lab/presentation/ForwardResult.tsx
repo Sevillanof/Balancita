@@ -103,11 +103,15 @@ export function ForwardResult({
       />
       {result.unclassified && result.unclassified.closed > 0 && (
         <div data-testid="forward-unclassified-closed">
-          <b>Sin clasificar</b>: {count(result.unclassified.closed)} cerradas
-          <small>
-            {result.unclassified.note}. {result.unclassified.hint} No cuentan
-            como en vivo ni para el mínimo.
-          </small>
+          <b>Sin clasificar</b>: {count(result.unclassified.closed)} cerradas ·
+          no cuentan como en vivo
+          <details>
+            <summary>Por qué</summary>
+            <small>
+              {result.unclassified.note}. {result.unclassified.hint} No cuentan
+              como en vivo ni para el mínimo.
+            </small>
+          </details>
         </div>
       )}
       {result.unclassified_open.count > 0 && (
