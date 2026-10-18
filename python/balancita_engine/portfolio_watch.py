@@ -35,10 +35,16 @@ SCHEMA = "balancita-quote-watch.v1"
 ONE_MINUTE_MS = 60_000
 TEN_THOUSAND = Decimal(10_000)
 UNRESOLVED_POLICIES = ("flag", "stop")
+# Kraken stamps ``time_ms`` with its own clock, ours stamps ``received_ms``: in the real BTC sample 9 % of the quotes (11,269 of 125,589)
+# were received up to 149 ms BEFORE their Kraken time. 500 ms is more than 3 times that, and far below any gap that matters (the entry
+# window is seconds). It is a parameter to review, not a measured limit. Beyond it the quote is invalid (a clock that far off is a fault).
+CLOCK_SKEW_TOLERANCE_MS = 500
 
 
 def parse_quote(quote):
-    """Validated quote with Decimals, or ``ValueError(reason)``. ``received_ms`` defaults to ``time_ms``."""
+    """Validated quote with Decimals, or ``ValueError(reason)``. ``received_ms`` defaults to ``time_ms``. A quote received up to
+    ``CLOCK_SKEW_TOLERANCE_MS`` before its Kraken time is kept with ``received_ms`` raised to ``time_ms`` (the later, never the earlier
+    instant, so no decision uses a quote before it can have existed); further back it is invalid."""
     try:
         bid, ask = D(str(quote["bid"])), D(str(quote["ask"]))
         time_ms = int(quote["time_ms"])
@@ -46,8 +52,9 @@ def parse_quote(quote):
         product = quote["product_id"]
     except (KeyError, TypeError, ValueError, InvalidOperation):
         raise ValueError("invalid_quote")
-    if not (bid.is_finite() and ask.is_finite()) or bid <= 0 or ask <= 0 or ask < bid or received_ms < time_ms:
+    if not (bid.is_finite() and ask.is_finite()) or bid <= 0 or ask <= 0 or ask < bid or received_ms < time_ms - CLOCK_SKEW_TOLERANCE_MS:
         raise ValueError("invalid_quote")
+    received_ms = max(received_ms, time_ms)
     mid = (bid + ask) / 2
     return {"product_id": product, "time_ms": time_ms, "received_ms": received_ms, "bid": bid, "ask": ask, "mid": mid,
             "spread_bps": (ask - bid) / mid * TEN_THOUSAND}
