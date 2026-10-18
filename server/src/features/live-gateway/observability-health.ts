@@ -119,8 +119,10 @@ const CANDLE_ERROR_MS = 5 * MINUTE
 /** Verdicts are written once per product and minute by the verdict service. */
 const VERDICT_OK_MS = 3 * MINUTE
 const VERDICT_ERROR_MS = 10 * MINUTE
-/** Forward and C31 loop every 1800 s (dev-provider-env). */
-const FORWARD_LOOP_MS = 30 * MINUTE
+/** Forward loops every 3600 s (dev-provider-env, owner decision: 1 h). */
+const FORWARD_LOOP_MS = 60 * MINUTE
+/** C31 loops every 1800 s (dev-provider-env). */
+const QWEN_EXIT_LOOP_MS = 30 * MINUTE
 const FORWARD_OK_MS = 1.5 * FORWARD_LOOP_MS
 const FORWARD_ERROR_MS = 2 * FORWARD_LOOP_MS
 /** Kronos loops every 3600 s (docs/kronos-supervision.md). */
@@ -1408,7 +1410,7 @@ function strategiesComponent(
     num(readJson(options.qwenExitSummaryPath)?.updated_ms) ??
       fileMtimeMs(options.qwenExitSummaryPath),
     now,
-    FORWARD_LOOP_MS,
+    QWEN_EXIT_LOOP_MS,
   )
   const off = options.qwenExitOff
   const experiments = [

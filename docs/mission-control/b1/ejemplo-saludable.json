@@ -289,7 +289,7 @@
         {
           "source": "strategy_events (estado por estrategia y versión)",
           "origin": "futures-strategies.sqlite",
-          "last_updated_ms": 1789996400000,
+          "last_updated_ms": 1789992800000,
           "state": "read"
         },
         {
@@ -315,7 +315,7 @@
         {
           "strategy_id": "C29",
           "source": "registro",
-          "active_since_ms": 1789996400000,
+          "active_since_ms": 1789992800000,
           "status": "ok",
           "products_expected": 8,
           "products_current": 8,
@@ -324,7 +324,7 @@
         {
           "strategy_id": "C30",
           "source": "registro",
-          "active_since_ms": 1789996400000,
+          "active_since_ms": 1789992800000,
           "status": "ok",
           "products_expected": 8,
           "products_current": 8,
@@ -516,7 +516,7 @@
           "label": "Ciclo del forward por estrategia y producto",
           "status": "ok",
           "value": 300000,
-          "rule": "por par estrategia/producto esperado: ok ≤ 45 min (1,5 ciclos de 30 min), warning ≤ 60 min; proceso activo sin ciclo reciente es error; el estado es el del peor par",
+          "rule": "por par estrategia/producto esperado: ok ≤ 90 min (1,5 ciclos de 60 min), warning ≤ 120 min; proceso activo sin ciclo reciente es error; el estado es el del peor par",
           "detail": "Los 16 pares esperados tienen un ciclo vigente."
         },
         {

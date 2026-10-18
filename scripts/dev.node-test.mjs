@@ -165,7 +165,7 @@ describe('devChildSpecs', () => {
         byName.strategies.args.indexOf('--strategies-db') + 1
       ],
       '--loop-seconds',
-      '1800',
+      '3600',
     ])
     assert.equal(env.PYTHONPATH, '/repo/python')
     assert.equal(

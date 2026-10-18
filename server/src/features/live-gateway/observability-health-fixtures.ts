@@ -311,8 +311,8 @@ export function seedStrategies(
     'INSERT INTO strategy_events(strategy_id,version,state,reason,known_at) VALUES(?,?,?,?,?)',
   )
   for (const s of strategies) {
-    insert.run(s.id, 1, 'draft', 'created', now - 3 * 3_600_000)
-    insert.run(s.id, 1, s.state, 'set', now - 3_600_000)
+    insert.run(s.id, 1, 'draft', 'created', now - 4 * 3_600_000)
+    insert.run(s.id, 1, s.state, 'set', now - 2 * 3_600_000)
   }
   db.close()
 }
