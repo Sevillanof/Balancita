@@ -18,6 +18,7 @@ not in any config: they are B5, listed in ``MISSING``.
 
 import json
 import os
+import re
 
 from .futures_spec_strategy import DEFAULT_SPEC_DIR, load_specs, spec_hash
 from .futures_strategy_plan import kronos_plan, spec_plan
@@ -43,6 +44,25 @@ RESEARCH_VERDICTS = (
 EDGE_EVIDENCE = ("candidate_edge", "tentative_edge", "reliable_edge")
 # Verdicts after which a strategy is still under study (the evidence is not conclusive).
 INVESTIGATING = ("candidate_edge", "insufficient_data")
+
+
+_OFF_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+def qwen_exit_off(config):
+    """The one C31 switch rule (the same in the launcher and the gateway): ``None`` when the ``off`` key is absent (on);
+    otherwise ``{"since", "reason", "invalid"}``. The block is valid only as an object with a non-empty ``reason`` and a
+    ``since`` date ``YYYY-MM-DD``; anything else (``{}``, ``null``, ``true``, a blank reason) is a config error: the
+    strategy stays off (fail-safe), ``invalid`` is true and the reason says so."""
+    if "off" not in config:
+        return None
+    off = config["off"]
+    reason = off.get("reason") if isinstance(off, dict) else None
+    since = off.get("since") if isinstance(off, dict) else None
+    if isinstance(reason, str) and reason.strip() and isinstance(since, str) and _OFF_DATE.match(since):
+        return {"since": since, "reason": reason, "invalid": False}
+    return {"since": None, "invalid": True,
+            "reason": 'config/qwen-exit.json: bloque "off" inválido (hace falta "reason" no vacío y "since" AAAA-MM-DD): apagada por seguridad'}
 
 
 def _read(config_dir, name):
@@ -183,7 +203,7 @@ def build_inventory(entries, specs, *, config_dir=None, carry=None):
 
     if qwen_exit is not None:
         strategy_id = qwen_exit["strategy_id"]
-        off = qwen_exit.get("off")  # the one switch (owner decision): shown as "off" with its reason, never hidden
+        off = qwen_exit_off(qwen_exit)  # the one switch (owner decision): shown as "off" with its reason, never hidden
         rows.append({
             "id": strategy_id, "version": 1, "name": "C31 Qwen decide salidas",
             "description": "Entradas de {}; Qwen decide cada salida.".format(
@@ -191,13 +211,14 @@ def build_inventory(entries, specs, *, config_dir=None, carry=None):
             "kind": "qwen_exit", "spec_hash": None,
             # Registered in config with a start; a config does not prove the process runs now.
             "operational": ({"state": "off", "basis": "config", "since_ms": None,
-                             "reason": "apagada desde {}: {}".format(off.get("since"), off.get("reason"))}
-                            if off else
+                             "reason": off["reason"] if off["invalid"] else
+                             "apagada desde {}: {}".format(off["since"], off["reason"])}
+                            if off is not None else
                             {"state": "unverified", "basis": "config", "since_ms": qwen_exit.get("start_ms"),
                              "reason": "registered_in_qwen_exit_config"}),
             "frozen": strategy_id in frozen,
             "research": {"state": "unmeasured", "evidence_of_edge": False, "reliable": False,
-                         "investigating": not off, "backtest": None},
+                         "investigating": off is None, "backtest": None},
             "forward": forward_block(qwen_exit.get("start_ms"), qwen_exit.get("registered")),
             "market": {"products": len(products) or None, "horizon_minutes": None, "exit_by": "qwen"},
             "note": qwen_exit.get("note"), "no_backtest": True,

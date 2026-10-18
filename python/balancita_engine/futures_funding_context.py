@@ -102,7 +102,8 @@ def load_periods_detailed(market_db_path, product_id, since_ms=None):
     Sightings era (``paper_futures_funding_sightings``, one row per closed period at every poll): ``known_at`` is the first
     sighting after the period closed and the rate is that sighting's (first seen, for causality). If later sightings show a
     different rate the period is listed in ``conflicts`` (how many other rates), never silently resolved.
-    Before that table existed (or in a DB without it) only ``paper_futures_funding_periods`` is left, which writes a row only
+    An hour with no sighting but a ``paper_futures_funding_periods`` row first seen after its close (a backfill after the capture
+    was off) is known at that row's ``known_at``. Before the sightings table existed (or in a DB without it) the periods table writes a row only
     when ``(start, rate)`` is new: the first row from after the close is used as it was; an hour whose only row was seen
     while it was still open gets ``known_at = end + 1 h`` (the next hourly poll, conservative) and is ``approximate``.
     Relative rates come from the poll extracts or stored bodies, parsed once per process (``_RATE_CACHE``); ``since_ms`` leaves
@@ -138,16 +139,20 @@ def load_periods_detailed(market_db_path, product_id, since_ms=None):
                 elif rate != first[start][2]:
                     rates_seen.setdefault(start, set()).add(rate)
         info["conflicts"] = {start: len(rates) for start, rates in rates_seen.items()}
-        # Hours with no sighting after their close: only before the sightings existed (or without the table).
+        # Hours with no sighting after their close. The sightings are written only for periods closed shortly before a
+        # poll, so after a stop the REST backfill reaches ``periods`` alone: a row first seen after the close counts at its
+        # arrival, in the era or not. A row seen only while open counts (approximately) only before the era.
         only_open = {}
         for sha, start, end, known_at in db.execute(
                 "SELECT response_sha256, start_ms, end_ms, known_at FROM paper_futures_funding_periods WHERE " + where + since
                 + " ORDER BY known_at, rowid", args + extra):
-            if start in first or (era_start is not None and end > era_start):
+            if start in first:
                 continue
-            if known_at >= end:
+            if known_at >= end:  # first seen after the close: known at its arrival (late = recovered, e.g. a REST backfill)
                 first[start] = (sha, known_at, None)
                 only_open.pop(start, None)
+            elif era_start is not None and end > era_start:  # seen only while open inside the era: no sighting, not guessed
+                continue
             elif start not in only_open:
                 only_open[start] = (sha, end + HOUR_MS)
         for start, (sha, known_at) in only_open.items():
@@ -314,6 +319,12 @@ def funding_state(context, at_ms):
     else:
         _, code, reason = context.assess_live(at_ms)
     return {"usable": code == "ok", "code": code, "reason": reason, "checked_ms": at_ms}
+
+
+def funding_since_ms(first_decision_ms):
+    """Earliest period start a caller replaying from ``first_decision_ms`` must load: the judged period may be up to
+    ``HOUR_MS + MAX_PERIOD_AGE_MS`` old (it started that long before the decision), its 30-day window precedes it, plus 1 h margin."""
+    return first_decision_ms - WINDOW_MS - HOUR_MS - MAX_PERIOD_AGE_MS - HOUR_MS
 
 
 def funding_for(market_db_path, product_id, since_ms=None, recover_until_ms=None):

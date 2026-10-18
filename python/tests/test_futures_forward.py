@@ -224,6 +224,32 @@ class FundingStateAndRecoveryTests(unittest.TestCase):
         self.assertEqual((marked["recovered_trades"], marked["live_trades"]), (1, 0))
 
 
+class FundingSinceMarginTests(unittest.TestCase):
+    PRODUCTS = RecoveryTests.PRODUCTS
+    setUp = RecoveryTests.setUp
+    tearDown = RecoveryTests.tearDown
+
+    def test_since_covers_the_oldest_judged_period_and_its_window(self):
+        from balancita_engine import futures_funding_context as fc
+        first = 10_000 * fc.HOUR_MS
+        # The oldest period a first decision can judge started MAX_PERIOD_AGE + 1 h before it; its 30 days precede that.
+        oldest_needed = first - (fc.HOUR_MS + fc.MAX_PERIOD_AGE_MS) - fc.WINDOW_MS
+        self.assertLessEqual(fc.funding_since_ms(first), oldest_needed)
+        self.assertGreater(first - fc.funding_since_ms(first), 2 * fc.HOUR_MS + fc.WINDOW_MS)  # more than the old 2 h margin
+
+    def test_the_forward_asks_for_that_since(self):
+        from balancita_engine import futures_funding_context as fc
+        seen = []
+        self.assertTrue(hasattr(futures_forward, "funding_since_ms"))
+        with mock.patch.object(futures_forward, "funding_for", side_effect=lambda *a, **k: seen.append(a) or None):
+            market = os.path.join(self.dir.name, "m.sqlite")
+            _market(market)
+            run_forward(market, os.path.join(self.dir.name, "f.sqlite"), SPECS, self.registration, self.PRODUCTS)
+        start = self.registration["strategies"][C30]["start_ms"]
+        self.assertTrue(seen)
+        self.assertTrue(all(a[2] == fc.funding_since_ms(start) for a in seen))
+
+
 class StaleGateTests(unittest.TestCase):
     """With the gate on, a candle learned long after it closed opens nothing; open positions are still managed."""
 

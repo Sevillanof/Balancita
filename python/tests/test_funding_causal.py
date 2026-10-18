@@ -239,13 +239,46 @@ class LoadPeriodsTests(unittest.TestCase):
         self.assertEqual(periods, [(5 * H, 0.5, 6 * H + 30)])
         self.assertEqual(info["conflicts"], {5 * H: 2})  # two other rates
 
-    def test_the_era_boundary_hours_before_use_the_periods_table_hours_after_need_a_sighting(self):
+    def test_the_era_boundary_hours_before_use_the_periods_table_hours_seen_only_open_after_need_a_sighting(self):
         self.response("before", 5 * H + 40, [(4 * H, 0.1)], [(4 * H, "1")])        # closed at 5 h, seen at 5 h 40: exact
         self.sightings((5 * H, 6 * H + 30, "1", 0.2))                                # sightings start at 6 h 30
-        self.response("poll-failed", 9 * H + 30, [(8 * H, 0.3)], [(8 * H, "1")])    # in the era but no sighting: not guessed
         periods, info = fc.load_periods_detailed(self.path, "PF_XBTUSD")
         self.assertEqual(periods, [(4 * H, 0.1, 5 * H + 40), (5 * H, 0.2, 6 * H + 30)])
         self.assertEqual(info["approximate"], set())
+
+    def test_the_era_boundary_hour_seen_after_the_close_in_periods_only_is_known_when_it_arrived(self):
+        self.sightings((5 * H, 6 * H + 30, "1", 0.2))
+        self.response("poll-failed", 9 * H + 30, [(8 * H, 0.3)], [(8 * H, "1")])    # closed at 9 h, first seen at 9 h 30
+        self.response("open-only", 10 * H + 30, [(10 * H, 0.4)], [(10 * H, "1")])   # seen only while open inside the era
+        periods = fc.load_periods(self.path, "PF_XBTUSD")
+        self.assertIn((8 * H, 0.3, 9 * H + 30), periods)  # the stored arrival time, not adjusted
+        self.assertNotIn(10 * H, [p[0] for p in periods])  # still not guessed
+
+    def test_a_ten_hour_stop_with_a_rest_backfill_loses_no_hour_and_marks_the_decisions_recovered(self):
+        """Through the DB: sightings only for the last 2 h before the backfill poll, the rest only in ``periods``."""
+        off, hours_off = 800, 10                                     # capture off for hours 800..809
+        arrival = (off + hours_off) * H + 600_000                    # back at hour 810 + 10 min
+        for i in range(off):                                         # normal capture before the stop
+            self.response("n%d" % i, (i + 1) * H + LAG, [(i * H, 1e-5 + i * 1e-8)], [(i * H, "1")])
+        self.sightings(*[(i * H, (i + 1) * H + LAG, "1", 1e-5 + i * 1e-8) for i in range(off - 24, off)])
+        rates = [(i * H, 1e-5 + i * 1e-8) for i in range(off, off + hours_off)]
+        self.response("backfill", arrival, rates, [(start, "1") for start, _ in rates])  # REST: periods only
+        self.sightings(*[(i * H, arrival, "1", 1e-5 + i * 1e-8) for i in range(off + hours_off - 2, off + hours_off)])
+        periods, info = fc.load_periods_detailed(self.path, "PF_XBTUSD")
+        known = {start: known_at for start, _, known_at in periods}
+        for i in range(off, off + hours_off):                        # every hour is there, at its real arrival time
+            self.assertEqual(known[i * H], arrival, i)
+        self.assertEqual(info["approximate"], set())
+        ctx = fc.funding_for(self.path, "PF_XBTUSD", recover_until_ms=arrival + H)
+        during = (off + 4) * H + LAG                                  # a decision in the middle of the stop
+        self.assertEqual(ctx.assess_live(during)[1], "stale")
+        found, code, _, quality = ctx.assess_detail(during)
+        self.assertEqual(code, "ok")                                  # no window_gaps: judged on what is known by then
+        self.assertTrue(quality["recovered"])
+        self.assertIn(during, ctx.late_at)
+        live_ctx = fc.funding_for(self.path, "PF_XBTUSD")
+        self.assertEqual(live_ctx.assess(arrival + 5 * 60_000)[1], "ok")   # after the arrival, live and complete
+        self.assertEqual(len(fc.funding_periods(ctx)), off + hours_off)    # accounting keeps them
 
     def test_the_context_reports_how_many_hours_of_its_window_are_approximate_or_conflicting(self):
         ctx = fc.FundingContext(hourly(800), approximate={5 * H, 790 * H}, conflicts={200 * H: 1, 799 * H: 2, 6 * H: 1})

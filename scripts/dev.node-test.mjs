@@ -609,6 +609,7 @@ describe('optional LLM decision children (llm and q)', () => {
       qwenExitSwitch('/r', read('{"off":{"since":"2026-10-18","reason":"x"}}')),
       {
         off: true,
+        invalid: false,
         since: '2026-10-18',
         reason: 'x',
       },
@@ -621,6 +622,32 @@ describe('optional LLM decision children (llm and q)', () => {
       qwenExitSwitch(process.cwd()).off,
       true,
       'the shipped config is off',
+    )
+  })
+
+  it('treats any off block that is not {reason non-empty, since YYYY-MM-DD} as a config error that stays off', () => {
+    const read = (text) => () => text
+    const bad = [
+      '{"off":{}}',
+      '{"off":null}',
+      '{"off":true}',
+      '{"off":"x"}',
+      '{"off":{"since":"2026-10-18","reason":""}}',
+      '{"off":{"since":"2026-10-18","reason":"   "}}',
+      '{"off":{"since":"2026-10-18"}}',
+      '{"off":{"reason":"x"}}',
+      '{"off":{"since":"ayer","reason":"x"}}',
+    ]
+    for (const text of bad) {
+      const sw = qwenExitSwitch('/r', read(text))
+      assert.equal(sw.off, true, text)
+      assert.equal(sw.invalid, true, text)
+      assert.match(sw.reason, /inválido/, text)
+    }
+    assert.equal(
+      qwenExitSwitch('/r', read('{"off":{"since":"2026-10-18","reason":"x"}}'))
+        .invalid,
+      false,
     )
   })
 

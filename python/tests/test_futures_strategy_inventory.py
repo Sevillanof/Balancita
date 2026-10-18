@@ -91,6 +91,29 @@ class InventoryTest(unittest.TestCase):
         self.assertEqual(back["operational"]["state"], "unverified")
         self.assertTrue(back["research"]["investigating"])
 
+    def test_an_invalid_off_block_is_a_loud_config_error_and_stays_off(self):
+        config = os.path.join(self.dir, "config")
+        shutil.copytree(DEFAULT_CONFIG_DIR, config)
+        path = os.path.join(config, "qwen-exit.json")
+        with open(path, encoding="utf-8") as handle:
+            body = json.load(handle)
+        self.service.config_dir = config
+        for bad in ({}, None, True, "x", {"since": "2026-10-18", "reason": ""}, {"since": "2026-10-18", "reason": "  "},
+                    {"since": "2026-10-18"}, {"reason": "x"}, {"since": "ayer", "reason": "x"}):
+            with open(path, "w", encoding="utf-8") as handle:
+                json.dump(dict(body, off=bad), handle)
+            c31 = _row(self.inventory(), "c31-qwen-exit-perp-v1")
+            self.assertEqual(c31["operational"]["state"], "off", bad)
+            self.assertIn("inválido", c31["operational"]["reason"], bad)
+            self.assertFalse(c31["research"]["investigating"], bad)
+
+    def test_qwen_exit_off_rule(self):
+        from balancita_engine.futures_strategy_inventory import qwen_exit_off
+        self.assertIsNone(qwen_exit_off({"schema": "s"}))
+        self.assertEqual(qwen_exit_off({"off": {"since": "2026-10-18", "reason": "x"}}),
+                         {"since": "2026-10-18", "reason": "x", "invalid": False})
+        self.assertTrue(qwen_exit_off({"off": {}})["invalid"])
+
     def test_carry_is_unverified_without_state_files(self):
         carry = _row(self.inventory(), "carry-funding-c-v1")
         self.assertEqual(carry["operational"]["state"], "unverified")

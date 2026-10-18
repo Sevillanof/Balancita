@@ -474,26 +474,43 @@ export function onlyChildSpecs(specs, env = {}) {
   return specs.filter((spec) => wanted.includes(spec.name))
 }
 
+const INVALID_OFF_REASON =
+  'config/qwen-exit.json: bloque "off" inválido (hace falta "reason" no vacío y "since" AAAA-MM-DD): apagada por seguridad'
+
 /**
- * The one switch of C31 (qwenexit): the `off` block of `config/qwen-exit.json` (reason + decision date).
- * Present, unreadable or missing file -> off (fail-safe). Delete the block to turn C31 back on.
+ * The one switch of C31 (qwenexit), the same rule in the launcher, the Python inventory and the gateway: the `off`
+ * key of `config/qwen-exit.json` absent -> on. Present -> it must be an object with a non-empty `reason` and a
+ * `since` date (YYYY-MM-DD). Anything else (`{}`, `null`, `true`, blank reason, bad date, unreadable file) is a
+ * config error: C31 stays off (fail-safe), `invalid` is true and `reason` says so. Delete the block to turn C31 on.
  */
 export function qwenExitSwitch(
   root,
   read = (path) => readFileSync(path, 'utf8'),
 ) {
+  let config
   try {
-    const off = JSON.parse(read(`${root}/config/qwen-exit.json`)).off
-    return off
-      ? { off: true, since: off.since ?? null, reason: off.reason ?? null }
-      : { off: false }
+    config = JSON.parse(read(`${root}/config/qwen-exit.json`))
   } catch {
     return {
       off: true,
+      invalid: true,
       since: null,
       reason: 'config/qwen-exit.json ilegible: apagada por seguridad',
     }
   }
+  if (config === null || typeof config !== 'object' || !('off' in config))
+    return { off: false }
+  const off = config.off
+  const reason = off !== null && typeof off === 'object' ? off.reason : null
+  const since = off !== null && typeof off === 'object' ? off.since : null
+  if (
+    typeof reason === 'string' &&
+    reason.trim() !== '' &&
+    typeof since === 'string' &&
+    /^\d{4}-\d{2}-\d{2}$/.test(since)
+  )
+    return { off: true, invalid: false, since, reason }
+  return { off: true, invalid: true, since: null, reason: INVALID_OFF_REASON }
 }
 
 export function devChildSpecs({
@@ -588,7 +605,7 @@ export function devChildSpecs({
         // C31 is listed as "apagada" (with this reason) instead of disappearing.
         ...(qwenExit.off
           ? {
-              QWEN_EXIT_OFF_REASON: qwenExit.reason ?? '',
+              QWEN_EXIT_OFF_REASON: qwenExit.reason,
               QWEN_EXIT_OFF_SINCE: qwenExit.since ?? '',
             }
           : {}),
