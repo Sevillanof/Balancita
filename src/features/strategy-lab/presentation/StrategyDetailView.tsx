@@ -1039,6 +1039,8 @@ export default function StrategyDetailView({
           <OperationalBadge
             state={row.operational.state}
             basis={row.operational.basis}
+            sinceMs={row.operational.since_ms}
+            reason={row.operational.reason}
           />
           <ResearchBadge state={row.research.state} />
           {row.frozen && <FrozenBadge />}

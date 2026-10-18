@@ -38,8 +38,13 @@ CREATE TABLE replay_qwen_report(id INTEGER PRIMARY KEY CHECK(id=1), payload TEXT
 """
 
 
-def load_range(market_db_path, product_id, start_ms, end_ms):
-    """Official 1m and 5m candles (first-known revision) from ``start_ms - warmup`` to ``end_ms``."""
+def load_range(market_db_path, product_id, start_ms, end_ms, max_lag_ms=None):
+    """Official 1m and 5m candles (first-known revision) from ``start_ms - warmup`` to ``end_ms``.
+
+    ``max_lag_ms`` (default ``None``: every stored candle, as the forward's ``recovered`` labelling expects) leaves out the
+    candles the capture first learned more than that long after they closed: a live view of the market, in which a candle
+    backfilled hours later was not there when the decision was taken. Each candle's ``known_at`` is in the result either way.
+    """
     market = _OfficialCandles(market_db_path)
     try:
         if not market.available:
@@ -50,6 +55,9 @@ def load_range(market_db_path, product_id, start_ms, end_ms):
             rows[interval] = market._candles(market.db.execute(
                 market._ROWS_SQL.format(market._WINDOW_WHERE), (product_id, interval, lo, end_ms, cutoff)
             ).fetchall())
+        if max_lag_ms is not None:
+            for interval in rows:
+                rows[interval] = [c for c in rows[interval] if c["known_at"] - c["close_at"] <= max_lag_ms]
         return rows[ONE_MINUTE_MS], rows[FIVE_MINUTES_MS]
     finally:
         market.db.close()
@@ -316,7 +324,7 @@ def main(argv=None):
                              "(+ strategy reliability), learning (+ Qwen's judged decisions) or consensus (no model: the "
                              "mean strategy consensus decides, the reference arm); default: as shipped")
     parser.add_argument("--qwen-funding", choices=("off", "on", "placebo", "contrarian", "follow"), default="off",
-                        help="funding line (trade_action@5): off (as shipped, v4), on, placebo (the line from 7 days "
+                        help="funding line (trade_action@6): off (as shipped, v4), on, placebo (the line from 7 days "
                              "earlier), or a model-free rule: contrarian (high funding sells, low buys) / follow")
     parser.add_argument("--qwen-calm-skip", action=argparse.BooleanOptionalAction, default=True,
                         help="do not ask in the calmest third of volatility (percentile of the past only); those "

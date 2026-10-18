@@ -11,6 +11,7 @@ import { createObservabilityActivity } from '../features/live-gateway/observabil
 import { createObservabilityDecisions } from '../features/live-gateway/observability-decisions.ts'
 import { loadPinnedProducts } from '../features/kraken-futures/futures-products.ts'
 import { serverConfigFrom } from '../platform/config.ts'
+import { qwenExitOffFromEnv } from '../features/live-gateway/qwen-exit-off.ts'
 
 function pythonUnavailableReason(status: string | undefined) {
   if (status === 'sqlite_too_old') return 'python_sqlite_too_old'
@@ -99,6 +100,7 @@ async function main(): Promise<void> {
       forwardProducts: forwardProducts(process.env),
       processHealthPath: process.env.DEV_HEALTH_FILE || undefined,
       qwenExitSummaryPath: process.env.QWEN_EXIT_SUMMARY_PATH || undefined,
+      qwenExitOff: qwenExitOffFromEnv(process.env),
       kronosSummaryPath: process.env.KRONOS_SUMMARY_PATH || undefined,
       resilienceLogPath: join(
         dirname(config.futuresMarketDbPath),

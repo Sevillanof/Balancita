@@ -205,10 +205,12 @@ test('Estrategias opens on the inventory and every interaction answers', async (
       .locator('[data-id="kronos-small-1h-h4-v1"]')
       .getByTestId('operational-badge'),
   ).toHaveText('Estado no verificado')
-  // C31 is registered only in qwen-exit.json: a config does not prove it runs.
+  // C31 is off by owner decision (2026-10-18): the badge says so and shows why.
   const c31 = page.locator('[data-id^="c31"]')
-  await expect(c31.getByTestId('operational-badge')).toHaveText(
-    'Estado no verificado',
+  await expect(c31.getByTestId('operational-badge')).toHaveText('Apagada')
+  await expect(c31.getByTestId('operational-badge')).toHaveAttribute(
+    'title',
+    /^Apagada · motivo: apagada desde 2026-10-18: Decisión del propietario/,
   )
   await expect(page.getByText('Activa en paper')).toHaveCount(0)
   await expect(page.getByText('Con evidencia de ventaja')).toHaveCount(0)

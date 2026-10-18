@@ -10,7 +10,7 @@ import urllib.request
 from http.server import ThreadingHTTPServer
 
 from balancita_engine.futures_spec_strategy import load_specs
-from balancita_engine.futures_strategy_inventory import build_inventory
+from balancita_engine.futures_strategy_inventory import DEFAULT_CONFIG_DIR, build_inventory
 from balancita_engine.futures_strategy_registry import StrategyRegistry, StrategyService, make_handler
 
 
@@ -67,10 +67,52 @@ class InventoryTest(unittest.TestCase):
         self.assertEqual(c31["research"]["state"], "unmeasured")
         self.assertIsNone(c31["research"]["backtest"])
         self.assertEqual(c31["operational"]["basis"], "config")
-        self.assertEqual(c31["operational"]["state"], "unverified")
+        self.assertEqual(c31["operational"]["state"], "off")
         self.assertEqual(inv["counts"]["active"], 3)
         self.assertEqual(_row(inv, "kronos-small-1h-h4-v1")["operational"]["state"], "unverified")
         self.assertTrue(_row(inv, "c32-funding-contrarian-24h-perp-v1")["no_backtest"])
+
+    def test_c31_is_listed_as_off_with_its_reason_and_returns_when_the_block_is_removed(self):
+        c31 = _row(self.inventory(), "c31-qwen-exit-perp-v1")
+        self.assertEqual(c31["operational"]["state"], "off")
+        self.assertEqual(c31["operational"]["reason"].split(":")[0], "apagada desde 2026-10-18")
+        self.assertIn("funding", c31["operational"]["reason"])
+        self.assertFalse(c31["research"]["investigating"])
+        config = os.path.join(self.dir, "config")
+        shutil.copytree(DEFAULT_CONFIG_DIR, config)
+        path = os.path.join(config, "qwen-exit.json")
+        with open(path, encoding="utf-8") as handle:
+            body = json.load(handle)
+        del body["off"]
+        with open(path, "w", encoding="utf-8") as handle:
+            json.dump(body, handle)
+        self.service.config_dir = config
+        back = _row(self.inventory(), "c31-qwen-exit-perp-v1")
+        self.assertEqual(back["operational"]["state"], "unverified")
+        self.assertTrue(back["research"]["investigating"])
+
+    def test_an_invalid_off_block_is_a_loud_config_error_and_stays_off(self):
+        config = os.path.join(self.dir, "config")
+        shutil.copytree(DEFAULT_CONFIG_DIR, config)
+        path = os.path.join(config, "qwen-exit.json")
+        with open(path, encoding="utf-8") as handle:
+            body = json.load(handle)
+        self.service.config_dir = config
+        for bad in ({}, None, True, "x", {"since": "2026-10-18", "reason": ""}, {"since": "2026-10-18", "reason": "  "},
+                    {"since": "2026-10-18"}, {"reason": "x"}, {"since": "ayer", "reason": "x"}):
+            with open(path, "w", encoding="utf-8") as handle:
+                json.dump(dict(body, off=bad), handle)
+            c31 = _row(self.inventory(), "c31-qwen-exit-perp-v1")
+            self.assertEqual(c31["operational"]["state"], "off", bad)
+            self.assertIn("inválido", c31["operational"]["reason"], bad)
+            self.assertFalse(c31["research"]["investigating"], bad)
+
+    def test_qwen_exit_off_rule(self):
+        from balancita_engine.futures_strategy_inventory import qwen_exit_off
+        self.assertIsNone(qwen_exit_off({"schema": "s"}))
+        self.assertEqual(qwen_exit_off({"off": {"since": "2026-10-18", "reason": "x"}}),
+                         {"since": "2026-10-18", "reason": "x", "invalid": False})
+        self.assertTrue(qwen_exit_off({"off": {}})["invalid"])
 
     def test_carry_is_unverified_without_state_files(self):
         carry = _row(self.inventory(), "carry-funding-c-v1")

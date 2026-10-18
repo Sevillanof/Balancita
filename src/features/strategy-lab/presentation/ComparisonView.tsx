@@ -84,6 +84,8 @@ export function ExperimentCard({
           <OperationalBadge
             state={row.operational.state}
             basis={row.operational.basis}
+            sinceMs={row.operational.since_ms}
+            reason={row.operational.reason}
           />
         )}
       </header>

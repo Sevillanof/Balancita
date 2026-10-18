@@ -748,6 +748,9 @@ class ServiceBase(unittest.TestCase):
         finally:
             db.close()
 
+    def skips(self):
+        return self.rows("paper_futures_llm_skips")
+
     def add_candle(self):
         # Extend market and verdicts through a scratch fixture-like path.
         market = MarketDb.__new__(MarketDb)
@@ -799,6 +802,9 @@ class ServiceTests(ServiceBase):
         service._is_calm = lambda product_id, bucket: True
         self.assertEqual(service.poll(), 0)
         self.assertEqual((self.provider.calls, service.calm_skipped, len(self.rows())), (0, 1, 0))
+        skip, = [r for r in self.skips() if r["code"] == "calm_skip"]
+        self.assertEqual((skip["code"], skip["question_id"], skip["question_version"]), ("calm_skip", "t_choice", 1))
+        self.assertIn("calma", skip["reason"])
 
     def test_calm_skip_still_asks_a_bucket_that_is_not_calm_and_is_off_by_default(self):
         service = self.service(calm_skip=True)
@@ -840,6 +846,9 @@ class ServiceTests(ServiceBase):
         db.close()
         self.assertGreater(lags, 100)
         self.assertEqual(self.provider.calls, 1)
+        stale = [r for r in self.skips() if r["code"] == "stale_verdict"]
+        self.assertEqual(len(stale), lags)
+        self.assertIn("veredicto", stale[0]["reason"])
 
     def test_wall_clock_age_guard_prevents_catching_up_after_a_restart(self):
         late = lambda: int(time.time() * 1000) + 3_600_000
@@ -857,6 +866,9 @@ class ServiceTests(ServiceBase):
         self.assertEqual(self.provider.calls, 0)
         unavailable = [line for line in self.logs if "unavailable" in line]
         self.assertEqual(len(unavailable), 1)
+        down = [r for r in self.skips() if r["code"] == "model_down"]
+        self.assertEqual(len(down), 1)  # the one fresh bucket, recorded once even though polled twice
+        self.assertEqual(down[0]["reason"], "modelo local caído (llama-server no responde)")
 
     def test_a_skipped_bucket_is_never_retried_after_recovery(self):
         self.provider.healthy = False
@@ -865,10 +877,14 @@ class ServiceTests(ServiceBase):
         self.provider.healthy = True
         self.assertEqual(service.poll(), 0)
         self.assertEqual(self.provider.calls, 0)
+        missed = [r["bucket_start"] for r in self.skips() if r["code"] == "model_down"]
+        self.assertEqual(len(missed), 1)
         bucket = self.add_candle()
         self.assertEqual(service.poll(), 1)
         rows = self.rows()
         self.assertEqual([r["bucket_start"] for r in rows], [bucket])
+        self.assertNotIn(bucket, missed)
+        self.assertEqual(len([r for r in self.skips() if r["code"] == "model_down"]), 1)
         self.assertTrue(any("available again" in line for line in self.logs))
 
     def test_a_timeout_mid_decision_stores_nothing(self):
@@ -877,6 +893,27 @@ class ServiceTests(ServiceBase):
         self.assertEqual(service.poll(), 0)
         self.assertEqual(self.rows(), [])
         self.assertEqual(self.rows("paper_futures_llm_errors"), [])
+        skip, = [r for r in self.skips() if r["code"] == "model_down"]
+        self.assertEqual(skip["reason"], "modelo local caído (llama-server no responde): timeout")
+
+    def test_a_state_error_records_a_skip_with_its_detail(self):
+        def refuse(*args, **kwargs):
+            raise q.StateError("features 1m not ready")
+
+        original, q.evaluate = q.evaluate, refuse
+        self.addCleanup(setattr, q, "evaluate", original)
+        self.assertEqual(self.service().poll(), 0)
+        skip, = [r for r in self.skips() if r["code"] == "state_error"]
+        self.assertEqual(skip["reason"], "estado no disponible: features 1m not ready")
+        self.assertEqual((skip["product_id"], skip["question_id"]), (BTC, "t_choice"))
+
+    def test_skips_are_append_only(self):
+        self.provider.healthy = False
+        self.service().poll()
+        db = sqlite3.connect(self.decisions_path)
+        self.addCleanup(db.close)
+        with self.assertRaises(sqlite3.DatabaseError):
+            db.execute("DELETE FROM paper_futures_llm_skips")
 
     def test_a_response_without_letters_is_an_error_row_not_a_decision(self):
         self.provider.entries = top(x=-0.1, y=-2.0)

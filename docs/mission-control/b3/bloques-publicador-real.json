@@ -33,7 +33,7 @@
           },
           "signal": {
             "action": "BUY",
-            "entry_hash": "c3e31d0f22143b7319f0f269ee8bd3214b8db51ee2b7e187c25676adfc70fad9",
+            "entry_hash": "8bb4764746a1d1d684863e6a99be6f64e5da4cb7498a19448241d5fce1ce8624",
             "origin": "original",
             "seq": 3,
             "signal_key": "dcd4ab505718dca6568fe4b0",
@@ -65,7 +65,7 @@
           },
           "signal": {
             "action": "WAIT",
-            "entry_hash": "644aec02c22d65fc0ddbd1a1cd388f3740e6de969645264700f84aed9fce6b92",
+            "entry_hash": "829c62842ecd3826e7a8c3b1d219e9d46731a90071e03a19d8fd115b40eed7c4",
             "origin": "original",
             "seq": 4,
             "signal_key": "439f099e9159540c19f0412c",
@@ -123,7 +123,7 @@
           },
           "signal": {
             "action": "BUY",
-            "entry_hash": "c3e31d0f22143b7319f0f269ee8bd3214b8db51ee2b7e187c25676adfc70fad9",
+            "entry_hash": "8bb4764746a1d1d684863e6a99be6f64e5da4cb7498a19448241d5fce1ce8624",
             "origin": "original",
             "seq": 3,
             "signal_key": "dcd4ab505718dca6568fe4b0",

@@ -31,7 +31,7 @@ from decimal import Decimal, InvalidOperation
 from . import replay_driver as RP
 from . import replay_funding_audit as RFA
 from . import signal_continuity as SC
-from .futures_funding_context import PUBLICATION_LAG_MS, FundingContext
+from .futures_funding_context import PUBLICATION_LAG_MS, FundingContext, with_publication_wait
 from .futures_simulator import FIVE_MINUTES_MS, ONE_MINUTE_MS
 from .multi_experiment import FrameFeeder, required_warmup_ms
 from .multi_signals import merged_indicators, stable_hash
@@ -244,7 +244,7 @@ class LiveEvaluator(object):
         if start_ms in state["funding"]:
             return False
         state["funding"][start_ms] = rate
-        state["context"] = FundingContext(sorted(state["funding"].items()))
+        state["context"] = FundingContext(with_publication_wait(sorted(state["funding"].items())))
         self.stats["funding_hours"] += 1
         due = start_ms + HOUR_MS + PUBLICATION_LAG_MS
         if arrival_ms > due:

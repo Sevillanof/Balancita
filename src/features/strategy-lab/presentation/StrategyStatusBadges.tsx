@@ -2,7 +2,7 @@ import { StatusPill } from '../../../shared/mission-control/index.ts'
 import {
   FROZEN_HINT,
   FROZEN_LABEL,
-  OPERATIONAL_BASIS_HINT,
+  operationalTitle,
   operationalLabel,
   operationalTone,
   researchLabel,
@@ -16,13 +16,17 @@ import {
 export function OperationalBadge({
   state,
   basis,
+  sinceMs,
+  reason,
 }: {
   state: string
   basis?: string
+  sinceMs?: number | null
+  reason?: string | null
 }) {
   return (
     <span
-      title={basis ? OPERATIONAL_BASIS_HINT[basis] : undefined}
+      title={operationalTitle(state, basis, sinceMs, reason)}
       data-testid="operational-badge"
       data-state={state}
     >

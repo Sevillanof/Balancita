@@ -23,12 +23,18 @@ def ramp(n=800, start=0, base=1e-5):
 
 
 class FundingContextTests(unittest.TestCase):
-    def test_a_period_counts_only_after_it_closed_plus_the_publication_lag(self):
+    def test_a_pair_without_known_at_counts_when_it_closes_with_no_floor(self):
         ctx = fc.FundingContext(ramp())
         period = fc.WINDOW + 5  # judged period index; it closes at (period + 1) * H
         closes = (period + 1) * H
-        self.assertEqual(ctx.percentile(closes + fc.PUBLICATION_LAG_MS - 1)[0], ramp()[period - 1][1])
-        self.assertEqual(ctx.percentile(closes + fc.PUBLICATION_LAG_MS)[0], ramp()[period][1])
+        self.assertEqual(ctx.percentile(closes - 1)[0], ramp()[period - 1][1])
+        self.assertEqual(ctx.percentile(closes)[0], ramp()[period][1])
+
+    def test_with_publication_wait_dates_the_pairs_ten_minutes_after_they_close(self):
+        ctx = fc.FundingContext(fc.with_publication_wait(ramp()))
+        closes = (fc.WINDOW + 6) * H
+        self.assertEqual(ctx.percentile(closes + fc.PUBLICATION_LAG_MS - 1)[0], ramp()[fc.WINDOW + 4][1])
+        self.assertEqual(ctx.percentile(closes + fc.PUBLICATION_LAG_MS)[0], ramp()[fc.WINDOW + 5][1])
 
     def test_the_percentile_excludes_the_period_it_judges_and_the_future(self):
         ctx = fc.FundingContext(ramp())
@@ -76,19 +82,19 @@ class FundingContextTests(unittest.TestCase):
             for sha, product, rate in (("a", "PF_XBTUSD", 1.0), ("b", "PF_ETHUSD", 2.0)):
                 raw = json.dumps({"rates": [{"timestamp": "1970-01-01T00:00:00Z", "relativeFundingRate": rate}]})
                 db.execute("INSERT INTO paper_futures_funding_responses VALUES(?,?,?,?)", (sha, 1, "t", raw))
-                db.execute("INSERT INTO paper_futures_funding_periods VALUES(?,?,?,?,?,?,?)", (sha, 0, H, "0", 1, "u", product))
+                db.execute("INSERT INTO paper_futures_funding_periods VALUES(?,?,?,?,?,?,?)", (sha, 0, H, "0", H + 5, "u", product))
             db.commit()
             db.close()
-            self.assertEqual(fc.load_periods(path, "PF_ETHUSD"), [(0, 2.0)])
+            self.assertEqual(fc.load_periods(path, "PF_ETHUSD"), [(0, 2.0, H + 5)])
             self.assertEqual(fc.load_periods(path, "PF_SOLUSD"), [])
 
 
 class FundingQuestionTests(unittest.TestCase):
-    def test_v5_is_v4_plus_the_funding_line_and_v4_keeps_its_pin(self):
+    def test_v6_is_v4_plus_the_funding_line_and_v4_keeps_its_pin(self):
         v4 = llm.load_questions()["trade_action"]
         self.assertEqual(llm.question_hash(v4), QUESTION_PINS["trade_action@4"])
         v5 = fc.funding_question(v4)
-        self.assertEqual(v5["version"], 5)
+        self.assertEqual(v5["version"], 6)  # v5 (pre-causal loader) rows are never mixed with v6
         self.assertEqual([f for f in v5["state_fields"] if f not in v4["state_fields"]], ["funding"])
         self.assertLess(v5["state_fields"].index("funding"), v5["state_fields"].index("lessons"))
         self.assertEqual({k: v for k, v in v5.items() if k not in ("version", "state_fields")},

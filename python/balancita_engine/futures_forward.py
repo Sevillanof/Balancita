@@ -11,9 +11,10 @@ Holes in the capture (the process was down) are filled afterwards from Kraken's 
 capture itself, with the candle's real ``known_at``. Because the replay is a pure function of the candles, a
 filled hole is simply replayed in order: entries at the close of the signal candle, stop and target against each
 candle's high and low (stop first when both fall in one candle), the time stop counted from the real entry. A
-trade whose entry-to-exit span contains a candle learned more than ``LATE_KNOWN_MS`` after it closed is labelled
-``recovered`` (it could not have been seen live) and still counts; the summary also gives the figures without
-them. See docs/strategy-reliability.md.
+trade whose entry-to-exit span contains a candle learned more than ``LATE_KNOWN_MS`` after it closed, or whose entry
+rested on funding the capture only learned afterwards, is labelled ``recovered`` (it could not have been seen live):
+it is simulated and reported apart (``summary_recovered``) but does NOT count toward ``FORWARD_MIN_TRADES``; only
+live trades do. See docs/strategy-reliability.md.
 
 ``write_summary`` turns that DB into ``futures-strategy-forward.v1`` JSON (per strategy: the reliability
 figures of its forward trades, per product, and the open positions), which
@@ -30,7 +31,7 @@ import os
 import sqlite3
 import time
 
-from .futures_funding_context import funding_for, funding_periods
+from .futures_funding_context import funding_for, funding_periods, funding_since_ms, funding_state
 from .futures_funding_reconcile import load_reconciled, reconcile
 from .futures_products import resolve_products
 from .futures_replay import load_range, replay
@@ -49,6 +50,9 @@ LATE_KNOWN_MS = 5 * 60_000
 # (positions already open are still managed). Applies from the moment the gate was first switched on, see
 # ``stale_gate_from``; trades stored before it keep the old rule and the ``recovered`` label.
 STALE_ENTRY_MS = 3 * 60_000
+# Owner decision: entries on candles learned late (a backfilled off period) are simulated and labelled ``recovered``,
+# not refused. The gate below stays available (``make_entry_gate``) but run_forward only applies it when this is True.
+BLOCK_STALE_ENTRIES = False
 # What the candles decide. ``net_bp`` is left out: it also depends on the funding known when the trade was stored,
 # which is completed beside the original (futures_funding_reconcile), not by a hole in the candles.
 _CORE_KEYS = ("entry_price", "exit_bucket_ms", "exit_price", "exit_reason", "side")
@@ -173,6 +177,15 @@ def candle_coverage(ones, fives, start_ms, end_ms):
     return late_ones, late_fives, missing
 
 
+def funding_recovered(trade, late_funding_at):
+    """True when the entry decision rested on funding the capture only learned afterwards (backfilled hours).
+
+    The entry reads the trend of the last closed 5m frame, i.e. a funding instant in ``(entry - 4 min, entry + 1 min]``.
+    """
+    entry = trade["entry_bucket_ms"]
+    return any(entry - 4 * ONE_MINUTE_MS < at <= entry + ONE_MINUTE_MS for at in late_funding_at)
+
+
 def is_recovered(trade, late_ones, late_fives):
     """True when a candle between the signal candle and the exit candle was learned late (a capture hole)."""
     first, last = trade["entry_bucket_ms"], trade["exit_bucket_ms"]
@@ -229,12 +242,17 @@ def run_forward(market_db, db_path, specs, registration, products):
                     ones, fives = load_range(market_db, product_id, info["start_ms"], now + ONE_MINUTE_MS)
                 except ValueError:
                     continue
-                context = funding_for(market_db, product_id)
+                # Periods from 30 days before the first decision: the cost follows the hours replayed, not the capture's age.
+                # ``recover_until_ms=now``: an off period is evaluated with the funding backfilled since (see FundingContext).
+                context = funding_for(market_db, product_id, funding_since_ms(info["start_ms"]),
+                                      recover_until_ms=now)
                 (book,) = replay([spec], ones, fives, start_ms=info["start_ms"], product_id=product_id,
                                  tick_size=tick_size, funding=context, funding_periods=funding_periods(context),
-                                 entry_gate=make_entry_gate(ones, fives, gate_from))
+                                 entry_gate=make_entry_gate(ones, fives, gate_from) if BLOCK_STALE_ENTRIES else None)
                 late_ones, late_fives, missing = candle_coverage(ones, fives, info["start_ms"], now)
-                recovered = {t["entry_bucket_ms"] for t in book.trades if is_recovered(t, late_ones, late_fives)}
+                late_funding = sorted(context.late_at) if context is not None else []
+                recovered = {t["entry_bucket_ms"] for t in book.trades
+                             if is_recovered(t, late_ones, late_fives) or funding_recovered(t, late_funding)}
                 with db:
                     added[(strategy_id, product_id)] = 0
                     stored = {bucket: json.loads(payload) for bucket, payload in db.execute(
@@ -261,6 +279,7 @@ def run_forward(market_db, db_path, specs, registration, products):
                             "checked_ms": now, "missing_1m": missing, "late_1m": len(late_ones),
                             "diverged_trades": diverged, "blocked_stale_entries": len(book.blocked),
                             "stale_cycles": book.stale_cycles,
+                            "funding": funding_state(context, now),
                             # How far behind "now" the newest stored 1m candle closed: a capture that stopped
                             # leaves no holes inside the range, only a growing lag.
                             "candle_lag_ms": (now - (max(c["bucket_start"] for c in ones) + ONE_MINUTE_MS))
@@ -300,6 +319,10 @@ def write_summary(db_path, specs, registration, out_path):
                     trade.update(funding_usd=row["funding_usd"], funding_complete=True, funding_status="complete",
                                  pnl_usd=row["pnl_usd"], net_bp=row["net_bp"], funding_source=row["method_version"])
             live_only = [t for t in trades if not t["recovered"]]
+            recovered_only = [t for t in trades if t["recovered"]]
+            last_ms = max(now, info["start_ms"] + 1)
+            funding_state_by_product = {product: json.loads(payload).get("funding") for product, payload in db.execute(
+                "SELECT product_id, payload FROM forward_status WHERE strategy_id=?", (strategy_id,))}
             statuses = [json.loads(payload) for (payload,) in db.execute(
                 "SELECT payload FROM forward_status WHERE strategy_id=?", (strategy_id,))]
             open_positions = sum(1 for (payload,) in db.execute(
@@ -311,9 +334,15 @@ def write_summary(db_path, specs, registration, out_path):
             strategies[strategy_id] = {
                 "spec_hash": digest, "start_ms": info["start_ms"], "open_positions": open_positions,
                 "summary": summarize_trades(trades, first_ms=info["start_ms"], last_ms=max(now, info["start_ms"] + 1)),
-                "recovered_trades": len(trades) - len(live_only),
-                "summary_without_recovered": summarize_trades(
-                    live_only, first_ms=info["start_ms"], last_ms=max(now, info["start_ms"] + 1)),
+                "recovered_trades": len(recovered_only),
+                # Live and recovered (decided on data that arrived late: backfilled candles or funding) apart.
+                # Only the live ones count toward FORWARD_MIN_TRADES and decide the verdict (effective_reliability).
+                "summary_without_recovered": summarize_trades(live_only, first_ms=info["start_ms"], last_ms=last_ms),
+                "summary_recovered": summarize_trades(recovered_only, first_ms=info["start_ms"], last_ms=last_ms),
+                "counts_toward_min_trades": "live",
+                "live_trades": len(live_only),
+                # Per product: whether funding is usable now and, if not, the stable code and the reason in Spanish.
+                "funding_state": {p: v for p, v in sorted(funding_state_by_product.items()) if v is not None},
                 "missing_candles_1m": sum(st["missing_1m"] for st in statuses),
                 "diverged_trades": sum(st["diverged_trades"] for st in statuses),
                 "blocked_stale_entries": sum(st.get("blocked_stale_entries", 0) for st in statuses),
@@ -369,8 +398,8 @@ def main(argv=None):
         body = write_summary(os.path.join(args.out, "forward.sqlite"), specs, registration,
                              os.path.join(args.out, "forward-reliability.json"))
         for strategy_id, entry in body["strategies"].items():
-            print("{} forward trades={} (recovered {}) open={} +{} missing 1m={} diverged={}".format(
-                strategy_id, entry["summary"]["trades"], entry["recovered_trades"], entry["open_positions"],
+            print("{} forward trades={} (live {}, recovered {}) open={} +{} missing 1m={} diverged={}".format(
+                strategy_id, entry["summary"]["trades"], entry["live_trades"], entry["recovered_trades"], entry["open_positions"],
                 sum(n for (s, _), n in added.items() if s == strategy_id), entry["missing_candles_1m"],
                 entry["diverged_trades"]), flush=True)
         if not args.loop_seconds:

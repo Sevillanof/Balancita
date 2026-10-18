@@ -474,6 +474,45 @@ export function onlyChildSpecs(specs, env = {}) {
   return specs.filter((spec) => wanted.includes(spec.name))
 }
 
+const INVALID_OFF_REASON =
+  'config/qwen-exit.json: bloque "off" inválido (hace falta "reason" no vacío y "since" AAAA-MM-DD): apagada por seguridad'
+
+/**
+ * The one switch of C31 (qwenexit), the same rule in the launcher, the Python inventory and the gateway: the `off`
+ * key of `config/qwen-exit.json` absent -> on. Present -> it must be an object with a non-empty `reason` and a
+ * `since` date (YYYY-MM-DD). Anything else (`{}`, `null`, `true`, blank reason, bad date, unreadable file) is a
+ * config error: C31 stays off (fail-safe), `invalid` is true and `reason` says so. Delete the block to turn C31 on.
+ */
+export function qwenExitSwitch(
+  root,
+  read = (path) => readFileSync(path, 'utf8'),
+) {
+  let config
+  try {
+    config = JSON.parse(read(`${root}/config/qwen-exit.json`))
+  } catch {
+    return {
+      off: true,
+      invalid: true,
+      since: null,
+      reason: 'config/qwen-exit.json ilegible: apagada por seguridad',
+    }
+  }
+  if (config === null || typeof config !== 'object' || !('off' in config))
+    return { off: false }
+  const off = config.off
+  const reason = off !== null && typeof off === 'object' ? off.reason : null
+  const since = off !== null && typeof off === 'object' ? off.since : null
+  if (
+    typeof reason === 'string' &&
+    reason.trim() !== '' &&
+    typeof since === 'string' &&
+    /^\d{4}-\d{2}-\d{2}$/.test(since)
+  )
+    return { off: true, invalid: false, since, reason }
+  return { off: true, invalid: true, since: null, reason: INVALID_OFF_REASON }
+}
+
 export function devChildSpecs({
   root,
   env,
@@ -489,6 +528,7 @@ export function devChildSpecs({
   // Injectable local-model search (`findQwenModel`); none found by default so
   // the function stays pure.
   findModel = () => undefined,
+  qwenExit = qwenExitSwitch(root),
 }) {
   const serverCwd = `${root}/server`
   const hasEnvFile = exists(`${serverCwd}/.env`)
@@ -562,6 +602,13 @@ export function devChildSpecs({
         // `/api/system`: size of the saved data, C31's summary and the Kronos run.
         DEV_DATA_DIR: `${serverCwd}/data/dev-live`,
         QWEN_EXIT_SUMMARY_PATH: `${serverCwd}/data/dev-live/qwen-exit/qwen-exit-summary.json`,
+        // C31 is listed as "apagada" (with this reason) instead of disappearing.
+        ...(qwenExit.off
+          ? {
+              QWEN_EXIT_OFF_REASON: qwenExit.reason,
+              QWEN_EXIT_OFF_SINCE: qwenExit.since ?? '',
+            }
+          : {}),
         KRONOS_SUMMARY_PATH:
           (env.KRONOS_SUMMARY_PATH ?? '').trim() ||
           `${serverCwd}/data/kronos/kronos-summary.json`,
@@ -664,31 +711,35 @@ export function devChildSpecs({
             .join(delimiter),
         },
       },
-      {
-        // C31: entries from the shipped specs, every exit decided by Qwen (market DB read-only -> its own
-        // DB and summary, sole writer of both). Asks the model only while a position is open.
-        name: 'qwenexit',
-        command: python.command,
-        cwd: serverCwd,
-        args: [
-          ...python.prefixArgs,
-          '-m',
-          'balancita_engine.futures_qwen_exit',
-          '--market-db',
-          marketDb,
-          '--out',
-          qwenExitDir,
-          '--loop-seconds',
-          '1800',
-        ],
-        env: {
-          ...env,
-          LLAMA_PORT: port,
-          PYTHONPATH: [`${root}/python`, env.PYTHONPATH]
-            .filter(Boolean)
-            .join(delimiter),
-        },
-      },
+      ...(qwenExit.off
+        ? []
+        : [
+            {
+              // C31: entries from the shipped specs, every exit decided by Qwen (market DB read-only -> its own
+              // DB and summary, sole writer of both). Asks the model only while a position is open.
+              name: 'qwenexit',
+              command: python.command,
+              cwd: serverCwd,
+              args: [
+                ...python.prefixArgs,
+                '-m',
+                'balancita_engine.futures_qwen_exit',
+                '--market-db',
+                marketDb,
+                '--out',
+                qwenExitDir,
+                '--loop-seconds',
+                '1800',
+              ],
+              env: {
+                ...env,
+                LLAMA_PORT: port,
+                PYTHONPATH: [`${root}/python`, env.PYTHONPATH]
+                  .filter(Boolean)
+                  .join(delimiter),
+              },
+            },
+          ]),
     ]
   }
 

@@ -15,6 +15,7 @@ export type OperationalState =
   | 'tracking'
   | 'inactive'
   | 'unverified'
+  | 'off'
 
 export type ResearchState =
   | 'reliable_edge'
@@ -35,6 +36,7 @@ export const OPERATIONAL_LABELS: Record<OperationalState, string> = {
   tracking: 'En seguimiento (no opera)',
   inactive: 'Desactivada',
   unverified: 'Estado no verificado',
+  off: 'Apagada',
 }
 
 export const OPERATIONAL_TONES: Record<OperationalState, StatusTone> = {
@@ -46,6 +48,7 @@ export const OPERATIONAL_TONES: Record<OperationalState, StatusTone> = {
   tracking: 'ok',
   inactive: 'nodata',
   unverified: 'nodata',
+  off: 'nodata',
 }
 
 export const RESEARCH_LABELS: Record<ResearchState, string> = {
@@ -81,6 +84,27 @@ export const OPERATIONAL_BASIS_HINT: Record<string, string> = {
   config:
     'Registrada en un archivo de configuración: no prueba que el proceso esté corriendo',
   none: 'Ninguna fuente confirma este estado',
+}
+
+/** Tooltip of the badge: an off strategy shows why and since when, not the config hint. */
+export function operationalTitle(
+  state: string,
+  basis?: string,
+  sinceMs?: number | null,
+  reason?: string | null,
+): string | undefined {
+  if (state === 'off') {
+    const date =
+      sinceMs != null && Number.isFinite(sinceMs)
+        ? new Date(sinceMs).toISOString().slice(0, 10)
+        : null
+    const parts = [
+      date ? `Apagada desde ${date}` : 'Apagada',
+      reason ? `motivo: ${reason}` : null,
+    ].filter(Boolean)
+    return parts.join(' · ')
+  }
+  return basis ? OPERATIONAL_BASIS_HINT[basis] : undefined
 }
 
 /** Labels tolerate a value this build does not know, never printing it as a verdict. */

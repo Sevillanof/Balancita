@@ -2,9 +2,11 @@ import json
 import os
 import sqlite3
 import tempfile
+import types
 import unittest
 from unittest import mock
 
+from balancita_engine import futures_forward
 from balancita_engine.futures_forward import LATE_KNOWN_MS, STALE_ENTRY_MS, make_entry_gate, effective_registration, load_registration, main, run_forward, write_summary
 from balancita_engine.futures_replay import replay
 from balancita_engine.futures_simulator import simulate_many
@@ -139,6 +141,115 @@ class RecoveryTests(unittest.TestCase):
         self.assertLessEqual(1_000, LATE_KNOWN_MS)
 
 
+class BackfilledEntriesAreSimulatedTests(unittest.TestCase):
+    """Owner decision: entries on backfilled candles are not refused; they are simulated and labelled recovered."""
+
+    PRODUCTS = RecoveryTests.PRODUCTS
+    setUp = RecoveryTests.setUp
+    tearDown = RecoveryTests.tearDown
+
+    def _forward(self, name, hole):
+        market = os.path.join(self.dir.name, name + ".sqlite")
+        _market(market, hole=hole)
+        db = os.path.join(self.dir.name, name + "-forward.sqlite")
+        seed = sqlite3.connect(db)  # the stale-data gate is on since the beginning of time
+        seed.executescript("CREATE TABLE forward_policy(name TEXT NOT NULL PRIMARY KEY, value INTEGER NOT NULL) STRICT;"
+                           "INSERT INTO forward_policy VALUES('stale_gate_from_ms', 0);")
+        seed.commit()
+        seed.close()
+        run_forward(market, db, SPECS, self.registration, self.PRODUCTS)
+        return db
+
+    def test_the_gate_is_off_by_default(self):
+        self.assertFalse(futures_forward.BLOCK_STALE_ENTRIES)
+
+    def test_an_entry_on_a_backfilled_signal_candle_is_opened_blocked_nothing_and_marked_recovered(self):
+        db = self._forward("entry", (2300, 2500))
+        self.assertEqual(_trades(db), self.reference)
+        summary = write_summary(db, SPECS, self.registration, os.path.join(self.dir.name, "s.json"))["strategies"][C30]
+        self.assertEqual((summary["blocked_stale_entries"], summary["stale_cycles"]), (0, 0))
+        self.assertEqual((summary["recovered_trades"], summary["live_trades"]), (1, 0))
+
+    def test_the_summary_keeps_live_and_recovered_apart_and_says_only_live_counts(self):
+        db = self._forward("apart", (2300, 2500))
+        summary = write_summary(db, SPECS, self.registration, os.path.join(self.dir.name, "s.json"))["strategies"][C30]
+        self.assertEqual(summary["counts_toward_min_trades"], "live")
+        self.assertEqual((summary["summary_recovered"]["trades"], summary["summary_without_recovered"]["trades"]), (1, 0))
+        self.assertEqual(summary["summary"]["trades"], 1)
+
+    def test_the_gate_still_blocks_when_it_is_switched_on(self):
+        with mock.patch.object(futures_forward, "BLOCK_STALE_ENTRIES", True):
+            db = self._forward("blocked", (2300, 2500))
+        self.assertNotIn(self.reference[0]["entry_bucket_ms"], [t["entry_bucket_ms"] for t in _trades(db)])
+
+
+class FundingStateAndRecoveryTests(unittest.TestCase):
+    """The summary says, per product, why funding is (not) usable; entries resting on backfilled funding are recovered."""
+
+    PRODUCTS = RecoveryTests.PRODUCTS
+    setUp = RecoveryTests.setUp
+    tearDown = RecoveryTests.tearDown
+
+    def test_the_summary_gives_the_funding_reason_per_product(self):
+        _, db = RecoveryTests._run(self, "state", None)
+        summary = write_summary(db, SPECS, self.registration, os.path.join(self.dir.name, "s.json"))["strategies"][C30]
+        state = summary["funding_state"]["PF_XBTUSD"]
+        self.assertEqual((state["usable"], state["code"]), (False, "no_history"))  # the fixture holds no funding at all
+        self.assertIn("sin historia de funding", state["reason"])
+
+    def test_a_trade_decided_on_funding_learned_afterwards_is_recovered_and_one_decided_live_is_not(self):
+        trade = {"entry_bucket_ms": 10 * 60 * MINUTE}
+        entry = trade["entry_bucket_ms"]
+        self.assertTrue(futures_forward.funding_recovered(trade, [entry + MINUTE]))
+        self.assertTrue(futures_forward.funding_recovered(trade, [entry - 3 * MINUTE]))
+        self.assertFalse(futures_forward.funding_recovered(trade, [entry - 4 * MINUTE]))  # the frame before the last one
+        self.assertFalse(futures_forward.funding_recovered(trade, [entry + MINUTE + 1]))
+        self.assertFalse(futures_forward.funding_recovered(trade, []))
+
+    def test_a_forward_run_marks_the_trade_recovered_when_the_funding_it_used_was_backfilled(self):
+        late = types.SimpleNamespace(late_at={self.reference[0]["entry_bucket_ms"] + MINUTE}, percentile=lambda at: None)
+        market = os.path.join(self.dir.name, "fund.sqlite")
+        _market(market)
+        db = os.path.join(self.dir.name, "fund-forward.sqlite")
+        with mock.patch.object(futures_forward, "funding_for", return_value=None):
+            run_forward(market, db, SPECS, self.registration, self.PRODUCTS)
+        live = write_summary(db, SPECS, self.registration, os.path.join(self.dir.name, "s.json"))["strategies"][C30]
+        self.assertEqual(live["recovered_trades"], 0)
+        db2 = os.path.join(self.dir.name, "fund2-forward.sqlite")
+        with mock.patch.object(futures_forward, "funding_for", return_value=late), \
+                mock.patch.object(futures_forward, "funding_periods", return_value=[]), \
+                mock.patch.object(futures_forward, "funding_state", return_value=None):
+            run_forward(market, db2, SPECS, self.registration, self.PRODUCTS)
+        marked = write_summary(db2, SPECS, self.registration, os.path.join(self.dir.name, "s2.json"))["strategies"][C30]
+        self.assertEqual((marked["recovered_trades"], marked["live_trades"]), (1, 0))
+
+
+class FundingSinceMarginTests(unittest.TestCase):
+    PRODUCTS = RecoveryTests.PRODUCTS
+    setUp = RecoveryTests.setUp
+    tearDown = RecoveryTests.tearDown
+
+    def test_since_covers_the_oldest_judged_period_and_its_window(self):
+        from balancita_engine import futures_funding_context as fc
+        first = 10_000 * fc.HOUR_MS
+        # The oldest period a first decision can judge started MAX_PERIOD_AGE + 1 h before it; its 30 days precede that.
+        oldest_needed = first - (fc.HOUR_MS + fc.MAX_PERIOD_AGE_MS) - fc.WINDOW_MS
+        self.assertLessEqual(fc.funding_since_ms(first), oldest_needed)
+        self.assertGreater(first - fc.funding_since_ms(first), 2 * fc.HOUR_MS + fc.WINDOW_MS)  # more than the old 2 h margin
+
+    def test_the_forward_asks_for_that_since(self):
+        from balancita_engine import futures_funding_context as fc
+        seen = []
+        self.assertTrue(hasattr(futures_forward, "funding_since_ms"))
+        with mock.patch.object(futures_forward, "funding_for", side_effect=lambda *a, **k: seen.append(a) or None):
+            market = os.path.join(self.dir.name, "m.sqlite")
+            _market(market)
+            run_forward(market, os.path.join(self.dir.name, "f.sqlite"), SPECS, self.registration, self.PRODUCTS)
+        start = self.registration["strategies"][C30]["start_ms"]
+        self.assertTrue(seen)
+        self.assertTrue(all(a[2] == fc.funding_since_ms(start) for a in seen))
+
+
 class StaleGateTests(unittest.TestCase):
     """With the gate on, a candle learned long after it closed opens nothing; open positions are still managed."""
 
@@ -155,7 +266,8 @@ class StaleGateTests(unittest.TestCase):
                            "INSERT INTO forward_policy VALUES('stale_gate_from_ms', 0);")
         seed.commit()
         seed.close()
-        run_forward(market, db, SPECS, self.registration, self.PRODUCTS)
+        with mock.patch.object(futures_forward, "BLOCK_STALE_ENTRIES", True):
+            run_forward(market, db, SPECS, self.registration, self.PRODUCTS)
         return market, db
 
     def test_a_stale_signal_candle_opens_no_entry_and_is_counted(self):
@@ -212,7 +324,8 @@ class StaleGateTests(unittest.TestCase):
     def test_running_again_neither_duplicates_trades_nor_changes_what_was_blocked(self):
         market, db = self._run("twice", (2300, 2500))
         first = (_trades(db), sqlite3.connect(db).execute("SELECT COUNT(*) FROM forward_blocked").fetchone()[0])
-        run_forward(market, db, SPECS, self.registration, self.PRODUCTS)
+        with mock.patch.object(futures_forward, "BLOCK_STALE_ENTRIES", True):
+            run_forward(market, db, SPECS, self.registration, self.PRODUCTS)
         second = (_trades(db), sqlite3.connect(db).execute("SELECT COUNT(*) FROM forward_blocked").fetchone()[0])
         self.assertEqual(first, second)
 
@@ -291,6 +404,17 @@ class EffectiveReliabilityTests(unittest.TestCase):
         self.assertEqual((up["source"], up["verdict"]), ("forward", "tentative_edge"))
         down = effective_reliability(_table(), _forward(FORWARD_MIN_TRADES + 50, "negative_edge"), SPECS[C30])
         self.assertEqual((down["source"], down["verdict"]), ("forward", "negative_edge"))
+
+    def test_recovered_trades_never_count_toward_the_minimum(self):
+        forward = _forward(FORWARD_MIN_TRADES + 20, "reliable_edge")  # 120 in all, but only 99 of them live
+        forward["strategies"][C30]["summary_without_recovered"] = {
+            "trades": FORWARD_MIN_TRADES - 1, "verdict": "negative_edge", "hit_rate": 0.3, "mean_net_bp": -5.0}
+        entry = effective_reliability(_table(), forward, SPECS[C30])
+        self.assertEqual((entry["source"], entry["verdict"], entry["forward_trades"]),
+                         ("backtest", "candidate_edge", FORWARD_MIN_TRADES - 1))
+        forward["strategies"][C30]["summary_without_recovered"]["trades"] = FORWARD_MIN_TRADES
+        entry = effective_reliability(_table(), forward, SPECS[C30])
+        self.assertEqual((entry["source"], entry["verdict"], entry["trades"]), ("forward", "negative_edge", FORWARD_MIN_TRADES))
 
     def test_a_forward_record_of_another_spec_version_is_ignored(self):
         entry = effective_reliability(_table(), _forward(500, "reliable_edge", digest="old"), SPECS[C30])
