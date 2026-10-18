@@ -259,8 +259,11 @@ test('Estrategias opens on the comparison and every interaction answers', async 
   await expect(retired).toHaveAttribute('open', '')
   await expect(
     page.locator('[data-id^="c25"]').getByTestId('operational-badge'),
-  ).toHaveText('Cerrada')
+  ).toHaveText('Retirada')
   await expect(page.locator('[data-id^="c25"]')).toContainText(
+    'se cerró con el motor viejo D: sin ventaja tras costes',
+  )
+  await expect(page.locator('[data-id^="c25"]')).not.toContainText(
     'closed_with_engine_d',
   )
   // C31 is off by owner decision (2026-10-18): the badge says so and shows why.
@@ -271,13 +274,15 @@ test('Estrategias opens on the comparison and every interaction answers', async 
     /^Apagada desde 2026-10-18 · motivo: apagada desde 2026-10-18: Decisión del propietario/,
   )
   await expect(c31).toContainText('desde 2026-10-18')
+  await expect(c31).not.toContainText('Para reactivarla')
+  expect((await c31.innerText()).match(/2026-10-18/g)).toHaveLength(1)
   // C32 was retired by the owner: closed, with its own reason and date.
   const c32 = page.locator('[data-id^="c32"]')
   await expect(c32.getByTestId('operational-badge')).toHaveAttribute(
     'title',
-    /^Cerrada desde 2026-10-18 · motivo: Retirada \(18-oct\): ya no se usa/,
+    /^Retirada desde 2026-10-18 · motivo: Retirada \(18-oct\): ya no se usa/,
   )
-  await expect(c32).toContainText('Retirada (18-oct): ya no se usa')
+  await expect(c32).toContainText('Motivo: ya no se usa')
   await shot(page, '2-retiradas')
 
   // Detail opens the C29 detail view; the laboratory stays one click away.

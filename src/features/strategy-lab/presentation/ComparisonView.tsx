@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { DataState, StatusPill } from '../../../shared/mission-control/index.ts'
 import { count, horizonText, netBpPerOp } from '../domain/strategy-format.ts'
-import { splitStrategies } from '../domain/comparison-groups.ts'
+import { retiredReason, splitStrategies } from '../domain/comparison-groups.ts'
 import type {
   Inventory,
   InventoryStrategy,
@@ -101,10 +101,8 @@ export function ExperimentCard({
         {row.frozen && <FrozenBadge />}
       </div>
 
-      <section className="comparison__block">
-        <h4>Modelo</h4>
-        <p>{marketText(row)}</p>
-      </section>
+      <ForwardResult row={row} now={now} />
+      {start && <small className="comparison__start">{start}</small>}
 
       {row.kind === 'model' && (
         <section className="comparison__block" data-testid="kronos-activity">
@@ -133,15 +131,11 @@ export function ExperimentCard({
         </section>
       )}
 
-      <section className="comparison__block">
-        <h4>Backtest (neto de costes)</h4>
+      <section className="comparison__block comparison__secondary">
+        <h4>Backtest (neto de costes) · histórico, no decide</h4>
         {net && backtest ? (
           <>
-            <strong
-              className={(backtest.mean_net_bp ?? 0) >= 0 ? 'is-up' : 'is-down'}
-            >
-              {net}
-            </strong>
+            <strong>{net}</strong>
             <small>
               {count(backtest.trades)} ops
               {backtest.t_stat != null ? ` · t = ${backtest.t_stat}` : ''}
@@ -159,8 +153,10 @@ export function ExperimentCard({
         )}
       </section>
 
-      <ForwardResult row={row} now={now} />
-      {start && <small className="comparison__start">{start}</small>}
+      <section className="comparison__block comparison__secondary">
+        <h4>Modelo</h4>
+        <p>{marketText(row)}</p>
+      </section>
 
       <section className="comparison__block comparison__verdict">
         <h4>Veredicto según la evidencia</h4>
@@ -402,7 +398,8 @@ export default function ComparisonView({
                 reason={row.operational.reason}
               />
               <span>
-                Motivo: {row.operational.reason ?? 'No disponible'}
+                Motivo:{' '}
+                {retiredReason(row.operational.reason) ?? 'No disponible'}
                 {row.operational.since_ms != null &&
                   ` · desde ${utcDay(row.operational.since_ms)}`}
               </span>

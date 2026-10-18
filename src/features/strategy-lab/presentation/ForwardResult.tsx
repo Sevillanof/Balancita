@@ -72,7 +72,10 @@ export function ForwardResult({
   const result = row.forward.trades
   if (result === null)
     return (
-      <section className="comparison__block" data-testid="forward-result">
+      <section
+        className="comparison__block comparison__forward"
+        data-testid="forward-result"
+      >
         <h4>Forward paper</h4>
         <em>{row.forward.missing ?? 'Sin lectura del forward'}</em>
         {row.forward.problems.map((p) => (
@@ -86,7 +89,10 @@ export function ForwardResult({
     : 0
   const ago = agoText(result.last_run_ms, now)
   return (
-    <section className="comparison__block" data-testid="forward-result">
+    <section
+      className="comparison__block comparison__forward"
+      data-testid="forward-result"
+    >
       <h4>Forward paper</h4>
       <p data-testid="forward-state">{stateLine(result.state)}</p>
       <Side title="En vivo" side={result.live} testid="forward-live" />

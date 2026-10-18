@@ -118,10 +118,10 @@ describe('ComparisonView (datos de ejemplo)', () => {
     const retired = within(screen.getByTestId('retired-row'))
     expect(retired.getByText('X5 Cerrada')).toBeInTheDocument()
     expect(retired.getByTestId('operational-badge')).toHaveTextContent(
-      'Cerrada',
+      'Retirada',
     )
     expect(screen.getByTestId('retired-row')).toHaveTextContent(
-      'Motivo: closed_with_engine_d',
+      'Motivo: se cerró con el motor viejo D',
     )
   })
 

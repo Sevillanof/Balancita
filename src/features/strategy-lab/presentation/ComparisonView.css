@@ -269,3 +269,38 @@
 .comparison__panel {
   overflow-x: auto;
 }
+
+/* Live forward decides: it leads the card; the backtest is history. */
+.comparison__forward {
+  border-color: var(--mc-long);
+  gap: 8px;
+}
+
+.comparison__forward p,
+.comparison__forward div,
+.comparison__forward small {
+  font-size: 13px;
+  line-height: 18px;
+}
+
+.comparison__forward small {
+  display: block;
+  color: var(--mc-text-2);
+  font-size: 12px;
+}
+
+.comparison__forward progress {
+  display: block;
+  width: 100%;
+}
+
+.comparison__secondary strong {
+  color: var(--mc-text-2);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.comparison__health-off {
+  color: var(--mc-text-2);
+  font-size: 12px;
+}
