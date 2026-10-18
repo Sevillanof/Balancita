@@ -31,6 +31,45 @@ CREATE TABLE paper_futures_funding_periods(response_sha256 TEXT NOT NULL, start_
 """
 
 _cache = {}
+FUNDING_FILE = os.path.join(real_sample.PARTIAL_DIR, "paper_futures_funding_responses_trimmed.jsonl")
+
+
+class Raw(str):
+    """The text of a number exactly as Kraken wrote it (a float would round it)."""
+
+
+def loads_exact(text):
+    """``json.loads`` with every decimal number kept as its own text (``Raw``)."""
+    return json.loads(text, parse_float=Raw)
+
+
+def dumps_exact(value):
+    """``json.dumps(value, sort_keys=True)`` that writes a ``Raw`` number back with the text it came with."""
+    if isinstance(value, Raw):
+        return str(value)
+    if isinstance(value, dict):
+        return "{" + ", ".join("{}: {}".format(json.dumps(k), dumps_exact(value[k])) for k in sorted(value)) + "}"
+    if isinstance(value, list):
+        return "[" + ", ".join(dumps_exact(v) for v in value) + "]"
+    return json.dumps(value)
+
+
+def funding():
+    """The 20 hourly funding responses the capture really stored for PF_XBTUSD, each cut to the newest 48 hours it listed (the text of
+    every rate is Kraken's own): ``{received_at, server_time, sha256, raw, periods}`` in arrival order. ``periods`` are the rows the
+    capture stored for the response (the hour it added), from the sample's funding periods."""
+    if "funding" not in _cache:
+        periods = {}
+        for row in real_sample.rows("funding_periods", real_sample.PARTIAL_DIR):
+            periods.setdefault(row["response_sha256"], []).append(row)
+        out = []
+        with open(FUNDING_FILE, encoding="utf-8") as handle:
+            for line in handle:
+                row = loads_exact(line)
+                out.append({"received_at": row["received_at"], "server_time": row["server_time"], "sha256": row["response_sha256"],
+                            "raw": dumps_exact(row["raw_trimmed"]), "periods": periods[row["response_sha256"]]})
+        _cache["funding"] = sorted(out, key=lambda r: r["received_at"])
+    return _cache["funding"]
 
 
 def candles():
@@ -52,7 +91,7 @@ def quotes():
 class RealWorld(object):
     """``release_until(t)`` writes every real candle known by ``t`` and every real quote received by ``t`` that is not in a hole."""
 
-    def __init__(self, directory, quote_holes=()):
+    def __init__(self, directory, quote_holes=(), with_funding=False):
         self.dir = directory
         self.path = os.path.join(directory, "capture.sqlite")
         self.db = sqlite3.connect(self.path)
@@ -60,8 +99,10 @@ class RealWorld(object):
         self.db.executescript(MARKER)
         self.db.executescript(FUNDING_TABLES)
         self.holes = tuple(quote_holes)
-        self.candle_rows = candles()                # a subclass may hand some of them over later than they really arrived
-        self.next_candle = self.next_quote = 0
+        self.candle_rows = candles()
+        self.funding_rows = funding() if with_funding else []       # the accounting funding the capture stored; a scenario may drop, change or add some
+        self.next_funding = 0
+        self.next_candle = self.next_quote = 0               # a subclass may hand some candles over later than they really arrived
         self.db.commit()
 
     def release_until(self, t_ms):
@@ -83,6 +124,14 @@ class RealWorld(object):
             self.db.execute("INSERT INTO paper_futures_market_events VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
                             ("ticker:{}:{}:{}".format(BTC, epoch, seq), "ticker", BTC, epoch, seq, event_time, received, persisted, None, "{}",
                              text, hashlib.sha256(text.encode()).hexdigest()))
+        while self.next_funding < len(self.funding_rows) and self.funding_rows[self.next_funding]["received_at"] <= t_ms:
+            row = self.funding_rows[self.next_funding]
+            self.next_funding += 1
+            self.db.execute("INSERT INTO paper_futures_funding_responses VALUES(?,?,?,?)", (row["sha256"], row["received_at"], row["server_time"], row["raw"]))
+            for period in row["periods"]:
+                self.db.execute("INSERT INTO paper_futures_funding_periods VALUES(?,?,?,?,?,?,?)",
+                                (row["sha256"], period["start_ms"], period["end_ms"], period["funding_rate"], period["known_at"], period["unit"],
+                                 period["product_id"]))
         self.db.commit()
 
     def snapshot(self, directory):
@@ -90,7 +139,7 @@ class RealWorld(object):
         self.db.commit()
         path = os.path.join(directory, "capture-snapshot.sqlite")
         shutil.copyfile(self.path, path)
-        return {"capture": path, "next_candle": self.next_candle, "next_quote": self.next_quote}
+        return {"capture": path, "next_candle": self.next_candle, "next_quote": self.next_quote, "next_funding": self.next_funding}
 
     def fork(self, directory, snap):
         """A world that continues from ``snap`` in its own file (the real rows are shared, nothing is read again)."""
@@ -98,7 +147,7 @@ class RealWorld(object):
         other.path = os.path.join(directory, "capture.sqlite")
         shutil.copyfile(snap["capture"], other.path)
         other.db = sqlite3.connect(other.path)
-        other.next_candle, other.next_quote = snap["next_candle"], snap["next_quote"]
+        other.next_candle, other.next_quote, other.next_funding = snap["next_candle"], snap["next_quote"], snap["next_funding"]
         return other
 
     def close(self):
