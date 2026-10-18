@@ -8,6 +8,7 @@ import shutil
 import tempfile
 import unittest
 from decimal import Decimal
+from unittest import mock
 
 from balancita_engine import paper_live_evaluator as LE
 from balancita_engine import replay_data as RD
@@ -558,6 +559,26 @@ class TestRecoveryAndGaps(Fixture):
         gap_free = [c for c in cycles if hole < c < hole + ev.warmup_ms]
         self.assertEqual(gap_free, [])                                  # nothing is decided on features rebuilt after a hole
         self.assertTrue([c for c in cycles if c < hole])                 # decisions before the hole stand
+
+    def test_the_session_resumes_at_the_instant_the_warmup_names_not_before_and_not_later(self):
+        """The edge of the warm-up after a hole, on the fixture and with a shortened ``required_warmup_ms`` (it proves the gate, not the 12 days):
+        no cycle closes before ``until_ms``, every suppressed cycle names that instant, and the first cycle at or after it is made."""
+        warmup = 12 * HOUR                  # longer than the rebuilt indicators need (a cycle exists), so the warm-up is what holds it, and inside the fixture's day
+        hole = FIRST_DECISION + 8 * HOUR
+        short = [i for i in self.stream() if not (i[2] == "candle" and i[3]["bucket_start"] == hole)]
+        with mock.patch.object(LE, "required_warmup_ms", lambda periods: warmup):
+            ev = self.evaluator()
+        got = self.drive(ev, [i for i in short if i[0] <= hole + warmup + HOUR])
+        until = hole + MIN + warmup
+        report = ev.report()
+        cycles = sorted(e["payload"]["cycle_ms"] for e in got)
+        self.assertEqual({s["until_ms"] for s in report["suppressed"]}, {until})                  # the instant it waits for, written down
+        self.assertTrue(all(s["cycle_ms"] < until for s in report["suppressed"]))
+        self.assertEqual([c for c in cycles if hole < c < until], [])                           # nothing before it, down to the last cycle
+        after = [c for c in cycles if c >= until]
+        self.assertTrue(after)
+        self.assertLess(after[0], until + FIVE_MINUTES_MS)                                      # the first cycle that is allowed is made, not one later
+        self.assertEqual(max(s["cycle_ms"] for s in report["suppressed"]) + FIVE_MINUTES_MS >= until, True)     # and the one just before it was held back
 
     def test_invalid_candles_and_unknown_products_are_refused_without_touching_state(self):
         ev = self.evaluator()
