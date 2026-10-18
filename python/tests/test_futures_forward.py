@@ -1,3 +1,5 @@
+import contextlib
+import io
 import json
 import os
 import sqlite3
@@ -155,6 +157,125 @@ class RecoveryTests(unittest.TestCase):
         self.assertEqual(len([f for f in os.listdir(out) if ".before-rebuild-" in f]), 1)
         with open(os.path.join(out, "forward-reliability.json"), encoding="utf-8") as handle:
             self.assertEqual(json.load(handle)["strategies"][C30]["diverged_trades"], 0)
+
+    def _stored_before_the_marks(self, name):
+        """A forward.sqlite as the previous version left it: trades across an unfilled hole and no era marks."""
+        _, db = self._run(name, (3700, 3900), filled=False)
+        with sqlite3.connect(db) as handle:
+            handle.executescript("DROP TABLE forward_era; DROP TABLE forward_diverged; DROP TABLE forward_unclassified;"
+                                 "DELETE FROM forward_policy WHERE name='legacy_era_marked_ms';")
+        filled = os.path.join(self.dir.name, name + "-filled.sqlite")
+        _market(filled, hole=(3700, 3900))
+        return db, filled
+
+    def test_trades_stored_under_the_old_rule_are_legacy_not_an_error_and_never_live(self):
+        db, filled = self._stored_before_the_marks("legacy")
+        run_forward(filled, db, SPECS, self.registration, self.PRODUCTS)
+        summary = write_summary(db, SPECS, self.registration, os.path.join(self.dir.name, "s.json"))["strategies"][C30]
+        self.assertEqual(summary["diverged_trades"], 0)
+        self.assertGreaterEqual(summary["legacy_diverged_trades"], 1)
+        self.assertEqual(summary["unclassified_trades"], summary["legacy_diverged_trades"])
+        self.assertEqual(summary["summary_unclassified"]["trades"], summary["unclassified_trades"])
+        self.assertIn("#283", summary["legacy_note"])
+        self.assertEqual(summary["live_trades"] + summary["recovered_trades"] + summary["unclassified_trades"],
+                         len(_trades(db)))
+        self.assertEqual(summary["summary_without_recovered"]["trades"], summary["live_trades"])
+        self.assertEqual(summary["summary"]["trades"], summary["live_trades"] + summary["recovered_trades"])
+        with sqlite3.connect(db) as handle:
+            self.assertEqual({era for (era,) in handle.execute("SELECT era FROM forward_era")} - {"bloqueo-antiguo"},
+                             {"actual"} if summary["live_trades"] + summary["recovered_trades"] else set())
+
+    def test_the_marks_are_written_once_and_new_trades_are_of_the_current_era(self):
+        db, filled = self._stored_before_the_marks("marks")
+        run_forward(filled, db, SPECS, self.registration, self.PRODUCTS)
+        with sqlite3.connect(db) as handle:
+            before = handle.execute("SELECT * FROM forward_era ORDER BY entry_bucket_ms").fetchall()
+        run_forward(filled, db, SPECS, self.registration, self.PRODUCTS)
+        with sqlite3.connect(db) as handle:
+            self.assertEqual(handle.execute("SELECT * FROM forward_era ORDER BY entry_bucket_ms").fetchall(), before)
+        self.assertIn("bloqueo-antiguo", {row[4] for row in before})
+        _, fresh = self._run("fresh", None)
+        with sqlite3.connect(fresh) as handle:
+            self.assertEqual(handle.execute("SELECT DISTINCT era FROM forward_era").fetchall(), [("actual",)])
+
+    def test_the_legacy_marking_runs_once_and_later_writes_are_never_legacy(self):
+        db, filled = self._stored_before_the_marks("once")
+        run_forward(filled, db, SPECS, self.registration, self.PRODUCTS)
+        with sqlite3.connect(db) as handle:
+            old = handle.execute("SELECT COUNT(*) FROM forward_era WHERE era='bloqueo-antiguo'").fetchone()[0]
+            self.assertGreaterEqual(old, 1)
+            # An old process keeps writing a trade without era after the marking.
+            handle.execute("INSERT INTO forward_trade SELECT strategy_id, product_id, ?, spec_hash, payload "
+                           "FROM forward_trade LIMIT 1", (START + 9_000 * MINUTE,))
+        run_forward(filled, db, SPECS, self.registration, self.PRODUCTS)
+        with sqlite3.connect(db) as handle:
+            self.assertEqual(handle.execute("SELECT COUNT(*) FROM forward_era WHERE era='bloqueo-antiguo'").fetchone()[0], old)
+            self.assertEqual(handle.execute("SELECT COUNT(*) FROM forward_era WHERE entry_bucket_ms=?",
+                                            (START + 9_000 * MINUTE,)).fetchone()[0], 0)
+
+    def test_a_classification_does_not_flip_between_cycles(self):
+        db, filled = self._stored_before_the_marks("flip")
+        path = os.path.join(self.dir.name, "s.json")
+        run_forward(filled, db, SPECS, self.registration, self.PRODUCTS)
+        first = write_summary(db, SPECS, self.registration, path)["strategies"][C30]
+        self.assertGreaterEqual(first["unclassified_trades"], 1)
+        # Second cycle on the market the trades were stored on: they are reproduced again, yet stay unclassified.
+        again = os.path.join(self.dir.name, "flip-unfilled.sqlite")
+        _market(again, hole=(3700, 3900), filled=False)
+        run_forward(again, db, SPECS, self.registration, self.PRODUCTS)
+        second = write_summary(db, SPECS, self.registration, path)["strategies"][C30]
+        for key in ("unclassified_trades", "live_trades", "recovered_trades", "legacy_diverged_trades"):
+            self.assertEqual(second[key], first[key], key)
+        run_forward(filled, db, SPECS, self.registration, self.PRODUCTS)
+        third = write_summary(db, SPECS, self.registration, path)["strategies"][C30]
+        self.assertEqual(third["unclassified_trades"], first["unclassified_trades"])
+
+    def test_two_rebuilds_in_the_same_instant_never_overwrite_the_evidence(self):
+        out = os.path.join(self.dir.name, "twice")
+        os.makedirs(out)
+        for text in ("a", "b"):
+            sqlite3.connect(os.path.join(out, "forward.sqlite")).close()
+        kept = futures_forward.start_rebuild(out, now_s=1000)
+        self.assertTrue(kept.endswith(".before-rebuild-1000000"))
+        sqlite3.connect(os.path.join(out, "forward.sqlite")).close()
+        with self.assertRaises(FileExistsError):
+            futures_forward.start_rebuild(out, now_s=1000)
+        self.assertTrue(os.path.exists(os.path.join(out, "forward.sqlite")))
+        self.assertTrue(os.path.exists(kept))
+
+    def test_rebuild_keeps_first_seen_and_policy_the_old_file_and_says_where(self):
+        out = os.path.join(self.dir.name, "rebuild-out")
+        os.makedirs(out)
+        current = os.path.join(out, "forward.sqlite")
+        with sqlite3.connect(current) as handle:
+            handle.executescript(
+                "CREATE TABLE forward_first_seen(strategy_id TEXT NOT NULL, spec_hash TEXT NOT NULL, "
+                "seen_ms INTEGER NOT NULL, PRIMARY KEY(strategy_id, spec_hash)) STRICT;"
+                "INSERT INTO forward_first_seen VALUES('s1','h1',1234);"
+                "CREATE TABLE forward_policy(name TEXT NOT NULL PRIMARY KEY, value INTEGER NOT NULL) STRICT;"
+                "INSERT INTO forward_policy VALUES('stale_gate_from_ms', 777);")
+        registration = os.path.join(self.dir.name, "reg.json")
+        with open(registration, "w", encoding="utf-8") as handle:
+            json.dump(dict(self.registration, schema="futures-forward-strategies.v1"), handle)
+        market = os.path.join(self.dir.name, "rebuild-market.sqlite")
+        _market(market)
+        output = io.StringIO()
+        with mock.patch("balancita_engine.futures_forward.resolve_products", return_value=self.PRODUCTS), \
+                contextlib.redirect_stdout(output):
+            main(["--market-db", market, "--out", out, "--registration", registration, "--rebuild"])
+        (kept,) = [f for f in os.listdir(out) if ".before-rebuild-" in f]
+        self.assertIn(os.path.join(out, kept), output.getvalue())
+        with sqlite3.connect(os.path.join(out, kept)) as handle:
+            self.assertEqual(handle.execute("SELECT seen_ms FROM forward_first_seen").fetchall(), [(1234,)])
+        with sqlite3.connect(current) as handle:
+            self.assertEqual(handle.execute("SELECT strategy_id, spec_hash, seen_ms FROM forward_first_seen").fetchall(),
+                             [("s1", "h1", 1234)])
+            self.assertEqual(handle.execute("SELECT value FROM forward_policy WHERE name='stale_gate_from_ms'").fetchall(),
+                             [(777,)])
+        self.assertEqual(_trades(current), self.reference)
+
+    def test_rebuild_without_a_database_keeps_nothing_and_does_not_fail(self):
+        self.assertIsNone(futures_forward.start_rebuild(self.dir.name))
 
     def test_a_candle_learned_within_the_normal_poll_delay_is_not_recovered(self):
         self.assertGreater(LATE_KNOWN_MS, 60_000)

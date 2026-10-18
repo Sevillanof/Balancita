@@ -348,6 +348,30 @@ describe('observability health', () => {
     expect(report.overall.status).toBe('warning')
   })
 
+  it('does not raise a warning for old-rule legacy trades but still does for current-era divergences', () => {
+    const b = box()
+    seedHealthy(b)
+    fresh(b.forwardDb)
+    seedForward(b.forwardDb, {
+      now: NOW,
+      strategies: ['C29'],
+      checkedAgeMs: 60_000,
+      legacyDiverged: 28,
+    })
+    const report = createObservabilityHealth(optionsOf(b)).report()
+    const paper = component(report, 'paper')
+    const anomalies = check(paper, 'forward_anomalies')
+    expect(anomalies.status).toBe('ok')
+    expect(anomalies.detail).toContain(
+      '28 trades del legado (#283) no se reproducen con la regla actual; `--rebuild` los recalcula conservando la evidencia y el inicio de cada estrategia',
+    )
+    expect(JSON.stringify(report)).toContain('"legacy_diverged_trades":28')
+    expect(JSON.stringify(paper.limitations)).not.toContain('falta B5')
+    expect(JSON.stringify(paper.limitations)).toContain(
+      'GET /api-strategies/forward',
+    )
+  })
+
   it('treats a forward process with no recent cycle as an error and an old cycle without process info as unknown', () => {
     const b = box()
     seedHealthy(b)

@@ -95,6 +95,15 @@ export function ForwardResult({
         side={result.recovered}
         testid="forward-recovered"
       />
+      {result.unclassified && result.unclassified.closed > 0 && (
+        <div data-testid="forward-unclassified-closed">
+          <b>Sin clasificar</b>: {count(result.unclassified.closed)} cerradas
+          <small>
+            {result.unclassified.note}. {result.unclassified.hint} No cuentan
+            como en vivo ni para el mínimo.
+          </small>
+        </div>
+      )}
       {result.unclassified_open.count > 0 && (
         <div data-testid="forward-unclassified-open">
           <b>Sin clasificar</b>: {result.unclassified_open.count}
