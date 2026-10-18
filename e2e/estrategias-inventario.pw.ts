@@ -211,7 +211,7 @@ test('GET /api-strategies/inventory answers through the Vite proxy with the real
   ).toBe(404)
 })
 
-test('Estrategias opens on the inventory and every interaction answers', async ({
+test('Estrategias opens on the comparison and every interaction answers', async ({
   page,
 }) => {
   const log: { method: string; url: string; status: number }[] = []
@@ -227,12 +227,14 @@ test('Estrategias opens on the inventory and every interaction answers', async (
 
   await page.goto('/estrategias')
   await expect(
-    page.getByRole('heading', {
-      name: 'Inventario de modelos y calificación estadística',
-    }),
+    page.getByRole('heading', { name: 'Un libro paper por estrategia' }),
   ).toBeVisible()
-  const rows = page.getByTestId('inventory-row')
-  await expect(rows).toHaveCount(10)
+  // One page: no tabs, no separate inventory.
+  await expect(page.getByRole('tablist')).toHaveCount(0)
+  const cards = page.getByTestId('experiment-card')
+  await expect(cards).toHaveCount(4)
+  const retiredRows = page.getByTestId('retired-row')
+  await expect(retiredRows).toHaveCount(6)
   // Same words for both axes; C30 is the only candidate, never "reliable".
   const c30 = page.locator('[data-id="c30-momentum-12h-perp-v1"]')
   await expect(c30.getByTestId('research-badge')).toHaveText(
@@ -243,14 +245,24 @@ test('Estrategias opens on the inventory and every interaction answers', async (
   )
   await expect(
     page
-      .locator('[data-id="c25-pullback-perp-v1"]')
-      .getByTestId('operational-badge'),
-  ).toHaveText('Cerrada')
-  await expect(
-    page
       .locator('[data-id="kronos-small-1h-h4-v1"]')
       .getByTestId('operational-badge'),
   ).toHaveText('Estado no verificado')
+  await expect(page.getByText('Activa en paper')).toHaveCount(0)
+  await expect(page.getByText('Con evidencia de ventaja')).toHaveCount(0)
+  await shot(page, '1-estrategias')
+
+  // Retired and turned-off strategies: collapsed, each with reason and date.
+  const retired = page.getByTestId('retired')
+  await expect(retired).not.toHaveAttribute('open', '')
+  await retired.getByText('Retiradas y apagadas').click()
+  await expect(retired).toHaveAttribute('open', '')
+  await expect(
+    page.locator('[data-id^="c25"]').getByTestId('operational-badge'),
+  ).toHaveText('Cerrada')
+  await expect(page.locator('[data-id^="c25"]')).toContainText(
+    'closed_with_engine_d',
+  )
   // C31 is off by owner decision (2026-10-18): the badge says so and shows why.
   const c31 = page.locator('[data-id^="c31"]')
   await expect(c31.getByTestId('operational-badge')).toHaveText('Apagada')
@@ -258,36 +270,15 @@ test('Estrategias opens on the inventory and every interaction answers', async (
     'title',
     /^Apagada desde 2026-10-18 · motivo: apagada desde 2026-10-18: Decisión del propietario/,
   )
-  await expect(page.getByText('Activa en paper')).toHaveCount(0)
-  await expect(page.getByText('Con evidencia de ventaja')).toHaveCount(0)
-  await expect(page.getByText('Todas', { exact: false }).first()).toBeVisible()
-  await shot(page, '1-inventario')
-
-  // Filters.
-  await page.getByRole('button', { name: /Cerradas/ }).click()
-  await expect(rows).toHaveCount(5)
-  await page.getByRole('button', { name: /Evidencia preliminar/ }).click()
-  await expect(rows).toHaveCount(1)
-  await page.getByRole('button', { name: /Todas/ }).click()
-  await expect(rows).toHaveCount(10)
-
-  // Audit of a closed strategy.
-  await page.getByRole('button', { name: /Auditar C25/ }).click()
-  await expect(page.getByTestId('inventory-audit')).toContainText(
-    'closed_with_engine_d',
-  )
-  await shot(page, '2-auditoria-cerrada')
-
+  await expect(c31).toContainText('desde 2026-10-18')
   // C32 was retired by the owner: closed, with its own reason and date.
-  await page.getByRole('button', { name: /Auditar C32/ }).click()
-  const retired = page.locator('[data-id^="c32"]')
-  await expect(retired.getByTestId('operational-badge')).toHaveAttribute(
+  const c32 = page.locator('[data-id^="c32"]')
+  await expect(c32.getByTestId('operational-badge')).toHaveAttribute(
     'title',
     /^Cerrada desde 2026-10-18 · motivo: Retirada \(18-oct\): ya no se usa/,
   )
-  await expect(page.getByTestId('inventory-audit').last()).toContainText(
-    'Retirada (18-oct): ya no se usa',
-  )
+  await expect(c32).toContainText('Retirada (18-oct): ya no se usa')
+  await shot(page, '2-retiradas')
 
   // Detail opens the C29 detail view; the laboratory stays one click away.
   await page.getByRole('button', { name: /Detalle de C29/ }).click()
@@ -301,32 +292,31 @@ test('Estrategias opens on the inventory and every interaction answers', async (
   ).toBeVisible()
   await expect(page.getByRole('button', { name: 'Importar' })).toBeVisible()
   await shot(page, '3-laboratorio-c29')
-  await page.getByRole('tab', { name: 'Inventario de modelos' }).click()
-  await expect(rows).toHaveCount(10)
+  await page.getByRole('button', { name: '← Estrategias' }).click()
+  await expect(cards).toHaveCount(4)
 
-  // «Ver contador» of the Carry row opens the real counter and returns.
+  // «Ver contador» of the Carry card opens the real counter and returns.
   await page.getByRole('button', { name: /Ver contador de/ }).click()
-  await expect(page.getByRole('tab', { name: 'Laboratorio' })).toHaveAttribute(
-    'aria-selected',
-    'true',
-  )
+  await expect(page.getByRole('heading', { name: 'Laboratorio' })).toBeVisible()
   const carryPanel = page.getByRole('region', { name: 'Carry de funding' })
   await expect(carryPanel).toBeVisible()
   await expect(page.getByTestId('carry-destino')).toBeFocused()
   await expect(carryPanel).toBeInViewport()
   await shot(page, '4-contador-carry')
-  await page.getByRole('tab', { name: 'Inventario de modelos' }).click()
-  await expect(rows).toHaveCount(10)
+  await page.getByRole('button', { name: '← Estrategias' }).click()
+  await expect(cards).toHaveCount(4)
 
-  // The Carry request is served once: entering the Laboratory again from the
-  // tab (not from «Ver contador») must not pull the focus back to Carry.
-  await page.getByRole('tab', { name: 'Laboratorio' }).click()
+  // The Carry request is served once: entering the Laboratory again through
+  // «Nueva estrategia» (not «Ver contador») must not pull the focus to Carry.
+  await page.getByRole('button', { name: 'Nueva estrategia' }).click()
+  await expect(page.getByRole('dialog')).toBeVisible()
+  await page.keyboard.press('Escape')
   await expect(
     page.getByRole('region', { name: 'Carry de funding' }),
   ).toBeVisible()
   await expect(page.getByTestId('carry-destino')).not.toBeFocused()
-  await page.getByRole('tab', { name: 'Inventario de modelos' }).click()
-  await expect(rows).toHaveCount(10)
+  await page.getByRole('button', { name: '← Estrategias' }).click()
+  await expect(cards).toHaveCount(4)
 
   mkdirSync(SHOTS, { recursive: true })
   writeFileSync(join(SHOTS, 'solicitudes.json'), JSON.stringify(log, null, 2))
@@ -349,10 +339,6 @@ test('the forward result of C30 renders live and recovered apart, with progress'
   page,
 }) => {
   await page.goto('/estrategias')
-  const row = page.locator(`[data-id="${C30}"]`)
-  await expect(row).toContainText('forward: 7/15 en vivo')
-  await expect(row).toContainText('paper: +31,50 USD en vivo')
-  await page.getByRole('button', { name: 'Ver comparación' }).click()
   const forward = page
     .locator(`[data-id="${C30}"]`)
     .getByTestId('forward-result')
@@ -380,7 +366,7 @@ test('the forward result of C30 renders live and recovered apart, with progress'
   ).toContainText('el forward no mide esta estrategia')
 })
 
-test('navigation: Terminal <-> Estrategias <-> inventory <-> detail, no new tabs', async ({
+test('navigation: Terminal <-> Estrategias <-> detail, no new tabs', async ({
   page,
 }) => {
   await page.route('**/api-live/**', (route) =>
@@ -390,26 +376,18 @@ test('navigation: Terminal <-> Estrategias <-> inventory <-> detail, no new tabs
   // against the real gateway in integracion-gateway.pw.ts.
   await page.goto('/estrategias')
   await expect(
-    page.getByRole('heading', {
-      name: 'Inventario de modelos y calificación estadística',
-    }),
+    page.getByRole('heading', { name: 'Un libro paper por estrategia' }),
   ).toBeVisible()
-  await expect(page.getByTestId('inventory-row')).toHaveCount(10)
-  // No new tab: the two views of Estrategias are the only ones.
-  await expect(page.getByRole('tab')).toHaveText([
-    'Inventario de modelos',
-    'Laboratorio',
-  ])
-  // Inventory -> detail of C29 -> back through the breadcrumb.
+  await expect(page.getByTestId('experiment-card')).toHaveCount(4)
+  // No tabs: Estrategias is one page.
+  await expect(page.getByRole('tablist')).toHaveCount(0)
+  // Strategies page -> detail of C29 -> back through the breadcrumb.
   await page.getByRole('button', { name: /Detalle de C29/ }).click()
   const detail = page.getByTestId('strategy-detail')
   await expect(detail).toBeVisible()
   await expect(detail.getByRole('heading', { name: /^C29/ })).toBeVisible()
-  await expect(
-    page.getByRole('tab', { name: 'Inventario de modelos' }),
-  ).toHaveAttribute('aria-selected', 'true')
   await detail.getByRole('button', { name: 'Estrategias' }).click()
-  await expect(page.getByTestId('inventory-row')).toHaveCount(10)
+  await expect(page.getByTestId('experiment-card')).toHaveCount(4)
   // The detail is generic: other rules strategies open the same view, with
   // their own figures and without C29's.
   await page.getByRole('button', { name: /Detalle de C30/ }).click()
@@ -436,22 +414,19 @@ test('navigation: Terminal <-> Estrategias <-> inventory <-> detail, no new tabs
   await expect(page.getByTestId('strategy-detail')).toHaveCount(0)
   await page.goBack()
   await expect(page).toHaveURL(/\/estrategias$/)
-  await expect(page.getByTestId('inventory-row')).toHaveCount(10)
+  await expect(page.getByTestId('experiment-card')).toHaveCount(4)
   await page.getByRole('button', { name: /Detalle de C30/ }).click()
-  // Detail -> laboratory (explicit action) -> back to the inventory tab.
+  // Detail -> laboratory (explicit action) -> back to the strategies page.
   await detail.getByRole('button', { name: 'Abrir en Laboratorio' }).click()
-  await expect(page.getByRole('tab', { name: 'Laboratorio' })).toHaveAttribute(
-    'aria-selected',
-    'true',
-  )
-  await page.getByRole('tab', { name: 'Inventario de modelos' }).click()
-  await expect(page.getByTestId('inventory-row')).toHaveCount(10)
-  // Estrategias -> Terminal -> back: opens on the inventory again.
+  await expect(page.getByRole('heading', { name: 'Laboratorio' })).toBeVisible()
+  await page.getByRole('button', { name: '← Estrategias' }).click()
+  await expect(page.getByTestId('experiment-card')).toHaveCount(4)
+  // Estrategias -> Terminal -> back: opens on the strategies page again.
   await page.getByRole('link', { name: 'Terminal', exact: true }).click()
   await expect(page).toHaveURL(/\/terminal$/)
   await page.goBack()
   await expect(page).toHaveURL(/\/estrategias$/)
-  await expect(page.getByTestId('inventory-row')).toHaveCount(10)
+  await expect(page.getByTestId('experiment-card')).toHaveCount(4)
 })
 
 test('Detalle C29 shows the real registry figures, B2 operations and no invented data', async ({
@@ -492,7 +467,7 @@ test('Detalle C29 shows the real registry figures, B2 operations and no invented
   await expect(
     detail.getByRole('heading', { name: /^C29/, level: 2 }),
   ).toBeVisible()
-  // Same badges as the inventory.
+  // Same badges as the cards.
   await expect(detail.getByTestId('operational-badge')).toHaveText(
     'Activa en el registro',
   )
@@ -546,9 +521,9 @@ test('Detalle C29 shows the real registry figures, B2 operations and no invented
   mkdirSync(DETAIL_SHOTS, { recursive: true })
   await shot(page, 'detalle-c29', DETAIL_SHOTS, false)
   await shot(page, 'detalle-c29-completo', DETAIL_SHOTS)
-  // Back to the inventory through the breadcrumb.
+  // Back to the strategies page through the breadcrumb.
   await detail.getByRole('button', { name: 'Estrategias' }).click()
-  await expect(page.getByTestId('inventory-row')).toHaveCount(10)
+  await expect(page.getByTestId('experiment-card')).toHaveCount(4)
 
   writeFileSync(
     join(DETAIL_SHOTS, 'solicitudes.json'),

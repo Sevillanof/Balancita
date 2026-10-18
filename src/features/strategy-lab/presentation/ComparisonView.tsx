@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { DataState, StatusPill } from '../../../shared/mission-control/index.ts'
 import { count, horizonText, netBpPerOp } from '../domain/strategy-format.ts'
-import { splitExperiments } from '../domain/comparison-groups.ts'
+import { splitStrategies } from '../domain/comparison-groups.ts'
 import type {
   Inventory,
   InventoryStrategy,
@@ -54,7 +54,6 @@ export function ExperimentCard({
   row,
   inventory,
   onOpen,
-  onInventory,
   activity = null,
   now,
 }: {
@@ -64,17 +63,15 @@ export function ExperimentCard({
   activity?: KronosActivity | null
   now: number
   onOpen: () => void
-  onInventory: () => void
 }) {
   const backtest = row.research.backtest
   const net = netBpPerOp(backtest?.mean_net_bp)
   const detail = validationDetail(row, inventory)
-  const closed = row.operational.state === 'closed'
   const start = forwardText(row)
   const verified = row.kind === 'model' && activity?.verified ? activity : null
   return (
     <article
-      className={closed ? 'comparison__card is-closed' : 'comparison__card'}
+      className="comparison__card"
       data-testid="experiment-card"
       data-id={row.id}
     >
@@ -171,27 +168,30 @@ export function ExperimentCard({
         {detail.extra && <p>{detail.extra}</p>}
       </section>
 
-      {closed || row.kind === 'qwen_exit' ? (
-        <button type="button" onClick={onInventory}>
-          Ver en inventario
-        </button>
-      ) : (
-        <button
-          type="button"
-          aria-label={
-            row.kind === 'model'
-              ? 'Abrir Kronos en el Laboratorio'
-              : `Detalle de ${row.name}`
-          }
-          onClick={onOpen}
-        >
-          {row.kind === 'model'
-            ? 'Abrir Kronos en el Laboratorio →'
+      <button
+        type="button"
+        className="comparison__open"
+        aria-label={
+          row.kind === 'model'
+            ? 'Abrir Kronos en el Laboratorio'
             : row.kind === 'carry'
-              ? 'Ver contador →'
-              : 'Detalle →'}
-        </button>
-      )}
+              ? `Ver contador de ${row.name}`
+              : `Detalle de ${row.name}`
+        }
+        disabled={row.kind === 'qwen_exit'}
+        title={
+          row.kind === 'qwen_exit'
+            ? 'Sin detalle: los resultados de C31 son un archivo local'
+            : undefined
+        }
+        onClick={onOpen}
+      >
+        {row.kind === 'model'
+          ? 'Abrir Kronos en el Laboratorio →'
+          : row.kind === 'carry'
+            ? 'Ver contador →'
+            : 'Detalle →'}
+      </button>
     </article>
   )
 }
@@ -201,7 +201,10 @@ type Props = {
   connectError: string | null
   reload: number
   onOpen: (row: InventoryStrategy) => void
-  onBack: () => void
+  /** «Nueva estrategia»: opens the laboratory. */
+  onNew: () => void
+  /** The loaded inventory, for the detail view of the page. */
+  onLoaded?: (inventory: Inventory | null) => void
   loadActivity?: () => Promise<KronosActivity>
 }
 
@@ -219,7 +222,8 @@ export default function ComparisonView({
   connectError,
   reload,
   onOpen,
-  onBack,
+  onNew,
+  onLoaded,
   loadActivity = defaultLoadActivity,
 }: Props) {
   const [inventory, setInventory] = useState<Inventory | null>(null)
@@ -262,16 +266,18 @@ export default function ComparisonView({
         if (!active) return
         setInventory(loaded)
         setFailure(null)
+        onLoaded?.(loaded)
       },
       (error: unknown) => {
         if (!active) return
         setFailure(error instanceof Error ? error.message : String(error))
+        onLoaded?.(null)
       },
     )
     return () => {
       active = false
     }
-  }, [api, reload])
+  }, [api, reload, onLoaded])
 
   if (connectError)
     return (
@@ -306,35 +312,24 @@ export default function ComparisonView({
   if (!inventory)
     return <DataState kind="loading" title="Cargando la comparación…" />
 
-  const { running, stopped } = splitExperiments(inventory)
-  const renderCard = (row: InventoryStrategy) => (
-    <ExperimentCard
-      key={row.id}
-      row={row}
-      inventory={inventory}
-      onOpen={() => onOpen(row)}
-      onInventory={onBack}
-      activity={activity}
-      now={now}
-    />
-  )
+  const { active: running, retired } = splitStrategies(inventory)
+  const cost = inventory.cost_model
   return (
-    <section className="comparison" aria-label="Comparación de experimentos">
+    <section className="comparison" aria-label="Estrategias">
       <header className="comparison__head">
         <div>
-          <p className="comparison__eyebrow">
-            Estrategias · <b>Comparación de experimentos</b>
-          </p>
-          <h2>Un libro paper por experimento</h2>
+          <p className="comparison__eyebrow">Estrategias</p>
+          <h2>Un libro paper por estrategia</h2>
         </div>
-        <button type="button" onClick={onBack}>
-          ← Volver al inventario
+        <button type="button" className="comparison__new" onClick={onNew}>
+          Nueva estrategia
         </button>
       </header>
 
       <div className="comparison__banner" role="note">
-        <b>Libros segregados:</b> cada experimento tiene su propio libro paper (
-        {inventory.notional_usd} USD por operación). Los resultados{' '}
+        <b>Libros segregados:</b> cada estrategia tiene su propio libro paper (
+        {inventory.notional_usd} USD por operación
+        {cost ? `, costes ${cost.version}` : ''}). Los resultados{' '}
         <b className="is-down">no se suman</b> ni se comparan con métricas de
         otra unidad o metodología. No hay cartera consolidada.
       </div>
@@ -342,62 +337,79 @@ export default function ComparisonView({
       <ForwardHealth health={inventory.forward_health} now={now} />
 
       <h3 className="comparison__group">
-        Experimentos · <span data-testid="running-count">{running.length}</span>
+        Activas · <span data-testid="running-count">{running.length}</span>
       </h3>
-      <div className="comparison__grid">{running.map(renderCard)}</div>
-
-      <h3 className="comparison__group">
-        Cerrados y contador aparte ·{' '}
-        <span data-testid="stopped-count">{stopped.length}</span>
-      </h3>
-      <div className="comparison__grid">{stopped.map(renderCard)}</div>
-
-      <div className="comparison__lower">
-        <article className="comparison__panel">
-          <h3>Equity por experimento</h3>
-          <p>
-            <b>No disponible.</b> El forward aún no publica una serie de equity
-            por experimento; cuando exista se mostrará una curva por libro.
-            Nunca una curva consolidada.
-          </p>
-        </article>
-        <article className="comparison__panel">
-          <h3>
-            Qué mide cada experimento <small>por qué no se suman</small>
-          </h3>
-          <table>
-            <thead>
-              <tr>
-                <th>Experimento</th>
-                <th>Quién decide la salida</th>
-                <th>Horizonte</th>
-                <th>Unidad del resultado</th>
-              </tr>
-            </thead>
-            <tbody>
-              {running.map((row) => (
-                <tr key={row.id}>
-                  <td>{row.name}</td>
-                  <td>
-                    {row.market.exit_by
-                      ? EXIT_LABELS[row.market.exit_by]
-                      : 'No disponible'}
-                  </td>
-                  <td>
-                    {horizonText(row.market.horizon_minutes) ?? 'No disponible'}
-                  </td>
-                  <td>
-                    {netBpPerOp(row.research.backtest?.mean_net_bp)
-                      ? 'pb por operación (neto)'
-                      : 'No disponible'}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          <p>Concurrencia cruzada y pérdida correlacionada: no disponibles.</p>
-        </article>
+      <div className="comparison__grid">
+        {running.map((row) => (
+          <ExperimentCard
+            key={row.id}
+            row={row}
+            inventory={inventory}
+            onOpen={() => onOpen(row)}
+            activity={activity}
+            now={now}
+          />
+        ))}
       </div>
+
+      <details className="comparison__panel" data-testid="measure-table">
+        <summary>Qué mide cada estrategia</summary>
+        <table>
+          <thead>
+            <tr>
+              <th>Estrategia</th>
+              <th>Quién decide la salida</th>
+              <th>Horizonte</th>
+              <th>Unidad del resultado</th>
+            </tr>
+          </thead>
+          <tbody>
+            {running.map((row) => (
+              <tr key={row.id}>
+                <td>{row.name}</td>
+                <td>
+                  {row.market.exit_by
+                    ? EXIT_LABELS[row.market.exit_by]
+                    : 'No disponible'}
+                </td>
+                <td>
+                  {horizonText(row.market.horizon_minutes) ?? 'No disponible'}
+                </td>
+                <td>
+                  {netBpPerOp(row.research.backtest?.mean_net_bp)
+                    ? 'pb por operación (neto)'
+                    : 'No disponible'}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </details>
+
+      <details className="comparison__panel" data-testid="retired">
+        <summary>
+          Retiradas y apagadas ·{' '}
+          <span data-testid="stopped-count">{retired.length}</span>
+        </summary>
+        <ul className="comparison__retired">
+          {retired.map((row) => (
+            <li key={row.id} data-testid="retired-row" data-id={row.id}>
+              <b>{row.name}</b> <small>v{row.version}</small>
+              <OperationalBadge
+                state={row.operational.state}
+                basis={row.operational.basis}
+                sinceMs={row.operational.since_ms}
+                reason={row.operational.reason}
+              />
+              <span>
+                Motivo: {row.operational.reason ?? 'No disponible'}
+                {row.operational.since_ms != null &&
+                  ` · desde ${utcDay(row.operational.since_ms)}`}
+              </span>
+            </li>
+          ))}
+        </ul>
+      </details>
     </section>
   )
 }

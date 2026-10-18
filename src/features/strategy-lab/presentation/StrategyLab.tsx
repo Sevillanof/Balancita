@@ -70,11 +70,8 @@ import {
   VersionsTab,
 } from './StrategyLabPanels.tsx'
 import { NewStrategyModal } from './NewStrategyModal.tsx'
-import InventoryView from './InventoryView.tsx'
 import ComparisonView from './ComparisonView.tsx'
 import StrategyDetailView, { type LoadActivity } from './StrategyDetailView.tsx'
-import StrategyViewTabs from './StrategyViewTabs.tsx'
-import './InventoryView.css'
 import {
   MODEL_TEXTS,
   STATE_LABELS,
@@ -88,17 +85,13 @@ type Props = {
   connect?: (candles: LabCandles | null) => Promise<StrategyApi>
   loadQwen?: (product: string) => Promise<QwenScores>
   loadKronos?: (product: string) => Promise<QwenScores>
-  /** The default view is the inventory; the laboratory keeps every existing action. */
+  /** The default view is the strategies page; the laboratory keeps every existing action. */
   initialView?: StrategyView
   /** B2 activity reader for the detail view (tests inject it). */
   loadActivity?: LoadActivity
 }
 
-type StrategyView = 'inventory' | 'lab' | 'comparison' | 'detail'
-const VIEW_TABS = [
-  { id: 'inventory', label: 'Inventario de modelos' },
-  { id: 'lab', label: 'Laboratorio' },
-] as const
+type StrategyView = 'home' | 'lab' | 'detail'
 
 type Tab = 'rules' | 'params' | 'risk' | 'plan' | 'json' | 'versions'
 type SaveMode = 'modify' | 'new'
@@ -166,15 +159,15 @@ export default function StrategyLab({
   connect = defaultConnect,
   loadQwen = defaultLoadQwen,
   loadKronos = defaultLoadKronos,
-  initialView = 'inventory',
+  initialView = 'home',
   loadActivity,
 }: Props) {
   const [view, setView] = useState<StrategyView>(initialView)
-  // «Ver contador» del inventario: lleva al contador de Carry dentro del laboratorio.
+  // «Ver contador» de la tarjeta de Carry: lleva al contador de Carry dentro del laboratorio.
   const [carryRequest, setCarryRequest] = useState(0)
   const carryRef = useRef<HTMLDivElement>(null)
   // Last carry request already served: a later entry to the laboratory from
-  // another view (comparison, detail, tab) must not pull the focus back to Carry.
+  // another view (home, detail) must not pull the focus back to Carry.
   const carryServed = useRef(0)
   const [detailRow, setDetailRow] = useState<InventoryStrategy | null>(null)
   const [inventory, setInventory] = useState<Inventory | null>(null)
@@ -718,52 +711,19 @@ export default function StrategyLab({
 
   return (
     <div className="strategy-lab">
-      <StrategyViewTabs
-        tabs={VIEW_TABS}
-        current={
-          view === 'comparison' || view === 'detail' ? 'inventory' : view
-        }
-        onChange={setView}
-        trailing={
-          inventory && (
-            <dl className="strategy-views__figures" aria-label="Resumen">
-              <div>
-                <dt>Estrategias</dt>
-                <dd>{inventory.counts.strategies}</dd>
-              </div>
-              <div>
-                <dt>Activas en el registro</dt>
-                <dd>{inventory.counts.active}</dd>
-              </div>
-              <div>
-                <dt>Costes</dt>
-                <dd>{inventory.cost_model?.version ?? 'No disponible'}</dd>
-              </div>
-              <div>
-                <dt>Capital</dt>
-                <dd>{inventory.notional_usd} USD por operación</dd>
-              </div>
-            </dl>
-          )
-        }
-      />
-      {view === 'inventory' && (
-        <InventoryView
-          api={api}
-          connectError={connectError}
-          reload={reload}
-          onOpen={openFromInventory}
-          onLoaded={setInventory}
-          onCompare={() => setView('comparison')}
-        />
-      )}
-      {view === 'comparison' && (
+      {view === 'home' && (
         <ComparisonView
           api={api}
           connectError={connectError}
           reload={reload}
           onOpen={openFromInventory}
-          onBack={() => setView('inventory')}
+          onLoaded={setInventory}
+          onNew={() => {
+            setNotice(null)
+            setError(null)
+            setCreating(true)
+            setView('lab')
+          }}
         />
       )}
       {view === 'detail' && detailRow && api && inventory && (
@@ -772,13 +732,20 @@ export default function StrategyLab({
           row={detailRow}
           inventory={inventory}
           loadActivity={loadActivity}
-          onBack={() => setView('inventory')}
+          onBack={() => setView('home')}
           onOpenLab={() => openInLab(detailRow)}
         />
       )}
       {view === 'lab' && (
         <>
           <div className="strategy-lab__toolbar">
+            <button
+              type="button"
+              className="strategy-lab__button"
+              onClick={() => setView('home')}
+            >
+              ← Estrategias
+            </button>
             <h1>Laboratorio</h1>
             <p className="strategy-lab__context">
               {connectError
