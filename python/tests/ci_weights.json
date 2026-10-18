@@ -90,6 +90,7 @@
   "test_paper_live_process_185.TestPreflightAndStart": 8,
   "test_paper_live_resources_185": 75,
   "test_paper_live_source_185": 92,
+  "test_paper_live_stale_stop_184": 14,
   "test_paper_live_status_187": 1,
   "test_paper_observed_funding_184.TestObservedFunding": 86,
   "test_paper_observed_funding_184.TestObservedFundingScenarios": 66,
