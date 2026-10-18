@@ -1,21 +1,25 @@
 """Issue #184, PR 5b: the stale-quote stop of the paper process (``stale_stop``). The value is a parameter named by the operator, never a
 default; Captura's 24 h measurement picks the real one. The quote gaps come from the real XBT tickers of the partial sample (they hold three
-real WebSocket cuts); the end-to-end run reuses the session harness (invented market, to be replaced with the real quotes)."""
+real WebSocket cuts); the end-to-end run replays the real candles and quotes of the same sample (``real_world``), with 130 s of real quotes left out."""
 
 import json
 import os
+import shutil
+import tempfile
 import unittest
 from types import SimpleNamespace
 
 import real_sample
 from balancita_engine import paper_live_process as LP
-from live_world import MIN, World
-from test_paper_live_integration import FIRST_DECISION, MAX_QUOTE_GAP_MS
-from test_paper_live_process_185 import Base, Clock, config_dict
+from balancita_engine import replay_specs as RS
+from balancita_engine import signal_continuity as SC
+from real_world import BTC, MIN, SEC, T0, RealWorld
+from test_paper_live_integration import MAX_QUOTE_GAP_MS
+from test_paper_live_process_185 import config_dict
 
-BTC = "PF_XBTUSD"
-DECISION_MS = 1763254200000
-HOLE = (DECISION_MS - 100_000, DECISION_MS + 30_000)         # no BTC quote for 130 s
+DECIDE_FROM = T0 + 600 * MIN
+DECIDE_UNTIL = T0 + 1000 * MIN
+HOLE = (DECIDE_FROM + 10 * MIN, DECIDE_FROM + 10 * MIN + 130 * SEC)         # 130 s of real quotes left out
 
 
 def real_windows():
@@ -120,20 +124,42 @@ class TestSupervisorCheck(unittest.TestCase):
         self.assertEqual(supervisor.stop_reason, "resource_limit:disk")
 
 
-class TestStaleStopInTheSession(Base):
-    """End to end on the session harness: a 130 s hole in the quotes with a 60 s limit ends the session in order, with its own status."""
+class Clock(object):
+    """Ten-second steps from the first decision; ``sleep`` moves to the next one."""
+
+    def __init__(self):
+        self.t = DECIDE_FROM
+
+    def now(self):
+        return self.t
+
+    def sleep(self, _seconds):
+        self.t += 10 * SEC
+
+
+class TestStaleStopInTheSession(unittest.TestCase):
+    """End to end on the real candles and quotes: a 130 s hole with a 60 s limit ends the session in order, with its own status."""
 
     def setUp(self):
-        super().setUp()
-        self.world.close()
-        holey = os.path.join(self.root, "holey")
-        os.makedirs(holey)
-        self.world = World(holey, quote_holes=[HOLE])
-        self.world.release_until(FIRST_DECISION - MIN)
+        SC.disarm()
+        self.root = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.root, True)
+        self.world = RealWorld(self.root, quote_holes=[HOLE])
+        self.addCleanup(self.world.close)
+        self.world.release_until(DECIDE_FROM - MIN)
+        self.directory = os.path.join(self.root, "session")
+
+    def read(self, name):
+        with open(os.path.join(self.directory, name), encoding="utf-8") as handle:
+            return json.load(handle)
 
     def test_the_hole_ends_the_session_in_order_with_status_5_and_the_reason_on_record(self):
         clock = Clock()
-        supervisor = self.supervisor(clock, stale_stop={"stop_quote_gap_ms": 60_000})
+        config = LP.validate_config(config_dict(decide_from_ms=DECIDE_FROM, decide_until_ms=DECIDE_UNTIL, warmup_minutes=540,
+                                                funding_mode="observed", stale_stop={"stop_quote_gap_ms": 60_000}))
+        supervisor = LP.Supervisor(config, self.directory, self.world.path, clock=clock.now, sleep=clock.sleep,
+                                   tick=self.world.release_until, strategies=RS.load_frozen()[0])
+        self.addCleanup(lambda: supervisor.session is not None and supervisor.abandon())
         supervisor.start()
         code = supervisor.run()
         self.assertEqual(code, LP.EXIT_STALE_STOP)
