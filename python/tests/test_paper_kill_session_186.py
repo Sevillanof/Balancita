@@ -2,7 +2,8 @@
 journal writes of the step that declares a ``source_stale`` loss, seen from the SESSION. The child process half-writes a journal
 line (S-K1) or stops between two entries of the declaration (S-K2: ``source_loss`` and ``order_cancelled``); this process recovers
 the directory and makes the same step again: the result must be the one of the step that never failed (same orders with the same
-``decided_at`` and the same money), declared once. Invented data only (the world of ``test_paper_safe_stop_186_session``)."""
+``decided_at`` and the same money), declared once. The market is the real one of ``test_paper_safe_stop_186_session``; only the
+S-K5 scenarios (a stop crossed while the process is down) still run on an invented world, until a real market that crosses a stop is found."""
 
 import os
 import shutil
@@ -17,22 +18,23 @@ from balancita_engine import paper_live_integration as LI
 from balancita_engine import replay_specs as RS
 from balancita_engine import signal_continuity as SC
 from balancita_engine.paper_runner_store import FileRunnerJournal, JOURNAL_FILE
+import test_paper_live_integration as TI
 from live_world import LOAD_START, World
+from real_session import abandon, journal_clock, record
 from test_paper_safe_stop_186_session import NOW, Base, kinds
-from test_paper_live_integration import (BTC, ENTRY_STEP, ETH, HOLE, TIMES, UNTIL_ORDER, Circuit, abandon, journal_clock, new_session, record,
-                                         recover_session)
+from test_paper_live_integration import BTC, ETH, HOLE, TIMES, Circuit
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
 
-def run_child(test, directory, world, fault, kind, nth=1, in_recovery=False, step=ENTRY_STEP):
+def run_child(test, directory, world, fault, kind, nth=1, in_recovery=False, step=NOW, invented=False):
     """Runs one step in another process that dies (SIGKILL) at the ``nth`` time ``fault`` is reached for ``kind``. Returns the path of
     the marker the worker writes when its recovery has returned (absent if the process died inside the recovery)."""
     stage = directory + ".stage"
     if os.path.exists(stage):
         os.remove(stage)
     env = dict(os.environ, PYTHONPATH=os.pathsep.join((os.path.dirname(HERE), HERE)), KILL_IN_RECOVERY="1" if in_recovery else "0",
-               KILL_STAGE_FILE=stage)
+               KILL_STAGE_FILE=stage, KILL_INVENTED="1" if invented else "0")
     done = subprocess.run([sys.executable, "-W", "ignore", os.path.join(HERE, "live_kill_store_worker.py"), directory, world.path,
                            str(journal_clock(directory)), fault, kind or "-", str(nth), str(step)],
                           env=env, capture_output=True, text=True, timeout=900)
@@ -169,7 +171,7 @@ CROSSING = D("3400.0")                           # from this instant on ETH quot
 class StopCrossedWhileDownBase(object):
     """S-K5 (matrix A6): the process dies with a position open and, while it is down, the market goes below the stop and stays
     there. The recovered run must NOT execute anything with a quote of the downtime (no retroactive execution): the recovery
-    declares the uncovered stretch and the position leaves afterwards. Invented data only. ``COHERENT`` says whether the candles of
+    declares the uncovered stretch and the position leaves afterwards. Invented data only (the rest of this file runs on the real market). ``COHERENT`` says whether the candles of
     the product tell the same story as its quotes (D-202-05): they do in one scenario and they do not in the other, because the
     two worlds exercise two different doors of the runner."""
 
@@ -191,7 +193,7 @@ class StopCrossedWhileDownBase(object):
                 if candle["bucket_start"] + 60_000 > cross_from:
                     candle.update(open=str(CROSSING), high=str(CROSSING), low=str(CROSSING), close=str(CROSSING))
         world.release_until(LOAD_START)
-        session = new_session(world, os.path.join(root, "a"), strategies, products=(BTC, ETH))
+        session = TI.new_session(world, os.path.join(root, "a"), strategies, products=(BTC, ETH))
         for now in TIMES[:STOP_STEP + 1]:
             world.release_until(now)
             session.step(now)
@@ -220,12 +222,12 @@ class StopCrossedWhileDownBase(object):
         directory = os.path.join(root, "s")
         shutil.copytree(snap["session"], directory)
         world.release_until(TIMES[STOP_STEP + 1])
-        run_child(self, directory, world, "before_journal", None, step=STOP_STEP + 1)        # it dies before its first write of the step
+        run_child(self, directory, world, "before_journal", None, step=STOP_STEP + 1, invented=True)        # it dies before its first write of the step
         self.assertTrue(raw_journal(directory).endswith(b"\n"))
         self.assertEqual(self.cache["continuous"][0]["exit_reason"], "stop")                 # the continuous run left through the stop
         self.assertLess(self.cache["continuous"][0]["exit_time_ms"], TIMES[STOP_STEP + 1])  # while the process was down
         recovery_ms = TIMES[STOP_STEP + 1]
-        session = recover_session(world, directory, self.cache["strategies"], recovery_ms, products=(BTC, ETH))
+        session = TI.recover_session(world, directory, self.cache["strategies"], recovery_ms, products=(BTC, ETH))
         self.addCleanup(abandon, session)
         recovery = [e for e in session.runner.journal.entries if e["kind"] == "recovery"][-1]["data"]
         self.assertIn(ETH, recovery["open_positions"])                          # the open position is declared by the recovery
@@ -270,10 +272,16 @@ class TestRealKillStopCrossedWhileDownCoherentCandles(StopCrossedWhileDownBase, 
         self.assertGreaterEqual(trade["exit_time_ms"], recovery_ms)                # nothing is executed back in time
 
 
+def backsteps(times):
+    """Where a journal's time goes back. The real history is read after the session starts, so the first events are older than the
+    run start; what a jumping clock must not add is any other step back (the normal run has these too)."""
+    return [(a, b) for a, b in zip(times, times[1:]) if b < a]
+
+
 class TestWallClockJumpsDuringAnOpenSilence(Base):
     """S-U4 (matrix E6): the instant the session is given (``observed_now_ms``) jumps backwards or far forwards around the step that
     declares a silence of the source. Nothing may break, nothing may be declared twice, the cancelled order, the money and the signals
-    must be the ones of the run whose clock was normal, and the journal's own time never goes back. Invented data only."""
+    must be the ones of the run whose clock was normal, and the journal's own time never goes back. """
 
     JUMPS = {"back_before": (-1_800_000, 0), "forward_before": (10 * 86_400_000, 0), "forward_only": (10 * 86_400_000,),
              "back_after": (0, -1_800_000, 60_000), "forward_then_back": (3_600_000, 0, 60_000)}
@@ -292,74 +300,15 @@ class TestWallClockJumpsDuringAnOpenSilence(Base):
                 self.assertEqual(self.losses(session), ref["losses"])                              # declared once
                 self.assertEqual(kinds(session, "source_stale_detected"), ref["detected"])
                 times = [e["t_ms"] for e in session.runner.journal.entries[1:]]       # the first entry is the run start
-                self.assertEqual(times, sorted(times), "the journal's time went back")
+                self.assertEqual(backsteps(times), backsteps(ref["times"]), "the journal's time went back")
                 self.assertEqual(session.runner.integrity()["open_cycles"], [])
                 self.release()
 
 
-class TestObservedSilenceUnderAJumpingClock(Base):
-    """S-U4, D-202-02: the branch where the CLOCK carries the declaration (``observed_silence``): the world is released only up to
-    the instant of the silence (the market has not moved past it), so no event can tie the declaration and the order is still alive;
-    then the market goes on after the jump. The declaration must stay at the end of the excess (not at the observed bound), the
-    observed bound must never go back, and the money must be the one of the normal clock."""
+# S-U4 / D-202-02 (the branch where the CLOCK carries the declaration, ``observed_silence``) is not here any more: it needs the order to be pending
+# while the source is silent and the decision undelivered, which a single real product cannot give (the quote that releases the
+# decision also fills the order). It stays covered in ``test_paper_live_integration`` until a second product has real data.
 
-    OBSERVED_JUMPS = {"forward_first": (10 * 86_400_000,), "back_then_on": (0, -1_800_000, 60_000), "forward_then_back": (3_600_000, 0, 60_000)}
-
-    def observed_run(self, offsets):
-        root = tempfile.mkdtemp()
-        self.addCleanup(shutil.rmtree, root, True)
-        world = self.cache["world"].fork(root, self.cache["snap"]["world"])
-        directory = os.path.join(root, "s")
-        shutil.copytree(self.cache["snap"]["session"], directory)
-        session = self.reopen(world, directory)
-        world.release_until(UNTIL_ORDER)
-        bounds = []
-        for offset in offsets:
-            session.step(UNTIL_ORDER + offset)
-            bounds.append(session.ingestor.observed_until_ms)
-        world.release_until(NOW)
-        session.step(NOW)
-        return session, bounds
-
-    @staticmethod
-    def declarations(session):
-        return [(e["kind"], e["t_ms"]) for e in session.runner.journal.entries if e["kind"] in ("source_loss", "order_cancelled")]
-
-    def test_the_observed_bound_does_not_go_back_when_the_first_step_after_a_recovery_has_an_earlier_clock(self):
-        """The one place where a clock that went back could lower the bound: the first poll after a recovery (otherwise a poll with an
-        earlier bound is ignored). The bound the dead process had reached is kept."""
-        root = tempfile.mkdtemp()
-        self.addCleanup(shutil.rmtree, root, True)
-        world = self.cache["world"].fork(root, self.cache["snap"]["world"])
-        directory = os.path.join(root, "s")
-        shutil.copytree(self.cache["snap"]["session"], directory)
-        session = self.reopen(world, directory)
-        world.release_until(UNTIL_ORDER)
-        session.step(UNTIL_ORDER + 60_000)
-        before = session.ingestor.observed_until_ms
-        self.assertIsNotNone(before)
-        abandon(self.live.pop())                                          # the process dies
-        again = self.reopen(world, directory)
-        again.step(UNTIL_ORDER - 1_800_000)                              # the machine's clock is half an hour behind after the restart
-        self.assertGreaterEqual(again.ingestor.observed_until_ms, before)
-        self.assertEqual(len(self.losses(again)), 1)                      # and the silence is declared once
-
-    def test_the_observed_silence_is_declared_at_its_own_instant_whatever_the_clock_does(self):
-        reference, _ = self.observed_run((0,))
-        self.assertEqual([r["trigger"] for r in kinds(reference, "source_stale_detected")], ["observed_silence"])    # the branch is exercised
-        self.assertEqual(len(self.losses(reference)), 1)
-        gap_to = self.losses(reference)[0]["gap_to_ms"]
-        self.assertEqual([t for k, t in self.declarations(reference) if k == "source_loss"], [gap_to])          # at the end of the excess
-        for name, offsets in self.OBSERVED_JUMPS.items():
-            with self.subTest(jump=name):
-                session, bounds = self.observed_run(offsets)
-                self.assertEqual([r["trigger"] for r in kinds(session, "source_stale_detected")], ["observed_silence"])
-                self.assertEqual(self.declarations(session), self.declarations(reference))                       # same instants as the normal clock
-                self.assertEqual(self.losses(session), self.losses(reference))
-                seen = [b for b in bounds if b is not None]
-                self.assertEqual(seen, sorted(seen), "the observed bound went back with the clock")
-                for key in ("orders", "portfolio", "closed", "open", "fees"):
-                    self.assertEqual(record(session, NOW)[key], record(reference, NOW)[key], key)
 
 if __name__ == "__main__":
     unittest.main()
