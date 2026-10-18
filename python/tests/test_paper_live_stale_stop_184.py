@@ -1,21 +1,25 @@
 """Issue #184, PR 5b: the stale-quote stop of the paper process (``stale_stop``). The value is a parameter named by the operator, never a
 default; Captura's 24 h measurement picks the real one. The quote gaps come from the real XBT tickers of the partial sample (they hold three
-real WebSocket cuts); the end-to-end run reuses the session harness (invented market, to be replaced with the real quotes)."""
+real WebSocket cuts); the end-to-end run replays the real candles and quotes of the same sample (``real_world``), with 130 s of real quotes left out."""
 
 import json
 import os
+import shutil
+import tempfile
 import unittest
 from types import SimpleNamespace
 
 import real_sample
 from balancita_engine import paper_live_process as LP
-from live_world import MIN, World
-from test_paper_live_integration import FIRST_DECISION, MAX_QUOTE_GAP_MS
-from test_paper_live_process_185 import Base, Clock, config_dict
+from balancita_engine import replay_specs as RS
+from balancita_engine import signal_continuity as SC
+from real_world import BTC, MIN, SEC, T0, RealWorld
+from test_paper_live_integration import MAX_QUOTE_GAP_MS
+from test_paper_live_process_185 import config_dict
 
-BTC = "PF_XBTUSD"
-DECISION_MS = 1763254200000
-HOLE = (DECISION_MS - 100_000, DECISION_MS + 30_000)         # no BTC quote for 130 s
+DECIDE_FROM = T0 + 120 * MIN
+DECIDE_UNTIL = T0 + 400 * MIN
+HOLE = (DECIDE_FROM + 10 * MIN, DECIDE_FROM + 10 * MIN + 130 * SEC)         # 130 s of real quotes left out
 
 
 def real_windows():
@@ -104,6 +108,18 @@ class TestSupervisorCheck(unittest.TestCase):
         self.assertFalse(supervisor.stop_requested)
         self.assertIsNone(supervisor.stop_reason)
 
+    def test_while_the_ingestor_still_has_rows_to_read_the_quote_time_is_not_a_silence(self):
+        supervisor = self.supervisor({BTC: 1_000})
+        supervisor.session.ingestor = SimpleNamespace(ticker_more=True, candle_more=False)
+        supervisor._check_quote_gap(10 ** 9)
+        self.assertFalse(supervisor.stop_requested)
+        supervisor.session.ingestor = SimpleNamespace(ticker_more=False, candle_more=True)
+        supervisor._check_quote_gap(10 ** 9)
+        self.assertFalse(supervisor.stop_requested)
+        supervisor.session.ingestor = SimpleNamespace(ticker_more=False, candle_more=False)
+        supervisor._check_quote_gap(10 ** 9)
+        self.assertTrue(supervisor.stop_requested)
+
     def test_without_the_parameter_nothing_is_checked(self):
         config = LP.validate_config(config_dict())
         supervisor = LP.Supervisor(config, "/nonexistent", "/nonexistent", clock=lambda: 0)
@@ -120,31 +136,61 @@ class TestSupervisorCheck(unittest.TestCase):
         self.assertEqual(supervisor.stop_reason, "resource_limit:disk")
 
 
-class TestStaleStopInTheSession(Base):
-    """End to end on the session harness: a 130 s hole in the quotes with a 60 s limit ends the session in order, with its own status."""
+class Clock(object):
+    """Ten-second steps from the first decision; ``sleep`` moves to the next one."""
+
+    def __init__(self):
+        self.t = DECIDE_FROM
+
+    def now(self):
+        return self.t
+
+    def sleep(self, _seconds):
+        self.t += 10 * SEC
+
+
+class TestStaleStopInTheSession(unittest.TestCase):
+    """End to end on the real candles and quotes. The session starts on 120 minutes of history (more tickers than one batch of the ingestor reads) that the ingestor reads batch by batch."""
 
     def setUp(self):
-        super().setUp()
-        self.world.close()
-        holey = os.path.join(self.root, "holey")
-        os.makedirs(holey)
-        self.world = World(holey, quote_holes=[HOLE])
-        self.world.release_until(FIRST_DECISION - MIN)
+        SC.disarm()
+        self.root = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.root, True)
+        self.directory = os.path.join(self.root, "session")
 
-    def test_the_hole_ends_the_session_in_order_with_status_5_and_the_reason_on_record(self):
+    def run_session(self, holes, decide_until):
+        world = RealWorld(self.root, quote_holes=holes)
+        self.addCleanup(world.close)
+        world.release_until(DECIDE_FROM - MIN)
         clock = Clock()
-        supervisor = self.supervisor(clock, stale_stop={"stop_quote_gap_ms": 60_000})
+        config = LP.validate_config(config_dict(decide_from_ms=DECIDE_FROM, decide_until_ms=decide_until, warmup_minutes=100,
+                                                funding_mode="observed", stale_stop={"stop_quote_gap_ms": 60_000}))
+        supervisor = LP.Supervisor(config, self.directory, world.path, clock=clock.now, sleep=clock.sleep,
+                                   tick=world.release_until, strategies=RS.load_frozen()[0])
+        self.addCleanup(lambda: supervisor.session is not None and supervisor.abandon())
         supervisor.start()
-        code = supervisor.run()
-        self.assertEqual(code, LP.EXIT_STALE_STOP)
+        return supervisor.run()
+
+    def read(self, name):
+        with open(os.path.join(self.directory, name), encoding="utf-8") as handle:
+            return json.load(handle)
+
+    def test_the_hole_ends_the_session_in_order_with_status_5_at_the_hole_and_the_reason_on_record(self):
+        self.assertEqual(self.run_session([HOLE], DECIDE_UNTIL), LP.EXIT_STALE_STOP)
         report = self.read(LP.REPORT_FILE)
         self.assertEqual(report["ended_as"], LP.STOPPED_PHASE)
         self.assertEqual(report["stale_stop"]["stop_reason"], "quote_gap:" + BTC)
-        self.assertEqual(report["stale_stop"]["events"][0]["limit_ms"], 60_000)
-        self.assertGreater(report["stale_stop"]["events"][0]["gap_ms"], 60_000)
+        event = report["stale_stop"]["events"][0]
+        self.assertEqual(event["limit_ms"], 60_000)
+        self.assertGreater(event["gap_ms"], 60_000)
+        self.assertTrue(HOLE[0] + 60_000 <= event["observed_now_ms"] <= HOLE[1], event)      # at the hole, not before it
         beat = self.read(LP.HEARTBEAT_FILE)
         self.assertEqual(beat["phase"], LP.STOPPED_PHASE)
         self.assertEqual((beat["stale_stop"]["limit_ms"], beat["stale_stop"]["events"]), (60_000, report["stale_stop"]["events"]))
+
+    def test_the_same_run_without_the_hole_does_not_stop_for_silence(self):
+        self.assertEqual(self.run_session([], HOLE[1] + 5 * MIN), LP.EXIT_OK)
+        self.assertEqual(self.read(LP.REPORT_FILE)["stale_stop"]["events"], [])
 
 
 if __name__ == "__main__":

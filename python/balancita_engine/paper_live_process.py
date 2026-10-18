@@ -472,11 +472,15 @@ class Supervisor(object):
 
     def _check_quote_gap(self, now):
         """With ``stale_stop`` named: a product silent for longer than the stop gap asks for the same orderly stop as a SIGTERM. One product of
-        eight stopping the session is on purpose: they share one portfolio."""
+        eight stopping the session is on purpose: they share one portfolio. Not measured while the ingestor still has rows to read (a session
+        started on a long history catches up batch by batch): the quote time it has seen is then behind by the backlog, not by a silence."""
         limit = (self.config.get("stale_stop") or {}).get("stop_quote_gap_ms")
         self._first_now = now if self._first_now is None else self._first_now
         if limit is None or self.stale_events:
             return
+        ingestor = getattr(self.session, "ingestor", None)
+        if ingestor is not None and (ingestor.ticker_more or ingestor.candle_more):
+            return                                   # still reading the rows already there: ``last_quote`` is behind the clock, not the feed
         found = stale_product(self.session.last_quote, self.config["products"], self._first_now, now, limit)
         if found:
             self.stale_events.append({"kind": "stop", "product_id": found[0], "gap_ms": found[1], "limit_ms": limit, "observed_now_ms": now})
