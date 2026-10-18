@@ -2,8 +2,8 @@
 journal writes of the step that declares a ``source_stale`` loss, seen from the SESSION. The child process half-writes a journal
 line (S-K1) or stops between two entries of the declaration (S-K2: ``source_loss`` and ``order_cancelled``); this process recovers
 the directory and makes the same step again: the result must be the one of the step that never failed (same orders with the same
-``decided_at`` and the same money), declared once. The market is the real one of ``test_paper_safe_stop_186_session``; only the
-S-K5 scenarios (a stop crossed while the process is down) still run on an invented world, until a real market that crosses a stop is found."""
+``decided_at`` and the same money), declared once. The market is the real one of ``test_paper_safe_stop_186_session``; the S-K5 scenarios (a stop crossed while the process is down) run on the
+real fall of 21:25Z that stops out the second forced entry."""
 
 import os
 import shutil
@@ -15,26 +15,23 @@ import unittest
 from decimal import Decimal as D
 
 from balancita_engine import paper_live_integration as LI
-from balancita_engine import replay_specs as RS
 from balancita_engine import signal_continuity as SC
 from balancita_engine.paper_runner_store import FileRunnerJournal, JOURNAL_FILE
-import test_paper_live_integration as TI
-from live_world import LOAD_START, World
-from real_session import abandon, journal_clock, record
+from real_session import DECIDE_FROM, STEP, abandon, journal_clock, new_session, record, recover_session, strategies
+from real_world import BTC, MIN, RealWorld, quotes
 from test_paper_safe_stop_186_session import NOW, Base, kinds
-from test_paper_live_integration import BTC, ETH, HOLE, TIMES, Circuit
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
 
-def run_child(test, directory, world, fault, kind, nth=1, in_recovery=False, step=NOW, invented=False):
+def run_child(test, directory, world, fault, kind, nth=1, in_recovery=False, step=NOW):
     """Runs one step in another process that dies (SIGKILL) at the ``nth`` time ``fault`` is reached for ``kind``. Returns the path of
     the marker the worker writes when its recovery has returned (absent if the process died inside the recovery)."""
     stage = directory + ".stage"
     if os.path.exists(stage):
         os.remove(stage)
     env = dict(os.environ, PYTHONPATH=os.pathsep.join((os.path.dirname(HERE), HERE)), KILL_IN_RECOVERY="1" if in_recovery else "0",
-               KILL_STAGE_FILE=stage, KILL_INVENTED="1" if invented else "0")
+               KILL_STAGE_FILE=stage)
     done = subprocess.run([sys.executable, "-W", "ignore", os.path.join(HERE, "live_kill_store_worker.py"), directory, world.path,
                            str(journal_clock(directory)), fault, kind or "-", str(nth), str(step)],
                           env=env, capture_output=True, text=True, timeout=900)
@@ -164,16 +161,26 @@ class TestRealKillInTheMiddleOfALine(KillBase):
                 self.release()
 
 
-STOP_STEP = 106                                  # the step after which ETH has an open LONG (stop 3476.49) and BTC another one
-CROSSING = D("3400.0")                           # from this instant on ETH quotes far below that stop, and stays there
+STOP_STEP = 51                                   # the last step before the real market crosses the stop of the second position (21:25:09Z; the step is 21:25:00Z)
+CROSSING_FROM = DECIDE_FROM + STOP_STEP * STEP   # the downtime starts here: from this instant on the real quotes stay below that stop until 22:30Z
+
+
+def at(step):
+    return DECIDE_FROM + step * STEP
+
+
+def first_quote_after(t_ms):
+    return min((r for r in quotes() if r[2] > t_ms), key=lambda r: r[2])
 
 
 class StopCrossedWhileDownBase(object):
     """S-K5 (matrix A6): the process dies with a position open and, while it is down, the market goes below the stop and stays
     there. The recovered run must NOT execute anything with a quote of the downtime (no retroactive execution): the recovery
-    declares the uncovered stretch and the position leaves afterwards. Invented data only (the rest of this file runs on the real market). ``COHERENT`` says whether the candles of
-    the product tell the same story as its quotes (D-202-05): they do in one scenario and they do not in the other, because the
-    two worlds exercise two different doors of the runner."""
+    declares the uncovered stretch and the position leaves afterwards. The market is the real one: the second forced entry (19:40Z,
+    stop 81401.19) is stopped out by the real fall of 21:25Z, and the real quotes stay below the stop for over an hour. ``COHERENT`` says
+    whether the candles of the product tell the same story as its quotes (D-202-05): the real ones do; in the other scenario the candles after
+    the instant are made flat at the last real close, above the stop (the one hand edit), so only the quotes cross it. The two worlds exercise two
+    different doors of the runner."""
 
     COHERENT = False
     cache = None
@@ -183,36 +190,34 @@ class StopCrossedWhileDownBase(object):
         SC.disarm()
         cls.cache = {}
         cls.cache["dir"] = root = tempfile.mkdtemp()
-        strategies, _ = RS.load_frozen()
-        cls.cache["strategies"] = strategies
-        world = World(root, quote_holes=[HOLE], second_product_shift=5)
-        cross_from = TIMES[STOP_STEP] + 60_000
-        world.second["quotes"] = [(t, CROSSING if t > cross_from else p) for t, p in world.second["quotes"]]
-        if cls.COHERENT:
-            for candle in world.second["ones"]:
-                if candle["bucket_start"] + 60_000 > cross_from:
-                    candle.update(open=str(CROSSING), high=str(CROSSING), low=str(CROSSING), close=str(CROSSING))
-        world.release_until(LOAD_START)
-        session = TI.new_session(world, os.path.join(root, "a"), strategies, products=(BTC, ETH))
-        for now in TIMES[:STOP_STEP + 1]:
-            world.release_until(now)
-            session.step(now)
-        cls.cache["snap"] = Circuit.take_snapshot(root, "k5", session, world, STOP_STEP + 1)
+        cls.cache["strategies"] = strategies()
+        world = RealWorld(root)
+        if not cls.COHERENT:
+            before = [c for c in world.candle_rows if c["bucket_start"] + 60_000 <= CROSSING_FROM][-1]
+            for candle in world.candle_rows:
+                if candle["bucket_start"] + 60_000 > CROSSING_FROM:
+                    candle.update(open_price=before["close_price"], high_price=before["close_price"], low_price=before["close_price"],
+                                  close_price=before["close_price"])
+        world.release_until(DECIDE_FROM - MIN)
+        session = new_session(world, os.path.join(root, "a"), cls.cache["strategies"])
+        for index in range(STOP_STEP + 1):
+            world.release_until(at(index))
+            session.step(at(index))
+        target = os.path.join(root, "k5")
+        os.makedirs(target)
+        shutil.copytree(session.directory, os.path.join(target, "session"))
+        cls.cache["snap"] = {"session": os.path.join(target, "session"), "world": world.snapshot(target)}
         cls.cache["world"] = world
-        for now in TIMES[STOP_STEP + 1:STOP_STEP + 3]:                       # the same two steps without any death
-            world.release_until(now)
-            session.step(now)
-        cls.cache["continuous"] = cls.eth_trades(session)
+        for index in (STOP_STEP + 1, STOP_STEP + 2):                          # the same two steps without any death
+            world.release_until(at(index))
+            session.step(at(index))
+        cls.cache["continuous"] = list(session.runner.portfolio.trades)
         abandon(session)
 
     @classmethod
     def tearDownClass(cls):
         shutil.rmtree(cls.cache.get("dir", ""), True)
         cls.cache = None
-
-    @staticmethod
-    def eth_trades(session):
-        return [t for t in session.runner.portfolio.trades if t["product_id"] == ETH]
 
     def recovered_and_stepped_twice(self):
         root = tempfile.mkdtemp()
@@ -221,54 +226,58 @@ class StopCrossedWhileDownBase(object):
         world = self.cache["world"].fork(root, snap["world"])
         directory = os.path.join(root, "s")
         shutil.copytree(snap["session"], directory)
-        world.release_until(TIMES[STOP_STEP + 1])
-        run_child(self, directory, world, "before_journal", None, step=STOP_STEP + 1, invented=True)        # it dies before its first write of the step
+        world.release_until(at(STOP_STEP + 1))
+        run_child(self, directory, world, "before_journal", None, step=at(STOP_STEP + 1))        # it dies before its first write of the step
         self.assertTrue(raw_journal(directory).endswith(b"\n"))
-        self.assertEqual(self.cache["continuous"][0]["exit_reason"], "stop")                 # the continuous run left through the stop
-        self.assertLess(self.cache["continuous"][0]["exit_time_ms"], TIMES[STOP_STEP + 1])  # while the process was down
-        recovery_ms = TIMES[STOP_STEP + 1]
-        session = TI.recover_session(world, directory, self.cache["strategies"], recovery_ms, products=(BTC, ETH))
+        stopped = self.cache["continuous"][-1]
+        self.assertEqual(stopped["exit_reason"], "stop")                                     # the continuous run left through the stop
+        self.assertGreater(stopped["exit_time_ms"], CROSSING_FROM)
+        self.assertLess(stopped["exit_time_ms"], at(STOP_STEP + 1))                          # while the process was down
+        recovery_ms = at(STOP_STEP + 1)
+        session = recover_session(world, directory, self.cache["strategies"], recovery_ms)
         self.addCleanup(abandon, session)
         recovery = [e for e in session.runner.journal.entries if e["kind"] == "recovery"][-1]["data"]
-        self.assertIn(ETH, recovery["open_positions"])                          # the open position is declared by the recovery
+        self.assertIn(BTC, recovery["open_positions"])                          # the open position is declared by the recovery
         self.assertGreater(recovery["uncovered_ms"], 0)                         # and so is the stretch nobody watched
+        before = len(session.runner.portfolio.trades)
         session.step(recovery_ms)
-        self.assertEqual(self.eth_trades(session), [], "the stop was executed with something of the downtime")
-        world.release_until(TIMES[STOP_STEP + 2])
-        session.step(TIMES[STOP_STEP + 2])
-        trades = self.eth_trades(session)
-        self.assertEqual(len(trades), 1)
-        self.assertEqual(trades[0]["exit_reason"], "stop")
+        self.assertEqual(len(session.runner.portfolio.trades), before, "the stop was executed with something of the downtime")
+        world.release_until(at(STOP_STEP + 2))
+        session.step(at(STOP_STEP + 2))
+        trades = session.runner.portfolio.trades
+        self.assertEqual(len(trades), before + 1)
+        self.assertEqual(trades[-1]["exit_reason"], "stop")
         self.assertEqual(session.runner.integrity()["open_cycles"], [])
-        return session, trades[0], recovery_ms
+        return session, trades[-1], recovery_ms
 
 
 class TestRealKillStopCrossedWhileDownQuotesOnly(StopCrossedWhileDownBase, unittest.TestCase):
-    """The door of the quotes: the candles of the product keep their original prices (above the stop), so only its quotes cross the
-    stop. The position leaves with the FIRST quote observed after the recovery, at that quote's price, not at the stop's level."""
+    """The door of the quotes: the candles of the product keep their prices above the stop, so only its quotes cross the stop.
+    The position leaves with the FIRST quote observed after the recovery, at that quote's price, not at the stop's level."""
 
     def test_the_position_leaves_with_the_first_quote_after_the_recovery_at_its_price(self):
         _, trade, recovery_ms = self.recovered_and_stepped_twice()
-        first_after = min(t for t, _ in self.cache["world"].second["quotes"] if t > recovery_ms)
-        self.assertEqual(trade["exit_time_ms"], first_after)
-        self.assertEqual(D(str(trade["exit_price"])), D("3399.8062"))              # that quote's 3400.0 less the modeled cost, not the stop's level
-        self.assertLess(D(str(trade["exit_price"])), CROSSING)
+        first = first_quote_after(recovery_ms)
+        self.assertEqual(trade["exit_time_ms"], first[2])
+        self.assertEqual(D(str(trade["exit_price"])), D(first[5]))                      # a long leaves at the bid of that quote
+        self.assertLess(D(str(trade["exit_price"])), D(str(trade["stop_price"])))      # the real market was far below the stop by then
 
 
 class TestRealKillStopCrossedWhileDownCoherentCandles(StopCrossedWhileDownBase, unittest.TestCase):
     """The door of the candles (D-202-05): the candles tell the same story as the quotes. BAL-DECISION-186-05/06 (#206, in main):
     after a real interruption of the runner the first valid candle that closes at the end of the hole is evaluated against the
-    simulated OPENING of that candle (``stop_after_hole = gap_open``, the default), not against the stop's level. The position leaves
-    at that open (less the modeled cost), the same price the quotes door gives; it is a SIMULATED reference, not a fill."""
+    simulated OPENING of that candle (``stop_after_hole = gap_open``, the default), not against the stop's level. With real quotes in the
+    same world the first quote after the recovery is observed before that candle closes, so the exit is that quote's price, again not the stop's
+    level; a SIMULATED reference, not a fill."""
 
     COHERENT = True
 
     def test_the_position_leaves_at_the_simulated_open_after_the_hole_not_at_the_stop_level(self):
         _, trade, recovery_ms = self.recovered_and_stepped_twice()
         self.assertEqual(trade["exit_reason"], "stop")
-        self.assertEqual(D(str(trade["exit_price"])), D("3399.8062"))              # the candle's open (3400.0) less the modeled cost
-        self.assertLess(D(str(trade["exit_price"])), D(str(trade["stop_price"])))  # and not the stop's level (above it, 3476.49)
-        self.assertLess(D(str(trade["exit_price"])), CROSSING)
+        first = first_quote_after(recovery_ms)
+        self.assertEqual(D(str(trade["exit_price"])), D(first[5]))                 # the first thing observed after the hole, a real quote here
+        self.assertLess(D(str(trade["exit_price"])), D(str(trade["stop_price"])))  # and not the stop's level
         self.assertGreaterEqual(trade["exit_time_ms"], recovery_ms)                # nothing is executed back in time
 
 
