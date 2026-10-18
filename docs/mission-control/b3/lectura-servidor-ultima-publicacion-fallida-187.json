@@ -41,7 +41,7 @@
             },
             "signal": {
               "action": "BUY",
-              "entry_hash": "1978483f7a908f6a204c6ea42ea129c9e07981c699874d3e517ca9a8c4e8dbd3",
+              "entry_hash": "38eb922933cf5cd26760c876f9b8dd06697f3e825fe6a8a36eb6cc49595bbbcf",
               "origin": "original",
               "seq": 35,
               "signal_key": "98465f97729ed734b28d0e4a",
@@ -75,7 +75,7 @@
             },
             "signal": {
               "action": "BUY",
-              "entry_hash": "cf06e89b216d72aa436b189f8748938d33bfffb2313cb9a00ed9db816cde133c",
+              "entry_hash": "856bde7144e45d3ecc52f0915afbf8f9842e8ae2e8c79faf7da7b3d87f3f099f",
               "origin": "original",
               "seq": 38,
               "signal_key": "cd833d62f653de2ac8903d88",
@@ -109,7 +109,7 @@
             },
             "signal": {
               "action": "BUY",
-              "entry_hash": "80df763bd7f39f83dd4e0f57481d430a849a580f29036f91ab43dc0e44a7a321",
+              "entry_hash": "b4dcd1606302bb076ac13d3038bd853e34c037c411ec58bfc946c5bd7aec4f82",
               "origin": "original",
               "seq": 41,
               "signal_key": "99811dc0a457d18e4fb11931",
@@ -209,7 +209,7 @@
       "pid": 4242
     },
     "schema": "balancita-paper-session-blocks.v1",
-    "session_id": "445b91dd7d180a30d318",
+    "session_id": "eabc0874f42c286d7be3",
     "status": {
       "clock": null,
       "evidence_class": "not_forward_evidence",

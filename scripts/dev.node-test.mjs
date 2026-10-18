@@ -605,12 +605,17 @@ describe('optional LLM decision children (llm and q)', () => {
 
   it('reads the C31 switch from the off block of config/qwen-exit.json and fails safe', () => {
     const read = (text) => () => text
-    assert.deepEqual(qwenExitSwitch('/r', read('{"off":{"since":"2026-10-18","reason":"x"}}')), {
-      off: true,
-      since: '2026-10-18',
-      reason: 'x',
+    assert.deepEqual(
+      qwenExitSwitch('/r', read('{"off":{"since":"2026-10-18","reason":"x"}}')),
+      {
+        off: true,
+        since: '2026-10-18',
+        reason: 'x',
+      },
+    )
+    assert.deepEqual(qwenExitSwitch('/r', read('{"schema":"s"}')), {
+      off: false,
     })
-    assert.deepEqual(qwenExitSwitch('/r', read('{"schema":"s"}')), { off: false })
     assert.equal(qwenExitSwitch('/r', read('{')).off, true)
     assert.equal(
       qwenExitSwitch(process.cwd()).off,

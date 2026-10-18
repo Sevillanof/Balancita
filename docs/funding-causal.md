@@ -10,11 +10,11 @@ Estado: código y pruebas con datos mínimos escritos a mano; **no se corrió so
 
 ## Valores provisionales (decididos por Fran, a revisar con el WebSocket)
 
-| Constante | Valor | Razón |
-| --- | --- | --- |
-| `MAX_PERIOD_AGE_MS` | 71 min | medido desde el **fin** de la última tasa conocida. El funding es horario y el período recién cerrado se conoce normalmente entre 30 s y 11 min después de su fin (reintentos REST y sondeo de asentamiento de la captura, `live-capture.ts`), así que en operación normal la última conocida cerró hace ≤ ~60 min; pasados 71 min la hora recién cerrada no llegó. Con funding por WebSocket bajaría a ~61 min. |
-| ventana | 720 h, 100 % | sin tolerancia (antes 0,9). |
-| piso de publicación | ninguno | se usa la hora real en que la captura vio el dato. |
+| Constante           | Valor        | Razón                                                                                                                                                                                                                                                                                                                                                                                                            |
+| ------------------- | ------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `MAX_PERIOD_AGE_MS` | 71 min       | medido desde el **fin** de la última tasa conocida. El funding es horario y el período recién cerrado se conoce normalmente entre 30 s y 11 min después de su fin (reintentos REST y sondeo de asentamiento de la captura, `live-capture.ts`), así que en operación normal la última conocida cerró hace ≤ ~60 min; pasados 71 min la hora recién cerrada no llegó. Con funding por WebSocket bajaría a ~61 min. |
+| ventana             | 720 h, 100 % | sin tolerancia (antes 0,9).                                                                                                                                                                                                                                                                                                                                                                                      |
+| piso de publicación | ninguno      | se usa la hora real en que la captura vio el dato.                                                                                                                                                                                                                                                                                                                                                               |
 
 **No reutilizar la «mediana ≈ 16,8 h» de `docs/captura-confirmacion-funding-184.md`**: era un artefacto de la deduplicación del almacén (hora en que se guardó, no en que se publicó).
 

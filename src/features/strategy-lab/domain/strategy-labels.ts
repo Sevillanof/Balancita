@@ -86,6 +86,27 @@ export const OPERATIONAL_BASIS_HINT: Record<string, string> = {
   none: 'Ninguna fuente confirma este estado',
 }
 
+/** Tooltip of the badge: an off strategy shows why and since when, not the config hint. */
+export function operationalTitle(
+  state: string,
+  basis?: string,
+  sinceMs?: number | null,
+  reason?: string | null,
+): string | undefined {
+  if (state === 'off') {
+    const date =
+      sinceMs != null && Number.isFinite(sinceMs)
+        ? new Date(sinceMs).toISOString().slice(0, 10)
+        : null
+    const parts = [
+      date ? `Apagada desde ${date}` : 'Apagada',
+      reason ? `motivo: ${reason}` : null,
+    ].filter(Boolean)
+    return parts.join(' · ')
+  }
+  return basis ? OPERATIONAL_BASIS_HINT[basis] : undefined
+}
+
 /** Labels tolerate a value this build does not know, never printing it as a verdict. */
 export function operationalLabel(state: string): string {
   return state in OPERATIONAL_LABELS
