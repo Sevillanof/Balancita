@@ -1,7 +1,8 @@
 {
   "schema": "futures-forward-strategies.v1",
-  "note": "Strategies measured forward in paper. min_forward_trades (15 live trades) is the single source of the review threshold (ADR 0001 amendment 2026-10-18); Python and the API read it from here. A strategy found by searching past data is promoted only by trades that happened after its start_ms; see docs/strategy-reliability.md.",
+  "note": "Strategies measured forward in paper. min_forward_trades (15 live trades) is the single source of the review threshold (ADR 0001 amendment 2026-10-18); Python and the API read it from here. late_candle_tolerance_ms (15 s) is the single tolerance for a late candle in the forward and in the paper session: a candle learned more than that after its bucket closed never produces a live trade (ADR 0001 amendment 2026-10-18). A strategy found by searching past data is promoted only by trades that happened after its start_ms; see docs/strategy-reliability.md.",
   "min_forward_trades": 15,
+  "late_candle_tolerance_ms": 15000,
   "promote_t_stat": 1.64,
   "strategies": {
     "c30-momentum-12h-perp-v1": {

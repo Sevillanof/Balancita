@@ -78,6 +78,22 @@ def load_forward_min_trades(path=FORWARD_STRATEGIES_PATH):
 
 
 FORWARD_MIN_TRADES = load_forward_min_trades()
+
+
+def load_late_candle_tolerance_ms(path=FORWARD_STRATEGIES_PATH):
+    """The late-candle tolerance, read from ``late_candle_tolerance_ms`` in config/forward-strategies.json (single source).
+
+    A candle whose ``known_at - (bucket_start + interval)`` is greater than this never produces a live trade, in the
+    forward (the trade is simulated and marked ``recovered``) or in the paper session (the order is not executed).
+    """
+    with open(path, encoding="utf-8") as handle:
+        value = json.load(handle)["late_candle_tolerance_ms"]
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        raise ValueError("late_candle_tolerance_ms must be a positive integer")
+    return value
+
+
+LATE_CANDLE_TOLERANCE_MS = load_late_candle_tolerance_ms()
 VERDICTS = ("insufficient_data", "negative_edge", "no_edge", "candidate_edge", "tentative_edge", "reliable_edge")
 
 

@@ -13,6 +13,7 @@ import unittest
 from unittest import mock
 
 from balancita_engine import paper_live_process as LP
+from balancita_engine.futures_strategy_reliability import LATE_CANDLE_TOLERANCE_MS
 from real_session import DECIDE_FROM as FIRST_DECISION, DECIDE_UNTIL as LAST_DECISION, INGEST_KW, MAX_QUOTE_GAP_MS
 from real_session import Base, Clock, config_dict
 
@@ -32,7 +33,7 @@ class TestRealSessionGate(Base):
 
     def config(self, **over):
         body = dict(source_id=LP.REAL_SOURCE, authorization_ref=REF, ingest_kw=dict(INGEST_KW, causal_until_clock=True),
-                    stale_stop={"stop_quote_gap_ms": MAX_QUOTE_GAP_MS + 1}, evaluator_kw={"candle_tolerance_ms": 45_000})
+                    stale_stop={"stop_quote_gap_ms": MAX_QUOTE_GAP_MS + 1}, evaluator_kw={"candle_tolerance_ms": LATE_CANDLE_TOLERANCE_MS})
         body.update(over)
         return LP.validate_config(config_dict(**body))
 
@@ -55,11 +56,18 @@ class TestRealSessionGate(Base):
     def test_a_real_session_without_the_stale_stop_is_refused_even_when_it_is_authorized(self):
         path = self.real_copy()
         bare = LP.validate_config(config_dict(source_id=LP.REAL_SOURCE, authorization_ref=REF, ingest_kw=dict(INGEST_KW, causal_until_clock=True),
-                                              evaluator_kw={"candle_tolerance_ms": 45_000}))
+                                              evaluator_kw={"candle_tolerance_ms": LATE_CANDLE_TOLERANCE_MS}))
         with mock.patch.dict(LP.AUTHORIZED_SESSIONS, self.grant(path)):
             report, failed = self.failed(bare, path)
         self.assertEqual(failed, ["stale_stop_named"], report)
         self.assertFalse(report["ok"])
+
+    def test_a_real_session_with_a_tolerance_other_than_the_shared_one_is_refused(self):
+        path = self.real_copy()
+        for other in (LATE_CANDLE_TOLERANCE_MS - 1, LATE_CANDLE_TOLERANCE_MS + 1, 45_000):
+            with mock.patch.dict(LP.AUTHORIZED_SESSIONS, self.grant(path)):
+                report, failed = self.failed(self.config(evaluator_kw={"candle_tolerance_ms": other}), path)
+            self.assertEqual(failed, ["candle_tolerance_named"], (other, report))
 
     def test_a_real_session_without_the_candle_tolerance_is_refused_even_when_it_is_authorized(self):
         path = self.real_copy()
