@@ -359,11 +359,16 @@ class FundingAudit(Tmp):
                        ("r%d" % n, BTC, START, START + HOUR, "0.5", received, "usd_per_base_per_hour"))
         db.commit()
         db.close()
-        forward = dict(FF.load_periods(path, BTC))
+        forward = {s: r for s, r, _ in FF.load_periods(path, BTC)}
         gate = RD.ReplayDataGate(path, START, START + 5 * DAY + 3 * HOUR)
         replay = {s: float(r) for s, r in gate.relative_funding(BTC)}
         gate.close()
-        self.assertEqual(replay, {s: v for s, v in forward.items() if s < START + 5 * DAY + 3 * HOUR})
+        # The forward now reads only the hours the periods table lists as seen after they closed (futures_funding_context
+        # .load_periods); the 9a gate still reads the oldest and the two newest bodies. Where both state an hour, the rate is
+        # the same one: the first seen.
+        self.assertTrue(forward)
+        self.assertEqual({s: replay[s] for s in forward if s in replay}, {s: v for s, v in forward.items() if s in replay})
+        self.assertEqual(set(forward) & set(replay), set(forward))
         self.assertNotEqual(replay[START + 3 * HOUR], 0.0099)                        # not the revision: the oldest response
 
 

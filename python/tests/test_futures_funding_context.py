@@ -76,10 +76,10 @@ class FundingContextTests(unittest.TestCase):
             for sha, product, rate in (("a", "PF_XBTUSD", 1.0), ("b", "PF_ETHUSD", 2.0)):
                 raw = json.dumps({"rates": [{"timestamp": "1970-01-01T00:00:00Z", "relativeFundingRate": rate}]})
                 db.execute("INSERT INTO paper_futures_funding_responses VALUES(?,?,?,?)", (sha, 1, "t", raw))
-                db.execute("INSERT INTO paper_futures_funding_periods VALUES(?,?,?,?,?,?,?)", (sha, 0, H, "0", 1, "u", product))
+                db.execute("INSERT INTO paper_futures_funding_periods VALUES(?,?,?,?,?,?,?)", (sha, 0, H, "0", H + 5, "u", product))
             db.commit()
             db.close()
-            self.assertEqual(fc.load_periods(path, "PF_ETHUSD"), [(0, 2.0)])
+            self.assertEqual(fc.load_periods(path, "PF_ETHUSD"), [(0, 2.0, H + 5)])
             self.assertEqual(fc.load_periods(path, "PF_SOLUSD"), [])
 
 

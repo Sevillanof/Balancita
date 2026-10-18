@@ -145,8 +145,10 @@ class ForwardReconciliationTests(unittest.TestCase):
                 continue
             stamp = datetime.fromtimestamp(t / 1000, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
             rates.append({"timestamp": stamp, "fundingRate": 1, "relativeFundingRate": rate})
+            # the capture saw each hour once it had closed: one period row per hour listed, as the store writes them
+            db.execute("INSERT INTO paper_futures_funding_periods VALUES(?,?,?,?,?,?,?)",
+                       ("a", t, t + H, "0", t + H + 1, "u", "PF_XBTUSD"))
         db.execute("INSERT INTO paper_futures_funding_responses VALUES(?,?,?,?)", ("a", 1, "t", json.dumps({"rates": rates})))
-        db.execute("INSERT INTO paper_futures_funding_periods VALUES(?,?,?,?,?,?,?)", ("a", 0, H, "0", 1, "u", "PF_XBTUSD"))
         db.commit()
         db.close()
 
