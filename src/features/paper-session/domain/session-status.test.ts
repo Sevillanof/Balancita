@@ -39,10 +39,15 @@ describe('session status decoder against blocks the real publisher emitted', () 
   })
 
   it('an orderly stop and an unavailable status never claim verified funding', () => {
+    // the stopped session left a position open, so its funding report is observed but incomplete
+    expect(decodeSessionStatus(statuses.stopped_orderly).funding.source).toBe(
+      'observed',
+    )
+    expect(decodeSessionStatus(statuses.unavailable).funding.source).toBe(
+      'unknown',
+    )
     for (const raw of [statuses.stopped_orderly, statuses.unavailable]) {
-      const s = decodeSessionStatus(raw)
-      expect(s.funding.source).toBe('unknown')
-      expect(s.funding.pnlVerified).toBe(false)
+      expect(decodeSessionStatus(raw).funding.pnlVerified).toBe(false)
     }
   })
 
