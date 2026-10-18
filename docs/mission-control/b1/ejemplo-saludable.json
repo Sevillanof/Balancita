@@ -525,7 +525,7 @@
           "label": "Anomalías registradas del forward",
           "status": "ok",
           "value": 0,
-          "rule": "warning si hay trades divergentes (necesitan --rebuild) o velas con retraso > 10 min, solo en pares esperados; los bloqueos y ciclos obsoletos se informan sin juzgar",
+          "rule": "warning si hay trades divergentes de la regla actual (necesitan --rebuild) o velas con retraso > 10 min, solo en pares esperados; los bloqueos y ciclos obsoletos se informan sin juzgar",
           "detail": "Sin divergencias ni retrasos de vela registrados."
         }
       ],
@@ -550,6 +550,7 @@
           "missing_1m": 0,
           "late_1m": 0,
           "diverged_trades": 0,
+          "legacy_diverged_trades": 0,
           "blocked_stale_entries": 0,
           "stale_cycles": 0
         },
@@ -564,6 +565,7 @@
           "missing_1m": 0,
           "late_1m": 0,
           "diverged_trades": 0,
+          "legacy_diverged_trades": 0,
           "blocked_stale_entries": 0,
           "stale_cycles": 0
         },
@@ -578,6 +580,7 @@
           "missing_1m": 0,
           "late_1m": 0,
           "diverged_trades": 0,
+          "legacy_diverged_trades": 0,
           "blocked_stale_entries": 0,
           "stale_cycles": 0
         },
@@ -592,6 +595,7 @@
           "missing_1m": 0,
           "late_1m": 0,
           "diverged_trades": 0,
+          "legacy_diverged_trades": 0,
           "blocked_stale_entries": 0,
           "stale_cycles": 0
         },
@@ -606,6 +610,7 @@
           "missing_1m": 0,
           "late_1m": 0,
           "diverged_trades": 0,
+          "legacy_diverged_trades": 0,
           "blocked_stale_entries": 0,
           "stale_cycles": 0
         },
@@ -620,6 +625,7 @@
           "missing_1m": 0,
           "late_1m": 0,
           "diverged_trades": 0,
+          "legacy_diverged_trades": 0,
           "blocked_stale_entries": 0,
           "stale_cycles": 0
         },
@@ -634,6 +640,7 @@
           "missing_1m": 0,
           "late_1m": 0,
           "diverged_trades": 0,
+          "legacy_diverged_trades": 0,
           "blocked_stale_entries": 0,
           "stale_cycles": 0
         },
@@ -648,6 +655,7 @@
           "missing_1m": 0,
           "late_1m": 0,
           "diverged_trades": 0,
+          "legacy_diverged_trades": 0,
           "blocked_stale_entries": 0,
           "stale_cycles": 0
         },
@@ -662,6 +670,7 @@
           "missing_1m": 0,
           "late_1m": 0,
           "diverged_trades": 0,
+          "legacy_diverged_trades": 0,
           "blocked_stale_entries": 0,
           "stale_cycles": 0
         },
@@ -676,6 +685,7 @@
           "missing_1m": 0,
           "late_1m": 0,
           "diverged_trades": 0,
+          "legacy_diverged_trades": 0,
           "blocked_stale_entries": 0,
           "stale_cycles": 0
         },
@@ -690,6 +700,7 @@
           "missing_1m": 0,
           "late_1m": 0,
           "diverged_trades": 0,
+          "legacy_diverged_trades": 0,
           "blocked_stale_entries": 0,
           "stale_cycles": 0
         },
@@ -704,6 +715,7 @@
           "missing_1m": 0,
           "late_1m": 0,
           "diverged_trades": 0,
+          "legacy_diverged_trades": 0,
           "blocked_stale_entries": 0,
           "stale_cycles": 0
         },
@@ -718,6 +730,7 @@
           "missing_1m": 0,
           "late_1m": 0,
           "diverged_trades": 0,
+          "legacy_diverged_trades": 0,
           "blocked_stale_entries": 0,
           "stale_cycles": 0
         },
@@ -732,6 +745,7 @@
           "missing_1m": 0,
           "late_1m": 0,
           "diverged_trades": 0,
+          "legacy_diverged_trades": 0,
           "blocked_stale_entries": 0,
           "stale_cycles": 0
         },
@@ -746,6 +760,7 @@
           "missing_1m": 0,
           "late_1m": 0,
           "diverged_trades": 0,
+          "legacy_diverged_trades": 0,
           "blocked_stale_entries": 0,
           "stale_cycles": 0
         },
@@ -760,6 +775,7 @@
           "missing_1m": 0,
           "late_1m": 0,
           "diverged_trades": 0,
+          "legacy_diverged_trades": 0,
           "blocked_stale_entries": 0,
           "stale_cycles": 0
         },
@@ -770,6 +786,7 @@
             "rows_not_expected": 0,
             "open_positions": 0,
             "diverged_trades": 0,
+            "legacy_diverged_trades": 0,
             "blocked_stale_entries": 0,
             "stale_cycles": 0
           }
@@ -778,7 +795,7 @@
       "limitations": [
         "Solo describe el forward; el libro D está retirado y no se evalúa.",
         "Las filas de pares que ya no se esperan (estrategia apagada) se cuentan aparte y no prueban actividad.",
-        "No hay PnL no realizado ni posiciones abiertas por estrategia: falta B5.",
+        "Las posiciones abiertas por estrategia y su PnL no realizado («abierta, valuada a mercado») no se leen aquí: están en GET /api-strategies/forward.",
         "Los descartes del simulador (coste/protección) no se persisten (B4 pospuesto)."
       ]
     },

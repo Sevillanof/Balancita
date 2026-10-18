@@ -987,6 +987,8 @@ interface ForwardRow {
   readonly missing1m: number
   readonly late1m: number
   readonly diverged: number
+  /** Stored under the rule PR #283 removed: legacy, not an error. */
+  readonly legacyDiverged: number
   readonly blockedStale: number
   readonly staleCycles: number
 }
@@ -1023,6 +1025,7 @@ function readForward(options: ObservabilityHealthOptions): Opened<ForwardRead> {
         missing1m: num(p.missing_1m) ?? 0,
         late1m: num(p.late_1m) ?? 0,
         diverged: num(p.diverged_trades) ?? 0,
+        legacyDiverged: num(p.legacy_diverged_trades) ?? 0,
         blockedStale: num(p.blocked_stale_entries) ?? 0,
         staleCycles: num(p.stale_cycles) ?? 0,
       }
@@ -1568,6 +1571,11 @@ function paperComponent(
       own.reduce((a, r) => a + pick(r), 0)
     const diverged = sum((r) => r.diverged)
     const lagging = own.filter((r) => (r.candleLagMs ?? 0) > LAG_WARN_MS).length
+    const legacy = sum((r) => r.legacyDiverged)
+    const legacyText =
+      legacy > 0
+        ? ` ${legacy} operación(es) del legado del cambio del 18-oct (#283): decididas con la regla anterior, sin clasificar y fuera del avance; no se juzgan como error.`
+        : ''
     const anomalous = diverged > 0 || lagging > 0
     checks.push(
       check({
@@ -1575,13 +1583,13 @@ function paperComponent(
         label: 'Anomalías registradas del forward',
         status: own.length === 0 ? 'unknown' : anomalous ? 'warning' : 'ok',
         value: own.length === 0 ? null : diverged + lagging,
-        rule: `warning si hay trades divergentes (necesitan --rebuild) o velas con retraso > ${LAG_WARN_MS / MINUTE} min, solo en pares esperados; los bloqueos y ciclos obsoletos se informan sin juzgar`,
+        rule: `warning si hay trades divergentes de la regla actual (necesitan --rebuild) o velas con retraso > ${LAG_WARN_MS / MINUTE} min, solo en pares esperados; los bloqueos y ciclos obsoletos se informan sin juzgar`,
         detail:
           own.length === 0
             ? 'Los pares esperados no tienen estado registrado.'
             : anomalous
-              ? `${diverged} trade(s) divergente(s), ${lagging} par(es) con vela retrasada.`
-              : 'Sin divergencias ni retrasos de vela registrados.',
+              ? `${diverged} trade(s) divergente(s), ${lagging} par(es) con vela retrasada.${legacyText}`
+              : `Sin divergencias ni retrasos de vela registrados.${legacyText}`,
       }),
     )
     for (const p of pairs)
@@ -1596,6 +1604,7 @@ function paperComponent(
         missing_1m: p.row?.missing1m ?? null,
         late_1m: p.row?.late1m ?? null,
         diverged_trades: p.row?.diverged ?? null,
+        legacy_diverged_trades: p.row?.legacyDiverged ?? null,
         blocked_stale_entries: p.row?.blockedStale ?? null,
         stale_cycles: p.row?.staleCycles ?? null,
       })
@@ -1611,6 +1620,7 @@ function paperComponent(
         ).length,
         open_positions: forward.value.open,
         diverged_trades: diverged,
+        legacy_diverged_trades: legacy,
         blocked_stale_entries: sum((r) => r.blockedStale),
         stale_cycles: sum((r) => r.staleCycles),
       },
@@ -1633,7 +1643,7 @@ function paperComponent(
     [
       'Solo describe el forward; el libro D está retirado y no se evalúa.',
       'Las filas de pares que ya no se esperan (estrategia apagada) se cuentan aparte y no prueban actividad.',
-      'No hay PnL no realizado ni posiciones abiertas por estrategia: falta B5.',
+      'Las posiciones abiertas por estrategia y su PnL no realizado («abierta, valuada a mercado») no se leen aquí: están en GET /api-strategies/forward.',
       'Los descartes del simulador (coste/protección) no se persisten (B4 pospuesto).',
     ],
     items,

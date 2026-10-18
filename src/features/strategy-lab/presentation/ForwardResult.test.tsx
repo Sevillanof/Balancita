@@ -180,6 +180,28 @@ describe('ForwardResult (datos de ejemplo)', () => {
     expect(screen.getByTestId('forward-progress')).toHaveTextContent('37/100')
   })
 
+  it('shows closed trades of the old rule apart and does not add them to the progress', () => {
+    const legacy = { ...side(28, 5), open: undefined }
+    render(
+      <ForwardResult
+        row={rowWith(
+          result({
+            live: side(37, 12.5),
+            unclassified: {
+              ...legacy,
+              note: 'legado del cambio del 18-oct (#283): decididas con la regla anterior',
+            },
+          }),
+        )}
+        now={NOW}
+      />,
+    )
+    const box = screen.getByTestId('forward-unclassified-closed')
+    expect(box).toHaveTextContent('Sin clasificar: 28 cerradas')
+    expect(box).toHaveTextContent('decididas con la regla anterior')
+    expect(screen.getByTestId('forward-progress')).toHaveTextContent('37/100')
+  })
+
   it('hides the unclassified block when there is none', () => {
     render(<ForwardResult row={rowWith(result())} now={NOW} />)
     expect(

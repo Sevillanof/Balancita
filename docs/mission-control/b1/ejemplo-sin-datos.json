@@ -331,7 +331,7 @@
       "limitations": [
         "Solo describe el forward; el libro D está retirado y no se evalúa.",
         "Las filas de pares que ya no se esperan (estrategia apagada) se cuentan aparte y no prueban actividad.",
-        "No hay PnL no realizado ni posiciones abiertas por estrategia: falta B5.",
+        "Las posiciones abiertas por estrategia y su PnL no realizado («abierta, valuada a mercado») no se leen aquí: están en GET /api-strategies/forward.",
         "Los descartes del simulador (coste/protección) no se persisten (B4 pospuesto)."
       ]
     },

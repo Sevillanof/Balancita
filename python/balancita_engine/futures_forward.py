@@ -56,7 +56,24 @@ BLOCK_STALE_ENTRIES = False
 # What the candles decide. ``net_bp`` is left out: it also depends on the funding known when the trade was stored,
 # which is completed beside the original (futures_funding_reconcile), not by a hole in the candles.
 _CORE_KEYS = ("entry_price", "exit_bucket_ms", "exit_price", "exit_reason", "side")
+# Which rule decided each stored trade (written beside it, never by rewriting it). Trades already stored when the
+# marks first appeared were decided under the stale-entry gate that PR #283 (18 Oct) removed: era ``ERA_OLD``.
+# Every trade stored from then on is ``ERA_NOW``. The old ones the current rule does not reproduce are legacy of
+# that change, not an error; a divergence of the current era is still a real warning.
+ERA_OLD = "bloqueo-antiguo"
+ERA_NOW = "actual"
+LEGACY_NOTE = "legado del cambio del 18-oct (#283): decididas con la regla anterior"
+_FIRST_SEEN_SCHEMA = ("CREATE TABLE IF NOT EXISTS forward_first_seen("
+                      "strategy_id TEXT NOT NULL, spec_hash TEXT NOT NULL, seen_ms INTEGER NOT NULL, "
+                      "PRIMARY KEY(strategy_id, spec_hash)) STRICT;")
 _SCHEMA = """
+CREATE TABLE IF NOT EXISTS forward_era(
+  strategy_id TEXT NOT NULL, product_id TEXT NOT NULL, entry_bucket_ms INTEGER NOT NULL,
+  spec_hash TEXT NOT NULL, era TEXT NOT NULL, marked_ms INTEGER NOT NULL,
+  PRIMARY KEY(strategy_id, product_id, entry_bucket_ms, spec_hash)) STRICT;
+CREATE TABLE IF NOT EXISTS forward_diverged(
+  strategy_id TEXT NOT NULL, product_id TEXT NOT NULL, entry_bucket_ms INTEGER NOT NULL,
+  PRIMARY KEY(strategy_id, product_id, entry_bucket_ms)) STRICT;
 CREATE TABLE IF NOT EXISTS forward_trade(
   strategy_id TEXT NOT NULL, product_id TEXT NOT NULL, entry_bucket_ms INTEGER NOT NULL,
   spec_hash TEXT NOT NULL, payload TEXT NOT NULL, PRIMARY KEY(strategy_id, product_id, entry_bucket_ms, spec_hash)) STRICT;
@@ -137,9 +154,7 @@ def effective_registration(db_path, registration, specs, candidates, now_ms):
             del registered[strategy_id]
     db = sqlite3.connect(db_path)
     try:
-        db.executescript("CREATE TABLE IF NOT EXISTS forward_first_seen("
-                         "strategy_id TEXT NOT NULL, spec_hash TEXT NOT NULL, seen_ms INTEGER NOT NULL, "
-                         "PRIMARY KEY(strategy_id, spec_hash)) STRICT;")
+        db.executescript(_FIRST_SEEN_SCHEMA)
         for strategy_id, info in candidates.items():
             if info["state"] != "active" or strategy_id in registered:
                 continue
@@ -229,6 +244,43 @@ def make_entry_gate(ones, fives, gate_from_ms):
     return gate
 
 
+def mark_legacy_era(db, now_ms):
+    """Marks every stored trade that has no era yet as ``ERA_OLD`` (decided before the marks existed). Append-only."""
+    with db:
+        db.execute("INSERT OR IGNORE INTO forward_era SELECT strategy_id, product_id, entry_bucket_ms, spec_hash, ?, ? "
+                   "FROM forward_trade", (ERA_OLD, now_ms))
+
+
+def start_rebuild(out_dir, now_s=None):
+    """Sets ``forward.sqlite`` aside as evidence and starts a new one that keeps what is not recomputable.
+
+    ``forward_first_seen`` (when a registry strategy was first seen: its start) and ``forward_policy`` are copied
+    into the new file; without them a strategy with no ``active_since_ms`` would restart "from now". Trades, status
+    and marks are recomputed from the candles. Returns the path of the kept file, or ``None`` when there was none.
+    """
+    current = os.path.join(out_dir, "forward.sqlite")
+    if not os.path.exists(current):
+        return None
+    kept = "{}.before-rebuild-{}".format(current, int(time.time() if now_s is None else now_s))
+    os.rename(current, kept)
+    old = sqlite3.connect("file:{}?mode=ro".format(kept), uri=True)
+    new = sqlite3.connect(current)
+    try:
+        new.executescript(_FIRST_SEEN_SCHEMA + _SCHEMA)
+        present = {name for (name,) in old.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        with new:
+            if "forward_first_seen" in present:
+                new.executemany("INSERT OR IGNORE INTO forward_first_seen VALUES(?,?,?)",
+                                old.execute("SELECT strategy_id, spec_hash, seen_ms FROM forward_first_seen"))
+            if "forward_policy" in present:
+                new.executemany("INSERT OR IGNORE INTO forward_policy VALUES(?,?)",
+                                old.execute("SELECT name, value FROM forward_policy"))
+    finally:
+        old.close()
+        new.close()
+    return kept
+
+
 def run_forward(market_db, db_path, specs, registration, products):
     """Replays every registered spec over every product and stores the trades closed since its start.
 
@@ -241,6 +293,7 @@ def run_forward(market_db, db_path, specs, registration, products):
     try:
         now = int(time.time() * 1000)
         gate_from = stale_gate_from(db, now)
+        mark_legacy_era(db, now)
         for strategy_id, info in registration["strategies"].items():
             spec = specs.get(strategy_id)
             if spec is None:
@@ -273,10 +326,22 @@ def run_forward(market_db, db_path, specs, registration, products):
                             "INSERT OR IGNORE INTO forward_trade VALUES(?,?,?,?,?)",
                             (strategy_id, product_id, trade["entry_bucket_ms"], digest, json.dumps(trade)))
                         added[(strategy_id, product_id)] += cursor.rowcount
+                        if cursor.rowcount:
+                            db.execute("INSERT OR IGNORE INTO forward_era VALUES(?,?,?,?,?,?)",
+                                       (strategy_id, product_id, trade["entry_bucket_ms"], digest, ERA_NOW, now))
                     # Trades stored earlier that the candles now on disk no longer reproduce (they were computed
                     # across a hole): never rewritten, only counted, so ``--rebuild`` can recompute them.
-                    diverged = sum(1 for bucket, old in stored.items() if bucket not in by_entry or any(
+                    diverged_buckets = sorted(bucket for bucket, old in stored.items() if bucket not in by_entry or any(
                         old.get(key) != by_entry[bucket].get(key) for key in _CORE_KEYS))
+                    eras = dict(db.execute(
+                        "SELECT entry_bucket_ms, era FROM forward_era WHERE strategy_id=? AND product_id=? "
+                        "AND spec_hash=?", (strategy_id, product_id, digest)))
+                    legacy = sum(1 for bucket in diverged_buckets if eras.get(bucket) == ERA_OLD)
+                    diverged = len(diverged_buckets) - legacy
+                    db.execute("DELETE FROM forward_diverged WHERE strategy_id=? AND product_id=?",
+                               (strategy_id, product_id))
+                    db.executemany("INSERT INTO forward_diverged VALUES(?,?,?)",
+                                   [(strategy_id, product_id, bucket) for bucket in diverged_buckets])
                     db.executemany("INSERT OR IGNORE INTO forward_blocked VALUES(?,?,?,?)",
                                    [(strategy_id, product_id, bucket, digest) for bucket in book.blocked])
                     db.execute("DELETE FROM forward_recovered WHERE strategy_id=? AND product_id=?",
@@ -286,7 +351,7 @@ def run_forward(market_db, db_path, specs, registration, products):
                     db.execute("INSERT OR REPLACE INTO forward_status VALUES(?,?,?)", (
                         strategy_id, product_id, json.dumps({
                             "checked_ms": now, "missing_1m": missing, "late_1m": len(late_ones),
-                            "diverged_trades": diverged, "blocked_stale_entries": len(book.blocked),
+                            "diverged_trades": diverged, "legacy_diverged_trades": legacy, "blocked_stale_entries": len(book.blocked),
                             "stale_cycles": book.stale_cycles,
                             "funding": funding_state(context, now),
                             # How far behind "now" the newest stored 1m candle closed: a capture that stopped
@@ -322,6 +387,14 @@ def write_summary(db_path, specs, registration, out_path):
             recovered = {(product, bucket) for product, bucket in db.execute(
                 "SELECT product_id, entry_bucket_ms FROM forward_recovered WHERE strategy_id=?", (strategy_id,))}
             trades = [dict(json.loads(payload), product_id=product) for product, payload in rows]
+            # Legacy: stored under the old rule and not reproduced by the current one. No ``recovered`` flag can be
+            # computed for them, so they are neither live nor recovered: they have a block of their own.
+            diverged = {(product, bucket) for product, bucket in db.execute(
+                "SELECT product_id, entry_bucket_ms FROM forward_diverged WHERE strategy_id=?", (strategy_id,))}
+            old_era = {(product, bucket) for product, bucket in db.execute(
+                "SELECT product_id, entry_bucket_ms FROM forward_era WHERE strategy_id=? AND spec_hash=? AND era=?",
+                (strategy_id, digest, ERA_OLD))}
+            legacy_keys = diverged & old_era
             reconciled = load_reconciled(db, strategy_id, digest)
             for trade in trades:
                 trade["recovered"] = (trade["product_id"], trade["entry_bucket_ms"]) in recovered
@@ -329,6 +402,10 @@ def write_summary(db_path, specs, registration, out_path):
                 if row is not None and not trade.get("funding_complete"):
                     trade.update(funding_usd=row["funding_usd"], funding_complete=True, funding_status="complete",
                                  pnl_usd=row["pnl_usd"], net_bp=row["net_bp"], funding_source=row["method_version"])
+            unclassified = [t for t in trades if (t["product_id"], t["entry_bucket_ms"]) in legacy_keys]
+            for trade in unclassified:
+                trade["recovered"] = None
+            trades = [t for t in trades if t["recovered"] is not None]
             live_only = [t for t in trades if not t["recovered"]]
             recovered_only = [t for t in trades if t["recovered"]]
             last_ms = max(now, info["start_ms"] + 1)
@@ -352,6 +429,10 @@ def write_summary(db_path, specs, registration, out_path):
                 "summary_recovered": summarize_trades(recovered_only, first_ms=info["start_ms"], last_ms=last_ms),
                 "counts_toward_min_trades": "live",
                 "live_trades": len(live_only),
+                # Stored under the rule PR #283 removed and not reproduced now: never live, never in the progress.
+                "unclassified_trades": len(unclassified), "legacy_note": LEGACY_NOTE,
+                "summary_unclassified": summarize_trades(unclassified, first_ms=info["start_ms"], last_ms=last_ms),
+                "legacy_diverged_trades": sum(st.get("legacy_diverged_trades", 0) for st in statuses),
                 # Per product: whether funding is usable now and, if not, the stable code and the reason in Spanish.
                 "funding_state": {p: v for p, v in sorted(funding_state_by_product.items()) if v is not None},
                 "missing_candles_1m": sum(st["missing_1m"] for st in statuses),
@@ -391,9 +472,9 @@ def main(argv=None):
     args = parser.parse_args(argv)
     os.makedirs(args.out, exist_ok=True)
     if args.rebuild:
-        current = os.path.join(args.out, "forward.sqlite")
-        if os.path.exists(current):
-            os.rename(current, "{}.before-rebuild-{}".format(current, int(time.time())))
+        kept = start_rebuild(args.out)
+        if kept:
+            print("rebuild: the previous forward.sqlite is kept as evidence at {}".format(kept), flush=True)
     specs = load_specs(args.specs_dir)
     registration = load_registration(args.registration)
     products = resolve_products()
@@ -409,10 +490,11 @@ def main(argv=None):
         body = write_summary(os.path.join(args.out, "forward.sqlite"), specs, registration,
                              os.path.join(args.out, "forward-reliability.json"))
         for strategy_id, entry in body["strategies"].items():
-            print("{} forward trades={} (live {}, recovered {}) open={} +{} missing 1m={} diverged={}".format(
-                strategy_id, entry["summary"]["trades"], entry["live_trades"], entry["recovered_trades"], entry["open_positions"],
+            print("{} forward trades={} (live {}, recovered {}, unclassified {}) open={} +{} missing 1m={} diverged={} legacy={}".format(
+                strategy_id, entry["summary"]["trades"], entry["live_trades"], entry["recovered_trades"], entry["unclassified_trades"],
+            entry["open_positions"],
                 sum(n for (s, _), n in added.items() if s == strategy_id), entry["missing_candles_1m"],
-                entry["diverged_trades"]), flush=True)
+                entry["diverged_trades"], entry["legacy_diverged_trades"]), flush=True)
         if not args.loop_seconds:
             return
         time.sleep(args.loop_seconds)
