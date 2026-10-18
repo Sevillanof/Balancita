@@ -19,8 +19,8 @@ HOLE = (DECISION_MS - 100_000, DECISION_MS + 30_000)         # no BTC quote for 
 
 
 def real_windows():
-    """The received times of the real XBT tickers, one list per capture window (a window ends at a jump of more than a minute)."""
-    times = sorted(row["received_at"] for row in real_sample.rows("market_events", real_sample.PARTIAL_DIR) if row["product_id"] == BTC)
+    """The Kraken times of the real XBT tickers, one list per capture window (a window ends at a jump of more than a minute)."""
+    times = sorted(row["event_time"] for row in real_sample.rows("market_events", real_sample.PARTIAL_DIR) if row["product_id"] == BTC)
     windows = [[times[0]]]
     for previous, current in zip(times, times[1:]):
         if current - previous > 60_000:
@@ -52,10 +52,11 @@ class TestStaleProduct(unittest.TestCase):
         self.assertIsNone(LP.stale_product({BTC: 1_000}, [BTC], 0, 61_000, 60_000))
         self.assertEqual(LP.stale_product({BTC: 1_000}, [BTC], 0, 61_001, 60_000), (BTC, 60_001))
 
-    def test_a_product_that_never_quoted_is_measured_from_the_start_and_a_quote_before_it_does_not_count(self):
+    def test_a_product_that_never_quoted_is_measured_from_the_start_and_one_that_did_from_its_last_quote(self):
         self.assertIsNone(LP.stale_product({}, [BTC], 5_000, 65_000, 60_000))
         self.assertEqual(LP.stale_product({}, [BTC], 5_000, 65_001, 60_000), (BTC, 60_001))
-        self.assertEqual(LP.stale_product({BTC: 1_000}, [BTC], 5_000, 65_001, 60_000), (BTC, 60_001))
+        self.assertEqual(LP.stale_product({BTC: 1_000}, [BTC], 5_000, 61_001, 60_000), (BTC, 60_001))      # not given a fresh limit by the start
+        self.assertIsNone(LP.stale_product({BTC: 1_000}, [BTC], 5_000, 61_000, 60_000))
 
     def test_the_longest_silence_among_the_products_is_the_one_reported(self):
         self.assertEqual(LP.stale_product({"PF_A": 0, "PF_B": 30_000, "PF_C": 90_000}, ["PF_A", "PF_B", "PF_C"], 0, 100_000, 50_000), ("PF_A", 100_000))
@@ -141,7 +142,9 @@ class TestStaleStopInTheSession(Base):
         self.assertEqual(report["stale_stop"]["stop_reason"], "quote_gap:" + BTC)
         self.assertEqual(report["stale_stop"]["events"][0]["limit_ms"], 60_000)
         self.assertGreater(report["stale_stop"]["events"][0]["gap_ms"], 60_000)
-        self.assertEqual(self.read(LP.HEARTBEAT_FILE)["phase"], LP.STOPPED_PHASE)
+        beat = self.read(LP.HEARTBEAT_FILE)
+        self.assertEqual(beat["phase"], LP.STOPPED_PHASE)
+        self.assertEqual((beat["stale_stop"]["limit_ms"], beat["stale_stop"]["events"]), (60_000, report["stale_stop"]["events"]))
 
 
 if __name__ == "__main__":

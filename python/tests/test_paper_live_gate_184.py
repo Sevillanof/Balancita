@@ -13,7 +13,7 @@ import unittest
 from unittest import mock
 
 from balancita_engine import paper_live_process as LP
-from test_paper_live_integration import FIRST_DECISION, INGEST_KW, LAST_DECISION
+from test_paper_live_integration import FIRST_DECISION, INGEST_KW, LAST_DECISION, MAX_QUOTE_GAP_MS
 from test_paper_live_process_185 import Base, Clock, config_dict
 
 REF = "BAL-DECISION-999-01"
@@ -31,7 +31,8 @@ class TestRealSessionGate(Base):
         return path
 
     def config(self, **over):
-        body = dict(source_id=LP.REAL_SOURCE, authorization_ref=REF, ingest_kw=dict(INGEST_KW, causal_until_clock=True))
+        body = dict(source_id=LP.REAL_SOURCE, authorization_ref=REF, ingest_kw=dict(INGEST_KW, causal_until_clock=True),
+                    stale_stop={"stop_quote_gap_ms": MAX_QUOTE_GAP_MS + 1})
         body.update(over)
         return LP.validate_config(config_dict(**body))
 
@@ -50,6 +51,14 @@ class TestRealSessionGate(Base):
         with mock.patch.dict(LP.AUTHORIZED_SESSIONS, self.grant(path)):
             report, failed = self.failed(self.config(), path)
             self.assertEqual(failed, [], report)
+
+    def test_a_real_session_without_the_stale_stop_is_refused_even_when_it_is_authorized(self):
+        path = self.real_copy()
+        bare = LP.validate_config(config_dict(source_id=LP.REAL_SOURCE, authorization_ref=REF, ingest_kw=dict(INGEST_KW, causal_until_clock=True)))
+        with mock.patch.dict(LP.AUTHORIZED_SESSIONS, self.grant(path)):
+            report, failed = self.failed(bare, path)
+        self.assertEqual(failed, ["stale_stop_named"], report)
+        self.assertFalse(report["ok"])
 
     def test_every_mismatch_is_refused_and_nothing_is_written(self):
         path = self.real_copy()

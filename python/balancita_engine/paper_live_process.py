@@ -223,11 +223,12 @@ def _validate_stale_stop(raw, max_quote_gap_ms):
 
 
 def stale_product(last_quote, products, since_ms, now_ms, limit_ms):
-    """The product with the longest quote gap past ``limit_ms`` as ``(product, gap_ms)``, or None. A product without a quote is measured from
-    ``since_ms``; a quote never moves a gap backwards."""
+    """The product with the longest quote gap past ``limit_ms`` as ``(product, gap_ms)``, or None. A product that has quoted is measured from
+    its last quote; one that has not, from ``since_ms`` (the process's first step), so a restart gives a silent product a fresh limit only
+    while it has no quote at all."""
     worst = None
     for product in products:
-        gap = now_ms - max(last_quote.get(product, since_ms), since_ms)
+        gap = now_ms - last_quote.get(product, since_ms)
         if gap > limit_ms and (worst is None or gap > worst[1]):
             worst = (product, gap)
     return worst
@@ -278,6 +279,8 @@ def preflight(config, directory, source_path, *, strategies=None):
     synthetic = config["source_id"] == SYNTHETIC_SOURCE
     check("causal_ingest", synthetic or config["ingest_kw"].get("causal_until_clock") is True,
           "a source that is not the synthetic fixture needs ingest_kw.causal_until_clock (no row is read before the clock reaches it; D-185-R4-01)")
+    check("stale_stop_named", synthetic or config.get("stale_stop") is not None,
+          "a real session needs stale_stop: without it a source that stops quoting leaves the session alive and blind (docs/etapa-10e 3.3)")
     if synthetic:
         authorized, why = True, ""
     elif config["source_id"] != REAL_SOURCE:
@@ -775,7 +778,7 @@ def wall_clock_runtime(config, *, now_ms=None, sleeper=None):
 
 # ---- command line ------------------------------------------------------------------------------------------------
 def main(argv=None, *, tick=lambda now: None):
-    """``preflight`` and ``run`` on the simulated clock. Exit status: 0 ok, 2 refused (no file was written), 3 halted, 4 stopped in order by a resource limit."""
+    """``preflight`` and ``run`` on the simulated clock. Exit status: 0 ok, 2 refused (no file was written), 3 halted, 4 stopped in order by a resource limit, 5 stopped in order by a stale quote (``stale_stop``)."""
     parser = argparse.ArgumentParser(prog="paper_live_process", description="Offline paper session lifecycle (the capture of Kraken, once a session is authorized).")
     parser.add_argument("command", choices=("preflight", "run"))
     parser.add_argument("--config", required=True)
