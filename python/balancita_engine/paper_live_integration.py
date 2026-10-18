@@ -569,6 +569,7 @@ class LiveSession(object):
             self.evaluator.feed_funding(item["product_id"], item["start_ms"], item["rate"], item["arrival_ms"])
             return
         if kind == "observed_funding":                      # the accounting only, from the capture's responses
+            item = self._not_before_runner_clock(item)
             self._open_holes(item["t_ms"])
             self._handle(item)
             return
@@ -590,6 +591,18 @@ class LiveSession(object):
         if event["kind"] == "quote":
             self._track_quote(event)
         self._handle(event)
+
+    def _not_before_runner_clock(self, event):
+        """A funding response that reaches the runner after the runner's clock passed its time (the restart clock of a recovery that
+        came after the response arrived, or a row the capture stored late) would be refused as ``out_of_order_event`` and the hour
+        would never reach the portfolio, while the book keeps it: the session would halt on that divergence at every restart. The
+        accounting event is then delivered at the runner's clock, the moment this process actually knew it; the period, its rate and
+        the book's ``known_at_ms`` (the response's own arrival) stay as they were. Same input and same clock give the same event."""
+        clock = self.runner.clock
+        if clock is None or event["t_ms"] >= clock:
+            return event
+        return make_event(event["kind"], event["payload"], t_ms=clock, source=event["source"], stream=event["stream"],
+                          source_offset=event["source_offset"], source_epoch=event["source_epoch"])
 
     def _track_quote(self, event):
         self._continuity(event, self.runner.executor.pending)

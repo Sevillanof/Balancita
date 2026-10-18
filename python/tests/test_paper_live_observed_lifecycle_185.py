@@ -70,11 +70,11 @@ class TestObservedLifecycle(unittest.TestCase):
                 seen["done"] = True
         supervisor.tick = tick
 
-    def halted_run(self):
+    def halted_run(self, step=CATCH_UP):
         clock = Clock()
         supervisor = self.supervisor(clock)
         supervisor.start()
-        self.diverge_at(supervisor, CATCH_UP)
+        self.diverge_at(supervisor, step)
         self.assertEqual(supervisor.run(max_steps=60), LP.EXIT_HALTED)
         return supervisor, clock
 
@@ -119,6 +119,18 @@ class TestObservedLifecycle(unittest.TestCase):
         self.assertEqual(report["ended_as"], LP.STOPPED_PHASE)
         self.assertGreaterEqual(report["funding"]["divergence_evidence"], 1)       # the evidence is still there
         self.assertFalse(report["funding"]["pnl_verified"])
+
+    def test_a_halt_in_the_step_a_funding_response_arrives_still_restarts(self):
+        """D-302-02: the halted step took the response of the next hour from the capture and never checkpointed it. The restart clock
+        is later than the response's arrival, so the runner used to refuse the hour as out of order, the book kept it, and the session
+        halted again at its first step, at every restart."""
+        _, clock = self.halted_run(step=4)
+        restarted = self.supervisor(clock)
+        restarted.start(restart=True)
+        self.assertEqual(restarted.run(max_steps=2), LP.EXIT_OK)
+        funding = restarted.session.runner.portfolio.funding[BTC]
+        self.assertEqual(restarted.session.funding_divergence(), {"missing": [], "extra": [], "rate_differs": []})
+        self.assertGreaterEqual(len(funding), 2)                                   # the hour that was in flight reached the portfolio
 
     def test_the_published_funding_of_a_diverged_session_says_observed_and_not_verified(self):
         """#187: the block restates the session's own funding report; a divergence is never published as a verified result."""
