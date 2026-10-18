@@ -19,7 +19,7 @@ from real_session import Base, Clock, position_detail, step_of
 from real_world import MIN, T0
 
 STEPS = 52                       # 260 minutes of real market: decisions before, during and after the silences below
-CATCH_UP = 8                     # the process starts on 270 minutes of real quotes (about 28 000 rows): it reads 5 000 a step and says "stale" until it is up to date
+CATCH_UP = 7                     # steps that say "stale" before the process is up to date: it starts on 270 minutes of real quotes (about 28 000 rows): it reads 5 000 a step and says "stale" until it is up to date
 SILENCE = (34, 40)               # a position (forced entry decided at step 31) is open all through it
 
 
@@ -45,7 +45,7 @@ class Gate(object):
 
 
 class TestSilentSourceSeenByTheProcess(Base):
-    buckets = (T0 + 300 * MIN, T0 + 420 * MIN, T0 + 500 * MIN)          # entries decided at steps 7, 31 and 47
+    buckets = (T0 + 300 * MIN, T0 + 420 * MIN, T0 + 460 * MIN, T0 + 500 * MIN)          # entries decided at steps 7, 31, 39 (inside the silence) and 47
 
     def run_with_silence(self, first, last, steps=STEPS, **over):
         supervisor = self.supervisor(self.clock(), publish_blocks=True, **over)
@@ -75,6 +75,8 @@ class TestSilentSourceSeenByTheProcess(Base):
         self.assertGreater(before[0], 0, "the session was deciding before the silence")
         self.assertEqual(before, after, "no decision and no order while nothing arrived")
         self.assertGreater(kinds(supervisor)["decision"], after[0], "decisions resume when rows come back")
+        silent = [o for o in supervisor.session.runner.orders() if T0 + 459 * MIN < o["timeline"]["decided_ms"] < T0 + 461 * MIN]
+        self.assertEqual([(o["state"], o["reasons"]) for o in silent], [("rejected", ["position_already_open"])])   # the entry of the silence is decided only when the rows return, and the earlier position is still open
         self.assertEqual(self.read(LP.REPORT_FILE)["halted"], None)
 
     def test_an_open_position_is_left_exactly_as_it_was_by_the_silence_and_by_the_stop(self):
@@ -112,7 +114,8 @@ class TestSilentSourceSeenByTheProcess(Base):
             seen.append((state["source"], self.read(LP.BLOCKS_FILE)["positions"]["verification"]))
         supervisor._beat = spy
         self.assertEqual(supervisor.run(max_steps=STEPS), LP.EXIT_OK)
-        self.assertEqual({source for source, _ in seen[:CATCH_UP - 1]}, {"stale"})          # still reading the history that was there at the start
+        self.assertEqual({source for source, _ in seen[:CATCH_UP]}, {"stale"})              # still reading the history that was there at the start
+        self.assertNotEqual(seen[CATCH_UP][0], "stale")                                    # and up to date at the next step
         seen = [(i, *pair) for i, pair in enumerate(seen) if i >= CATCH_UP]
         stale = [i for i, source, _ in seen if source == "stale"]
         self.assertTrue(stale)
