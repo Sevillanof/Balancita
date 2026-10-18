@@ -6,6 +6,7 @@ import {
 } from './historical-funding.ts'
 import {
   FUNDING_RECOVERY_LOOKBACK_MS,
+  needsFundingSighting,
   recoveryFrom,
 } from './recovery-cursor.ts'
 import type { OfficialCandleResponse } from './official-candles.ts'
@@ -369,6 +370,13 @@ export class FuturesMarketStore {
         response_sha256 TEXT NOT NULL,
         PRIMARY KEY(product_id, start_ms, received_at)
       ) STRICT;
+      CREATE TABLE IF NOT EXISTS paper_futures_funding_backlog(
+        product_id TEXT PRIMARY KEY, done_at INTEGER NOT NULL
+      ) STRICT;
+      CREATE TRIGGER IF NOT EXISTS paper_futures_funding_backlog_no_update
+        BEFORE UPDATE ON paper_futures_funding_backlog BEGIN SELECT RAISE(ABORT, 'funding evidence is immutable'); END;
+      CREATE TRIGGER IF NOT EXISTS paper_futures_funding_backlog_no_delete
+        BEFORE DELETE ON paper_futures_funding_backlog BEGIN SELECT RAISE(ABORT, 'funding evidence is immutable'); END;
       CREATE TRIGGER IF NOT EXISTS paper_futures_funding_polls_no_update
         BEFORE UPDATE ON paper_futures_funding_polls BEGIN SELECT RAISE(ABORT, 'funding evidence is immutable'); END;
       CREATE TRIGGER IF NOT EXISTS paper_futures_funding_polls_no_delete
@@ -782,12 +790,18 @@ export class FuturesMarketStore {
       throw new Error('Cannot append to a read-only market store.')
     const response = poll.response
     const startedAt = time(poll.startedAt, 'startedAt')
-    // Recovery rule (docs/captura-recuperacion.md): every closed period of the
-    // response, from the last one already sighted after its close up to now
-    // (at most FUNDING_RECOVERY_LOOKBACK_MS back), that has no post-close
-    // sighting yet gets one stamped with this response's receive time; the
-    // last two hours are sighted on every poll, as before.
-    const since =
+    // Recovery rule (docs/captura-recuperacion.md): the cursor is the last
+    // period of the product with a sighting after its close; a poll sights what
+    // closed after it (the hours off included, the one open at shutdown among
+    // them) plus the last two hours again. Only the first poll of a product on
+    // a database also fills old holes, once, inside the lookback.
+    const backlog =
+      response !== undefined && !this.fundingBacklogDone(poll.productId)
+    const cursor =
+      response === undefined || backlog
+        ? undefined
+        : this.fundingCursor(poll.productId)
+    const floor =
       response === undefined
         ? 0
         : recoveryFrom(
@@ -796,19 +810,22 @@ export class FuturesMarketStore {
             FUNDING_RECOVERY_LOOKBACK_MS,
           )
     const sighted =
-      response === undefined
-        ? new Set<number>()
-        : this.sightedAfterClose(poll.productId, since)
+      response !== undefined && backlog
+        ? this.sightedAfterClose(poll.productId, floor)
+        : new Set<number>()
     const closed =
       response === undefined
         ? []
-        : response.records.filter(
-            (record) =>
-              record.endMs <= response.receivedAtMs &&
-              record.startMs >= since &&
-              (response.receivedAtMs - record.endMs <=
-                FUNDING_RESIGHT_WINDOW_MS ||
-                !sighted.has(record.startMs)),
+        : response.records.filter((record) =>
+            needsFundingSighting({
+              startMs: record.startMs,
+              endMs: record.endMs,
+              receivedAtMs: response.receivedAtMs,
+              floorMs: floor,
+              resightMs: FUNDING_RESIGHT_WINDOW_MS,
+              cursorMs: cursor,
+              sighted: backlog ? sighted : undefined,
+            }),
           )
     if (
       response !== undefined &&
@@ -856,6 +873,12 @@ export class FuturesMarketStore {
       const insert = this.db.prepare(
         'INSERT OR IGNORE INTO paper_futures_funding_sightings VALUES(?,?,?,?,?,?,?)',
       )
+      if (backlog)
+        this.db
+          .prepare(
+            'INSERT OR IGNORE INTO paper_futures_funding_backlog VALUES(?,?)',
+          )
+          .run(poll.productId, time(response!.receivedAtMs, 'receivedAtMs'))
       let sightings = 0
       for (const record of closed)
         sightings += Number(
@@ -875,6 +898,27 @@ export class FuturesMarketStore {
       this.db.exec('ROLLBACK')
       throw error
     }
+  }
+
+  /** Whether this product already had its one-time catch-up on this database. */
+  private fundingBacklogDone(productId: string): boolean {
+    return (
+      this.db
+        .prepare(
+          'SELECT 1 AS done FROM paper_futures_funding_backlog WHERE product_id=?',
+        )
+        .get(productId) !== undefined
+    )
+  }
+
+  /** Start of the last period of the product sighted after its close (index walk from the newest). */
+  private fundingCursor(productId: string): number | undefined {
+    const row = this.db
+      .prepare(
+        'SELECT start_ms AS startMs FROM paper_futures_funding_sightings WHERE product_id=? AND received_at>=end_ms ORDER BY start_ms DESC LIMIT 1',
+      )
+      .get(productId) as { startMs: number } | undefined
+    return row?.startMs
   }
 
   /** Period starts of the product that already have a sighting at or after their close. */

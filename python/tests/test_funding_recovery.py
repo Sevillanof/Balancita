@@ -75,6 +75,19 @@ class FundingRecoveryTests(unittest.TestCase):
         found, code, _ = fc.funding_for(self.path, "PF_XBTUSD").assess(BACK + 5 * 60_000)
         self.assertEqual(code, "window_gaps")
 
+    def test_hourly_polls_after_the_restart_resight_only_two_hours_and_keep_the_first_known_at(self):
+        self.capture_until_shutdown()
+        self.poll(BACK, range(790, 811), range(800, 810), range(801, 811))
+        later = BACK + H
+        self.poll(later, range(790, 812), range(809, 811), [811])  # cursor 809 + re-sight de 2 h, no las anteriores
+        rows = self.db.execute("SELECT COUNT(*) FROM paper_futures_funding_sightings WHERE received_at=?", (later,)).fetchone()[0]
+        self.assertEqual(rows, 2)
+        periods, info = fc.load_periods_detailed(self.path, "PF_XBTUSD")
+        known = {s: k for s, _, k in periods}
+        for i in range(800, 809):
+            self.assertEqual(known[i * H], BACK, i)
+        self.assertEqual(info["approximate"], set())
+
 
 if __name__ == "__main__":
     unittest.main()

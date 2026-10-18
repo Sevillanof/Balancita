@@ -2,7 +2,7 @@
 
 **Regla.** Al (re)arrancar la captura o al volver la conexión, lo último ya registrado es el punto de partida. Todo lo que falta desde ahí hasta ahora se pide a Kraken por REST y se **registra con la hora real en que Balancita lo recibió**. Nunca se altera lo que Kraken envió: solo se anota qué llegó y cuándo. Todo es append-only (disparadores existentes), con el cerrojo de escritor único y sin reescribir filas ni cuerpos guardados.
 
-Ayudante común: `server/src/features/kraken-futures/recovery-cursor.ts` (`recoveryFrom(últimoRegistrado, ahora, retroceso)`: el último registrado manda, y nunca se retrocede más que el tope).
+Ayudante común: `server/src/features/kraken-futures/recovery-cursor.ts` (`recoveryFrom(últimoRegistrado, ahora, retroceso)`: el último registrado manda, y nunca se retrocede más que el tope; `needsFundingSighting`: la regla pura de qué período se avista).
 
 ## Velas
 
@@ -12,9 +12,11 @@ Ayudante común: `server/src/features/kraken-futures/recovery-cursor.ts` (`recov
 
 `FuturesMarketStore.recordFundingPoll`, en cada sondeo correcto de cada producto:
 
-- Se escribe un avistamiento (`received_at` = hora real de recepción de ese sondeo) por **cada período cerrado** de la respuesta que **no tenga aún un avistamiento posterior a su cierre**, no solo los de las últimas 2 h. Así la hora que estaba abierta al apagar (ya listada con la misma tasa, por lo que `periods` no escribe fila nueva) y todas las apagadas quedan vistas al volver, con la hora de ese arranque.
-- Las últimas 2 h se siguen avistando en cada sondeo (una revisión de tasa aparece como otro avistamiento del mismo período); las más antiguas se avistan una sola vez.
-- **Tope:** 32 días (`FUNDING_RECOVERY_LOOKBACK_MS`: ventana de 30 días del cargador + 2 de margen) y, de hecho, lo que Kraken devuelva. Una primera ejecución sobre una base antigua registra la carga pendiente una vez, con la hora real de esa ejecución (es cuando Balancita la verificó).
+- **Punto de partida (cursor):** el último período del producto con un avistamiento posterior a su cierre (consulta indexada por la clave primaria de `paper_futures_funding_sightings`, recorrida desde el más reciente; sin índice nuevo). Cada sondeo avista los períodos cerrados **posteriores al cursor**: normalmente solo la hora que acaba de cerrar; tras apagar el Mac, solo las horas apagadas, incluida la que estaba abierta al apagar (ya listada con la misma tasa, por lo que `periods` no escribe fila nueva), con la hora de ese arranque.
+- **Revisiones:** las últimas 2 h se avistan de nuevo en cada sondeo (una revisión de tasa aparece como otro avistamiento del mismo período). Está acotado a 2 h: el coste es proporcional a lo que falta, no a la ventana de 32 días.
+- **Carga atrasada, una sola vez por producto y base:** la primera vez que esta versión sondea un producto se hace un único barrido acotado de los huecos antiguos dentro del tope. Queda anotado en `paper_futures_funding_backlog(product_id, done_at)` (tabla aditiva, append-only con disparadores; no es una migración numerada). Nunca se repite, ni en sondeos posteriores ni tras reiniciar. Un sondeo fallido no la consume. Los huecos anteriores al cursor no se vuelven a barrer después.
+- **Tope:** 32 días (`FUNDING_RECOVERY_LOOKBACK_MS`: ventana de 30 días del cargador + 2 de margen) y, de hecho, lo que Kraken devuelva. La carga atrasada registra con la hora real de esa ejecución (es cuando Balancita la verificó).
+- No se guardan cuerpos extra: `extract_text` contiene solo los períodos realmente avistados en ese sondeo.
 - Por producto: cada producto tiene sus propios avistamientos y su propio punto de partida. El período abierto nunca se avista.
 - Un sondeo fallido no escribe avistamientos; el siguiente sondeo correcto recupera el hueco (desconexión sin reinicio).
 
