@@ -1,6 +1,7 @@
 """Issue #183 (BAL-COORD-183-PRUEBA-TARDIA-01): official candles recovered after a capture outage, with a ``known_at`` about 2.4 h
-after the bucket they describe. Invented data only: a capture-shaped file written by the tests, no real database, no network, no
-wall clock. The measured shape comes from BAL-RESULTADO-183-02 (the 1-minute official candles of one window were completely there
+after the bucket they describe. The ingestor cases use a few hand-written rows in a capture-shaped file; the session cases use the
+real BTC market of the sample, with its real candles of the outage handed over late (the only thing changed is their ``known_at``).
+No real database, no network, no wall clock. The measured shape comes from BAL-RESULTADO-183-02 (the 1-minute official candles of one window were completely there
 but the tail of their ``known_at - bucket end`` reached about 2.4 h: coverage is not availability).
 
 What is shown at the ingestor (this file, ``TestLateCandlesAtTheIngestor``):
@@ -24,11 +25,11 @@ import unittest
 from unittest import mock
 
 from balancita_engine import paper_live_ingest as ING
-from balancita_engine import replay_specs as RS
 from balancita_engine.paper_live_ingest import Ingestor, SourceReader
-from live_world import FIRST_DECISION, LOAD_START, World
+import real_session as RSN
+from real_session import DECIDE_FROM, STEP, abandon, journal_clock, new_session, record, recover_session
+from real_world import RealWorld
 from test_paper_live_ingest import BTC, CYCLE, MIN, SEC, Source
-from test_paper_live_integration import TIMES, abandon, journal_clock, new_session, record, recover_session
 
 T0 = CYCLE
 LIVE_MIN = 20                                   # the capture is alive for the first 20 minutes
@@ -222,31 +223,27 @@ class TestLateCandlesAtTheIngestor(Base):
         self.assertEqual(resumed[:len(emitted_before)], emitted_before)
 
 
-HOLE_FROM = FIRST_DECISION + 40 * MIN              # the capture goes down 40 minutes into the decision window
+HOLE_FROM = DECIDE_FROM + 40 * MIN                 # the capture goes down 40 minutes into the decision window (the evaluator has caught up by then)
+BUY_AT = (DECIDE_FROM + 60 * MIN,)                 # the one forced entry, inside the outage
 HOLE_TO = HOLE_FROM + 144 * MIN                    # and is back 2.4 h later
-KNOWN_BACK = HOLE_TO + 5 * SEC                     # the recovered 1-minute official candles are known 5 s after the return
+KNOWN_BACK = HOLE_TO                              # the recovered 1-minute official candles are known as the tickers come back (the same batch)
 
 
-class LateWorld(World):
-    """The invented world of the integration suite, but the 1-minute candles of the outage are not in the file while it lasts: they
-    are recorded in one batch (``known_at = KNOWN_BACK``) when the tickers are back. ``recover=False`` is the control: the same
-    outage and no recovery at all."""
+class LateWorld(RealWorld):
+    """The real BTC market, but the 1-minute candles of the outage are not in the file while it lasts: the real rows are handed over
+    in one batch (``known_at = KNOWN_BACK``) when the tickers are back, the late shape of BAL-RESULTADO-183-02. ``recover=False`` is
+    the control: the same outage and no recovery at all."""
 
-    def __init__(self, *a, recover=True, **k):
-        super().__init__(*a, quote_holes=[(HOLE_FROM, HOLE_TO)], **k)
-        self.held = [c for c in self.ones if HOLE_FROM <= c["bucket_start"] < HOLE_TO]
-        self.ones = [c for c in self.ones if not (HOLE_FROM <= c["bucket_start"] < HOLE_TO)]
-        self.recover = recover
-        self.recovered = False
-
-    def release_until(self, t_ms):
-        super().release_until(t_ms)
-        if self.recover and not self.recovered and t_ms >= KNOWN_BACK:
-            for c in self.held:
-                self.source.candle(BTC, c["bucket_start"], c["open"], c["high"], c["low"], c["close"], known_at=KNOWN_BACK,
-                                   volume=str(c["volume_btc"]))
-            self.source.commit()
-            self.recovered = True
+    def __init__(self, directory, recover=True):
+        super().__init__(directory, quote_holes=[(HOLE_FROM, HOLE_TO)])
+        rows = []
+        for row in self.candle_rows:
+            if HOLE_FROM <= row["bucket_start"] < HOLE_TO:
+                if not recover:
+                    continue
+                row = dict(row, known_at=KNOWN_BACK)
+            rows.append(row)
+        self.candle_rows = sorted(rows, key=lambda r: (r["known_at"], r["bucket_start"]))
 
 
 _real_candle_event = ING._candle_event
@@ -258,7 +255,7 @@ def naive_candle_event(row):
 
 
 def instants():
-    out = [t for t in TIMES if t < HOLE_FROM - 10 * MIN]
+    out = [DECIDE_FROM + k * STEP for k in range(8)]                               # the real history is read 5000 rows a step: 7 steps to catch up
     t = HOLE_FROM - 10 * MIN
     while t < HOLE_TO + 60 * MIN:
         t += 10 * MIN
@@ -274,13 +271,13 @@ class TestLateCandlesThroughTheSession(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.root = tempfile.mkdtemp()
-        strategies, _ = RS.load_frozen()
-        cls.strategies = strategies
+        cls.buckets = BUY_AT
+        strategies = cls.strategies = RSN.strategies(cls.buckets)
         cls.runs = {}
         for name, recover, naive in (("late", True, False), ("control", False, False), ("naive", True, True)):
             os.makedirs(os.path.join(cls.root, "w-" + name))
             world = LateWorld(os.path.join(cls.root, "w-" + name), recover=recover)
-            world.release_until(LOAD_START)
+            world.release_until(DECIDE_FROM - MIN)
             directory = os.path.join(cls.root, "s-" + name)
             # "naive" is the counterfactual: the same recovered candles stamped at the close of their own bucket (known_at ignored)
             with mock.patch.object(ING, "_candle_event", naive_candle_event) if naive else contextlib.nullcontext():
@@ -306,7 +303,7 @@ class TestLateCandlesThroughTheSession(unittest.TestCase):
 
     def test_the_old_recovered_candles_are_rejected_as_late_not_applied_backwards(self):
         session = self.runs["late"][2]
-        rejected = [e["data"] for e in session.runner.journal.entries if e["kind"] == "event_rejected"]
+        rejected = [e["data"] for e in session.runner.journal.entries if e["kind"] == "event_rejected" and e["data"]["kind"] == "candle"]
         accepted = [e for e in session.runner.journal.entries if e["kind"] == "event_accepted" and e["data"]["event"]["kind"] == "candle"
                     and HOLE_FROM <= e["data"]["event"]["payload"]["bucket_ms"] < HOLE_TO]
         self.assertEqual({r["reason"] for r in rejected}, {"late_candle"})
