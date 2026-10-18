@@ -32,7 +32,7 @@ class TestRealSessionGate(Base):
 
     def config(self, **over):
         body = dict(source_id=LP.REAL_SOURCE, authorization_ref=REF, ingest_kw=dict(INGEST_KW, causal_until_clock=True),
-                    stale_stop={"stop_quote_gap_ms": MAX_QUOTE_GAP_MS + 1})
+                    stale_stop={"stop_quote_gap_ms": MAX_QUOTE_GAP_MS + 1}, evaluator_kw={"candle_tolerance_ms": 45_000})
         body.update(over)
         return LP.validate_config(config_dict(**body))
 
@@ -54,10 +54,20 @@ class TestRealSessionGate(Base):
 
     def test_a_real_session_without_the_stale_stop_is_refused_even_when_it_is_authorized(self):
         path = self.real_copy()
-        bare = LP.validate_config(config_dict(source_id=LP.REAL_SOURCE, authorization_ref=REF, ingest_kw=dict(INGEST_KW, causal_until_clock=True)))
+        bare = LP.validate_config(config_dict(source_id=LP.REAL_SOURCE, authorization_ref=REF, ingest_kw=dict(INGEST_KW, causal_until_clock=True),
+                                              evaluator_kw={"candle_tolerance_ms": 45_000}))
         with mock.patch.dict(LP.AUTHORIZED_SESSIONS, self.grant(path)):
             report, failed = self.failed(bare, path)
         self.assertEqual(failed, ["stale_stop_named"], report)
+        self.assertFalse(report["ok"])
+
+    def test_a_real_session_without_the_candle_tolerance_is_refused_even_when_it_is_authorized(self):
+        path = self.real_copy()
+        bare = LP.validate_config(config_dict(source_id=LP.REAL_SOURCE, authorization_ref=REF, ingest_kw=dict(INGEST_KW, causal_until_clock=True),
+                                              stale_stop={"stop_quote_gap_ms": MAX_QUOTE_GAP_MS + 1}))
+        with mock.patch.dict(LP.AUTHORIZED_SESSIONS, self.grant(path)):
+            report, failed = self.failed(bare, path)
+        self.assertEqual(failed, ["candle_tolerance_named"], report)
         self.assertFalse(report["ok"])
 
     def test_every_mismatch_is_refused_and_nothing_is_written(self):
