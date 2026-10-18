@@ -75,8 +75,15 @@ Ninguna sesión paper arranca sin la aprobación escrita de Fran.
   al latido y al informe. Una vela incompleta no frena por sí sola.
 - Hueco de velas: en Kraken un minuto sin trades es una vela plana con volumen 0 y no es un hueco. Hueco es solo una vela oficial que
   falta; nunca se rellena. Un hueco en la ventana de calentamiento o en la de decisión frena entradas.
-- Los tres umbrales (bloqueo de entradas, parada, tolerancia de velas) salen de la medición de 24 h de Captura (disponible
-  ~12:41Z del 18-oct). Valores candidatos de la medición de 3 h: 15 s / 25 s / 45 s; no se fijan hasta tener las 24 h.
+- Hecho (mecanismo): `stale_stop.stop_quote_gap_ms` en la configuración, opcional y apagado, parada ordenada con salida 5
+  (`docs/etapa-10-ciclo-de-vida.md`). Falta el freno por vela incompleta o hueco de velas.
+- Los tres umbrales salen de la medición de 24 h de Captura (18-oct-2026, 1.450 velas de 1 minuto por producto, 0 cotizaciones cruzadas o
+  incompletas; mediana entre cotizaciones del WebSocket de BTC 0,4 s y del REST 1,07 s; el peor hueco real fue de 12,1 s, en todos los
+  productos a la vez): **bloqueo de entradas 15 s** (`max_quote_gap_ms`, por encima del peor hueco real), **parada de la sesión 25 s**
+  (`stale_stop.stop_quote_gap_ms`, tiene que ser mayor que el bloqueo) y **tolerancia de velas 45 s** (todavía sin mecanismo que la use:
+  falta el contador de velas incompletas y el freno por hueco de velas). Siguen siendo parámetros que nombra el operador, no valores por
+  defecto del código; `python/tests/test_paper_live_thresholds_184.py` corre el proceso con esos valores sobre el mercado real de BTC.
+  Aprobar la sesión no es parte de esto: sigue necesitando la palabra de Fran (3.1).
 
 ### 3.4 Reloj real (PR 5c, aparte)
 

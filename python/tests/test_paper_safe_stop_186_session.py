@@ -3,7 +3,8 @@
 the session's audit journal and the session checkpoint, at every write of the step that declares a ``source_stale`` loss, and
 the recovery of the directory that is left. No pending decision is involved: the checkpoint failure keeps today's behaviour
 (the exception goes up, the previous checkpoint stays); what the session does about it afterwards is decision D-186-2 and is not
-changed here. Invented data only (the world of ``TestSilenceStillOpen``)."""
+changed here. The market is the real one (BTC candles and quotes of the 17-18 Oct 2026 sample); the only hand-written pieces are the
+purchase of C29 at the 5-minute bucket ``BUY_AT[0]`` and the silence of the source after it (the real quotes of ``HOLE`` are left out)."""
 
 import errno
 import gc
@@ -21,11 +22,13 @@ from balancita_engine import replay_specs as RS
 from balancita_engine import signal_continuity as SC
 from balancita_engine.paper_runner import REFUSED, RunnerError
 from balancita_engine.paper_runner_store import DirectoryLock, StoreError
-from live_world import LOAD_START, World
-from test_paper_live_integration import (BTC, ENTRY_QUOTE_MS, ENTRY_STEP, ETH, HOLE, TIMES, Circuit, abandon, journal_clock, new_session,
-                                         recover_session, record)
+from real_session import (BUY_AT, DECIDE_FROM, DECIDE_UNTIL, INGEST_KW, MAX_QUOTE_GAP_MS, STEP, abandon, journal_clock, new_session, record, recover_session, runner_config,
+                          strategies as forcing_strategies)
+from real_world import BTC, MIN, SEC, RealWorld
 
-NOW = TIMES[ENTRY_STEP]
+ENTRY_STEP = 7                                  # the clock step whose instant first has the rows of the forced entry (T0 + 305 min)
+NOW = DECIDE_FROM + ENTRY_STEP * STEP
+HOLE = (BUY_AT[0] + 3_500, BUY_AT[0] + 43 * SEC)    # the real quotes between the order's decision and 43 s later are left out: 39.5 s of silence
 FULL = OSError(errno.ENOSPC, "No space left on device")
 
 
@@ -42,15 +45,18 @@ class Base(unittest.TestCase):
         if cls.cache:
             return
         cls.cache["dir"] = root = tempfile.mkdtemp()
-        strategies, _ = RS.load_frozen()
-        cls.cache["strategies"] = strategies
-        world = World(root, quote_holes=[HOLE], second_product_shift=-3)
-        world.release_until(LOAD_START)
-        session = new_session(world, os.path.join(root, "a"), strategies, products=(BTC, ETH))
-        for now in TIMES[:ENTRY_STEP]:
+        cls.cache["strategies"] = forcing_strategies()
+        world = RealWorld(root, quote_holes=[HOLE])
+        world.release_until(DECIDE_FROM - MIN)
+        session = new_session(world, os.path.join(root, "a"), cls.cache["strategies"])
+        for index in range(ENTRY_STEP):
+            now = DECIDE_FROM + index * STEP
             world.release_until(now)
             session.step(now)
-        cls.cache["snap"] = Circuit.take_snapshot(root, "before", session, world, ENTRY_STEP)
+        target = os.path.join(root, "snap")
+        os.makedirs(target)
+        shutil.copytree(session.directory, os.path.join(target, "session"))
+        cls.cache["snap"] = {"session": os.path.join(target, "session"), "world": world.snapshot(target)}
         cls.cache["world"] = world
         abandon(session)
 
@@ -83,7 +89,7 @@ class Base(unittest.TestCase):
         return world, directory, session
 
     def reopen(self, world, directory):
-        session = recover_session(world, directory, self.cache["strategies"], journal_clock(directory), products=(BTC, ETH))
+        session = recover_session(world, directory, self.cache["strategies"], journal_clock(directory))
         self.live.append(session)
         return session
 
@@ -113,7 +119,8 @@ class Base(unittest.TestCase):
             with mock.patch.object(session.runner.journal, "add", count_add), mock.patch.object(session.audit, "_write", count_write):
                 session.step(NOW)
             self.cache["ref"] = {"record": record(session, NOW), "counts": counts, "losses": self.losses(session),
-                                 "detected": kinds(session, "source_stale_detected"), "loss_records": kinds(session, "source_loss")}
+                                 "detected": kinds(session, "source_stale_detected"), "loss_records": kinds(session, "source_loss"),
+                                 "times": [e["t_ms"] for e in session.runner.journal.entries[1:]]}
         return self.cache["ref"]
 
     def assert_same_as_reference(self, session):
@@ -468,7 +475,7 @@ class TestSecondProcessOnTheSession(Base):
     session repairs on opening. A half line there may be the live writer's own write in flight: cutting it is a write."""
 
     def second(self, world, directory):
-        return recover_session(world, directory, self.cache["strategies"], journal_clock(directory), products=(BTC, ETH))
+        return recover_session(world, directory, self.cache["strategies"], journal_clock(directory))
 
     def test_a_second_recovery_is_refused_and_writes_nothing(self):
         world, directory, live = self.fork()
@@ -493,7 +500,7 @@ class TestSecondProcessOnTheSession(Base):
         world, directory, live = self.fork()
         before = disk(directory)
         with self.assertRaises(Exception):
-            new_session(world, directory, self.cache["strategies"], products=(BTC, ETH))
+            new_session(world, directory, self.cache["strategies"])
         self.assertEqual(disk(directory), before)
 
 
@@ -501,7 +508,7 @@ CHILD = """
 import os, sys, time
 sys.path.insert(0, {py!r})
 sys.path.insert(0, {tests!r})
-import test_paper_live_integration as TI
+import real_session as RSN
 from types import SimpleNamespace
 from balancita_engine import paper_live_evaluator as LE
 from balancita_engine import paper_live_integration as LI
@@ -512,12 +519,12 @@ def seen(cls, *a, **k):                                   # the first thing the 
     open(os.path.join(sync, "opened." + role), "w").close()
     return real(cls, *a, **k)
 LE.LiveEvaluator.recover = classmethod(seen)
-strategies, _ = RS.load_frozen()
+strategies = RSN.strategies()
 open(os.path.join(sync, "ready." + role), "w").close()
 while not all(os.path.exists(os.path.join(sync, "ready." + r)) for r in ("a", "b")):
     time.sleep(0.01)                                       # both start together
 try:
-    session = TI.recover_session(SimpleNamespace(path=capture), directory, strategies, recovery_ms, products=(TI.BTC, TI.ETH))
+    session = RSN.recover_session(SimpleNamespace(path=capture), directory, strategies, recovery_ms)
     print("won", flush=True)
     session.runner.close()
 except Exception as error:
@@ -560,7 +567,7 @@ class TestLockIsOwnedBeforeAnythingIsOpened(Base):
 
         with mock.patch.object(LI.LE.LiveEvaluator, "recover", classmethod(eval_recover)), \
                 mock.patch.object(LI.AuditJournal, "open", classmethod(audit_open)):
-            session = recover_session(world, directory, self.cache["strategies"], journal_clock(directory), products=(BTC, ETH))
+            session = recover_session(world, directory, self.cache["strategies"], journal_clock(directory))
         self.live.append(session)
         self.assertEqual(held, {"evaluator": True, "audit": True})
         with self.assertRaises(StoreError):                     # and it is the runner that keeps it afterwards
@@ -577,14 +584,14 @@ class TestLockIsOwnedBeforeAnythingIsOpened(Base):
             return lock
 
         with mock.patch.object(LI, "_take_lock", spy):
-            session = recover_session(world, directory, self.cache["strategies"], journal_clock(directory), products=(BTC, ETH))
+            session = recover_session(world, directory, self.cache["strategies"], journal_clock(directory))
         self.live.append(session)
         self.assertEqual(len(taken), 1)
         self.assertIs(session.runner.lock, taken[0])
 
     def test_the_runner_keeps_that_same_lock_until_close(self):
         world, directory, runner_dir = self.copy_of_the_snapshot()
-        session = recover_session(world, directory, self.cache["strategies"], journal_clock(directory), products=(BTC, ETH))
+        session = recover_session(world, directory, self.cache["strategies"], journal_clock(directory))
         self.live.append(session)
         with self.assertRaises(StoreError):
             DirectoryLock(runner_dir)
@@ -595,7 +602,9 @@ class TestLockIsOwnedBeforeAnythingIsOpened(Base):
         world, directory, runner_dir = self.copy_of_the_snapshot()
         before = disk(directory)
         with self.assertRaises(LI.IntegrationError):
-            recover_session(world, directory, self.cache["strategies"], journal_clock(directory), products=(BTC,))   # another product set
+            LI.LiveSession.recover(directory, world.path, self.cache["strategies"], (BTC, "PF_ETHUSD"), runner_config(),     # another product set
+                                   journal_clock(directory), decide_from_ms=DECIDE_FROM, decide_until_ms=DECIDE_UNTIL,
+                                   ingest_kw=INGEST_KW, max_quote_gap_ms=MAX_QUOTE_GAP_MS, source_id="synthetic", funding_mode="observed")
         DirectoryLock(runner_dir).release()
         self.assertEqual(disk(directory), before)
 
@@ -620,7 +629,7 @@ class TestLockIsOwnedBeforeAnythingIsOpened(Base):
 
         with mock.patch.object(DirectoryLock, "__init__", init), mock.patch.object(DirectoryLock, "release", release):
             with self.assertRaises(LI.IntegrationError):
-                new_session(world, fresh, self.cache["strategies"], products=(BTC, ETH))
+                new_session(world, fresh, self.cache["strategies"])
             self.assertEqual(len(taken), 1)
             self.assertEqual([id(x) for x in released], [id(x) for x in taken])
             DirectoryLock(os.path.join(fresh, LI.RUNNER_DIR)).release()       # free while the first object is still alive
@@ -633,7 +642,7 @@ class TestLockIsOwnedBeforeAnythingIsOpened(Base):
             handle.write(b'{"half": ')                               # a half line that opening the audit would cut
         before = disk(directory)
         with self.assertRaises(LI.IntegrationError) as caught:
-            recover_session(world, directory, self.cache["strategies"], clock, products=(BTC, ETH))
+            recover_session(world, directory, self.cache["strategies"], clock)
         self.assertEqual(caught.exception.reason, "runner_missing")
         self.assertEqual(disk(directory), before)
 
