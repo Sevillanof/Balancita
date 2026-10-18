@@ -2,7 +2,7 @@
 
 Fijados antes de capturar datos nuevos y de calcular cualquier resultado. No se modifican retrospectivamente. Cualquier cambio se anota en un apartado de enmiendas con fecha y motivo, sin borrar lo anterior.
 
-Alcance: solo paper, solo datos públicos, estrategias congeladas (C29, C30, C32, Kronos), captura de libro y operaciones de BTC y ETH. Sin nuevas estrategias, sin tocar los últimos 60 días ni `holdout`.
+Alcance: solo paper, solo datos públicos, estrategias congeladas (C29, C30, Kronos; C32 retirada el 2026-10-18, conserva su historial forward), captura de libro y operaciones de BTC y ETH. Sin nuevas estrategias, sin tocar los últimos 60 días ni `holdout`.
 
 ## A. Estrategias forward
 

@@ -255,6 +255,8 @@ class ReliabilityTests(unittest.TestCase):
         self.assertIsNotNone(table, "config/strategy-reliability.json must exist")
         with open(os.path.join(os.path.dirname(__file__), "..", "..", "config", "forward-strategies.json")) as handle:
             forward_only = {sid for sid, info in json.load(handle)["strategies"].items() if info.get("no_backtest")}
+        with open(os.path.join(os.path.dirname(__file__), "..", "..", "config", "strategy-closed.json")) as handle:
+            forward_only |= set(json.load(handle).get("retired") or {})  # retired after forward-only: never backtested
         for strategy_id, spec in SPECS.items():
             if strategy_id in forward_only:  # its input (funding history) is too short to backtest; forward trades only
                 continue

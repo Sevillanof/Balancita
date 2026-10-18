@@ -219,9 +219,9 @@ class AcceptanceTests(unittest.TestCase):
             "config/strategies/c28-adapter-perp-v1.json": "562b7b52f850fc6f7d1c30ff65f30a669fef6bb0b0ac2b4081541736a55e7271",
             "config/strategies/c29-momentum-perp-v1.json": "998284cf51e317838a456fbbba789ee3c479a1471fcbb5f0b3dabadf95742628",
             "config/strategies/c30-momentum-12h-perp-v1.json": "c4d2184134365c454d391dc5f7569eff445eff789634405e0e26066a851a75ec",
-            "config/forward-strategies.json": "8810a48327e18772ba2212733ab62c616e00addfaeb5035b1921a2c9ab939ab5",
+            "config/forward-strategies.json": "f36987b348257ca2720e33453dbdd99c9bb94c4220e12e645aa19170597e9df9",
             "config/strategy-freeze.json": "13117739b4603f477ddca04ad9b72693dc19d3132a3d72f80a14acce9b1000b7",
-            "config/strategy-closed.json": "af82672287501abec6c114d8e00b37680b4471d06029828c6f64241a4ba389e8",
+            "config/strategy-closed.json": "75dfc20e5c5e7dfd6a58d658602298ec04d2e09d0b9e9982232952ffc447fee7",
         }
         for relative, digest in pinned.items():
             with open(os.path.join(ROOT, relative), "rb") as handle:

@@ -57,7 +57,10 @@ for (const strategy of ['C29', 'C30', 'C32'])
 seedForwardTrades(box.forwardDb, trades)
 seedStrategies(
   box.strategiesDb,
-  ['C29', 'C30', 'C32'].map((id) => ({ id, state: 'active' })),
+  ['C29', 'C30', 'C32'].map((id) => ({
+    id,
+    state: id === 'C32' ? 'deleted' : 'active',
+  })),
   NOW,
 )
 writeForwardConfig(box, [], [])

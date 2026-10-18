@@ -93,13 +93,14 @@ export function operationalTitle(
   sinceMs?: number | null,
   reason?: string | null,
 ): string | undefined {
-  if (state === 'off') {
+  if (state === 'off' || (state === 'closed' && reason)) {
     const date =
       sinceMs != null && Number.isFinite(sinceMs)
         ? new Date(sinceMs).toISOString().slice(0, 10)
         : null
+    const word = state === 'off' ? 'Apagada' : 'Cerrada'
     const parts = [
-      date ? `Apagada desde ${date}` : 'Apagada',
+      date ? `${word} desde ${date}` : word,
       reason ? `motivo: ${reason}` : null,
     ].filter(Boolean)
     return parts.join(' · ')

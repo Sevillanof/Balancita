@@ -129,8 +129,8 @@ test('Ver comparación shows one separate book per experiment from the real regi
   ).toBeVisible()
   const cards = page.getByTestId('experiment-card')
   await expect(cards).toHaveCount(10)
-  await expect(page.getByTestId('running-count')).toHaveText('5')
-  await expect(page.getByTestId('stopped-count')).toHaveText('5')
+  await expect(page.getByTestId('running-count')).toHaveText('4')
+  await expect(page.getByTestId('stopped-count')).toHaveText('6')
   await expect(page.getByRole('note')).toContainText('no se suman')
 
   const card = (id: string) => page.locator(`[data-id="${id}"]`)
