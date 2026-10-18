@@ -76,14 +76,18 @@ Ninguna sesión paper arranca sin la aprobación escrita de Fran.
 - Hueco de velas: en Kraken un minuto sin trades es una vela plana con volumen 0 y no es un hueco. Hueco es solo una vela oficial que
   falta; nunca se rellena. Un hueco en la ventana de calentamiento o en la de decisión frena entradas.
 - Hecho (mecanismo): `stale_stop.stop_quote_gap_ms` en la configuración, opcional y apagado, parada ordenada con salida 5
-  (`docs/etapa-10-ciclo-de-vida.md`). Falta el freno por vela incompleta o hueco de velas.
+  (`docs/etapa-10-ciclo-de-vida.md`). Hecho: contador de velas incompletas (`candles_incomplete`, en el latido y en el informe). Falta el freno por hueco de velas.
 - Los tres umbrales salen de la medición de 24 h de Captura (18-oct-2026, 1.450 velas de 1 minuto por producto, 0 cotizaciones cruzadas o
   incompletas; mediana entre cotizaciones del WebSocket de BTC 0,4 s y del REST 1,07 s; el peor hueco real fue de 12,1 s, en todos los
   productos a la vez): **bloqueo de entradas 15 s** (`max_quote_gap_ms`, por encima del peor hueco real), **parada de la sesión 25 s**
   (`stale_stop.stop_quote_gap_ms`, tiene que ser mayor que el bloqueo) y **tolerancia de velas 45 s** (todavía sin mecanismo que la use:
-  falta el contador de velas incompletas y el freno por hueco de velas). Siguen siendo parámetros que nombra el operador, no valores por
+  falta el freno por hueco de velas; el contador de velas incompletas ya está en el latido y en el informe). Siguen siendo parámetros que nombra el operador, no valores por
   defecto del código; `python/tests/test_paper_live_thresholds_184.py` corre el proceso con esos valores sobre el mercado real de BTC.
   Aprobar la sesión no es parte de esto: sigue necesitando la palabra de Fran (3.1).
+- Desfase de relojes (D-289-03): en la muestra real de BTC, 11.269 de 125.589 cotizaciones (9 %) llegaron hasta 149 ms **antes** de su hora
+  de Kraken. `parse_quote` las acepta si llegan hasta `CLOCK_SKEW_TOLERANCE_MS` = 500 ms antes (más de 3 veces lo medido) y les pone como
+  recepción la hora de Kraken (nunca una hora anterior a la real); más atrás sigue siendo cotización inválida. Sin esto el mayor tramo sin
+  cotización útil era de 8,0 s en vez de 3,7 s. Es un parámetro a revisar, no un límite medido (`test_quote_clock_skew_184.py`).
 
 ### 3.4 Reloj real (PR 5c, aparte)
 

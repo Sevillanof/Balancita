@@ -248,6 +248,7 @@ export interface ForwardSeed {
   readonly checkedAgeMs: number
   readonly candleLagMs?: number
   readonly diverged?: number
+  readonly legacyDiverged?: number
   readonly trades?: number
   /**
    * Per `strategy/product`: the cycle age in ms, or null for no row at all.
@@ -285,6 +286,7 @@ export function seedForward(path: string, seed: ForwardSeed): void {
           missing_1m: 0,
           late_1m: 0,
           diverged_trades: i === 0 ? (seed.diverged ?? 0) : 0,
+          legacy_diverged_trades: i === 0 ? (seed.legacyDiverged ?? 0) : 0,
           blocked_stale_entries: 0,
           stale_cycles: 0,
           candle_lag_ms: seed.candleLagMs ?? 90_000,

@@ -168,7 +168,7 @@
         "pid": 4242
       },
       "schema": "balancita-paper-session-blocks.v1",
-      "session_id": "3ba4bf6894fa6a433bd3",
+      "session_id": "a07c8f24a2b4f5118d52",
       "status": {
         "clock": null,
         "evidence_class": "not_forward_evidence",
@@ -228,7 +228,7 @@
       "run_id": "run-synthetic-0001",
       "runner_status": "STOPPED",
       "schema": "balancita-paper-live-heartbeat.v1",
-      "session_id": "3ba4bf6894fa6a433bd3",
+      "session_id": "a07c8f24a2b4f5118d52",
       "steps": 12
     },
     "intervals_before_trimming": 33
@@ -392,7 +392,7 @@
               "gaps": [],
               "last_quote_ms": 1792259078001,
               "last_watched_ms": 1792259078001,
-              "quotes_watched": 303,
+              "quotes_watched": 304,
               "silent_now_ms": 0
             },
             "entry_ms": 1792258805097,
@@ -431,7 +431,7 @@
         "pid": 4242
       },
       "schema": "balancita-paper-session-blocks.v1",
-      "session_id": "3ba4bf6894fa6a433bd3",
+      "session_id": "a07c8f24a2b4f5118d52",
       "status": {
         "clock": null,
         "evidence_class": "not_forward_evidence",
@@ -521,6 +521,7 @@
           "candle_earlier_revision_after_emit": 0,
           "candle_revisions_differing": 0,
           "candle_revisions_seen": 0,
+          "candles_incomplete": 0,
           "data_gaps": 0,
           "emitted": 40294,
           "epoch_changes": 1,
@@ -552,7 +553,7 @@
       "run_id": "run-synthetic-0001",
       "runner_status": "PROCESSING",
       "schema": "balancita-paper-live-heartbeat.v1",
-      "session_id": "3ba4bf6894fa6a433bd3",
+      "session_id": "a07c8f24a2b4f5118d52",
       "steps": 8
     },
     "intervals_before_trimming": 21
@@ -630,7 +631,7 @@
         "pid": 4242
       },
       "schema": "balancita-paper-session-blocks.v1",
-      "session_id": "3ba4bf6894fa6a433bd3",
+      "session_id": "a07c8f24a2b4f5118d52",
       "status": {
         "clock": null,
         "evidence_class": "not_forward_evidence",
@@ -686,7 +687,7 @@
       "run_id": "run-synthetic-0002",
       "runner_status": "PROCESSING",
       "schema": "balancita-paper-live-heartbeat.v1",
-      "session_id": "3ba4bf6894fa6a433bd3",
+      "session_id": "a07c8f24a2b4f5118d52",
       "steps": 0
     },
     "intervals_before_trimming": 0
@@ -764,7 +765,7 @@
         "pid": 4242
       },
       "schema": "balancita-paper-session-blocks.v1",
-      "session_id": "3ba4bf6894fa6a433bd3",
+      "session_id": "a07c8f24a2b4f5118d52",
       "status": {
         "clock": null,
         "evidence_class": "not_forward_evidence",
@@ -817,7 +818,7 @@
       "run_id": "run-synthetic-0002",
       "runner_status": "PROCESSING",
       "schema": "balancita-paper-live-heartbeat.v1",
-      "session_id": "3ba4bf6894fa6a433bd3",
+      "session_id": "a07c8f24a2b4f5118d52",
       "steps": 0
     },
     "intervals_before_trimming": 0
@@ -993,7 +994,7 @@
         "pid": 4242
       },
       "schema": "balancita-paper-session-blocks.v1",
-      "session_id": "3ba4bf6894fa6a433bd3",
+      "session_id": "a07c8f24a2b4f5118d52",
       "status": {
         "clock": null,
         "evidence_class": "not_forward_evidence",
@@ -1052,7 +1053,7 @@
       "run_id": "run-synthetic-0001",
       "runner_status": "STOPPED",
       "schema": "balancita-paper-live-heartbeat.v1",
-      "session_id": "3ba4bf6894fa6a433bd3",
+      "session_id": "a07c8f24a2b4f5118d52",
       "steps": 12
     },
     "intervals_before_trimming": 33

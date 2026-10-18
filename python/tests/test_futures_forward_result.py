@@ -35,7 +35,7 @@ class ForwardResultTest(unittest.TestCase):
         self.decisions = os.path.join(self.dir, "decisions.sqlite")
 
     def seed(self, *, last_run=NOW - HOUR // 2, live=7, recovered=2, side="LONG", funding_ok=True, position=True,
-             entry_recovered=None):
+             entry_recovered=None, unclassified=0):
         for path in (self.forward_db, self.market):
             if os.path.exists(path):
                 os.remove(path)
@@ -55,6 +55,7 @@ class ForwardResultTest(unittest.TestCase):
             "spec_hash": "hash1", "start_ms": NOW - 100 * HOUR, "open_positions": 1,
             "summary_without_recovered": _side(live, 31.5, incomplete=1),
             "summary_recovered": _side(recovered, -4.0),
+            "summary_unclassified": _side(unclassified, 9.0),
             "funding_state": {"PF_XBTUSD": funding}, "missing_candles_1m": 0, "max_candle_lag_ms": 1000}}}
         with open(self.summary, "w") as handle:
             json.dump(body, handle)
@@ -132,6 +133,18 @@ class ForwardResultTest(unittest.TestCase):
         self.assertEqual(position["label"], OPEN_LABEL)
         self.assertEqual(block["unclassified_open"]["pnl_usd"], position["pnl_usd"])
         self.assertEqual(block["progress"]["live_trades"], 7)
+
+    def test_closed_trades_of_the_old_rule_are_a_block_of_their_own_and_never_live(self):
+        self.seed(unclassified=28)
+        block = self.block()
+        self.assertEqual(block["unclassified"]["closed"], 28)
+        self.assertEqual(block["unclassified"]["net_usd"], 9.0)
+        self.assertIn("#283", block["unclassified"]["note"])
+        self.assertIn("`--rebuild` los recalcula conservando la evidencia", block["unclassified"]["hint"])
+        self.assertEqual((block["live"]["closed"], block["progress"]["live_trades"]), (7, 7))
+        self.assertEqual(block["progress"]["remaining"], 93)
+        self.seed()
+        self.assertEqual(self.block()["unclassified"]["closed"], 0)
 
     def test_classified_rows_leave_the_unclassified_block_empty(self):
         for flag in (True, False):

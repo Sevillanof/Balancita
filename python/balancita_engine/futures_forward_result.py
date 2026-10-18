@@ -8,7 +8,8 @@ Nothing here writes. It reads what the forward runner and Q already keep:
 * the market DB: the latest official 1m close, to value the open positions,
 * the decisions DB: ``paper_futures_llm_skips`` (why Q did not decide).
 
-Only live trades count toward the minimum (``FORWARD_MIN_TRADES``); recovered ones are shown apart. An open
+Only live trades count toward the minimum (``FORWARD_MIN_TRADES``); recovered ones are shown apart, and so are the
+unclassified ones (closed under the rule PR #283 removed and not reproduced now: never live). An open
 position is valued at the latest official close as if closed now (entry and exit costs of the cost model, no
 funding accrued yet) and always carries the label ``OPEN_LABEL``. Every problem comes with a stable code and a
 reason in Spanish: the view never says just "unknown". Contract: ``docs/forward-result-api.md``.
@@ -19,6 +20,7 @@ import os
 import sqlite3
 from decimal import Decimal
 
+from .futures_forward import LEGACY_NOTE, rebuild_hint
 from .futures_costs import exit_fill, fee_rate
 from .futures_strategy_reliability import FORWARD_SCHEMA
 
@@ -175,6 +177,8 @@ def read_forward(forward_db, summary_path, market_db, decisions_db, *, now_ms, n
                 "spec_hash": digest, "start_ms": entry.get("start_ms"),
                 "live": _side(entry.get("summary_without_recovered")),
                 "recovered": _side(entry.get("summary_recovered")),
+                "unclassified": dict(_side(entry.get("summary_unclassified")), note=entry.get("legacy_note", LEGACY_NOTE),
+                                      hint=rebuild_hint(entry.get("unclassified_trades", 0))),
                 "open": _open(positions),
                 "live_open": _open([p for p in positions if p["recovered"] is False]),
                 "recovered_open": _open([p for p in positions if p["recovered"] is True]),
@@ -226,9 +230,9 @@ def strategy_block(forward, strategy_id, operational, *, min_trades, spec_hash=N
                           ("not_measured", "el forward no mide esta estrategia: no está en forward-strategies.json "
                                            "ni tiene resumen"))
             problems.append({"code": code, "reason": text})
-        return dict(block, available=False, live=None, recovered=None, open=None, unclassified_open=None, progress=None,
+        return dict(block, available=False, live=None, recovered=None, unclassified=None, open=None, unclassified_open=None, progress=None,
                     last_run_ms=None, late=None)
-    live, recovered = raw["live"], raw["recovered"]
+    live, recovered, unclassified = raw["live"], raw["recovered"], raw["unclassified"]
     last_run = raw["last_run_ms"]
     late = None
     if running:
@@ -254,7 +258,7 @@ def strategy_block(forward, strategy_id, operational, *, min_trades, spec_hash=N
     live = dict(live, open=raw["live_open"])
     recovered = dict(recovered, open=raw["recovered_open"])
     return dict(block, available=True, spec_hash=raw["spec_hash"], start_ms=raw["start_ms"], live=live,
-                recovered=recovered, open=raw["open"], unclassified_open=raw["unclassified_open"],
+                recovered=recovered, unclassified=unclassified, open=raw["open"], unclassified_open=raw["unclassified_open"],
                 progress={"live_trades": done, "min_trades": min_trades,
                           "remaining": None if min_trades is None else max(0, min_trades - done),
                           "reached": min_trades is not None and done >= min_trades,
