@@ -4,6 +4,7 @@ row with the arrival time it really had). Nothing is generated: a row is written
 the time it really arrived, and a hole in the quotes is made by leaving real rows out. The file still carries the fixture marker,
 because it is a replay built by a test and not the capture itself (the real source needs an authorization that does not exist yet)."""
 
+import copy
 import csv
 import gzip
 import json
@@ -82,6 +83,22 @@ class RealWorld(object):
                             ("ticker:{}:{}:{}".format(BTC, epoch, seq), "ticker", BTC, epoch, seq, event_time, received, persisted, None, "{}",
                              text, hashlib.sha256(text.encode()).hexdigest()))
         self.db.commit()
+
+    def snapshot(self, directory):
+        """A byte copy of the capture-shaped file as it is now, with the release pointers, to fork a scenario from it."""
+        self.db.commit()
+        path = os.path.join(directory, "capture-snapshot.sqlite")
+        shutil.copyfile(self.path, path)
+        return {"capture": path, "next_candle": self.next_candle, "next_quote": self.next_quote}
+
+    def fork(self, directory, snap):
+        """A world that continues from ``snap`` in its own file (the real rows are shared, nothing is read again)."""
+        other = copy.copy(self)
+        other.path = os.path.join(directory, "capture.sqlite")
+        shutil.copyfile(snap["capture"], other.path)
+        other.db = sqlite3.connect(other.path)
+        other.next_candle, other.next_quote = snap["next_candle"], snap["next_quote"]
+        return other
 
     def close(self):
         self.db.commit()

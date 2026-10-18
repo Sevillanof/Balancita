@@ -2,7 +2,7 @@
 ``max_quote_gap_ms``, is blocked when it is decided (``entry_blocked_source_stale``, no order is created). The runner side is
 ``test_paper_entry_blocked_186``; here the session wires its own limit into the runner, the block is durable across a recovery, and
 a configuration that disagrees is refused. The limit is the session's explicit parameter (an unapproved hypothesis), never a default
-of the runner. Invented data only."""
+of the runner. Real BTC candles and quotes (``real_world``); C29's entry is the hand-written one of ``real_session``."""
 
 import os
 import shutil
@@ -11,14 +11,15 @@ import unittest
 from dataclasses import replace
 
 from balancita_engine import paper_live_integration as LI
-from balancita_engine import replay_specs as RS
 from balancita_engine import signal_continuity as SC
-from live_world import LOAD_START, World
-from test_paper_live_integration import (BTC, FIRST_DECISION, INGEST_KW, LAST_DECISION, MAX_QUOTE_GAP_MS, TIMES, ENTRY_STEP, abandon,
-                                         journal_clock, record, recover_session, runner_config)
+from real_session import (BUY_AT, DECIDE_FROM, DECIDE_UNTIL, INGEST_KW, MAX_QUOTE_GAP_MS, STEP, abandon, forced_signals, journal_clock, new_session,
+                          record, recover_session, runner_config, strategies)
+from real_world import BTC, MIN, RealWorld
 
-DECISION_MS = 1763254200000                                  # the candle close at which the first BTC entry is decided
+DECISION_MS = BUY_AT[0]                                      # the candle close at which the first BTC entry is decided (about 3 s later)
 HOLE = (DECISION_MS - 100_000, DECISION_MS + 30_000)         # no BTC quote for 130 s around it: the last one is older than the limit
+TIMES = [DECIDE_FROM + i * STEP for i in range(12)]
+ENTRY_STEP = next(i for i, t in enumerate(TIMES) if t > DECISION_MS + 5_000)
 LAST_STEP = ENTRY_STEP + 1
 
 
@@ -33,15 +34,13 @@ class TestEntryBlockedInTheSession(unittest.TestCase):
     def setUpClass(cls):
         SC.disarm()
         cls.cache["dir"] = root = tempfile.mkdtemp()
-        cls.cache["strategies"], _ = RS.load_frozen()
+        cls.cache["strategies"] = strategies()
         for block in (True, False):
             where = os.path.join(root, "w-{}".format(block))
             os.makedirs(where)
-            world = World(where, quote_holes=[HOLE])
-            world.release_until(LOAD_START)
-            session = LI.LiveSession.create(os.path.join(where, "s"), world.path, cls.cache["strategies"], (BTC,), runner_config(),
-                                            decide_from_ms=FIRST_DECISION, source_id="synthetic", funding_mode="synthetic", decide_until_ms=LAST_DECISION, ingest_kw=INGEST_KW,
-                                            max_quote_gap_ms=MAX_QUOTE_GAP_MS, block_stale_entries=block)
+            world = RealWorld(where, quote_holes=[HOLE])
+            world.release_until(DECIDE_FROM - MIN)
+            session = new_session(world, os.path.join(where, "s"), cls.cache["strategies"], block_stale_entries=block)
             records = []
             snap = None
             for index, now in enumerate(TIMES[:LAST_STEP + 1]):
@@ -66,6 +65,7 @@ class TestEntryBlockedInTheSession(unittest.TestCase):
         session = self.cache[True]["session"]
         first = session.runner.orders()[0]
         self.assertEqual((first["state"], first["reasons"]), ("rejected", ["entry_blocked_source_stale"]))
+        self.assertEqual(len(forced_signals(session)), 1)                  # the entry is the hand-written one, and the only one so far
         kinds = [e["kind"] for e in session.runner.journal.entries]
         self.assertNotIn("source_loss", kinds)                             # nothing was pending, so nothing had to be cancelled
         self.assertEqual([e for e in session.runner.journal.entries if e["kind"] == "order_cancelled"], [])
@@ -86,7 +86,7 @@ class TestEntryBlockedInTheSession(unittest.TestCase):
         world = cached["world"].fork(root, self.cache["worlds"][True])
         directory = os.path.join(root, "s")
         shutil.copytree(cached["snap"], directory)
-        session = recover_session(world, directory, self.cache["strategies"], journal_clock(directory), products=(BTC,))
+        session = recover_session(world, directory, self.cache["strategies"], journal_clock(directory))
         self.addCleanup(abandon, session)
         for index in range(ENTRY_STEP - 1, LAST_STEP + 1):
             world.release_until(TIMES[index])
@@ -97,13 +97,13 @@ class TestEntryBlockedInTheSession(unittest.TestCase):
     def test_a_configuration_with_another_limit_is_refused(self):
         root = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, root, True)
-        world = World(root, quote_holes=[HOLE])
-        world.release_until(LOAD_START)
+        world = RealWorld(root, quote_holes=[HOLE])
+        world.release_until(DECIDE_FROM - MIN)
         other = replace(runner_config(), entry_max_quote_age_ms=MAX_QUOTE_GAP_MS + 1)
         with self.assertRaises(LI.IntegrationError) as bad:
             LI.LiveSession.create(os.path.join(root, "s"), world.path, self.cache["strategies"], (BTC,), other,
-                                  decide_from_ms=FIRST_DECISION, source_id="synthetic", funding_mode="synthetic", decide_until_ms=LAST_DECISION, ingest_kw=INGEST_KW,
-                                  max_quote_gap_ms=MAX_QUOTE_GAP_MS)
+                                  decide_from_ms=DECIDE_FROM, source_id="synthetic", funding_mode="observed", decide_until_ms=DECIDE_UNTIL,
+                                  ingest_kw=INGEST_KW, max_quote_gap_ms=MAX_QUOTE_GAP_MS)
         self.assertEqual(bad.exception.reason, "config_incompatible")
         self.assertFalse(os.path.exists(os.path.join(root, "s")))          # refused before anything was written
         world.close()
