@@ -56,7 +56,7 @@
   "test_paper_disk_full_process_186": 190,
   "test_paper_downtime_stop_186": 1,
   "test_paper_entry_blocked_186": 1,
-  "test_paper_entry_blocked_session_186": 32,
+  "test_paper_entry_blocked_session_186": 55,
   "test_paper_kill_session_186.TestObservedSilenceUnderAJumpingClock": 56,
   "test_paper_kill_session_186.TestRealKillAroundTheDeclaration": 121,
   "test_paper_kill_session_186.TestRealKillInTheMiddleOfALine": 76,
