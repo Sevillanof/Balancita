@@ -7,6 +7,7 @@ import {
   type FuturesSocket,
 } from '../kraken-futures/futures-market.ts'
 import { FuturesCandleBuilder } from '../kraken-futures/futures-candles.ts'
+import { recoveryFrom } from '../kraken-futures/recovery-cursor.ts'
 import type {
   FundingPollOutcome,
   FundingPollPurpose,
@@ -352,9 +353,9 @@ export function createLiveCapture(options: LiveCaptureOptions) {
           return undefined
         // The request also covers the latest stored bucket, one interval after it closed: a bucket Kraken
         // completed or corrected since is kept as another revision, never overwritten.
-        if (latest !== undefined) return latest
+        if (latest !== undefined) return recoveryFrom(latest, now, Infinity)
         return Math.max(
-          now - (lookbacks[interval] ?? 500 * interval),
+          recoveryFrom(undefined, now, lookbacks[interval] ?? 500 * interval),
           now - window,
         )
       }
