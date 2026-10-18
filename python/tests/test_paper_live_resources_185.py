@@ -1,12 +1,11 @@
-"""Issue #185: resource limits of the paper process (disk and memory warn/stop). Invented data; the readings are injected, so no
+"""Issue #185: resource limits of the paper process (disk and memory warn/stop). The market is the real one; the readings are injected, so no
 number here is an approved limit."""
 
 import os
 import unittest
 
 from balancita_engine import paper_live_process as LP
-from test_paper_live_integration import TIMES
-from test_paper_live_process_185 import Base, Clock, config_dict
+from real_session import Base, Clock, config_dict
 
 # Arbitrary test numbers, deliberately not the deferred proposals in the Issues.
 LIMITS = {"disk_warn_bytes": 70, "disk_stop_bytes": 90, "memory_warn_bytes": 300, "memory_stop_bytes": 500, "check_every_steps": 2}
@@ -133,7 +132,7 @@ class TestResourceMonitor(Base):
         supervisor = self.supervisor(clock, resource_limits=LIMITS)
         supervisor.start()
         opened = None
-        for _ in range(len(TIMES)):
+        for _ in range(40):                                     # the forced entry of C29 comes at step 7
             now = clock.now()
             supervisor.tick(now)
             supervisor.session.step(now)

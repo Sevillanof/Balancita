@@ -1,5 +1,5 @@
 """Issues #186 and #187: the blocks file published by the Supervisor when the process dies or the clock misbehaves, seen from the files.
-Invented data, simulated clock, nothing real. What is asserted is what the process leaves today: a derived file that never says the session is
+Real BTC market, simulated clock. What is asserted is what the process leaves today: a derived file that never says the session is
 alive, a leftover temporary file that is not mistaken for the document, a restart that publishes its own run mark, and a clock jump that ends
 in a halted file. No limit of age is created or assumed: the file carries no age."""
 
@@ -9,10 +9,9 @@ import unittest
 
 from balancita_engine import paper_live_process as LP
 from test_paper_live_clock_185 import GUARD, Scripted
-from test_paper_live_integration import TIMES
-from test_paper_live_process_185 import START, Base, Clock
+from real_session import DECIDE_FROM, STEP, Base, Clock
 
-STEPS = 6
+STEPS = 8                  # the real history is read 5000 rows a step: the evaluator is live from the step 7 on
 
 
 def sha(path):
@@ -98,7 +97,7 @@ class TestBlocksWhenTheClockJumps(Base):
         return supervisor, supervisor.run(max_steps=20)
 
     def test_a_jump_ends_in_a_halted_file_with_the_reason_and_never_in_an_alive_one(self):
-        t = TIMES[START]
+        t = DECIDE_FROM
         supervisor, code = self.go([t, t + 60_000, t + 60_000 + GUARD["max_forward_jump_ms"] + 1], "jump")
         self.assertEqual(code, LP.EXIT_HALTED)
         doc = self.read(LP.BLOCKS_FILE)
@@ -109,7 +108,7 @@ class TestBlocksWhenTheClockJumps(Base):
         self.assertEqual(self.read(LP.HEARTBEAT_FILE)["phase"], LP.HALTED)
 
     def test_a_regression_ends_the_same_way_and_a_restart_needs_the_operator_without_touching_the_file(self):
-        t = [TIMES[START + i] for i in range(4)]
+        t = [DECIDE_FROM + i * STEP for i in range(4)]
         supervisor, code = self.go([t[0], t[1], t[2], t[1], t[3]], "back")
         self.assertEqual(code, LP.EXIT_HALTED)
         doc = self.read(LP.BLOCKS_FILE)

@@ -13,8 +13,8 @@ import unittest
 from unittest import mock
 
 from balancita_engine import paper_live_process as LP
-from test_paper_live_integration import FIRST_DECISION, INGEST_KW, LAST_DECISION, MAX_QUOTE_GAP_MS
-from test_paper_live_process_185 import Base, Clock, config_dict
+from real_session import DECIDE_FROM as FIRST_DECISION, DECIDE_UNTIL as LAST_DECISION, INGEST_KW, MAX_QUOTE_GAP_MS
+from real_session import Base, Clock, config_dict
 
 REF = "BAL-DECISION-999-01"
 

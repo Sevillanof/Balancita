@@ -1,5 +1,5 @@
 """Issue #185: the source file of a paper session. Its identity is the file (device and inode), and nothing that arrives after the clock
-enters a decision, even when the source already holds it. Invented data only."""
+enters a decision, even when the source already holds it. The market is the real one."""
 
 import os
 import shutil
@@ -7,8 +7,8 @@ import unittest
 
 from balancita_engine import paper_live_process as LP
 from balancita_engine.paper_live_ingest import Ingestor, SourceReader
-from test_paper_live_integration import BTC, INGEST_KW, LAST_DECISION, TIMES
-from test_paper_live_process_185 import START, Base, Clock, config_dict
+from real_session import DECIDE_FROM, DECIDE_UNTIL as LAST_DECISION, INGEST_KW, Base, Clock, config_dict
+from real_world import BTC, MIN
 
 
 class TestSourceIdentity(Base):
@@ -73,6 +73,7 @@ class TestCausality(Base):
             self.world.release_until(LAST_DECISION)                       # the file already holds every row, arrivals included
             supervisor.tick = lambda now: None
         self.assertEqual(supervisor.run(max_steps=8), LP.EXIT_OK)
+        self.ahead = supervisor.session.ingestor.max_seen_ms - clock.now()           # how far past the clock the ingestor has read
         return self.read(LP.REPORT_FILE)["digests"], supervisor.session.ingestor.stats.get("held_after_clock", 0)
 
     def test_with_the_option_rows_that_arrive_after_the_clock_do_not_change_a_decision(self):
@@ -80,21 +81,25 @@ class TestCausality(Base):
         in_advance, held_b = self.report_of("advance", True, True)
         self.assertEqual(just_in_time, in_advance)
         self.assertGreater(held_b, 0)                                      # the future was in the file and was held back
+        self.assertLessEqual(self.ahead, 0)                                # and nothing past the clock was read
 
     def test_without_the_option_a_file_that_holds_the_future_is_read_ahead_of_the_clock(self):
         # Documents today's behaviour: the ingestor is source-time driven. This is why a live source needs the option (D-185-R4).
-        just_in_time, _ = self.report_of("jit-off", False, False)
-        in_advance, _ = self.report_of("advance-off", True, False)
-        self.assertNotEqual(just_in_time, in_advance)
+        # With the real density the 40 minutes of the run hold a handful of decisions, so the proof is how far the ingestor read.
+        self.report_of("jit-off", False, False)
+        self.assertLessEqual(self.ahead, 0)                                # fed as the clock moves, it reads nothing past it
+        self.report_of("advance-off", True, False)
+        self.assertGreater(self.ahead, 60 * MIN)                           # the file holds the future: it is read hours ahead of the clock
 
     def test_a_row_received_after_the_clock_is_held_even_if_it_was_persisted_before(self):
         import sqlite3
         self.tearDown()
         self.setUp()
         self.directory = os.path.join(self.root, "received")
-        self.world.release_until(TIMES[START])                           # nothing in the file is persisted after the clock
+        self.world.release_until(DECIDE_FROM)                           # nothing in the file is persisted after the clock
         db = sqlite3.connect(self.world.path)
-        db.execute("UPDATE paper_futures_market_events SET received_at = persisted_at + 3600000 WHERE feed='ticker'")
+        # a week later than it was persisted: with the real density (5000 rows are read at a time) only the first batch is checked
+        db.execute("UPDATE paper_futures_market_events SET received_at = persisted_at + 604800000 WHERE feed='ticker'")
         db.commit()
         db.close()
         clock = Clock()
@@ -127,8 +132,8 @@ class TestHeldRows(Base):
 
     def test_a_candle_known_before_it_closes_is_held_until_its_close(self):
         import sqlite3
-        self.world.release_until(TIMES[START])
-        now = TIMES[START]
+        self.world.release_until(DECIDE_FROM)
+        now = DECIDE_FROM
         db = sqlite3.connect(self.world.path)
         bucket = (now // 60_000) * 60_000                                  # still open at ``now``: it closes after the clock
         db.execute("INSERT INTO paper_futures_official_candles VALUES(?,?,?,?,?,?,?,?,?,?,?)",
@@ -143,8 +148,8 @@ class TestHeldRows(Base):
 
     def test_a_held_row_is_not_skipped_when_a_later_row_arrived_earlier(self):
         import sqlite3
-        self.world.release_until(TIMES[START])
-        now = TIMES[START]
+        self.world.release_until(DECIDE_FROM)
+        now = DECIDE_FROM
         db = sqlite3.connect(self.world.path)
         template = db.execute("SELECT MAX(rowid) FROM paper_futures_market_events").fetchone()[0]
         late = dict(event_id="late-A", content_hash="hash-A", seq=10 ** 7, event_time=now + 600_000, persisted_at=now + 600_000,
