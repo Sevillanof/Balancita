@@ -281,6 +281,9 @@ def preflight(config, directory, source_path, *, strategies=None):
           "a source that is not the synthetic fixture needs ingest_kw.causal_until_clock (no row is read before the clock reaches it; D-185-R4-01)")
     check("stale_stop_named", synthetic or config.get("stale_stop") is not None,
           "a real session needs stale_stop: without it a source that stops quoting leaves the session alive and blind (docs/etapa-10e 3.3)")
+    tolerance = config["evaluator_kw"].get("candle_tolerance_ms")
+    check("candle_tolerance_named", synthetic or (isinstance(tolerance, int) and not isinstance(tolerance, bool) and tolerance > 0),
+          "a real session needs evaluator_kw.candle_tolerance_ms: without it a candle that arrives long after its minute still decides an entry (docs/etapa-10e 3.3)")
     if synthetic:
         authorized, why = True, ""
     elif config["source_id"] != REAL_SOURCE:

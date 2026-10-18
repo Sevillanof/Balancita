@@ -55,5 +55,39 @@ class TestApprovedThresholds(Base):
         self.assertLess(event["gap_ms"], 30 * SEC + 4 * SEC)                    # the silence of 30 s plus the longest real spacing of the sample (3.7 s)
 
 
+class TestCandleTolerance(Base):
+    """The 45 s: the real candle of the forced entry is read late (its real ``known_at`` is moved, nothing else), and the process runs with the
+    tolerance named. 30 s late is inside it and the entry happens; 50 s late is outside it, the candle makes no cycle and no order exists."""
+
+    def run_with_late_candle(self, seconds):
+        rows = list(self.world.candle_rows)
+        index = next(i for i, r in enumerate(rows) if r["bucket_start"] == DECISION - MIN)
+        rows[index] = dict(rows[index], known_at=DECISION + seconds * SEC)
+        self.world.candle_rows = sorted(rows, key=lambda r: (r["known_at"], r["bucket_start"]))
+        supervisor = self.supervisor(Clock(), max_quote_gap_ms=BLOCK_MS, stale_stop={"stop_quote_gap_ms": STOP_MS},
+                                     evaluator_kw={"candle_tolerance_ms": CANDLE_MS})
+        supervisor.start()
+        return supervisor, supervisor.run(max_steps=STEP_OF_DECISION + 2)
+
+    def test_a_candle_read_30_seconds_after_its_minute_still_decides_the_entry(self):
+        supervisor, code = self.run_with_late_candle(30)
+        self.assertEqual(code, LP.EXIT_OK)
+        self.assertEqual(supervisor.session.runner.orders()[0]["state"], "opened")
+        self.assertEqual([s for s in supervisor.session.evaluator.suppressed if s["reason"] == "candle_late"], [])
+
+    def test_a_candle_read_50_seconds_after_its_minute_makes_no_cycle_and_no_order(self):
+        supervisor, code = self.run_with_late_candle(50)
+        self.assertEqual(code, LP.EXIT_OK)                                     # it does not stop the session by itself
+        self.assertEqual(supervisor.session.runner.orders(), [])
+        late = [s for s in supervisor.session.evaluator.suppressed if s["reason"] == "candle_late"]
+        self.assertEqual([(s["cycle_ms"], s["tolerance_ms"]) for s in late], [(DECISION, CANDLE_MS)])
+        self.assertGreater(late[0]["lag_ms"], CANDLE_MS)
+
+    def test_the_tolerance_must_be_a_positive_integer(self):
+        for bad in (0, -1, 45.0, True, "45000"):
+            with self.assertRaises(Exception, msg=repr(bad)):
+                self.supervisor(Clock(), evaluator_kw={"candle_tolerance_ms": bad}).start()
+
+
 if __name__ == "__main__":
     unittest.main()

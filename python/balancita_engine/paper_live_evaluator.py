@@ -17,6 +17,8 @@ What it adds, because a session is not a batch:
   (no pickle, no dependence on how long the capture retains rows). A candle handed in again returns the cycle it produced
   the first time (same ``event_id``), so a crash between "evaluated" and "journaled by the runner" loses nothing and
   duplicates nothing;
+* ``candle_tolerance_ms`` (optional, named by the operator): a candle that arrives more than that after its minute closed keeps feeding
+  the indicators but makes no cycle (``suppressed`` with reason ``candle_late``): data that old does not decide an entry;
 * a funding hour that arrives after cycles that needed it is counted (``late_funding``): those cycles used what was
   published at the time, which is causal but not what a replay with the complete series would have used.
 
@@ -128,9 +130,13 @@ class InputLog(object):
 
 class LiveEvaluator(object):
     def __init__(self, strategies, products, log, *, decide_from_ms, decide_until_ms=None, source="paper-live-eval",
-                 max_pending_frames=MAX_PENDING_FRAMES, retain_cycles=RETAIN_CYCLES):
+                 max_pending_frames=MAX_PENDING_FRAMES, retain_cycles=RETAIN_CYCLES, candle_tolerance_ms=None):
         if not strategies:
             raise EvaluatorError("no_strategy")
+        if candle_tolerance_ms is not None and (not isinstance(candle_tolerance_ms, int) or isinstance(candle_tolerance_ms, bool)
+                                                or candle_tolerance_ms <= 0):
+            raise EvaluatorError("candle_tolerance_invalid", "a positive integer number of milliseconds")
+        self.candle_tolerance_ms = candle_tolerance_ms
         self.strategies, self.products = list(strategies), list(products)
         self.decide_from_ms, self.decide_until_ms, self.source = int(decide_from_ms), decide_until_ms, source
         self.periods = merged_indicators(self.strategies)
@@ -287,6 +293,11 @@ class LiveEvaluator(object):
             self.suppressed.append({"product_id": product, "cycle_ms": close_ms, "reason": "gap_warmup",
                                     "until_ms": state["suppress_until"]})
             return {"cycle": None, "duplicate": False, "rejected": None}
+        if self.candle_tolerance_ms is not None and int(arrival_ms) - close_ms > self.candle_tolerance_ms:
+            # the minute ended too long ago for this candle to drive a decision: the features are kept (the candle is real), no cycle is made
+            self.suppressed.append({"product_id": product, "cycle_ms": close_ms, "reason": "candle_late",
+                                    "lag_ms": int(arrival_ms) - close_ms, "tolerance_ms": self.candle_tolerance_ms})
+            return {"cycle": None, "duplicate": False, "rejected": None}
         event = RP.make_cycle_event(product, close_ms, frame, self.cycle_atr, source=self.source,
                                     lag_ms=max(int(arrival_ms) - close_ms, 0))
         key = (product, close_ms)
@@ -344,6 +355,8 @@ class LiveEvaluator(object):
                 "warmup_ms": self.warmup_ms, "five_minute_bar": "aggregated_from_1m", "source": self.source,
                 "decide_from_ms": self.decide_from_ms, "decide_until_ms": self.decide_until_ms,
                 "bounds": {"max_pending_frames": self.max_pending_frames, "retain_cycles": self.retain_cycles}}
+        if self.candle_tolerance_ms is not None:                # named only when set: a configuration without it keeps its digest
+            body["candle_tolerance_ms"] = self.candle_tolerance_ms
         with open(os.path.abspath(__file__), "rb") as handle:
             body["code"] = {"replay_pipeline": RP.code_identity()["digest"],
                             "evaluator_sha256": hashlib.sha256(handle.read().replace(b"\r\n", b"\n")).hexdigest()[:16]}
