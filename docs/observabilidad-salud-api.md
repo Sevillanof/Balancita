@@ -153,5 +153,5 @@ sobre la base viva.
   `unknown` y los componentes que dependen de él no pueden ser `ok` salvo que su salida sea fresca.
 - Kronos no está en el supervisor: su proceso se sabe solo por el muestreo de recursos (POSIX).
 - Los descartes del forward (coste/protección) y los fallos de Q no se persisten (B4 pospuesto): no se pueden evaluar.
-- No hay PnL no realizado ni posiciones abiertas por estrategia (B5) ni actividad, última operación y motivos de espera (B2).
+- Las posiciones abiertas y su PnL no realizado por estrategia no se leen en este panel (están en `GET /api-strategies/forward`, «abierta, valuada a mercado»); tampoco hay actividad, última operación y motivos de espera (B2).
 - Riesgo queda en «Sin datos» hasta que exista una fuente real. No se crea ningún mecanismo nuevo de persistencia.
