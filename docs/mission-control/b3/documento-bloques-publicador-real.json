@@ -37,7 +37,7 @@
             },
             "signal": {
               "action": "BUY",
-              "entry_hash": "c3e31d0f22143b7319f0f269ee8bd3214b8db51ee2b7e187c25676adfc70fad9",
+              "entry_hash": "8bb4764746a1d1d684863e6a99be6f64e5da4cb7498a19448241d5fce1ce8624",
               "origin": "original",
               "seq": 3,
               "signal_key": "dcd4ab505718dca6568fe4b0",
@@ -69,7 +69,7 @@
             },
             "signal": {
               "action": "WAIT",
-              "entry_hash": "644aec02c22d65fc0ddbd1a1cd388f3740e6de969645264700f84aed9fce6b92",
+              "entry_hash": "829c62842ecd3826e7a8c3b1d219e9d46731a90071e03a19d8fd115b40eed7c4",
               "origin": "original",
               "seq": 4,
               "signal_key": "439f099e9159540c19f0412c",
@@ -164,7 +164,7 @@
       "pid": 4242
     },
     "schema": "balancita-paper-session-blocks.v1",
-    "session_id": "f5f9082f89517baa7bc4",
+    "session_id": "b1099d38b1454dfb993d",
     "status": {
       "clock": null,
       "evidence_class": "not_forward_evidence",
@@ -238,7 +238,7 @@
             },
             "signal": {
               "action": "BUY",
-              "entry_hash": "cd9d852c8feb3fb58b11d7e9a8c444e101f19b85340a3082716b44055e359f9b",
+              "entry_hash": "760291cd9667e7355e0843cdb6c956659ff96a157f40d59f5c0269c1a7388c6f",
               "origin": "original",
               "seq": 4,
               "signal_key": "dcd4ab505718dca6568fe4b0",
@@ -270,7 +270,7 @@
             },
             "signal": {
               "action": "WAIT",
-              "entry_hash": "caf78d29d778d6edd7d33e1fa7989730b39cbc177ee0b35ad24f51b7be5a62ef",
+              "entry_hash": "fc990b4dbf3ae5752a5cf9677b7d4613cdb1863695c864bee8aaa79fb1851110",
               "origin": "original",
               "seq": 3,
               "signal_key": "439f099e9159540c19f0412c",
@@ -364,7 +364,7 @@
       "pid": 4242
     },
     "schema": "balancita-paper-session-blocks.v1",
-    "session_id": "445b91dd7d180a30d318",
+    "session_id": "eabc0874f42c286d7be3",
     "status": {
       "clock": null,
       "evidence_class": "not_forward_evidence",
@@ -439,7 +439,7 @@
             },
             "signal": {
               "action": "BUY",
-              "entry_hash": "c3e31d0f22143b7319f0f269ee8bd3214b8db51ee2b7e187c25676adfc70fad9",
+              "entry_hash": "8bb4764746a1d1d684863e6a99be6f64e5da4cb7498a19448241d5fce1ce8624",
               "origin": "original",
               "seq": 3,
               "signal_key": "dcd4ab505718dca6568fe4b0",
@@ -471,7 +471,7 @@
             },
             "signal": {
               "action": "WAIT",
-              "entry_hash": "644aec02c22d65fc0ddbd1a1cd388f3740e6de969645264700f84aed9fce6b92",
+              "entry_hash": "829c62842ecd3826e7a8c3b1d219e9d46731a90071e03a19d8fd115b40eed7c4",
               "origin": "original",
               "seq": 4,
               "signal_key": "439f099e9159540c19f0412c",
@@ -565,7 +565,7 @@
       "pid": 4242
     },
     "schema": "balancita-paper-session-blocks.v1",
-    "session_id": "445b91dd7d180a30d318",
+    "session_id": "eabc0874f42c286d7be3",
     "status": {
       "clock": null,
       "evidence_class": "not_forward_evidence",
@@ -640,7 +640,7 @@
             },
             "signal": {
               "action": "BUY",
-              "entry_hash": "c3e31d0f22143b7319f0f269ee8bd3214b8db51ee2b7e187c25676adfc70fad9",
+              "entry_hash": "8bb4764746a1d1d684863e6a99be6f64e5da4cb7498a19448241d5fce1ce8624",
               "origin": "original",
               "seq": 3,
               "signal_key": "dcd4ab505718dca6568fe4b0",
@@ -672,7 +672,7 @@
             },
             "signal": {
               "action": "WAIT",
-              "entry_hash": "644aec02c22d65fc0ddbd1a1cd388f3740e6de969645264700f84aed9fce6b92",
+              "entry_hash": "829c62842ecd3826e7a8c3b1d219e9d46731a90071e03a19d8fd115b40eed7c4",
               "origin": "original",
               "seq": 4,
               "signal_key": "439f099e9159540c19f0412c",
@@ -766,7 +766,7 @@
       "pid": 4242
     },
     "schema": "balancita-paper-session-blocks.v1",
-    "session_id": "445b91dd7d180a30d318",
+    "session_id": "eabc0874f42c286d7be3",
     "status": {
       "clock": null,
       "evidence_class": "not_forward_evidence",
@@ -841,7 +841,7 @@
             },
             "signal": {
               "action": "BUY",
-              "entry_hash": "c3e31d0f22143b7319f0f269ee8bd3214b8db51ee2b7e187c25676adfc70fad9",
+              "entry_hash": "8bb4764746a1d1d684863e6a99be6f64e5da4cb7498a19448241d5fce1ce8624",
               "origin": "original",
               "seq": 3,
               "signal_key": "dcd4ab505718dca6568fe4b0",
@@ -873,7 +873,7 @@
             },
             "signal": {
               "action": "WAIT",
-              "entry_hash": "644aec02c22d65fc0ddbd1a1cd388f3740e6de969645264700f84aed9fce6b92",
+              "entry_hash": "829c62842ecd3826e7a8c3b1d219e9d46731a90071e03a19d8fd115b40eed7c4",
               "origin": "original",
               "seq": 4,
               "signal_key": "439f099e9159540c19f0412c",
@@ -967,7 +967,7 @@
       "pid": 4242
     },
     "schema": "balancita-paper-session-blocks.v1",
-    "session_id": "445b91dd7d180a30d318",
+    "session_id": "eabc0874f42c286d7be3",
     "status": {
       "clock": null,
       "evidence_class": "not_forward_evidence",
@@ -1044,7 +1044,7 @@
             },
             "signal": {
               "action": "BUY",
-              "entry_hash": "c3e31d0f22143b7319f0f269ee8bd3214b8db51ee2b7e187c25676adfc70fad9",
+              "entry_hash": "8bb4764746a1d1d684863e6a99be6f64e5da4cb7498a19448241d5fce1ce8624",
               "origin": "original",
               "seq": 3,
               "signal_key": "dcd4ab505718dca6568fe4b0",
@@ -1076,7 +1076,7 @@
             },
             "signal": {
               "action": "WAIT",
-              "entry_hash": "644aec02c22d65fc0ddbd1a1cd388f3740e6de969645264700f84aed9fce6b92",
+              "entry_hash": "829c62842ecd3826e7a8c3b1d219e9d46731a90071e03a19d8fd115b40eed7c4",
               "origin": "original",
               "seq": 4,
               "signal_key": "439f099e9159540c19f0412c",

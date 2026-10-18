@@ -39,7 +39,7 @@
               },
               "signal": {
                 "action": "BUY",
-                "entry_hash": "1978483f7a908f6a204c6ea42ea129c9e07981c699874d3e517ca9a8c4e8dbd3",
+                "entry_hash": "38eb922933cf5cd26760c876f9b8dd06697f3e825fe6a8a36eb6cc49595bbbcf",
                 "origin": "original",
                 "seq": 35,
                 "signal_key": "98465f97729ed734b28d0e4a",
@@ -73,7 +73,7 @@
               },
               "signal": {
                 "action": "BUY",
-                "entry_hash": "cf06e89b216d72aa436b189f8748938d33bfffb2313cb9a00ed9db816cde133c",
+                "entry_hash": "856bde7144e45d3ecc52f0915afbf8f9842e8ae2e8c79faf7da7b3d87f3f099f",
                 "origin": "original",
                 "seq": 38,
                 "signal_key": "cd833d62f653de2ac8903d88",
@@ -107,7 +107,7 @@
               },
               "signal": {
                 "action": "BUY",
-                "entry_hash": "80df763bd7f39f83dd4e0f57481d430a849a580f29036f91ab43dc0e44a7a321",
+                "entry_hash": "b4dcd1606302bb076ac13d3038bd853e34c037c411ec58bfc946c5bd7aec4f82",
                 "origin": "original",
                 "seq": 41,
                 "signal_key": "99811dc0a457d18e4fb11931",
@@ -201,7 +201,7 @@
         "pid": 4242
       },
       "schema": "balancita-paper-session-blocks.v1",
-      "session_id": "445b91dd7d180a30d318",
+      "session_id": "eabc0874f42c286d7be3",
       "status": {
         "clock": null,
         "evidence_class": "not_forward_evidence",
@@ -259,7 +259,7 @@
       "run_id": "run-synthetic-0001",
       "runner_status": "STOPPED",
       "schema": "balancita-paper-live-heartbeat.v1",
-      "session_id": "445b91dd7d180a30d318",
+      "session_id": "eabc0874f42c286d7be3",
       "steps": 141
     },
     "intervals_before_trimming": 840
@@ -304,7 +304,7 @@
               },
               "signal": {
                 "action": "WAIT",
-                "entry_hash": "55500fded97d8bd6490a8081107d457fb9820558f54f4c20dd76aed7dfd3e19c",
+                "entry_hash": "1752774dc0257a3814e989dfb3a082052c28e9b287098904ac0d8673e33b3618",
                 "origin": "original",
                 "seq": 5,
                 "signal_key": "25b637f6501c39eb63be2966",
@@ -336,7 +336,7 @@
               },
               "signal": {
                 "action": "WAIT",
-                "entry_hash": "47142a86cc7097475a8e3aa224e5932a93f5e4fe1d295ed547e0a5c1393415e2",
+                "entry_hash": "ed6922e9495b7265daa3436bb2bcdcaac8fcc87da8b82f46ebdb8d7330889403",
                 "origin": "original",
                 "seq": 6,
                 "signal_key": "762c35291ed0f8da9710a064",
@@ -368,7 +368,7 @@
               },
               "signal": {
                 "action": "WAIT",
-                "entry_hash": "e9a634be7a965c3489177db940a9f71fb21a5a8f787c46b9e573103ac87f0311",
+                "entry_hash": "60ef94ad74b5e03875f68fe7b45e2882632346541796ddcd52d2bfcca0454c07",
                 "origin": "original",
                 "seq": 7,
                 "signal_key": "c3d492f91e3c83b81de0ce95",
@@ -433,7 +433,7 @@
         "pid": 4242
       },
       "schema": "balancita-paper-session-blocks.v1",
-      "session_id": "445b91dd7d180a30d318",
+      "session_id": "eabc0874f42c286d7be3",
       "status": {
         "clock": null,
         "evidence_class": "not_forward_evidence",
@@ -1073,7 +1073,7 @@
       "run_id": "run-synthetic-0001",
       "runner_status": "PROCESSING",
       "schema": "balancita-paper-live-heartbeat.v1",
-      "session_id": "445b91dd7d180a30d318",
+      "session_id": "eabc0874f42c286d7be3",
       "steps": 2
     },
     "intervals_before_trimming": 6
@@ -1118,7 +1118,7 @@
               },
               "signal": {
                 "action": "WAIT",
-                "entry_hash": "55500fded97d8bd6490a8081107d457fb9820558f54f4c20dd76aed7dfd3e19c",
+                "entry_hash": "1752774dc0257a3814e989dfb3a082052c28e9b287098904ac0d8673e33b3618",
                 "origin": "original",
                 "seq": 5,
                 "signal_key": "25b637f6501c39eb63be2966",
@@ -1150,7 +1150,7 @@
               },
               "signal": {
                 "action": "WAIT",
-                "entry_hash": "47142a86cc7097475a8e3aa224e5932a93f5e4fe1d295ed547e0a5c1393415e2",
+                "entry_hash": "ed6922e9495b7265daa3436bb2bcdcaac8fcc87da8b82f46ebdb8d7330889403",
                 "origin": "original",
                 "seq": 6,
                 "signal_key": "762c35291ed0f8da9710a064",
@@ -1182,7 +1182,7 @@
               },
               "signal": {
                 "action": "WAIT",
-                "entry_hash": "e9a634be7a965c3489177db940a9f71fb21a5a8f787c46b9e573103ac87f0311",
+                "entry_hash": "60ef94ad74b5e03875f68fe7b45e2882632346541796ddcd52d2bfcca0454c07",
                 "origin": "original",
                 "seq": 7,
                 "signal_key": "c3d492f91e3c83b81de0ce95",
@@ -1248,7 +1248,7 @@
         "pid": 4242
       },
       "schema": "balancita-paper-session-blocks.v1",
-      "session_id": "445b91dd7d180a30d318",
+      "session_id": "eabc0874f42c286d7be3",
       "status": {
         "clock": null,
         "evidence_class": "not_forward_evidence",
@@ -1306,7 +1306,7 @@
       "run_id": "run-synthetic-0002",
       "runner_status": "PROCESSING",
       "schema": "balancita-paper-live-heartbeat.v1",
-      "session_id": "445b91dd7d180a30d318",
+      "session_id": "eabc0874f42c286d7be3",
       "steps": 0
     },
     "intervals_before_trimming": 12
@@ -1351,7 +1351,7 @@
               },
               "signal": {
                 "action": "WAIT",
-                "entry_hash": "55500fded97d8bd6490a8081107d457fb9820558f54f4c20dd76aed7dfd3e19c",
+                "entry_hash": "1752774dc0257a3814e989dfb3a082052c28e9b287098904ac0d8673e33b3618",
                 "origin": "original",
                 "seq": 5,
                 "signal_key": "25b637f6501c39eb63be2966",
@@ -1383,7 +1383,7 @@
               },
               "signal": {
                 "action": "WAIT",
-                "entry_hash": "47142a86cc7097475a8e3aa224e5932a93f5e4fe1d295ed547e0a5c1393415e2",
+                "entry_hash": "ed6922e9495b7265daa3436bb2bcdcaac8fcc87da8b82f46ebdb8d7330889403",
                 "origin": "original",
                 "seq": 6,
                 "signal_key": "762c35291ed0f8da9710a064",
@@ -1415,7 +1415,7 @@
               },
               "signal": {
                 "action": "WAIT",
-                "entry_hash": "e9a634be7a965c3489177db940a9f71fb21a5a8f787c46b9e573103ac87f0311",
+                "entry_hash": "60ef94ad74b5e03875f68fe7b45e2882632346541796ddcd52d2bfcca0454c07",
                 "origin": "original",
                 "seq": 7,
                 "signal_key": "c3d492f91e3c83b81de0ce95",
@@ -1481,7 +1481,7 @@
         "pid": 4242
       },
       "schema": "balancita-paper-session-blocks.v1",
-      "session_id": "445b91dd7d180a30d318",
+      "session_id": "eabc0874f42c286d7be3",
       "status": {
         "clock": null,
         "evidence_class": "not_forward_evidence",
@@ -1536,7 +1536,7 @@
       "run_id": "run-synthetic-0002",
       "runner_status": "PROCESSING",
       "schema": "balancita-paper-live-heartbeat.v1",
-      "session_id": "445b91dd7d180a30d318",
+      "session_id": "eabc0874f42c286d7be3",
       "steps": 0
     },
     "intervals_before_trimming": 12
@@ -1581,7 +1581,7 @@
               },
               "signal": {
                 "action": "BUY",
-                "entry_hash": "1978483f7a908f6a204c6ea42ea129c9e07981c699874d3e517ca9a8c4e8dbd3",
+                "entry_hash": "38eb922933cf5cd26760c876f9b8dd06697f3e825fe6a8a36eb6cc49595bbbcf",
                 "origin": "original",
                 "seq": 35,
                 "signal_key": "98465f97729ed734b28d0e4a",
@@ -1615,7 +1615,7 @@
               },
               "signal": {
                 "action": "BUY",
-                "entry_hash": "cf06e89b216d72aa436b189f8748938d33bfffb2313cb9a00ed9db816cde133c",
+                "entry_hash": "856bde7144e45d3ecc52f0915afbf8f9842e8ae2e8c79faf7da7b3d87f3f099f",
                 "origin": "original",
                 "seq": 38,
                 "signal_key": "cd833d62f653de2ac8903d88",
@@ -1649,7 +1649,7 @@
               },
               "signal": {
                 "action": "BUY",
-                "entry_hash": "80df763bd7f39f83dd4e0f57481d430a849a580f29036f91ab43dc0e44a7a321",
+                "entry_hash": "b4dcd1606302bb076ac13d3038bd853e34c037c411ec58bfc946c5bd7aec4f82",
                 "origin": "original",
                 "seq": 41,
                 "signal_key": "99811dc0a457d18e4fb11931",
@@ -1745,7 +1745,7 @@
         "pid": 4242
       },
       "schema": "balancita-paper-session-blocks.v1",
-      "session_id": "445b91dd7d180a30d318",
+      "session_id": "eabc0874f42c286d7be3",
       "status": {
         "clock": null,
         "evidence_class": "not_forward_evidence",
@@ -1802,7 +1802,7 @@
       "run_id": "run-synthetic-0001",
       "runner_status": "STOPPED",
       "schema": "balancita-paper-live-heartbeat.v1",
-      "session_id": "445b91dd7d180a30d318",
+      "session_id": "eabc0874f42c286d7be3",
       "steps": 141
     },
     "intervals_before_trimming": 840

@@ -51,3 +51,7 @@ Q guarda una fila por cada tramo+pregunta que **no** decidió, en la tabla appen
 ## C31 apagada (decisión del propietario, 2026-10-18)
 
 C31 (`qwenexit`, `futures_qwen_exit.py`) queda **apagada**: usa un funding constante inventado (contradice el ADR «funding real y observado»), ignora `known_at` y no separa en vivo de recuperado. No se borra código ni datos. El interruptor único es el bloque `off` de `config/qwen-exit.json` (`since` y `reason`); borrarlo la reactiva. Con él: el lanzador (`scripts/dev-provider-env.mjs`) no arranca el proceso y pasa `QWEN_EXIT_OFF_REASON/SINCE` al servidor; el inventario la lista con estado `off` («Apagada») y el motivo; la salud la muestra como «apagada: motivo (desde fecha)» con estado `unknown`, nunca desaparece.
+
+## Sesiones paper y registros creados con el código anterior no se reanudan
+
+Este cambio modifica el código de `futures_funding_context.FundingContext`, que entra en `pipeline_hash()` (`signal_continuity.py`) y en el manifiesto del runner. Consecuencia: las sesiones paper y los registros durables de señales (congelado `strategy_frozen` de `signal_continuity`) creados con el código anterior **no se pueden reanudar**; el runner los rechaza con `config_incompatible` / `engine_behavior_changed` (`paper_runner.py`, comparación del manifiesto) y la continuidad con `pipeline_changed` (`signal_continuity.py`, `freeze`). Hace falta una sesión nueva. Los documentos de ejemplo de `docs/mission-control/b3/` se regeneraron: solo cambian `entry_hash` y `session_id`, derivados del manifiesto.
