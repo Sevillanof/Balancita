@@ -32,6 +32,12 @@ to the heartbeat, and when a ``*_stop_bytes`` limit is reached it stops IN ORDER
 ``stop_reason`` in the report and exit status 4). No value is approved or defaulted: Fran has not decided any (the numbers in the
 Issues are proposals), so a configuration without ``resource_limits`` behaves exactly as before.
 
+Stale-quote stop (``stale_stop`` in the configuration, optional and OFF unless named, like the resource limits): ``stop_quote_gap_ms`` is the
+longest a product may go without a quote. Past it the process stops IN ORDER (the same terminal stop, ``stop_reason`` ``quote_gap:<product>``,
+exit status 5). It must be above ``max_quote_gap_ms``, which only blocks entries. The value is a parameter: Captura's 24 h measurement sets it
+(docs/etapa-10e-camino-paper-datos-reales.md 3.3), nothing is approved here. A product that has not quoted at all is measured from the
+process's first step. Open positions are not closed or valued with the old quote (D-186-1).
+
 Open positions when the process stops are not touched (D-186-1): while it is down nobody evaluates their stops or targets. The
 report lists them so the operator sees what was left open. No persistent process is started by this module; ``run`` ends when
 it is told to stop, when it has done ``max_steps`` or when the decision window is over.
@@ -103,13 +109,13 @@ FRESH_MS = 600_000                               # the newest warm-up candle may
 
 INIT, WARMUP, LIVE, STOPPING, STOPPED_PHASE, HALTED, REFUSED_PHASE = "INIT", "WARMUP", "LIVE", "STOPPING", "STOPPED", "HALTED", "REFUSED"
 FINAL_PHASES = (STOPPED_PHASE, HALTED, REFUSED_PHASE)
-EXIT_OK, EXIT_REFUSED, EXIT_HALTED, EXIT_RESOURCE_STOP = 0, 2, 3, 4
+EXIT_OK, EXIT_REFUSED, EXIT_HALTED, EXIT_RESOURCE_STOP, EXIT_STALE_STOP = 0, 2, 3, 4, 5
 
 DEFAULTS = {"decide_until_ms": None, "max_quote_gap_ms": 15_000, "block_stale_entries": True,
             "on_funding_divergence": "halt", "ingest_kw": {}, "evaluator_kw": {},
             "strategies": "frozen", "capital_policy": CAPITAL_POLICY, "notional_per_trade_usd": DEFAULT_NOTIONAL_USD, "step_interval_ms": 1_000, "min_free_bytes": 1 << 30, "warmup_minutes": None}
 REQUIRED = ("schema", "products", "decide_from_ms", "funding_mode", "source_id")      # no default for either: the market source and the accounting source are always chosen, never implied (#184)
-OPTIONAL = ("resource_limits", "clock_guard", "authorization_ref", "publish_blocks")                  # absent from DEFAULTS on purpose: a configuration without it keeps its digest
+OPTIONAL = ("resource_limits", "clock_guard", "authorization_ref", "publish_blocks", "stale_stop")                  # absent from DEFAULTS on purpose: a configuration without it keeps its digest
 RESOURCE_KEYS = ("disk_warn_bytes", "disk_stop_bytes", "memory_warn_bytes", "memory_stop_bytes")
 DEFAULT_CHECK_EVERY_STEPS = 30
 AUTHORIZATION_REF = re.compile(r"^BAL-DECISION-[0-9]{1,4}-[0-9]{1,3}$")
@@ -187,6 +193,8 @@ def validate_config(raw):
         raise ProcessError("config_invalid", "authorization_ref: expected BAL-DECISION-<issue>-<n>")
     if "resource_limits" in config:
         config["resource_limits"] = _validate_resource_limits(config["resource_limits"])
+    if "stale_stop" in config:
+        config["stale_stop"] = _validate_stale_stop(config["stale_stop"], config["max_quote_gap_ms"])
     if "publish_blocks" in config and config["publish_blocks"] is not True:
         raise ProcessError("config_invalid", "publish_blocks: only true; leave it out to publish nothing")
     # ``authorization_ref`` is not part of the identity; it opens nothing by itself: it must match an entry of ``AUTHORIZED_SESSIONS`` (code)
@@ -201,6 +209,28 @@ def _validate_clock_guard(raw):
     if isinstance(value, bool) or not isinstance(value, int) or value < 1:
         raise ProcessError("config_invalid", "clock_guard.max_forward_jump_ms")
     return {"max_forward_jump_ms": value}
+
+
+def _validate_stale_stop(raw, max_quote_gap_ms):
+    """``{"stop_quote_gap_ms": n}``: the one value is named by the operator (nothing is approved or defaulted) and must be above the gap that
+    only blocks entries."""
+    if not isinstance(raw, dict) or set(raw) != {"stop_quote_gap_ms"}:
+        raise ProcessError("config_invalid", "stale_stop: exactly stop_quote_gap_ms")
+    value = raw["stop_quote_gap_ms"]
+    if isinstance(value, bool) or not isinstance(value, int) or value <= max_quote_gap_ms:
+        raise ProcessError("config_invalid", "stale_stop.stop_quote_gap_ms: an integer above max_quote_gap_ms")
+    return {"stop_quote_gap_ms": value}
+
+
+def stale_product(last_quote, products, since_ms, now_ms, limit_ms):
+    """The product with the longest quote gap past ``limit_ms`` as ``(product, gap_ms)``, or None. A product without a quote is measured from
+    ``since_ms``; a quote never moves a gap backwards."""
+    worst = None
+    for product in products:
+        gap = now_ms - max(last_quote.get(product, since_ms), since_ms)
+        if gap > limit_ms and (worst is None or gap > worst[1]):
+            worst = (product, gap)
+    return worst
 
 
 def _validate_resource_limits(raw):
@@ -337,6 +367,7 @@ class Supervisor(object):
         self.clock, self.sleep, self.tick = clock, sleep, tick
         self.resources = resources or read_resources           # ``resources(directory) -> {"disk_bytes", "memory_bytes"}``; injected in tests
         self.resource_events, self.last_resources, self.stop_reason = [], None, None
+        self.stale_events, self._first_now = [], None
         self._warned = set()
         self.wall_time = wall_time or (lambda: int(time.time() * 1000))     # only read when ``clock_guard`` is configured
         self.clock_events, self._last_now = [], None
@@ -436,6 +467,20 @@ class Supervisor(object):
         """Only sets a flag (safe in a signal handler): the loop stops after the step it is in."""
         self.stop_requested, self.stop_signal = True, signum
 
+    def _check_quote_gap(self, now):
+        """With ``stale_stop`` named: a product silent for longer than the stop gap asks for the same orderly stop as a SIGTERM. One product of
+        eight stopping the session is on purpose: they share one portfolio."""
+        limit = (self.config.get("stale_stop") or {}).get("stop_quote_gap_ms")
+        self._first_now = now if self._first_now is None else self._first_now
+        if limit is None or self.stale_events:
+            return
+        found = stale_product(self.session.last_quote, self.config["products"], self._first_now, now, limit)
+        if found:
+            self.stale_events.append({"kind": "stop", "product_id": found[0], "gap_ms": found[1], "limit_ms": limit, "observed_now_ms": now})
+            self.stop_reason = self.stop_reason or "quote_gap:" + found[0]
+            if not self.stop_requested:
+                self.request_stop(None)
+
     # ---- resources -------------------------------------------------------------------------------------------
     def _check_resources(self, now, steps):
         """Every ``check_every_steps`` steps (and on the first): measure, record, warn once per level and, at a stop limit, ask for the
@@ -520,13 +565,16 @@ class Supervisor(object):
             steps += 1
             self.phase = phase_of(self.session)
             self._check_resources(now, steps)
+            self._check_quote_gap(now)
             try:
                 self._beat(now, state)
             except OSError as error:                 # the supervisor cannot even say it is alive: that is a halt too
                 return self._halt(now, "heartbeat: " + repr(error))
             self.sleep(self.config["step_interval_ms"] / 1000.0)
         code = self.end()
-        return EXIT_RESOURCE_STOP if code == EXIT_OK and self.stop_reason else code
+        if code != EXIT_OK or not self.stop_reason:
+            return code
+        return EXIT_STALE_STOP if self.stop_reason.startswith("quote_gap:") else EXIT_RESOURCE_STOP
 
     def end(self):
         """Orderly end (decision D-186-1): pending orders are cancelled with their own reason, open positions are left as they are,
@@ -589,6 +637,8 @@ class Supervisor(object):
             beat["wall_ms"] = self.wall_time()                  # lets a supervisor tell a stuck process from a simulated clock
         if self.config.get("resource_limits"):
             beat["resources"] = {"last": self.last_resources, "events": self.resource_events}
+        if self.config.get("stale_stop"):
+            beat["stale_stop"] = {"limit_ms": self.config["stale_stop"]["stop_quote_gap_ms"], "events": self.stale_events}
         if self.config.get("publish_blocks"):
             beat["run_id"] = self.run_id
             self._publish(beat, state)                           # after the step's journal and checkpoint, before the heartbeat that reports it
@@ -634,6 +684,8 @@ class Supervisor(object):
             body["clock"] = {"events": self.clock_events}
         if self.config.get("resource_limits"):
             body["resources"] = {"last": self.last_resources, "events": self.resource_events, "stop_reason": self.stop_reason}
+        if self.config.get("stale_stop"):
+            body["stale_stop"] = {"limit_ms": self.config["stale_stop"]["stop_quote_gap_ms"], "events": self.stale_events, "stop_reason": self.stop_reason}
         if self.config["funding_mode"] == LI.OBSERVED_FUNDING:
             body["funding"] = session.funding_report()
         _write_json(os.path.join(self.directory, REPORT_FILE), body)

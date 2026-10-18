@@ -75,6 +75,8 @@ Ninguna sesión paper arranca sin la aprobación escrita de Fran.
   al latido y al informe. Una vela incompleta no frena por sí sola.
 - Hueco de velas: en Kraken un minuto sin trades es una vela plana con volumen 0 y no es un hueco. Hueco es solo una vela oficial que
   falta; nunca se rellena. Un hueco en la ventana de calentamiento o en la de decisión frena entradas.
+- Hecho (mecanismo): `stale_stop.stop_quote_gap_ms` en la configuración, opcional y apagado, parada ordenada con salida 5
+  (`docs/etapa-10-ciclo-de-vida.md`). Falta el valor y el freno por vela incompleta o hueco de velas.
 - Los tres umbrales (bloqueo de entradas, parada, tolerancia de velas) salen de la medición de 24 h de Captura (disponible
   ~12:41Z del 18-oct). Valores candidatos de la medición de 3 h: 15 s / 25 s / 45 s; no se fijan hasta tener las 24 h.
 

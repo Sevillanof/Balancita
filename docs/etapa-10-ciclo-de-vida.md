@@ -65,6 +65,16 @@ orden (nunca cuenta 0 bytes). Si un SIGTERM llegó en el mismo paso, la parada i
 nada y el digest de la configuración no cambia. **No hay valores aprobados**: los números de las Issues (disco 100/150 MB, memoria
 400/600 MB) siguen siendo propuestas diferidas; el código solo da el mecanismo. Pruebas: `python/tests/test_paper_live_resources_185.py`.
 
+## Parada por cotización tardía (opcional, apagada por defecto)
+
+Si la configuración trae `stale_stop: {"stop_quote_gap_ms": n}`, un producto que pasa más de `n` ms sin cotizar pide la misma parada
+ordenada que SIGTERM: informe con `stop_reason` `quote_gap:<producto>`, estado final STOPPED, salida 5. `n` tiene que ser mayor que
+`max_quote_gap_ms`, que solo bloquea entradas. Un producto que nunca cotizó se mide desde el primer paso del proceso. Que un solo
+producto frene toda la sesión es a propósito (comparten una cartera). Las posiciones abiertas no se cierran ni se valúan con la cotización
+vieja (D-186-1). El evento va al `heartbeat.json` y al `report.json` (`stale_stop`). Sin `stale_stop` no se mide ni se escribe nada y el
+digest no cambia. **No hay valor aprobado**: lo fija la medición de 24 h de Captura (docs/etapa-10e-camino-paper-datos-reales.md 3.3).
+Pruebas: `python/tests/test_paper_live_stale_stop_184.py` (los cortes reales del WebSocket de la muestra parcial dan los huecos).
+
 ## Guarda de reloj y hora de pared (opcional, apagada por defecto)
 
 Con `clock_guard: {"max_forward_jump_ms": n}` (sin valor por defecto: lo nombra el operador) el proceso compara cada instante con el anterior
