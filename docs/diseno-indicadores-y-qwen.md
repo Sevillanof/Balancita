@@ -1,6 +1,6 @@
 # Diseño: un solo catálogo de indicadores y el papel de Qwen
 
-Estado: propuesta (sin cambios de código). Rutas relativas a `python/balancita_engine/`. Todo sigue siendo papel; no se evalúa nada sobre holdout.
+Estado: propuesta con decisiones del dueño del 2026-10-18 aplicadas (sin cambios de código). Rutas relativas a `python/balancita_engine/`. Todo sigue siendo papel; no se evalúa nada sobre holdout.
 
 ## 1. Estado actual
 
@@ -21,14 +21,16 @@ Mapeo de STATE de Q (cada campo declara `needs`; el calentamiento de Q sale de a
 
 **C. Datos tardíos, criterio del forward para todos.** Se usan velas/funding tardíos (backfill) y el resultado se marca `recovered`; solo lo `live` cuenta para el mínimo de trades. Unificar `is_recovered`/`funding_recovered` en un módulo y usarlo en forward, Q (decisión sobre vela con `known_at − close_at > LATE_KNOWN_MS`), E, sesión de papel y `multi_experiment`.
 
-**D. Qwen en OPEN y CLOSE de cada estrategia (no cada minuto).** Nuevas preguntas de Q, ámbito `gate`: `open_gate` (`go`/`wait`) y `close_gate` (`close`/`hold`), con el estado de §B más `position`. Opt-in por estrategia (`qwen_gate: true`); las congeladas (C29-C32, Kronos) no cambian hasta 100 trades forward.
-- *Abrir:* la estrategia emite señal; Qwen solo confirma o veta el mismo lado (no crea trades ni cambia niveles, como el ADR de 2026-10-12). `wait` → no abre, código `qwen_wait`. Qwen caído/timeout/estado inválido → **no abre**, fila en `paper_futures_llm_skips` con `model_down` / `model_timeout` (nuevo, plazo 20 s < 1 barra) / `state_error`.
-- *Cerrar:* el **stop-loss nunca consulta a Qwen** y se ejecuta siempre (también con Qwen caído y mientras una respuesta está pendiente). El objetivo (target) también es determinista. "Cierre normal" = salida por regla de la estrategia o por horizonte; Qwen puede responder `hold` (máx. 2 prórrogas o 2× horizonte, luego cierre forzado `qwen_hold_cap`). Qwen caído en un cierre normal → cierra por regla (`model_down`, anotado); protege más que esperar.
-- *Registro:* decisión completa (entrada, prompt_hash, probabilidades, latencia) en `paper_futures_llm_decisions`; `paper_futures_llm_skips` gana `strategy_id`, `kind` (open/close) y `recovered`. La contabilidad es función pura de velas + decisiones almacenadas: el replay no vuelve a preguntar.
-- *Prioridad y recuperación:* cola con dos prioridades; lo vivo siempre antes. Tras apagado, solo se pregunta en los momentos en que la estrategia quiso abrir/cerrar dentro del tramo recuperado, en orden cronológico por (estrategia, producto), con estado causal (lecciones solo anteriores a la vela), y todo queda `recovered`. Si una decisión viva del mismo par llega con atrasos pendientes, estos caducan con la respuesta por defecto (no abre / cierra por regla, código `recovery_expired`) para que el libro sea determinista.
+**D. Qwen en cada OPEN; cierre solo por target, stop o regla de cierre.** Decisiones del dueño (2026-10-18, enmienda al ADR en el PR 0). Nueva pregunta de Q, ámbito `gate`: `open_gate` (`go`/`wait`), con el estado de §B. Opt-in por estrategia (`qwen_gate: true`); las congeladas (C25-C32) no cambian y su historial queda como evidencia. C31 se apaga y C32 se retira.
+- *Abrir:* la estrategia emite señal; Qwen solo confirma o veta el mismo lado (no crea trades ni cambia niveles). `wait` → no abre, código `qwen_wait`. Qwen caído/timeout/estado inválido → **no abre**, fila en `paper_futures_llm_skips` con `model_down` / `model_timeout` (nuevo, plazo 20 s < 1 barra) / `state_error`, siempre con código y razón.
+- *Cerrar:* una posición se cierra **solo** por (1) objetivo (target) alcanzado, (2) stop de protección alcanzado, o (3) una regla de cierre. El stop **nunca consulta a Qwen** y se ejecuta siempre (también con Qwen caído o con una respuesta pendiente). **No hay cierre por tiempo** (sin salida por horizonte) en estrategias nuevas; se elimina la regla de prórrogas (`hold` máx. 2, 2× horizonte, `qwen_hold_cap`). Las reglas de cierre **no están definidas**; que Qwen proponga cierres podrá ser una de ellas más adelante (requerirá su propia definición y enmienda).
+- *Registro:* decisión completa (entrada, prompt_hash, probabilidades, latencia) en `paper_futures_llm_decisions`; `paper_futures_llm_skips` gana `strategy_id`, `kind` y `recovered`. La contabilidad es función pura de velas + decisiones almacenadas: el replay no vuelve a preguntar.
+- *Expectativa auditable:* cada decisión de Qwen lleva una expectativa concreta y evaluable, guardada junto a la decisión. Esbozo de esquema (`expectation`): `{kind: "move_bp" | "hit_target_before" | "no_stop_before", side, magnitude_bp, deadline_ms, reference_price, stated_at_ms}`; p. ej. "+30 pb antes de <hora>" = `{kind:"move_bp", side:"long", magnitude_bp:30, deadline_ms:...}`. La respuesta sigue siendo restringida (letra + probabilidades); la expectativa se deriva de campos fijos, no de texto libre. Después de `deadline_ms` un evaluador (el scorer E existente o un hermano que reutilice su cálculo de resultado sobre velas, solo causal) escribe `expectation_outcome` (`met`/`missed`/`pending`, movimiento realizado, MFE/MAE, `recovered`) y se agrega por estrategia/versión de pregunta (tasa de acierto, calibración). Es medición de la calidad de Qwen; no cierra posiciones ni mueve niveles.
+- *Prioridad y recuperación:* cola con dos prioridades; lo vivo siempre antes. Tras apagado, solo se pregunta en los momentos en que la estrategia quiso abrir dentro del tramo recuperado, en orden cronológico por (estrategia, producto), con estado causal, y todo queda `recovered`. Si llega una decisión viva del mismo par con atrasos pendientes, estos caducan con la respuesta por defecto (no abre, código `recovery_expired`).
 - Límite declarado: el relleno sigue siendo el cierre de la vela de decisión; la latencia se registra.
+- **Preguntas abiertas (el dueño debe resolverlas).** (a) *Reglas de cierre: por definir.* (b) *Qué pasa con una posición que nunca toca target ni stop y ninguna regla dispara:* riesgo declarado: el capital queda comprometido indefinidamente, una posición por estrategia/producto bloquea nuevas entradas y el funding sigue acumulándose como coste. Antes de poner en vivo estrategias así hay que definir las reglas de cierre. (c) Si las expectativas de Qwen deben tener un plazo máximo permitido.
 
-**E. Funding opción b.** Solo se reserva: `funding.vs24h` (tasa actual vs media 24 h + cambio, causal, código+razón) con `status: reserved` en el catálogo (`validate_spec` lo rechaza) y el campo STATE `funding` ya existente (`:636`). Se implementa después.
+**E. Funding.** Es coste para todas las estrategias. La opción b (comparación a 24 h) es la funcionalidad general: `funding.vs24h` (tasa actual vs media 24 h + cambio, causal, código+razón), reservada (`status: reserved`, `validate_spec` la rechaza) hasta implementarla; campo STATE `funding` ya existente (`:636`).
 
 ## 3. Flujo de datos
 
@@ -38,24 +40,28 @@ market.sqlite ──> warm_feed(as_of, needs) ─ validate_candle ─> FeatureEn
    ├─> forward / backtest / fiabilidad / C31  (señales de specs, Book)
    ├─> multi_experiment / sesión de papel      (SpecSignalStrategy)
    └─> C (verdicts) ─> Q (STATE por needs) ─> decisions / skips
-señal OPEN/CLOSE de estrategia con qwen_gate ─> cola (vivo > recovered) ─> llama-server
-      ├ go/close/hold ─> Book ;  caído/timeout ─> no abre / cierra por regla + skip
-      └ stop-loss ─────────────────────────────> Book (sin pasar por Qwen)
-E (scorer) lee verdicts/decisions; etiqueta recovered con el mismo criterio
+señal OPEN de estrategia con qwen_gate ─> cola (vivo > recovered) ─> llama-server
+      ├ go/wait + expectativa ─> Book ;  caído/timeout ─> no abre + skip
+      └ target / stop / regla de cierre ──> Book (el stop no pasa por Qwen; sin cierre por tiempo)
+E (scorer) lee verdicts/decisions; califica expectativas; etiqueta recovered con el mismo criterio
 ```
 
 ## 4. Plan de PRs (pequeños, ordenados, cada uno con tests propios)
 
-0. **Enmienda del ADR** (solo si Fran la pide expresamente; el ADR es de solo lectura): Qwen decide cierres normales y confirma aperturas de todas las estrategias opt-in.
+0. **Enmienda del ADR 2026-10-18** (pedida por Fran; solo se añade al final): catálogo único, criterio tardío del forward, Qwen en cada OPEN con expectativa auditable, cierre solo por target/stop/regla (sin cierre por tiempo), C25-C32 congeladas, funding como coste y opción b general, C31 apagada y C32 retirada. Bloquea el PR 7.
 1. **Catálogo sin cambio de comportamiento:** `indicator_catalog.py`, `IncrementalFeatures` sobre él, nombre `funding.vs24h` reservado, `warmup_bars`. Test: salidas idénticas (golden de `frames` sobre velas reales) y señales de C29-C32 idénticas. Cambia `pipeline_hash` (ver §5).
 2. **`validate_spec` con catálogo:** rechaza desconocidos (`5m.macd`) y reservados; test de que todos los specs de `config/strategies/` y los guardados en el registro siguen válidos (los inválidos heredados se marcan, no se borran).
 3. **`feature_feed.py`:** `warm_feed`, `validate_candle`, calentamiento derivado; forward/backtest/C31/multi/sesión lo adoptan (congelados con 2000). Tests de convergencia y de huecos.
 4. **C sobre el alimentador** y retirada de `calculate_features`: `VERDICT_CONFIG` v4 sin `window_*`, BD de verdicts nueva (la vieja da `CONFIG_MISMATCH`, se conserva en solo lectura). Test de paridad completo.
 5. **Q:** campos STATE con `needs`; subir versiones de pregunta (`direction_1h` 2, `trade_action` 5, `exit_decision` 2) y los pines de hash en `test_futures_llm_decisions.py`.
 6. **Criterio `recovered` único** en Q, E, sesión y multi.
-7. **Puerta Qwen:** preguntas `open_gate`/`close_gate`, módulo de puerta, columnas nuevas, hook en `Book` (stop fuera de la puerta).
-8. **Recuperación con cola y caducidad.**
-9. (Posterior) implementar `funding.vs24h`.
+7. **Puerta Qwen en OPEN:** pregunta `open_gate`, módulo de puerta, columnas nuevas, hook en `Book` en la apertura (el stop no pasa por Qwen). Sin `close_gate` ni cierre por horizonte.
+8. **Expectativas auditables:** campo `expectation` en las decisiones y evaluador (E o hermano) que escribe `expectation_outcome`. Depende del 7.
+9. **Recuperación con cola y caducidad** (solo aperturas).
+10. (Posterior) implementar `funding.vs24h`.
+11. (Bloqueado hasta que Fran defina las reglas de cierre) estrategias nuevas con puerta Qwen en vivo; apagar C31 y retirar C32 puede ir antes, en su propio PR pequeño.
+
+Orden revisado: 0 → 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 → 9; los PR 1-6 no dependen de Qwen ni de reglas de cierre y pueden avanzar tras el 0.
 
 ## 5. Qué cambia para lo existente
 
@@ -74,6 +80,8 @@ Velas históricas insuficientes en un producto nuevo (mitigado: `warmup_insuffic
 2. **Convergencia:** arranque con `warmup_bars` vs. historia 10× más larga ⇒ diferencia relativa ≤1e-9 por indicador; con menos barras, el test falla (prueba la fórmula).
 3. **Calentamiento sin trades:** ningún trade abre dentro del calentamiento; velas tardías de calentamiento no marcan `recovered`.
 4. **Recuperación:** con huecos de captura, lo tardío sale `recovered`, no suma al mínimo, Qwen se consulta solo en los momentos de abrir/cerrar del tramo, y una decisión viva se atiende antes que el atraso.
-5. **Qwen caído:** en un open ⇒ sin trade y fila `model_down`/`model_timeout`; en un cierre normal ⇒ cierra por regla.
-6. **Independencia del stop:** con Qwen caído, colgado o respondiendo `hold`, el stop-loss se ejecuta en la misma vela y precio que sin Qwen.
+5. **Qwen caído:** en un open ⇒ sin trade y fila `model_down`/`model_timeout` con código y razón.
+6. **Independencia del stop:** con Qwen caído o colgado, el stop-loss se ejecuta en la misma vela y precio que sin Qwen.
 7. **Validación:** `validate_spec` rechaza `5m.macd`, periodos fuera de rango y `funding.vs24h` (reservado); acepta todos los specs enviados.
+8. **Sin cierre por tiempo:** una estrategia nueva sin target/stop alcanzado ni regla de cierre mantiene la posición abierta indefinidamente (no hay salida por horizonte); verificado en test.
+9. **Expectativas:** cada decisión de Qwen guarda su `expectation`; pasado el plazo el evaluador la califica solo con velas causales y marca `recovered` igual que el resto.

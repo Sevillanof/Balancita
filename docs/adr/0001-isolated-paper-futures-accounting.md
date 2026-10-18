@@ -155,3 +155,20 @@ Authorized by the user (Fran) through BAL-DECISION-185-TEXTO-ADR-04 (issue #185,
 ### Unchanged
 
 The fixed 100 USD per trade of the frozen forward policy (C29-C31, Kronos and the forward measurement), its evidence and its 100-trade rule stay as written above. A future rule that varies the size by operation type is expressly **undefined**: this amendment does not define it and does not make a permanent fixed size an obligation. It does not authorize strategy or forward changes, additional sizing, leverage, migration or reinterpretation of existing balances, real sessions or money.
+
+## Amendment 2026-10-18: one indicator catalog, Qwen at every open, auditable decisions, no time-based close
+
+Requested directly by the user (Fran) on 2026-10-18 (decisions on `docs/diseno-indicadores-y-qwen.md`). Where it conflicts with the text above, including the amendments of 2026-10-11 and 2026-10-12, this one prevails for strategies created after this date. Everything remains paper only: no real orders, no private endpoints, no credentials.
+
+### Decisions
+
+1. **One indicator catalog** for all of Balancita (candle verdicts, forward, backtest, Qwen state, scorer, paper session, multi-strategy experiment). The late-data criterion is the forward's for everyone: late data is used and the result is marked `recovered`; only live results count toward the minimum number of forward trades.
+2. **Qwen is consulted at every strategy OPEN** to confirm or veto the strategy's own signal (same side only; it creates no trade and changes no level). If Qwen is down or times out, the position is not opened; the skip is recorded with a code and a reason.
+3. **Qwen decisions are auditable.** Each decision carries a concrete, gradable expectation (for example "+30 bp before <time>"), stored with the decision and later compared with what actually happened.
+4. **Closing.** A position closes only when (a) its target is hit, (b) its protective stop is hit, or (c) a closing rule fires. The stop is always executed and never goes through Qwen. Closing rules are **not defined yet**; a Qwen-proposed close may become one such rule later, which requires its own definition. There is **no time-based close** (no horizon exit) for new strategies.
+5. **Frozen history.** C25-C32 history stays as evidence and is not modified. C31 is switched off and C32 is retired.
+6. **Funding** counts as a cost for every strategy. The comparison of the current rate against the 24 h (option b) is the general funding feature.
+
+### Unchanged
+
+Fixed notional, per-product cost model, append-only storage, replay equality, no look-ahead, the Evaluation rules and the 100-forward-trade rule for frozen strategies remain in force. Strategies without defined closing rules must not go live (see the design document, open questions).
