@@ -27,7 +27,7 @@ Cada ciclo horario (`run_forward`, `futures_forward.py:303`) y por cada (estrate
 
 **Atomicidad.** Un ciclo por serie = una transacción `BEGIN IMMEDIATE`: trades nuevos + `forward_era` (`ERA_NOW`) + `recovered` congelado + anomalías + `forward_open`/`forward_status` (vistas derivadas para la API actual) + blob + checkpoint `seq+1`. Se comprueba que `seq` leído sigue siendo el último (un segundo proceso falla, no duplica). Reanudación: leer el último checkpoint, verificar hash del blob y cola de la cadena; si no cuadra, la serie se detiene con código y razón (no calcula).
 
-**Avance del cursor.** Solo hasta la frontera contigua: último 1m `b` tal que existen todos los 1m desde el cursor y los 5m que cierran ≤ `b+1 min`. Un hueco espera `GAP_GRACE` = 15 min (provisional; se ajustará con el retraso máximo medido de llegada de velas en el Mac); pasado el plazo se declara (`forward_hole`, solo-añadir) y el cursor lo cruza igual que hoy lo hace el replay.
+**Avance del cursor.** Solo hasta la frontera contigua: último 1m `b` tal que existen todos los 1m desde el cursor y los 5m que cierran ≤ `b+1 min`. Una vela es tardía (`recovered`, nunca en vivo) si se supo más de 15 s después de cerrar: tolerancia única `late_candle_tolerance_ms` de `config/forward-strategies.json` (la misma de la sesión de papel; el módulo incremental no define otra). Es un concepto distinto de `GAP_GRACE`: un hueco espera `GAP_GRACE` = 15 min (provisional; se ajustará con el retraso máximo medido de llegada de velas en el Mac); pasado el plazo se declara (`forward_hole`, solo-añadir) y el cursor lo cruza igual que hoy lo hace el replay.
 
 ## 3. Corrección
 

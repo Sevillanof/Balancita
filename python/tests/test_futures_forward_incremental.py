@@ -711,6 +711,20 @@ class CheckpointStore(unittest.TestCase):
         with self.assertRaises(ConcurrentCycle):
             start_series(self.db, SeriesRunner(self.spec, product_id=PRODUCT, tick_size=TICK, start_ms=self.start))
 
+    def test_the_incremental_path_has_no_late_candle_tolerance_of_its_own(self):
+        """Una sola tolerancia (15 s, config/forward-strategies.json): el módulo incremental no define otra; cuando clasifique
+        velas tardías usará ``futures_forward.LATE_KNOWN_MS``. En la frontera: 15 s no es tardía, 15,001 s sí."""
+        import balancita_engine.futures_forward_incremental as inc
+        from balancita_engine import futures_forward as ff
+        own = [n for n in dir(inc) if "LATE" in n.upper() and "TOLER" in n.upper() or n in ("LATE_KNOWN_MS", "STALE_ENTRY_MS")]
+        self.assertEqual(own, [])
+        self.assertEqual(ff.LATE_KNOWN_MS, 15_000)
+        ones, fives = walk(30, seed=3)
+        for lag, late in ((ff.LATE_KNOWN_MS, 0), (ff.LATE_KNOWN_MS + 1, len(ones))):
+            shifted = [dict(c, known_at=c["close_at"] + lag) for c in ones]
+            late_ones, _, _ = ff.candle_coverage(shifted, [], 0, ones[-1]["close_at"])
+            self.assertEqual(len(late_ones), late)
+
     def test_the_live_loop_does_not_use_the_incremental_path_yet(self):
         with open(futures_forward.__file__, encoding="utf-8") as handle:
             source = handle.read()

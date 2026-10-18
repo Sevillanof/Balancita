@@ -128,6 +128,28 @@ class RecoveryTests(unittest.TestCase):
         self.assertFalse(self._open_position("open-live", (2050, 2100))["recovered"])
         self.assertFalse(self._open_position("open-after", (2600, 2700))["recovered"])
 
+    def test_tightening_the_tolerance_from_5_min_to_15_s_reclassifies_live_as_recovered_without_legacy_or_divergence(self):
+        """A candle learned 60 s late was live under the old 5 min and is recovered under 15 s. The derived ``forward_recovered`` is
+        rewritten each cycle and the stored trade is untouched, so the era (``actual``) and the divergence counters do not move."""
+        market = os.path.join(self.dir.name, "slow.sqlite")
+        _market(market)
+        db = sqlite3.connect(market)
+        db.execute("UPDATE paper_futures_official_candles SET known_at=known_at+60000 WHERE interval_ms=60000 AND bucket_start=?",
+                   (START + 2349 * MINUTE,))
+        db.commit()
+        db.close()
+        out = os.path.join(self.dir.name, "slow-forward.sqlite")
+        summary_path = os.path.join(self.dir.name, "s.json")
+        with mock.patch.object(futures_forward, "LATE_KNOWN_MS", 5 * 60_000):
+            run_forward(market, out, SPECS, self.registration, self.PRODUCTS)
+        before = write_summary(out, SPECS, self.registration, summary_path)["strategies"][C30]
+        self.assertEqual((before["live_trades"], before["recovered_trades"]), (1, 0))
+        run_forward(market, out, SPECS, self.registration, self.PRODUCTS)          # the next cycle, with 15 s
+        after = write_summary(out, SPECS, self.registration, summary_path)["strategies"][C30]
+        self.assertEqual((after["live_trades"], after["recovered_trades"]), (0, 1))
+        self.assertEqual(_trades(out), self.reference)
+        self.assertEqual((after["unclassified_trades"], after["diverged_trades"], after["legacy_diverged_trades"]), (0, 0, 0))
+
     def test_a_hole_that_does_not_touch_the_trade_leaves_it_unlabelled(self):
         _, db = self._run("elsewhere", (2050, 2100))
         self.assertEqual(_trades(db), self.reference)
