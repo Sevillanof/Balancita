@@ -77,11 +77,11 @@ describe('session status decoder against blocks the real publisher emitted', () 
   it('keeps the funding detail the publisher gave (D-229-01)', () => {
     const s = decodeSessionStatus(statuses.halted_funding_diverged)
     expect(s.funding).toMatchObject({
-      incompleteTrades: [],
       disputedTrades: [],
       quarantinedPeriods: [],
       divergenceEvidence: 1,
     })
+    expect(s.funding.incompleteTrades).toHaveLength(1) // the real halted session holds one open position whose funding is not complete
     const none = decodeSessionStatus(statuses.warming_up)
     expect(none.funding.incompleteTrades).toBeNull()
     expect(none.funding.divergenceEvidence).toBeNull()

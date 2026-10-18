@@ -5,10 +5,13 @@
     "funding": {
       "disputed_trades": [],
       "divergence_evidence": 1,
-      "incomplete_trades": [],
+      "incomplete_trades": [
+        "beaf130a9fc78a9b187c8c79"
+      ],
       "pnl_verified": false,
       "quarantined_periods": [],
       "reasons": [
+        "trade_funding_incomplete",
         "book_and_portfolio_diverge",
         "divergence_evidence_recorded"
       ],
@@ -17,8 +20,8 @@
     "halt_reason": "IntegrationError('funding_book_diverged: the funding book and the portfolio disagree')",
     "liveness": "final",
     "mode": "integration",
-    "observed_now_ms": 1763256600000,
-    "open_positions": 1,
+    "observed_now_ms": 1792260300000,
+    "open_positions": 0,
     "orderly_stop": null,
     "pending_orders": 0,
     "phase": "HALTED",
@@ -26,7 +29,7 @@
     "reported_phase": "HALTED",
     "resources": null,
     "schema": "balancita-paper-session-status.v1",
-    "steps": 9,
+    "steps": 11,
     "thresholds": {
       "heartbeat_max_age_ms": 5000,
       "status": "hypothesis"
