@@ -211,15 +211,20 @@ class LoadPeriodsTests(unittest.TestCase):
         self.db.executescript(
             "CREATE TABLE IF NOT EXISTS paper_futures_funding_sightings(product_id TEXT, start_ms INTEGER, received_at INTEGER,"
             " funding_rate TEXT, end_ms INTEGER, server_time TEXT, response_sha256 TEXT);"
-            "CREATE TABLE IF NOT EXISTS paper_futures_funding_polls(product_id TEXT, started_at INTEGER, response_sha256 TEXT,"
-            " extract_text TEXT);")
+            "CREATE TABLE IF NOT EXISTS paper_futures_funding_polls(product_id TEXT, started_at INTEGER, purpose TEXT,"
+            " scheduled_at INTEGER, finished_at INTEGER, outcome TEXT, http_status INTEGER, detail TEXT, response_sha256 TEXT,"
+            " extract_text TEXT, extract_sha256 TEXT, extract_periods INTEGER);")
         for start, received, absolute, relative in rows:
             sha = "s%d_%d" % (start, received)
             self.db.execute("INSERT INTO paper_futures_funding_sightings VALUES(?,?,?,?,?,?,?)",
                             ("PF_XBTUSD", start, received, absolute, start + H, "t", sha))
             line = json.dumps({"timestamp": stamp(start), "fundingRate": 1, "relativeFundingRate": relative})
-            self.db.execute("INSERT INTO paper_futures_funding_polls VALUES(?,?,?,?)",
-                            ("PF_XBTUSD", received, sha, "serverTime=t\n" + line))
+            self.poll(received, sha, "serverTime=t\n" + line)
+        self.db.commit()
+
+    def poll(self, started, sha=None, extract=None, outcome="ok", took=2_000):
+        self.db.execute("INSERT INTO paper_futures_funding_polls VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+                        ("PF_XBTUSD", started, "hourly", started, started + took, outcome, None, None, sha, extract, None, None))
         self.db.commit()
 
     def test_a_sighting_after_the_close_gives_the_known_at_and_the_rate_even_when_the_periods_table_saw_it_open(self):
@@ -279,6 +284,54 @@ class LoadPeriodsTests(unittest.TestCase):
         live_ctx = fc.funding_for(self.path, "PF_XBTUSD")
         self.assertEqual(live_ctx.assess(arrival + 5 * 60_000)[1], "ok")   # after the arrival, live and complete
         self.assertEqual(len(fc.funding_periods(ctx)), off + hours_off)    # accounting keeps them
+
+    def stopped_mid_hour(self, off_hour=800):
+        """Capture on until hour ``off_hour`` 14:00-style: that hour was listed while open (a periods row with known_at < end);
+        the machine shut down mid-hour; at the restart no new periods row exists for it (store dedup) and the sightings cover
+        only the last 2 h before the restart."""
+        for i in range(off_hour):
+            self.response("n%d" % i, (i + 1) * H + LAG, [(i * H, 1e-5 + i * 1e-8)], [(i * H, "1")])
+        self.sightings(*[(i * H, (i + 1) * H + LAG, "1", 1e-5 + i * 1e-8) for i in range(off_hour - 24, off_hour)])
+        rate = 1e-5 + off_hour * 1e-8
+        self.response("open", off_hour * H + 30_000, [(off_hour * H, rate)], [(off_hour * H, "1")])   # seen open, known_at < end
+        self.restart = (off_hour + 8) * H                                                                 # back 8 h later
+        rates = [(i * H, 1e-5 + i * 1e-8) for i in range(off_hour + 1, off_hour + 6)]                     # fresh pairs: stored
+        self.response("backfill", self.restart + 20_000, rates, [(start, "1") for start, _ in rates])
+        self.sightings(*[(i * H, self.restart + 60_000, "1", 1e-5 + i * 1e-8) for i in range(off_hour + 6, off_hour + 8)])
+        return off_hour, rate
+
+    def test_an_hour_listed_open_when_the_machine_shut_down_is_known_at_the_first_successful_poll_after_its_close(self):
+        hour, rate = self.stopped_mid_hour()
+        self.poll(self.restart + 30_000, "p1")                         # the restart's first successful poll
+        self.poll(self.restart + H, "p2")
+        periods, info = fc.load_periods_detailed(self.path, "PF_XBTUSD")
+        known = {start: known_at for start, _, known_at in periods}
+        self.assertEqual(known[hour * H], self.restart + 30_000 + 2_000)       # the stored finish of that poll, not adjusted
+        self.assertEqual(dict((s, r) for s, r, _ in periods)[hour * H], rate)
+        self.assertIn(hour * H, info["approximate"])                            # its rate is the one seen while open
+        ctx = fc.funding_for(self.path, "PF_XBTUSD", recover_until_ms=self.restart + 2 * H)
+        found, code, _, quality = ctx.assess_detail((hour + 3) * H + LAG)       # a decision during the stop
+        self.assertEqual((code, quality.get("recovered")), ("ok", True))
+        self.assertEqual(ctx.assess_live(self.restart + 5 * 60_000)[1], "ok")   # after the restart nothing is missing
+
+    def test_without_a_successful_poll_after_the_close_the_hour_is_still_missing(self):
+        hour, _ = self.stopped_mid_hour()
+        self.db.execute("UPDATE paper_futures_funding_polls SET outcome='http_error'")  # none succeeded; extracts stay readable
+        self.poll(hour * H + 40_000, "early")                          # before the close
+        self.poll(self.restart + 30_000, "p1", outcome="http_error")  # failed attempt
+        self.poll(self.restart + 40_000, None)                          # ok without a response
+        periods = fc.load_periods(self.path, "PF_XBTUSD")
+        self.assertNotIn(hour * H, [p[0] for p in periods])
+        gaps = fc.funding_for(self.path, "PF_XBTUSD").assess(self.restart + 5 * 60_000)
+        self.assertEqual(gaps[1], "window_gaps")
+
+    def test_a_poll_of_another_product_does_not_date_the_hour(self):
+        hour, _ = self.stopped_mid_hour()
+        self.db.execute("UPDATE paper_futures_funding_polls SET outcome='http_error'")
+        self.db.execute("INSERT INTO paper_futures_funding_polls VALUES('PF_ETHUSD',?,'hourly',?,?,'ok',NULL,NULL,'x',NULL,NULL,NULL)",
+                        (self.restart + 30_000, self.restart + 30_000, self.restart + 32_000))
+        self.db.commit()
+        self.assertNotIn(hour * H, [p[0] for p in fc.load_periods(self.path, "PF_XBTUSD")])
 
     def test_the_context_reports_how_many_hours_of_its_window_are_approximate_or_conflicting(self):
         ctx = fc.FundingContext(hourly(800), approximate={5 * H, 790 * H}, conflicts={200 * H: 1, 799 * H: 2, 6 * H: 1})

@@ -142,7 +142,7 @@ def load_periods_detailed(market_db_path, product_id, since_ms=None):
         # Hours with no sighting after their close. The sightings are written only for periods closed shortly before a
         # poll, so after a stop the REST backfill reaches ``periods`` alone: a row first seen after the close counts at its
         # arrival, in the era or not. A row seen only while open counts (approximately) only before the era.
-        only_open = {}
+        only_open, era_open = {}, {}
         for sha, start, end, known_at in db.execute(
                 "SELECT response_sha256, start_ms, end_ms, known_at FROM paper_futures_funding_periods WHERE " + where + since
                 + " ORDER BY known_at, rowid", args + extra):
@@ -151,10 +151,24 @@ def load_periods_detailed(market_db_path, product_id, since_ms=None):
             if known_at >= end:  # first seen after the close: known at its arrival (late = recovered, e.g. a REST backfill)
                 first[start] = (sha, known_at, None)
                 only_open.pop(start, None)
-            elif era_start is not None and end > era_start:  # seen only while open inside the era: no sighting, not guessed
-                continue
+            elif era_start is not None and end > era_start:  # seen only while open inside the era: see the polls below
+                era_open.setdefault(start, (sha, end))
             elif start not in only_open:
                 only_open[start] = (sha, end + HOUR_MS)
+        # An hour inside the era seen only while open and never sighted after its close (the capture was off at the close, the
+        # restart's backfill adds no row because the store keeps only new (start, rate) pairs): every successful funding poll
+        # lists the past year, so the first one that STARTED after the close contained it. Known at that poll's finish (the
+        # moment the capture recorded the response), with the rate Kraken showed while open; no poll yet -> still missing.
+        if era_open and "paper_futures_funding_polls" in tables:
+            for start, (sha, end) in era_open.items():
+                if start in first:
+                    continue
+                poll = db.execute(
+                    "SELECT finished_at FROM paper_futures_funding_polls WHERE product_id=? AND started_at>=? AND outcome='ok' "
+                    "AND response_sha256 IS NOT NULL ORDER BY started_at LIMIT 1", (product_id, end)).fetchone()
+                if poll is not None:
+                    first[start] = (sha, poll[0], None)
+                    info["approximate"].add(start)  # the rate is the one seen while open, not confirmed after the close
         for start, (sha, known_at) in only_open.items():
             if start not in first:
                 first[start] = (sha, known_at, None)
