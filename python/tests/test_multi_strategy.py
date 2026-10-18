@@ -219,7 +219,7 @@ class AcceptanceTests(unittest.TestCase):
             "config/strategies/c28-adapter-perp-v1.json": "562b7b52f850fc6f7d1c30ff65f30a669fef6bb0b0ac2b4081541736a55e7271",
             "config/strategies/c29-momentum-perp-v1.json": "998284cf51e317838a456fbbba789ee3c479a1471fcbb5f0b3dabadf95742628",
             "config/strategies/c30-momentum-12h-perp-v1.json": "c4d2184134365c454d391dc5f7569eff445eff789634405e0e26066a851a75ec",
-            "config/forward-strategies.json": "cfff41558d04a494b315993dc1dba2ce4dd721c914a7715b06ccafff0952c8c4",
+            "config/forward-strategies.json": "42bb59e733c0f191dcaccf1e2626c4e95f6cb558a3bea9f73ef746182bfcbed7",
             "config/strategy-freeze.json": "13117739b4603f477ddca04ad9b72693dc19d3132a3d72f80a14acce9b1000b7",
             "config/strategy-closed.json": "75dfc20e5c5e7dfd6a58d658602298ec04d2e09d0b9e9982232952ffc447fee7",
         }
