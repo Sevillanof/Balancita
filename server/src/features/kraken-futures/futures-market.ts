@@ -1,4 +1,11 @@
 import { createHash } from 'node:crypto'
+import {
+  FUNDING_WS_ALIVE_MARK_INTERVAL_MS,
+  fundingChangeKey,
+  fundingObservationFromTicker,
+  type FundingWsMark,
+  type FundingWsObservation,
+} from './funding-ws.ts'
 
 export const FUTURES_PRODUCT = 'PF_XBTUSD'
 export const FUTURES_INSTRUMENT_ID = 'kraken-futures:PF_XBTUSD'
@@ -569,6 +576,14 @@ export interface FuturesCollectorOptions {
   }) => void
   readonly onTrade?: (event: TradeEvent) => void
   /**
+   * Real-time funding capture (docs/funding-ws-btc.md): called for the first
+   * ticker after every (re)connect and whenever one of the five funding
+   * values changes. A failure never stops capture; the next ticker retries.
+   */
+  readonly persistFundingObservation?: (o: FundingWsObservation) => void
+  /** `alive` at most every 30 s while tickers arrive; `closed` when the socket goes away. */
+  readonly persistFundingMark?: (m: FundingWsMark) => void
+  /**
    * Subscribe to and reconstruct the order book (default true). When false the
    * collector only follows trade and ticker: freshness is driven by the ticker
    * alone, no book snapshot is ever requested, and event attestations report
@@ -630,6 +645,9 @@ export class KrakenFuturesMarketCollector {
   private lastTickerSuspended = true
   private lastTickerMarkAvailable = false
   private lastReceivedAt: number | null = null
+  private fundingConnectedAt: number | null = null
+  private fundingKey: string | null = null
+  private fundingAliveAt: number | null = null
   private lastClockSkewMs: number | null = null
   private gapCount = 0
   private rejectedCount = 0
@@ -784,6 +802,7 @@ export class KrakenFuturesMarketCollector {
     const socket = this.socket
     this.socket = null
     this.bookValid = false
+    this.closeFundingConnection()
     socket?.close()
     this.setState('stopped')
   }
@@ -828,6 +847,7 @@ export class KrakenFuturesMarketCollector {
     this.socket = null
     this.bookValid = false
     this.clearWatchdog()
+    this.closeFundingConnection()
     this.pendingRecovery = { reason, at: this.options.clock() }
     try {
       socket?.close()
@@ -904,6 +924,7 @@ export class KrakenFuturesMarketCollector {
     this.lastTickerAt = null
     this.lastTickerSuspended = true
     this.lastTickerMarkAvailable = false
+    this.closeFundingConnection()
     this.setState('connecting')
     this.opened = false
     this.connectStartedAt =
@@ -918,6 +939,8 @@ export class KrakenFuturesMarketCollector {
         if (this.stopped || this.socket !== socket) return
         this.opened = true
         this.lastActivityAt = this.lastDataAt = this.options.clock()
+        this.fundingConnectedAt = this.lastActivityAt
+        this.fundingKey = this.fundingAliveAt = null
         this.setState('syncing')
         for (const message of marketSubscriptions(
           this.bookEnabled ? undefined : ['trade', 'ticker'],
@@ -956,6 +979,7 @@ export class KrakenFuturesMarketCollector {
         if (this.socket !== socket) return
         this.socket = null
         this.bookValid = false
+        this.closeFundingConnection()
         this.setState('disconnected', 'connection_closed')
         this.scheduleReconnect()
       }
@@ -1032,6 +1056,7 @@ export class KrakenFuturesMarketCollector {
           item.seq === undefined ? 'collector_arrival' : 'provider',
         rawJson: text,
       }
+      this.recordFunding(item, receivedAt)
     } else throw new TypeError('Unsupported futures feed message.')
     const previous = this.seqs.get(event.type)
     if (event.type === 'book' && event.snapshot) {
@@ -1237,6 +1262,72 @@ export class KrakenFuturesMarketCollector {
       throw error
     }
     this.tick()
+  }
+
+  /** Never throws: funding capture must not stop market capture. */
+  private recordFunding(
+    item: Record<string, unknown>,
+    receivedAt: number,
+  ): void {
+    const { persistFundingObservation, persistFundingMark } = this.options
+    const connectedAt = this.fundingConnectedAt
+    if (!persistFundingObservation || connectedAt === null) return
+    try {
+      const observation = fundingObservationFromTicker(item, {
+        productId: FUTURES_PRODUCT,
+        receivedAt,
+        connectedAt,
+        firstAfterConnect: this.fundingKey === null,
+      })
+      const key = fundingChangeKey(observation)
+      if (key !== this.fundingKey) {
+        persistFundingObservation(observation)
+        this.fundingKey = key
+      }
+      // After the observation, so an `alive` mark always has one behind it.
+      if (
+        persistFundingMark &&
+        (this.fundingAliveAt === null ||
+          receivedAt - this.fundingAliveAt >= FUNDING_WS_ALIVE_MARK_INTERVAL_MS)
+      ) {
+        persistFundingMark({
+          productId: FUTURES_PRODUCT,
+          at: receivedAt,
+          connectedAt,
+          kind: 'alive',
+        })
+        this.fundingAliveAt = receivedAt
+      }
+    } catch (error) {
+      this.options.onResilience?.({
+        reason: 'funding_ws_capture_failed',
+        action: 'retry_next_ticker',
+        result: 'info',
+        detail: error instanceof Error ? error.message : 'unknown',
+      })
+    }
+  }
+
+  private closeFundingConnection(): void {
+    const connectedAt = this.fundingConnectedAt
+    this.fundingConnectedAt = null
+    this.fundingKey = this.fundingAliveAt = null
+    if (connectedAt === null || !this.options.persistFundingMark) return
+    try {
+      this.options.persistFundingMark({
+        productId: FUTURES_PRODUCT,
+        at: this.options.clock(),
+        connectedAt,
+        kind: 'closed',
+      })
+    } catch (error) {
+      this.options.onResilience?.({
+        reason: 'funding_ws_capture_failed',
+        action: 'continue',
+        result: 'info',
+        detail: error instanceof Error ? error.message : 'unknown',
+      })
+    }
   }
 
   private persistRaw(
