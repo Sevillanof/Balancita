@@ -172,3 +172,11 @@ Requested directly by the user (Fran) on 2026-10-18 (decisions on `docs/diseno-i
 ### Unchanged
 
 Fixed notional, per-product cost model, append-only storage, replay equality, no look-ahead, the Evaluation rules and the 100-forward-trade rule for frozen strategies remain in force. Strategies without defined closing rules must not go live (see the design document, open questions).
+
+### Further owner decisions (2026-10-18)
+
+7. **Review threshold.** A strategy is reviewed after **15 LIVE forward trades**. This replaces the 100-trade rule for new strategies. 15 is a review checkpoint to decide whether to keep the strategy; it is not statistical proof of profitability.
+8. **Only live trades count.** Trades whose live/recovered status is unknown are "unclassified" and never count (for example trades stored before #283, and open positions stored before entry classification).
+9. **Capture recovery.** After the capture was off, funding and candles are recorded from the last recorded point up to now, with the real arrival time. The cost is proportional to the gap, with a one-time backlog on the first run.
+10. **Funding retention target.** 7 days of funding in operational SQLite is enough for funding as a cost and for the 24 h comparison. Not yet implemented: it requires an incremental forward so that old trades are not recomputed without their data.
+11. **Historical archive (planned, not implemented).** A monthly Parquet archive of the full data; SQLite stays the operational store. Nothing is deleted from SQLite before the archive is verified (row counts and hashes).
