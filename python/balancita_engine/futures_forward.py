@@ -30,7 +30,7 @@ import os
 import sqlite3
 import time
 
-from .futures_funding_context import funding_for, funding_periods
+from .futures_funding_context import WINDOW_MS, funding_for, funding_periods
 from .futures_funding_reconcile import load_reconciled, reconcile
 from .futures_products import resolve_products
 from .futures_replay import load_range, replay
@@ -229,7 +229,8 @@ def run_forward(market_db, db_path, specs, registration, products):
                     ones, fives = load_range(market_db, product_id, info["start_ms"], now + ONE_MINUTE_MS)
                 except ValueError:
                     continue
-                context = funding_for(market_db, product_id)
+                # Periods from 30 days before the first decision: the cost follows the hours replayed, not the capture's age.
+                context = funding_for(market_db, product_id, info["start_ms"] - WINDOW_MS - 2 * 3_600_000)
                 (book,) = replay([spec], ones, fives, start_ms=info["start_ms"], product_id=product_id,
                                  tick_size=tick_size, funding=context, funding_periods=funding_periods(context),
                                  entry_gate=make_entry_gate(ones, fives, gate_from))
