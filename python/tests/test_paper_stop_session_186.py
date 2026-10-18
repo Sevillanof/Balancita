@@ -1,6 +1,6 @@
 """Issue #186, decision D-186-1 (BAL-DECISION-186-01: Cancelar), seen from the SESSION: ``LiveSession.stop`` calls the runner's
 ``stop_orderly`` (covered by ``test_paper_stop_orderly_186``), audits it, makes it durable with a checkpoint and closes the door
-to further steps. Invented data only (the world of ``TestSilenceStillOpen``). The checkpoint failure policy (D-186-2, ``Toda``) is
+to further steps. The market is the real one of ``test_paper_safe_stop_186_session``. The checkpoint failure policy (D-186-2, ``Toda``) is
 covered in ``test_paper_safe_stop_186_session``."""
 
 import errno

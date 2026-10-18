@@ -57,7 +57,6 @@
   "test_paper_downtime_stop_186": 1,
   "test_paper_entry_blocked_186": 1,
   "test_paper_entry_blocked_session_186": 55,
-  "test_paper_kill_session_186.TestObservedSilenceUnderAJumpingClock": 56,
   "test_paper_kill_session_186.TestRealKillAroundTheDeclaration": 121,
   "test_paper_kill_session_186.TestRealKillInTheMiddleOfALine": 76,
   "test_paper_kill_session_186.TestRealKillStopCrossedWhileDownCoherentCandles": 35,

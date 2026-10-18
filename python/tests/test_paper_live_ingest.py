@@ -926,6 +926,21 @@ class TestOpenSilencesAreDurable(Base):
         self.assertEqual(second["open_silences"][ETH]["observed_until_ms"], CYCLE + 80 * SEC - ING.DEFAULT_HOLD_MS)
         self.assertEqual(second["observation_gaps"], [])
 
+    def test_the_first_poll_after_a_recovery_with_an_earlier_clock_does_not_lower_the_observed_bound(self):
+        """The one place where a clock that went back could lower the bound: after a recovery the 'nothing new' guard is off (the
+        unobserved stretch has to be closed), so only the ``max`` keeps what the dead process had reached."""
+        self.feed(60)
+        reader = SourceReader(self.path)
+        ing = Ingestor(reader)
+        self.poll(ing, 80)
+        before = ing.observed_until_ms
+        self.assertEqual(before, CYCLE + 80 * SEC - ING.DEFAULT_HOLD_MS)
+        again, reader = self.reopen(ing, reader)
+        self.poll(again, 80 - 1800)                                    # the machine's clock is half an hour behind after the restart
+        reader.close()
+        self.assertEqual(again.observed_until_ms, before)
+        self.assertIsNone(again.recovered_from_ms)
+
     def test_a_silence_across_a_process_death_is_one_silence_with_the_unobserved_stretch_told_apart(self):
         self.feed(60, 20)
         reader = SourceReader(self.path)
