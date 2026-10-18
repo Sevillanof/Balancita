@@ -24,6 +24,7 @@ from .futures_strategy_reliability import FORWARD_SCHEMA
 
 RESULT_SCHEMA = "futures-forward-result.v1"
 OPEN_LABEL = "abierta, valuada a mercado"
+UNCLASSIFIED = "sin clasificar: abierta antes de la clasificación; se clasifica en el próximo ciclo"
 # The dev launcher runs the forward every hour (scripts/dev-provider-env.mjs).
 FORWARD_LOOP_SECONDS = 3600
 # A cycle is late after one and a half periods (the same rule as /api/observability/health).
@@ -105,12 +106,13 @@ def _open_positions(forward, market, strategy_id, spec_hash, notional):
         if position is None:
             continue
         entry, side = Decimal(position["entry"]), position["side"]
+        recorded = position.get("recovered")        # absent in rows stored before the classification existed
         item = {"product_id": product_id, "side": side, "entry_price": position["entry"],
                 "opened_at_ms": int(position["opened_at"]), "label": OPEN_LABEL,
                 "mark_price": None, "mark_bucket_ms": None, "pnl_usd": None, "net_bp": None,
-                "recovered": bool(position.get("recovered")),
-                "classification": ("recuperada (entrada con datos llegados tarde)" if position.get("recovered")
-                                   else "en vivo")}
+                "recovered": recorded if isinstance(recorded, bool) else None,
+                "classification": UNCLASSIFIED if not isinstance(recorded, bool) else
+                ("recuperada (entrada con datos llegados tarde)" if recorded else "en vivo")}
         mark = _latest_close(market, product_id)
         if mark is not None:
             price, bucket = mark
@@ -174,8 +176,9 @@ def read_forward(forward_db, summary_path, market_db, decisions_db, *, now_ms, n
                 "live": _side(entry.get("summary_without_recovered")),
                 "recovered": _side(entry.get("summary_recovered")),
                 "open": _open(positions),
-                "live_open": _open([p for p in positions if not p["recovered"]]),
-                "recovered_open": _open([p for p in positions if p["recovered"]]),
+                "live_open": _open([p for p in positions if p["recovered"] is False]),
+                "recovered_open": _open([p for p in positions if p["recovered"] is True]),
+                "unclassified_open": _open([p for p in positions if p["recovered"] is None]),
                 "last_run_ms": _last_run(forward, strategy_id) or (summary or {}).get("updated_ms"),
                 "funding_state": entry.get("funding_state") or {},
                 "missing_candles_1m": entry.get("missing_candles_1m", 0),
@@ -223,7 +226,7 @@ def strategy_block(forward, strategy_id, operational, *, min_trades, spec_hash=N
                           ("not_measured", "el forward no mide esta estrategia: no está en forward-strategies.json "
                                            "ni tiene resumen"))
             problems.append({"code": code, "reason": text})
-        return dict(block, available=False, live=None, recovered=None, open=None, progress=None,
+        return dict(block, available=False, live=None, recovered=None, open=None, unclassified_open=None, progress=None,
                     last_run_ms=None, late=None)
     live, recovered = raw["live"], raw["recovered"]
     last_run = raw["last_run_ms"]
@@ -251,7 +254,7 @@ def strategy_block(forward, strategy_id, operational, *, min_trades, spec_hash=N
     live = dict(live, open=raw["live_open"])
     recovered = dict(recovered, open=raw["recovered_open"])
     return dict(block, available=True, spec_hash=raw["spec_hash"], start_ms=raw["start_ms"], live=live,
-                recovered=recovered, open=raw["open"],
+                recovered=recovered, open=raw["open"], unclassified_open=raw["unclassified_open"],
                 progress={"live_trades": done, "min_trades": min_trades,
                           "remaining": None if min_trades is None else max(0, min_trades - done),
                           "reached": min_trades is not None and done >= min_trades,

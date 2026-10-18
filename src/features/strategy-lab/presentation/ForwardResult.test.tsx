@@ -31,7 +31,7 @@ const side = (closed: number, net: number, open = noOpen) => ({
 
 const position = (
   product: string,
-  recovered: boolean,
+  recovered: boolean | null,
 ): ForwardOpenPosition => ({
   product_id: product,
   side: 'SHORT',
@@ -39,9 +39,12 @@ const position = (
   opened_at_ms: NOW - 3_600_000,
   label: 'abierta, valuada a mercado',
   recovered,
-  classification: recovered
-    ? 'recuperada (entrada con datos llegados tarde)'
-    : 'en vivo',
+  classification:
+    recovered === null
+      ? 'sin clasificar: abierta antes de la clasificación; se clasifica en el próximo ciclo'
+      : recovered
+        ? 'recuperada (entrada con datos llegados tarde)'
+        : 'en vivo',
   mark_price: '99',
   mark_bucket_ms: NOW - 60_000,
   pnl_usd: 1.2,
@@ -65,6 +68,7 @@ const result = (patch: Partial<Result> = {}): Result => ({
   live: side(37, 12.5, liveOpen),
   recovered: side(4, -3, recoveredOpen),
   open: opened([position('PF_XBTUSD', false), position('PF_ETHUSD', true)]),
+  unclassified_open: noOpen,
   progress: { live_trades: 37, min_trades: 100, remaining: 63, reached: false },
   last_run_ms: NOW - 20 * 60_000,
   late: false,
@@ -151,6 +155,36 @@ describe('ForwardResult (datos de ejemplo)', () => {
     expect(screen.getByTestId('forward-live')).toHaveTextContent(
       'Funding incompleto en 2',
     )
+  })
+
+  it('shows positions opened before the classification apart, not as live', () => {
+    render(
+      <ForwardResult
+        row={rowWith(
+          result({
+            live: side(37, 12.5),
+            unclassified_open: opened([position('PF_SOLUSD', null)]),
+          }),
+        )}
+        now={NOW}
+      />,
+    )
+    const box = screen.getByTestId('forward-unclassified-open')
+    expect(box).toHaveTextContent('Sin clasificar: 1')
+    expect(box).toHaveTextContent(
+      'PF_SOLUSD corta desde 100 · sin clasificar: abierta antes de la clasificación; se clasifica en el próximo ciclo',
+    )
+    expect(screen.getByTestId('forward-live-open')).toHaveTextContent(
+      'Abiertas: 0',
+    )
+    expect(screen.getByTestId('forward-progress')).toHaveTextContent('37/100')
+  })
+
+  it('hides the unclassified block when there is none', () => {
+    render(<ForwardResult row={rowWith(result())} now={NOW} />)
+    expect(
+      screen.queryByTestId('forward-unclassified-open'),
+    ).not.toBeInTheDocument()
   })
 
   it('says a position cannot be valued instead of inventing a number', () => {

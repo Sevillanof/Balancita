@@ -95,6 +95,17 @@ export function ForwardResult({
         side={result.recovered}
         testid="forward-recovered"
       />
+      {result.unclassified_open.count > 0 && (
+        <div data-testid="forward-unclassified-open">
+          <b>Sin clasificar</b>: {result.unclassified_open.count}
+          {result.unclassified_open.positions.map((p) => (
+            <small key={p.product_id}>
+              {p.product_id} {p.side === 'LONG' ? 'larga' : 'corta'} desde{' '}
+              {p.entry_price} · {p.classification}
+            </small>
+          ))}
+        </div>
+      )}
       <div data-testid="forward-progress">
         <b>
           {progress.live_trades}/{progress.min_trades ?? '—'}

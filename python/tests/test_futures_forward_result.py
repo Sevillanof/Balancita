@@ -9,7 +9,7 @@ import urllib.request
 from http.server import ThreadingHTTPServer
 
 from balancita_engine.futures_forward import _SCHEMA, open_is_recovered
-from balancita_engine.futures_forward_result import OPEN_LABEL, read_forward, read_q_skips, strategy_block
+from balancita_engine.futures_forward_result import OPEN_LABEL, UNCLASSIFIED, read_forward, read_q_skips, strategy_block
 from balancita_engine.futures_spec_strategy import load_specs
 from balancita_engine.futures_strategy_reliability import FORWARD_SCHEMA
 from balancita_engine.futures_strategy_registry import StrategyRegistry, StrategyService, make_handler
@@ -119,9 +119,37 @@ class ForwardResultTest(unittest.TestCase):
         self.assertEqual(block["recovered"]["open"]["pnl_usd"], position["pnl_usd"])
         self.assertEqual(block["open"]["count"], 1)
 
-    def test_a_row_written_before_the_classification_counts_as_live(self):
+    def test_a_row_written_before_the_classification_is_unclassified_not_live(self):
         self.seed()
-        self.assertEqual(self.block()["live"]["open"]["count"], 1)
+        block = self.block()
+        self.assertEqual(block["live"]["open"]["count"], 0)
+        self.assertEqual(block["live"]["open"]["pnl_usd"], 0)
+        self.assertEqual(block["recovered"]["open"]["count"], 0)
+        self.assertEqual(block["open"]["count"], 1)
+        (position,) = block["unclassified_open"]["positions"]
+        self.assertEqual(position["classification"], UNCLASSIFIED)
+        self.assertIsNone(position["recovered"])
+        self.assertEqual(position["label"], OPEN_LABEL)
+        self.assertEqual(block["unclassified_open"]["pnl_usd"], position["pnl_usd"])
+        self.assertEqual(block["progress"]["live_trades"], 7)
+
+    def test_classified_rows_leave_the_unclassified_block_empty(self):
+        for flag in (True, False):
+            self.seed(entry_recovered=flag)
+            self.assertEqual(self.block()["unclassified_open"]["count"], 0)
+
+    def test_a_null_or_non_boolean_flag_is_unclassified(self):
+        for junk in (None, 0, "no"):
+            self.seed()
+            db = sqlite3.connect(self.forward_db)
+            (payload,) = db.execute("SELECT payload FROM forward_open").fetchone()
+            db.execute("UPDATE forward_open SET payload=?", (json.dumps(dict(json.loads(payload), recovered=junk)),))
+            db.commit()
+            db.close()
+            block = self.block()
+            self.assertEqual(block["unclassified_open"]["count"], 1)
+            self.assertEqual(block["unclassified_open"]["positions"][0]["classification"], UNCLASSIFIED)
+            self.assertEqual(block["live"]["open"]["count"], 0)
 
     def test_entry_on_a_late_1m_candle_is_recovered_only_that_candle(self):
         b = 1_000_000 * 60_000

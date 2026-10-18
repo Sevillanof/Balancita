@@ -175,7 +175,8 @@ export type ForwardOpenPosition = {
   entry_price: string
   opened_at_ms: number
   label: string
-  recovered: boolean
+  /** null: stored before the classification existed. */
+  recovered: boolean | null
   classification: string
   mark_price: string | null
   mark_bucket_ms: number | null
@@ -196,12 +197,9 @@ export type ForwardResult = {
   available: boolean
   live: ForwardSide
   recovered: ForwardSide
-  open: {
-    count: number
-    label: string
-    pnl_usd: number
-    positions: ForwardOpenPosition[]
-  }
+  open: ForwardOpen
+  /** Open before the classification existed: not live, not recovered, until the next cycle. */
+  unclassified_open: ForwardOpen
   progress: {
     live_trades: number
     min_trades: number | null
