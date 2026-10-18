@@ -41,6 +41,7 @@ from .futures_spec_strategy import (
     validate_spec,
 )
 from .futures_replay import load_range
+from .futures_forward_result import read_forward
 from .futures_strategy_inventory import build_inventory
 from .futures_strategy_plan import all_plans, load_freeze
 from .futures_strategy_reliability import load_reliability, reliability_for
@@ -494,8 +495,12 @@ class StrategyService:
     """What the API does: registry plus read-only verdicts, per product and period."""
 
     def __init__(self, registry, verdicts_db_path, products, provider_factory=None, replays=None,
-                 market_db_path=None, config_dir=None):
+                 market_db_path=None, config_dir=None, forward_db_path=None, forward_summary_path=None,
+                 decisions_db_path=None):
         self.config_dir = config_dir
+        self.forward_db_path = forward_db_path
+        self.forward_summary_path = forward_summary_path or os.environ.get("STRATEGY_FORWARD_PATH")
+        self.decisions_db_path = decisions_db_path
         self.registry = registry
         self.market_db_path = market_db_path
         self.replays = replays
@@ -597,7 +602,20 @@ class StrategyService:
             carry = futures_carry.read_summary(*_carry_paths())
         except (OSError, ValueError, KeyError):
             carry = None
-        return build_inventory(entries, specs, config_dir=self.config_dir, carry=carry)
+        forward = None
+        if self.forward_db_path or self.forward_summary_path or self.decisions_db_path:
+            forward = read_forward(self.forward_db_path, self.forward_summary_path, self.market_db_path,
+                                   self.decisions_db_path, now_ms=_now_ms())
+        return build_inventory(entries, specs, config_dir=self.config_dir, carry=carry, forward_result=forward)
+
+    def forward(self):
+        """How the forward is going per strategy, the funding per product and Q's skips (docs/forward-result-api.md)."""
+        inventory = self.inventory()
+        health = inventory["forward_health"] or {}
+        return dict(health, schema="futures-forward-result.v1", min_trades=inventory["forward_min_trades"],
+                    strategies=[{"id": r["id"], "name": r["name"], "kind": r["kind"],
+                                 "spec_hash": r["spec_hash"], "operational": r["operational"],
+                                 "forward": r["forward"]} for r in inventory["strategies"]])
 
     def translate(self, text, source):
         """A draft spec from Pine Script or freqtrade text; nothing is saved (PS-08f)."""
@@ -722,6 +740,8 @@ def make_handler(service):
                 return {"strategies": registry.list()}
             if method == "GET" and parts == ["carry"]:
                 return futures_carry.read_summary(*_carry_paths())
+            if method == "GET" and parts == ["forward"]:
+                return service.forward()
             if method == "GET" and parts == ["inventory"]:
                 return service.inventory()
             if method == "GET" and parts == ["plans"]:
@@ -821,6 +841,9 @@ def main(argv=None):
     parser.add_argument("--market-db", help="market DB (read-only) the historical replays read")
     parser.add_argument("--replays-dir", help="where each replay run DB is written (default: next to the strategies DB)")
     parser.add_argument("--config-dir", help="config folder the inventory reads (default: the repo's config/)")
+    parser.add_argument("--forward-db", help="forward.sqlite (read-only): open positions and last cycle")
+    parser.add_argument("--forward-summary", help="forward-reliability.json (default: $STRATEGY_FORWARD_PATH)")
+    parser.add_argument("--decisions-db", help="Q's decisions DB (read-only): why Q skipped")
     parser.add_argument("--port", type=int, default=int(os.environ.get("STRATEGIES_PORT", DEFAULT_PORT)))
     args = parser.parse_args(argv)
     registry = StrategyRegistry(args.strategies_db)
@@ -835,7 +858,8 @@ def main(argv=None):
         replays = ReplayJobs(args.market_db, directory, lambda: registry.active_specs(_now_ms()), products,
                              qwen_factory(os.path.join(directory, "qwen-cache.db")))
     service = StrategyService(registry, args.verdicts_db, products, replays=replays, market_db_path=args.market_db,
-                              config_dir=args.config_dir)
+                              config_dir=args.config_dir, forward_db_path=args.forward_db,
+                              forward_summary_path=args.forward_summary, decisions_db_path=args.decisions_db)
     server = ThreadingHTTPServer(("127.0.0.1", args.port), make_handler(service))
     print("[strategies] registry {} on http://127.0.0.1:{}".format(args.strategies_db, args.port), flush=True)
     try:
