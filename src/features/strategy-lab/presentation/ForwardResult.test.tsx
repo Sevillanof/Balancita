@@ -189,7 +189,7 @@ describe('ForwardResult (datos de ejemplo)', () => {
       <ForwardResult
         row={rowWith(
           result({
-            live: side(37, 12.5),
+            live: side(7, 12.5),
             unclassified: {
               ...legacy,
               note: 'legado del cambio del 18-oct (#283): decididas con la regla anterior',
@@ -204,7 +204,7 @@ describe('ForwardResult (datos de ejemplo)', () => {
     expect(box).toHaveTextContent('Sin clasificar: 28 cerradas')
     expect(box).toHaveTextContent('decididas con la regla anterior')
     expect(box).toHaveTextContent('`--rebuild` los recalcula')
-    expect(screen.getByTestId('forward-progress')).toHaveTextContent('37/100')
+    expect(screen.getByTestId('forward-progress')).toHaveTextContent('7/15')
   })
 
   it('hides the unclassified block when there is none', () => {
