@@ -1,9 +1,28 @@
 # Funding en tiempo real por WebSocket (solo BTC)
 
 Estado: implementado para `PF_XBTUSD`. Los otros 7 productos quedan pendientes
-(ver el final). Complementa a `captura-funding-184.md`: el REST
-`/historical-funding-rates` sigue siendo el respaldo y la fuente de la
-comparación.
+(ver el final). Complementa a `captura-funding-184.md` y a `funding-causal.md`:
+el REST `/historical-funding-rates` (avistamientos, época de #283) sigue siendo
+la fuente que lee hoy el cargador de Python y la referencia de la comparación.
+**Python no consume nada de esto todavía**; esta rama solo captura.
+
+## Enmienda 2026-10-18 del ADR 0001
+
+Las observaciones WS cumplen la enmienda:
+
+- Solo-añadir: triggers que abortan UPDATE y DELETE; nada se corrige ni se
+  borra, y el almacén no abre una segunda conexión de escritura.
+- Hora real de recepción: `received_at` es el reloj local del colector al
+  llegar el ticker (nunca el `time` del proveedor, que es diagnóstico). Es la
+  fecha de conocimiento (`known_at`) del dato.
+- Las predicciones van etiquetadas en columnas propias
+  (`*_prediction`) y jamás se usan como tasa: ni `fundingWsRate` ni la
+  comparación las leen.
+- Sin recuperación hacia atrás: el WS no se puede rellenar. Una hora con el
+  socket caído al cierre no tiene tasa WS (`no_coverage`); no se inventa ni se
+  rellena con REST dentro de estas tablas. La recuperación de #287
+  (`recovery-cursor.ts`, `paper_futures_funding_backlog`) solo afecta a
+  avistamientos/velas REST, y esta captura no la toca.
 
 ## Qué se captura
 
@@ -53,7 +72,7 @@ cualquier T posterior). Existe solo si se cumple todo:
 2. La última observación con `received_at < periodEndMs` es de la misma
    conexión que esa marca (`connection_mismatch` si no).
 3. Esa observación anuncia este cierre: `next_funding_rate_time ==
-   periodEndMs` (`period_mismatch` si no; falla cerrado).
+periodEndMs` (`period_mismatch` si no; falla cerrado).
 
 Resultados no disponibles: `no_table`, `no_coverage`, `no_observation`,
 `connection_mismatch`, `period_mismatch`. En todos, el respaldo es REST
@@ -86,20 +105,40 @@ lista de discrepancias (`startMs`, `ws`, `rest`). No resuelve ni promedia
 ninguna. Una discrepancia no es un error de captura per se: puede ser el
 último movimiento de tasa antes del cierre; por eso se cuenta y se revisa.
 
-## Cómo debe consumirlo el cargador de Python (pendiente, no se toca aquí)
+## Cómo lo leerá el cargador de Python (pendiente, no se toca aquí)
 
-`futures_funding_context.py` no se modifica en esta rama. Cuando se adapte:
+Cargador actual (`futures_funding_context.load_periods_detailed`, época de
+avistamientos, #283): para cada hora cerrada, `known_at` es el primer
+avistamiento (`paper_futures_funding_sightings`) posterior al cierre, con la
+hora real de recepción del sondeo, y la tasa es la de ese primer avistamiento
+(si otros posteriores difieren se cuenta un conflicto, no se elige en
+silencio). Las horas anteriores a la época usan `paper_futures_funding_periods`
+(`known_at` aproximado). Tras un apagado, #287 avista las horas cerradas desde
+el último avistamiento posterior a su cierre (con un marcador único de
+atraso, `paper_futures_funding_backlog`), así que esas horas llegan con
+`known_at` tardío y el forward las marca `recovered`.
+
+`futures_funding_context.py` no se modifica en esta rama. Cuando se adapte, el
+WS solo adelantaría `known_at`, nunca cambiaría la tasa oficial:
 
 - Abrir la base en solo lectura y comprobar con `sqlite_master` que existen las
-  dos tablas (bases antiguas no las tienen: caer al comportamiento actual).
-- Para el periodo H (fin `E`), aplicar las consultas de arriba con
+  dos tablas WS (bases antiguas no las tienen: caer al comportamiento actual).
+- Para la hora H (fin `E`), aplicar las consultas de arriba con
   `received_at < E`; si hay cobertura y la observación anuncia `E`, la tasa de
-  H está disponible desde `E` (no desde la siguiente consulta REST).
+  H podría tener `known_at = observed_at` (≈ `E`), en vez del primer
+  avistamiento REST posterior (entre 30 s y 11 min después). Con eso
+  `MAX_PERIOD_AGE_MS` podría bajar (ver `funding-causal.md`); es decisión
+  aparte y requiere la compuerta de comparación de abajo.
 - Nunca leer `funding_rate_prediction` ni `relative_funding_rate_prediction`
   como tasa.
-- Si no hay tasa WS, usar la sighting/REST como hasta ahora. Si hay ambas y
-  difieren, no elegir en silencio: registrar la discrepancia y usar la REST
-  como autoridad hasta que el recuento de discrepancias justifique otra cosa.
+- Sin tasa WS, usar el avistamiento/REST como hoy. Con ambas y valores
+  distintos, no elegir en silencio: registrar la discrepancia y usar la REST
+  como autoridad hasta que `compareFundingWsWithSightings` justifique otra cosa.
+- La tasa WS es absoluta y relativa de la hora en curso; el cargador trabaja
+  con la relativa: usar `relative_funding_rate`, no convertir la absoluta.
+- Un cambio de cargador altera el `known_at` que ve el forward y por tanto los
+  resultados de replay: requiere su propia decisión y PR, y no puede reescribir
+  operaciones ya almacenadas.
 - La conciliación vale solo para BTC hasta que se amplíe la captura.
 
 ## Pendiente para los otros 7 productos
