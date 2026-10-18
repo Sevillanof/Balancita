@@ -13,7 +13,8 @@ from balancita_engine.multi_signals import make_signal
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 MS = SC.FIVE_MINUTES_MS
-T0 = SC.DEMO_START_MS
+CANDLES = os.path.join(ROOT, "python", "tests", "fixtures", "muestra-parcial", "paper_futures_official_candles.jsonl")
+T0 = SC.real_candles(CANDLES)[0][0]["bucket_start"]   # the first captured minute
 
 
 def one_signal(action="BUY", cycle=T0 + 100 * MS, strategy=None):
@@ -211,7 +212,7 @@ class ReconstructionTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.strategies = SC.demo_strategies()
-        cls.ones, cls.fives = SC.synthetic_candles()
+        cls.ones, cls.fives = SC.real_candles(CANDLES)
         cls.live = SC.live_cycles(cls.strategies, cls.ones, cls.fives)
 
     def setUp(self):
@@ -330,6 +331,44 @@ class ReconstructionTests(unittest.TestCase):
         self.assertFalse(SC.verify_log(self.log, self.strategies)["ok"])
 
 
+class RealCandlesTests(unittest.TestCase):
+    def test_the_five_minute_bars_are_built_from_their_own_five_minutes(self):
+        ones, fives = SC.real_candles(CANDLES)
+        self.assertEqual((len(ones), len(fives)), (1168, 233))
+        by_start = {c["bucket_start"]: c for c in ones}
+        for bar in fives:
+            self.assertEqual(bar["bucket_start"] % MS, 0)
+            chunk = [by_start[bar["bucket_start"] + i * SC.ONE_MINUTE_MS] for i in range(5)]
+            self.assertEqual((bar["open"], bar["close"]), (chunk[0]["open"], chunk[-1]["close"]))
+            self.assertEqual(SC.D(bar["high"]), max(SC.D(c["high"]) for c in chunk))
+            self.assertEqual(SC.D(bar["low"]), min(SC.D(c["low"]) for c in chunk))
+            self.assertEqual(SC.D(bar["volume_btc"]), sum(SC.D(c["volume_btc"]) for c in chunk))
+            self.assertEqual((bar["close_at"], bar["known_at"]), (chunk[-1]["close_at"], chunk[-1]["known_at"]))
+
+    def test_a_hole_in_the_captured_minutes_is_refused(self):
+        with open(CANDLES, encoding="utf-8") as handle:
+            lines = handle.readlines()
+        path = os.path.join(tempfile.mkdtemp(), "holey.jsonl")
+        self.addCleanup(shutil.rmtree, os.path.dirname(path), True)
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.writelines(lines[:300] + lines[301:])
+        with self.assertRaises(SC.ContinuityError) as caught:
+            SC.real_candles(path)
+        self.assertEqual(caught.exception.reason, "candles_not_consecutive")
+
+    def test_the_last_revision_of_a_minute_wins(self):
+        with open(CANDLES, encoding="utf-8") as handle:
+            lines = handle.readlines()
+        newer = json.loads(lines[10])
+        newer.update(known_at=newer["known_at"] + 5_000, close_price="1", revision_hash="z" * 64)
+        path = os.path.join(tempfile.mkdtemp(), "revised.jsonl")
+        self.addCleanup(shutil.rmtree, os.path.dirname(path), True)
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.writelines(lines + [json.dumps(newer) + "\n"])
+        ones, _ = SC.real_candles(path)
+        self.assertEqual((ones[10]["close"], len(ones)), ("1", 1168))
+
+
 class TwoProcessTests(unittest.TestCase):
     """Real, independent interpreters that share only files. The whole matrix is demo.scenarios; here its results
     are asserted."""
@@ -337,7 +376,7 @@ class TwoProcessTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.base = tempfile.mkdtemp()
-        cls.results = demo.scenarios(cls.base)
+        cls.results = demo.scenarios(cls.base, CANDLES)
 
     @classmethod
     def tearDownClass(cls):
