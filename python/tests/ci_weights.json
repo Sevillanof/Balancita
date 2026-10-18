@@ -88,6 +88,7 @@
   "test_paper_live_process_185.TestLifecycle": 107,
   "test_paper_live_process_185.TestObservedLifecycle": 122,
   "test_paper_live_process_185.TestPreflightAndStart": 8,
+  "test_paper_blocks_crash_restart_187": 110,
   "test_paper_live_resources_185": 75,
   "test_paper_live_source_185": 92,
   "test_paper_live_stale_stop_184": 190,

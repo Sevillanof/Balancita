@@ -95,6 +95,7 @@ class Base(unittest.TestCase):
     def setUpClass(cls):
         SC.disarm()
         cls.cache["dir"] = tempfile.mkdtemp()
+        cls.cache["strategies"] = strategies(cls.buckets)
 
     @classmethod
     def tearDownClass(cls):
