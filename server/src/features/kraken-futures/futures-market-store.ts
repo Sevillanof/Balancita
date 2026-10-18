@@ -15,6 +15,14 @@ import { existsSync, mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { canonicalJson } from '../paper-futures/futures-canonical.ts'
 import { FUTURES_PRODUCT } from './futures-market.ts'
+import {
+  FUNDING_PERIOD_MS,
+  FUNDING_WS_COVERAGE_MAX_SILENCE_MS,
+  type FundingWsComparison,
+  type FundingWsMark,
+  type FundingWsObservation,
+  type FundingWsRateResult,
+} from './funding-ws.ts'
 
 type RecordValue = Record<string, unknown>
 type StoredRow = { normalized_json: string; received_sequence: number }
@@ -385,6 +393,33 @@ export class FuturesMarketStore {
         BEFORE UPDATE ON paper_futures_funding_sightings BEGIN SELECT RAISE(ABORT, 'funding evidence is immutable'); END;
       CREATE TRIGGER IF NOT EXISTS paper_futures_funding_sightings_no_delete
         BEFORE DELETE ON paper_futures_funding_sightings BEGIN SELECT RAISE(ABORT, 'funding evidence is immutable'); END;
+    `)
+    // Real-time funding from the WebSocket ticker (docs/funding-ws-btc.md).
+    // Additive as well: older readers ignore these tables.
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS paper_futures_funding_ws_observations(
+        product_id TEXT NOT NULL, received_at INTEGER NOT NULL, event_time INTEGER NOT NULL,
+        connected_at INTEGER NOT NULL, first_after_connect INTEGER NOT NULL,
+        funding_rate TEXT NOT NULL, relative_funding_rate TEXT NOT NULL,
+        funding_rate_prediction TEXT NOT NULL, relative_funding_rate_prediction TEXT NOT NULL,
+        next_funding_rate_time INTEGER NOT NULL
+      ) STRICT;
+      CREATE INDEX IF NOT EXISTS paper_futures_funding_ws_observations_at
+        ON paper_futures_funding_ws_observations(product_id, received_at);
+      CREATE TABLE IF NOT EXISTS paper_futures_funding_ws_marks(
+        product_id TEXT NOT NULL, at INTEGER NOT NULL, connected_at INTEGER NOT NULL,
+        kind TEXT NOT NULL CHECK(kind IN ('alive','closed'))
+      ) STRICT;
+      CREATE INDEX IF NOT EXISTS paper_futures_funding_ws_marks_at
+        ON paper_futures_funding_ws_marks(product_id, at);
+      CREATE TRIGGER IF NOT EXISTS paper_futures_funding_ws_observations_no_update
+        BEFORE UPDATE ON paper_futures_funding_ws_observations BEGIN SELECT RAISE(ABORT, 'funding evidence is immutable'); END;
+      CREATE TRIGGER IF NOT EXISTS paper_futures_funding_ws_observations_no_delete
+        BEFORE DELETE ON paper_futures_funding_ws_observations BEGIN SELECT RAISE(ABORT, 'funding evidence is immutable'); END;
+      CREATE TRIGGER IF NOT EXISTS paper_futures_funding_ws_marks_no_update
+        BEFORE UPDATE ON paper_futures_funding_ws_marks BEGIN SELECT RAISE(ABORT, 'funding evidence is immutable'); END;
+      CREATE TRIGGER IF NOT EXISTS paper_futures_funding_ws_marks_no_delete
+        BEFORE DELETE ON paper_futures_funding_ws_marks BEGIN SELECT RAISE(ABORT, 'funding evidence is immutable'); END;
     `)
   }
 
@@ -951,6 +986,159 @@ export class FuturesMarketStore {
       ORDER BY start_ms,received_at`,
       )
       .all(productId, knownAtCutoff) as Record<string, unknown>[]
+  }
+
+  appendFundingWsObservation(o: FundingWsObservation): void {
+    if (this.readOnly)
+      throw new Error('Cannot append to a read-only market store.')
+    if (!/^PF_[A-Z0-9]{2,20}$/.test(o.productId))
+      throw new TypeError('Funding observation product is invalid.')
+    this.db
+      .prepare(
+        `INSERT INTO paper_futures_funding_ws_observations VALUES(?,?,?,?,?,?,?,?,?,?)`,
+      )
+      .run(
+        o.productId,
+        time(o.receivedAt, 'receivedAt'),
+        time(o.eventTime, 'eventTime'),
+        time(o.connectedAt, 'connectedAt'),
+        o.firstAfterConnect ? 1 : 0,
+        o.fundingRate,
+        o.relativeFundingRate,
+        o.fundingRatePrediction,
+        o.relativeFundingRatePrediction,
+        time(o.nextFundingRateTime, 'nextFundingRateTime'),
+      )
+  }
+
+  appendFundingWsMark(m: FundingWsMark): void {
+    if (this.readOnly)
+      throw new Error('Cannot append to a read-only market store.')
+    this.db
+      .prepare(`INSERT INTO paper_futures_funding_ws_marks VALUES(?,?,?,?)`)
+      .run(
+        m.productId,
+        time(m.at, 'at'),
+        time(m.connectedAt, 'connectedAt'),
+        m.kind,
+      )
+  }
+
+  /**
+   * Causal WS rate of the hourly period that ends at `periodEndMs`: the last
+   * `funding_rate` observed with `received_at < periodEndMs`. Nothing received
+   * at or after the close is read, so the answer is the same at any later
+   * time T. It exists only when the socket is proven up at the close: the
+   * latest mark before the close is an `alive` one, at most
+   * FUNDING_WS_COVERAGE_MAX_SILENCE_MS old, of the same connection as the
+   * observation (the first ticker of a connection is always an observation),
+   * and the observation names this very close in `next_funding_rate_time`.
+   * Predictions are never read. Otherwise the result says why there is none.
+   */
+  fundingWsRate(productId: string, periodEndMs: number): FundingWsRateResult {
+    time(periodEndMs, 'periodEndMs')
+    if (periodEndMs % FUNDING_PERIOD_MS !== 0)
+      throw new RangeError('Funding period end must be an hour boundary.')
+    const exists = this.db
+      .prepare(
+        "SELECT 1 AS present FROM sqlite_master WHERE type='table' AND name='paper_futures_funding_ws_marks'",
+      )
+      .get()
+    if (exists === undefined)
+      return { status: 'unavailable', reason: 'no_table' }
+    const mark = this.db
+      .prepare(
+        `SELECT at,connected_at AS connectedAt,kind FROM paper_futures_funding_ws_marks
+      WHERE product_id=? AND at<? ORDER BY at DESC,rowid DESC LIMIT 1`,
+      )
+      .get(productId, periodEndMs) as
+      { at: number; connectedAt: number; kind: string } | undefined
+    if (
+      mark === undefined ||
+      mark.kind !== 'alive' ||
+      periodEndMs - mark.at > FUNDING_WS_COVERAGE_MAX_SILENCE_MS
+    )
+      return { status: 'unavailable', reason: 'no_coverage' }
+    const obs = this.db
+      .prepare(
+        `SELECT received_at AS receivedAt,connected_at AS connectedAt,funding_rate AS fundingRate,
+      relative_funding_rate AS relativeFundingRate,next_funding_rate_time AS nextFundingRateTime
+      FROM paper_futures_funding_ws_observations
+      WHERE product_id=? AND received_at<? ORDER BY received_at DESC,rowid DESC LIMIT 1`,
+      )
+      .get(productId, periodEndMs) as
+      | {
+          receivedAt: number
+          connectedAt: number
+          fundingRate: string
+          relativeFundingRate: string
+          nextFundingRateTime: number
+        }
+      | undefined
+    if (obs === undefined)
+      return { status: 'unavailable', reason: 'no_observation' }
+    if (obs.connectedAt !== mark.connectedAt)
+      return { status: 'unavailable', reason: 'connection_mismatch' }
+    if (obs.nextFundingRateTime !== periodEndMs)
+      return { status: 'unavailable', reason: 'period_mismatch' }
+    return {
+      status: 'ok',
+      fundingRate: obs.fundingRate,
+      relativeFundingRate: obs.relativeFundingRate,
+      observedAt: obs.receivedAt,
+      connectedAt: obs.connectedAt,
+    }
+  }
+
+  /**
+   * WS rate against the latest REST sighting of every period known at
+   * `knownAtCutoff`. Exact numeric equality; every disagreement is counted and
+   * listed, none is resolved or averaged. `null` when sightings do not exist.
+   */
+  compareFundingWsWithSightings(
+    productId: string,
+    knownAtCutoff: number,
+  ): FundingWsComparison | null {
+    const sightings = this.fundingSightings(productId, knownAtCutoff)
+    if (sightings === null) return null
+    const latest = new Map<number, { endMs: number; rate: string }>()
+    for (const row of sightings)
+      latest.set(row.startMs as number, {
+        endMs: row.endMs as number,
+        rate: String(row.fundingRate),
+      })
+    let matched = 0
+    let onlyRest = 0
+    const mismatches: { startMs: number; ws: string; rest: string }[] = []
+    for (const [startMs, sighting] of latest) {
+      const ws = this.fundingWsRate(productId, sighting.endMs)
+      if (ws.status !== 'ok') onlyRest += 1
+      else if (Number(ws.fundingRate) === Number(sighting.rate)) matched += 1
+      else mismatches.push({ startMs, ws: ws.fundingRate, rest: sighting.rate })
+    }
+    const ends = this.db
+      .prepare(
+        `SELECT DISTINCT next_funding_rate_time AS endMs FROM paper_futures_funding_ws_observations
+      WHERE product_id=? AND received_at<=? AND next_funding_rate_time<=? AND next_funding_rate_time>0`,
+      )
+      .all(productId, knownAtCutoff, knownAtCutoff) as { endMs: number }[]
+    const restEnds = new Set([...latest.values()].map((s) => s.endMs))
+    let onlyWs = 0
+    for (const { endMs } of ends)
+      if (
+        endMs % FUNDING_PERIOD_MS === 0 &&
+        !restEnds.has(endMs) &&
+        this.fundingWsRate(productId, endMs).status === 'ok'
+      )
+        onlyWs += 1
+    return {
+      compared: matched + mismatches.length,
+      matched,
+      mismatched: mismatches.length,
+      onlyWs,
+      onlyRest,
+      mismatches,
+    }
   }
 
   private writeFundingResponse(

@@ -841,6 +841,8 @@ export function createLiveCapture(options: LiveCaptureOptions) {
         return inserted
       },
       persistGap: (gap) => store.appendGap(gap),
+      persistFundingObservation: (o) => store.appendFundingWsObservation(o),
+      persistFundingMark: (m) => store.appendFundingWsMark(m),
       onState: (state, reason) => log(`${state}${reason ? ` ${reason}` : ''}`),
     })
     collector.start()

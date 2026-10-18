@@ -161,3 +161,26 @@ CREATE TRIGGER paper_futures_funding_sightings_no_update
         BEFORE UPDATE ON paper_futures_funding_sightings BEGIN SELECT RAISE(ABORT, 'funding evidence is immutable'); END;
 CREATE TRIGGER paper_futures_funding_sightings_no_delete
         BEFORE DELETE ON paper_futures_funding_sightings BEGIN SELECT RAISE(ABORT, 'funding evidence is immutable'); END;
+CREATE TABLE paper_futures_funding_ws_observations(
+        product_id TEXT NOT NULL, received_at INTEGER NOT NULL, event_time INTEGER NOT NULL,
+        connected_at INTEGER NOT NULL, first_after_connect INTEGER NOT NULL,
+        funding_rate TEXT NOT NULL, relative_funding_rate TEXT NOT NULL,
+        funding_rate_prediction TEXT NOT NULL, relative_funding_rate_prediction TEXT NOT NULL,
+        next_funding_rate_time INTEGER NOT NULL
+      ) STRICT;
+CREATE INDEX paper_futures_funding_ws_observations_at
+        ON paper_futures_funding_ws_observations(product_id, received_at);
+CREATE TABLE paper_futures_funding_ws_marks(
+        product_id TEXT NOT NULL, at INTEGER NOT NULL, connected_at INTEGER NOT NULL,
+        kind TEXT NOT NULL CHECK(kind IN ('alive','closed'))
+      ) STRICT;
+CREATE INDEX paper_futures_funding_ws_marks_at
+        ON paper_futures_funding_ws_marks(product_id, at);
+CREATE TRIGGER paper_futures_funding_ws_observations_no_update
+        BEFORE UPDATE ON paper_futures_funding_ws_observations BEGIN SELECT RAISE(ABORT, 'funding evidence is immutable'); END;
+CREATE TRIGGER paper_futures_funding_ws_observations_no_delete
+        BEFORE DELETE ON paper_futures_funding_ws_observations BEGIN SELECT RAISE(ABORT, 'funding evidence is immutable'); END;
+CREATE TRIGGER paper_futures_funding_ws_marks_no_update
+        BEFORE UPDATE ON paper_futures_funding_ws_marks BEGIN SELECT RAISE(ABORT, 'funding evidence is immutable'); END;
+CREATE TRIGGER paper_futures_funding_ws_marks_no_delete
+        BEFORE DELETE ON paper_futures_funding_ws_marks BEGIN SELECT RAISE(ABORT, 'funding evidence is immutable'); END;
