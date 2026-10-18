@@ -51,7 +51,7 @@ class ForwardResultTest(unittest.TestCase):
         db.close()
         funding = {"usable": funding_ok, "code": "ok" if funding_ok else "stale_history",
                    "reason": "ok" if funding_ok else "el funding observado llega con retraso", "checked_ms": NOW - 10}
-        body = {"schema": FORWARD_SCHEMA, "updated_ms": last_run, "min_forward_trades": 100, "strategies": {SID: {
+        body = {"schema": FORWARD_SCHEMA, "updated_ms": last_run, "min_forward_trades": FORWARD_MIN_TRADES, "strategies": {SID: {
             "spec_hash": "hash1", "start_ms": NOW - 100 * HOUR, "open_positions": 1,
             "summary_without_recovered": _side(live, 31.5, incomplete=1),
             "summary_recovered": _side(recovered, -4.0),
