@@ -34,6 +34,26 @@ _cache = {}
 FUNDING_FILE = os.path.join(real_sample.PARTIAL_DIR, "paper_futures_funding_responses_trimmed.jsonl")
 
 
+class Raw(str):
+    """The text of a number exactly as Kraken wrote it (a float would round it)."""
+
+
+def loads_exact(text):
+    """``json.loads`` with every decimal number kept as its own text (``Raw``)."""
+    return json.loads(text, parse_float=Raw)
+
+
+def dumps_exact(value):
+    """``json.dumps(value, sort_keys=True)`` that writes a ``Raw`` number back with the text it came with."""
+    if isinstance(value, Raw):
+        return str(value)
+    if isinstance(value, dict):
+        return "{" + ", ".join("{}: {}".format(json.dumps(k), dumps_exact(value[k])) for k in sorted(value)) + "}"
+    if isinstance(value, list):
+        return "[" + ", ".join(dumps_exact(v) for v in value) + "]"
+    return json.dumps(value)
+
+
 def funding():
     """The 20 hourly funding responses the capture really stored for PF_XBTUSD, each cut to the newest 48 hours it listed (the text of
     every rate is Kraken's own): ``{received_at, server_time, sha256, raw, periods}`` in arrival order. ``periods`` are the rows the
@@ -45,9 +65,9 @@ def funding():
         out = []
         with open(FUNDING_FILE, encoding="utf-8") as handle:
             for line in handle:
-                row = json.loads(line)
+                row = loads_exact(line)
                 out.append({"received_at": row["received_at"], "server_time": row["server_time"], "sha256": row["response_sha256"],
-                            "raw": json.dumps(row["raw_trimmed"], sort_keys=True), "periods": periods[row["response_sha256"]]})
+                            "raw": dumps_exact(row["raw_trimmed"]), "periods": periods[row["response_sha256"]]})
         _cache["funding"] = sorted(out, key=lambda r: r["received_at"])
     return _cache["funding"]
 
@@ -81,8 +101,8 @@ class RealWorld(object):
         self.holes = tuple(quote_holes)
         self.candle_rows = candles()
         self.funding_rows = funding() if with_funding else []       # the accounting funding the capture stored; a scenario may drop, change or add some
-        self.next_funding = 0                # a subclass may hand some of them over later than they really arrived
-        self.next_candle = self.next_quote = 0
+        self.next_funding = 0
+        self.next_candle = self.next_quote = 0               # a subclass may hand some candles over later than they really arrived
         self.db.commit()
 
     def release_until(self, t_ms):

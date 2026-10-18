@@ -5,7 +5,6 @@ funding are the real ones of PF_XBTUSD (17-oct 12:40Z to 18-oct 08:07Z): the 20 
 and say so; the clock is simulated and the entries are the ones ``Forcing`` makes (see ``real_session``)."""
 
 import inspect
-import json
 import os
 import shutil
 import sqlite3
@@ -20,7 +19,7 @@ from balancita_engine import signal_continuity as SC
 from balancita_engine.futures_simulator import accrue_funding
 from balancita_engine.multi_signals import stable_hash
 from real_session import (BUY_AT, DECIDE_FROM, STEP, abandon, journal_clock, new_session, recover_session, record, strategies)
-from real_world import BTC, HOUR, MIN, T0, RealWorld
+from real_world import BTC, HOUR, MIN, T0, Raw, RealWorld, dumps_exact, loads_exact
 
 LAG = 600_000                                      # the adapter's settle lag: an hour is definitive 10 minutes after it ends
 HELD = (T0 + 420 * MIN) // HOUR * HOUR             # 19:00Z: inside the second position (19:40 to 21:25) from its start to its end
@@ -56,6 +55,11 @@ def money(session):
             "trades": [(t["product_id"], t["exit_reason"], str(t["pnl_usd"]), t["funding_status"]) for t in session.runner.portfolio.trades]}
 
 
+def micro(amount):
+    """The session reports money to the millionth of a USD; the exact amount is compared at that precision, not with a tolerance."""
+    return amount.quantize(D("0.000001"))
+
+
 def LI_alerts(session):
     from balancita_engine import paper_runner_report as REP
     return REP.alerts(session.runner)
@@ -64,18 +68,18 @@ def LI_alerts(session):
 # ---- hand edits of the real responses (the scenarios say which) ------------------------------------------------------------------------
 def with_rate(row, hour_iso, factor):
     """A copy of a real response where the rate of ``hour_iso`` is ``factor`` times what Kraken sent (both the absolute and the relative one)."""
-    body = json.loads(row["raw"])
+    body = loads_exact(row["raw"])
     for item in body["rates"]:
         if item["timestamp"] == hour_iso:
-            item["fundingRate"] = item["fundingRate"] * factor
-            item["relativeFundingRate"] = item["relativeFundingRate"] * factor
-    return renamed(row, json.dumps(body, sort_keys=True))
+            item["fundingRate"] = Raw(format(D(item["fundingRate"]) * factor, "f"))
+            item["relativeFundingRate"] = Raw(format(D(item["relativeFundingRate"]) * factor, "f"))
+    return renamed(row, dumps_exact(body))
 
 
 def without_hour(row, hour_iso):
-    body = json.loads(row["raw"])
+    body = loads_exact(row["raw"])
     body["rates"] = [item for item in body["rates"] if item["timestamp"] != hour_iso]
-    return renamed(row, json.dumps(body, sort_keys=True))
+    return renamed(row, dumps_exact(body))
 
 
 def renamed(row, raw):
@@ -86,9 +90,9 @@ def real_rate(hour_iso):
     """The relative rate Kraken finally listed for ``hour_iso`` (the newest real response that lists it)."""
     from real_world import funding
     for row in reversed(funding()):
-        for item in json.loads(row["raw"])["rates"]:
+        for item in loads_exact(row["raw"])["rates"]:
             if item["timestamp"] == hour_iso:
-                return D(repr(item["relativeFundingRate"]))
+                return D(item["relativeFundingRate"])
     raise AssertionError(hour_iso)
 
 
@@ -127,7 +131,7 @@ class TestObservedFunding(unittest.TestCase):
             self.assertEqual(covered, trade["exit_time_ms"] - trade["entry_time_ms"])
             expected += amount if trade["side"] == "LONG" else -amount
         self.assertNotEqual(expected, 0)
-        self.assertAlmostEqual(float(D(money(session)["funding_usd"])), float(expected), places=5)
+        self.assertEqual(D(money(session)["funding_usd"]), micro(expected))
 
     def test_the_signals_and_the_trades_are_the_same_with_or_without_the_accounting_funding(self):
         a, b = self.cache["bare"]["records"], self.cache["observed"]["records"]
@@ -249,12 +253,12 @@ class TestObservedFundingScenarios(unittest.TestCase):
         """Hand edit: Kraken lists the hour 19:00 with 1.5 times its rate in every response from ``revised_at`` on. With ``extra_at``, a copy
         of the response of 20:00:30 is added at that instant (the hour is then settled with the rate in use before the correction)."""
         def tweak(rows):
-            out = [with_rate(r, HELD_ISO, 1.5) if r["received_at"] >= revised_at else r for r in rows]
+            out = [with_rate(r, HELD_ISO, D("1.5")) if r["received_at"] >= revised_at else r for r in rows]
             if extra_at is not None:
                 source = next(r for r in rows if r["received_at"] > HELD + HOUR and r["received_at"] < HELD + 2 * HOUR)       # the real 20:00:30
-                body = json.loads(source["raw"])
+                body = loads_exact(source["raw"])
                 body["serverTime"] = iso(extra_at)
-                out.append(renamed(dict(source, received_at=extra_at, server_time=iso(extra_at)), json.dumps(body, sort_keys=True)))
+                out.append(renamed(dict(source, received_at=extra_at, server_time=iso(extra_at)), dumps_exact(body)))
             return out
 
         world, _, session = self.start(tweak)
@@ -277,10 +281,9 @@ class TestObservedFundingScenarios(unittest.TestCase):
         old, _ = accrue_funding([(HELD, HELD + HOUR, real_rate(HELD_ISO))], trade["entry_time_ms"], trade["exit_time_ms"], notional)
         new, _ = accrue_funding([(HELD, HELD + HOUR, real_rate(HELD_ISO) * D("1.5"))], trade["entry_time_ms"], trade["exit_time_ms"], notional)
         sign = 1 if trade["side"] == "LONG" else -1
-        self.assertAlmostEqual(float(D(money(session)["funding_usd"]) - D(base["money"]["funding_usd"])), float(sign * (new - old)), places=5)
+        self.assertEqual(D(money(session)["funding_usd"]) - D(base["money"]["funding_usd"]), micro(sign * (new - old)))
         if expect_adjustment:
-            self.assertAlmostEqual(float(D(revisions[0]["after"]["funding_usd"]) - D(revisions[0]["before"]["funding_usd"])),
-                                   float(sign * (new - old)), places=5)
+            self.assertEqual(micro(D(revisions[0]["after"]["funding_usd"]) - D(revisions[0]["before"]["funding_usd"])), micro(sign * (new - old)))
             self.assertEqual(revisions[0]["revised_periods"], [[HELD, HELD + HOUR]])
         evidence = [r for r in session.audit.records() if r["kind"] == "funding_evidence" and r["start_ms"] == HELD]
         self.assertIn("revision_applied", [e["evidence_kind"] for e in evidence])
