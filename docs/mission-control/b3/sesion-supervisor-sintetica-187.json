@@ -521,6 +521,7 @@
           "candle_earlier_revision_after_emit": 0,
           "candle_revisions_differing": 0,
           "candle_revisions_seen": 0,
+          "candles_incomplete": 0,
           "data_gaps": 0,
           "emitted": 40294,
           "epoch_changes": 1,

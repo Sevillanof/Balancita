@@ -693,6 +693,9 @@ class Supervisor(object):
             body["resources"] = {"last": self.last_resources, "events": self.resource_events, "stop_reason": self.stop_reason}
         if self.config.get("stale_stop"):
             body["stale_stop"] = {"limit_ms": self.config["stale_stop"]["stop_quote_gap_ms"], "events": self.stale_events, "stop_reason": self.stop_reason}
+        ingestor = getattr(session, "ingestor", None)
+        if ingestor is not None:
+            body["candles_incomplete"] = ingestor.stats["candles_incomplete"]     # first versions read before their minute was over; the session used them as they came
         if self.config["funding_mode"] == LI.OBSERVED_FUNDING:
             body["funding"] = session.funding_report()
         _write_json(os.path.join(self.directory, REPORT_FILE), body)

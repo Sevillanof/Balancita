@@ -64,6 +64,7 @@
   "test_paper_kill_session_186.TestWallClockJumpsDuringAnOpenSilence": 52,
   "test_paper_late_official_candles_183": 95,
   "test_paper_live_clock_185": 90,
+  "test_paper_live_incomplete_candles_184": 25,
   "test_paper_live_evaluator.TestNoLookahead": 56,
   "test_paper_live_evaluator.TestParityWithTheReplay": 44,
   "test_paper_live_evaluator.TestRecoveryAndGaps": 86,
