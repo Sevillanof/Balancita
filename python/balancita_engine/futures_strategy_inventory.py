@@ -117,6 +117,12 @@ def build_inventory(entries, specs, *, config_dir=None, carry=None, forward_resu
     frozen = set(freeze.get("ids") or [])
     min_forward = freeze.get("min_forward_trades") or forward.get("min_forward_trades")
     registered = forward.get("strategies") or {}
+    retired = closed.get("retired") or {}
+
+    def retirement(strategy_id):
+        """``(since_ms, reason)`` of a closed strategy: its own retirement (date, reason) or the file's general one."""
+        own = retired.get(strategy_id) or {}
+        return _day_ms(own.get("date")), own.get("reason") or closed.get("reason")
 
     def research_entry(spec):
         if spec is None:
@@ -150,20 +156,22 @@ def build_inventory(entries, specs, *, config_dir=None, carry=None, forward_resu
         state = entry["state"]
         research = _research(research_entry(spec), is_closed)
         plan = spec_plan(spec) if spec else None
+        since_ms, closed_reason = retirement(strategy_id) if is_closed else (None, None)
         add({
             "id": strategy_id, "version": entry["version"], "name": entry["name"],
             "description": entry.get("description", ""), "kind": "rules", "spec_hash": entry.get("spec_hash"),
             "operational": {
                 "state": "closed" if is_closed else state, "basis": "registry",
-                "since_ms": entry.get("state_known_at") or None,
-                "reason": entry.get("state_reason"),
+                "since_ms": since_ms or entry.get("state_known_at") or None,
+                "reason": closed_reason or entry.get("state_reason"),
             },
             "frozen": strategy_id in frozen,
             "research": research,
             "forward": forward_block((info or {}).get("start_ms"), (info or {}).get("registered")),
             "market": {"products": len(products) or None, "horizon_minutes": _horizon(plan),
                        "exit_by": "rules"},
-            "note": (info or {}).get("why"), "no_backtest": bool((info or {}).get("no_backtest")),
+            "note": None if is_closed and strategy_id in retired else (info or {}).get("why"),
+            "no_backtest": bool((info or {}).get("no_backtest")),
         })
 
     # Closed strategies are deleted from the registry at start: they come back from the shipped specs.
@@ -172,17 +180,18 @@ def build_inventory(entries, specs, *, config_dir=None, carry=None, forward_resu
         if strategy_id in seen or spec is None:
             continue
         plan = spec_plan(spec)
+        since_ms, closed_reason = retirement(strategy_id)
         add({
             "id": strategy_id, "version": spec["version"], "name": spec["name"],
             "description": spec.get("description", ""), "kind": "rules", "spec_hash": spec_hash(spec),
-            "operational": {"state": "closed", "basis": "config", "since_ms": None,
-                            "reason": closed.get("reason")},
+            "operational": {"state": "closed", "basis": "config", "since_ms": since_ms,
+                            "reason": closed_reason},
             "frozen": strategy_id in frozen,
             "research": _research(research_entry(spec), True),
             "forward": forward_block(),
             "market": {"products": len(products) or None, "horizon_minutes": _horizon(plan),
                        "exit_by": "rules"},
-            "note": closed.get("note"), "no_backtest": False,
+            "note": None if strategy_id in retired else closed.get("note"), "no_backtest": False,
         })
 
     # Shipped specs the registry does not know and nothing closes: state unknown.

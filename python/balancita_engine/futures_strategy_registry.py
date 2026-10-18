@@ -195,9 +195,11 @@ class StrategyRegistry:
         """Deletes the strategies ``config/strategy-closed.json`` lists (once; later starts find them deleted)."""
         with open(path or CLOSED_PATH, encoding="utf-8") as handle:
             closed = json.load(handle)
+        retired = closed.get("retired") or {}
         for strategy_id in closed["ids"]:
             if self._version_row(strategy_id, None) is not None and not self._deleted(strategy_id):
-                self.delete(strategy_id, strategy_id, reason=closed.get("reason", "closed"))
+                reason = (retired.get(strategy_id) or {}).get("reason") or closed.get("reason", "closed")
+                self.delete(strategy_id, strategy_id, reason=reason)
 
     def _version_row(self, strategy_id, version):
         sql = ("SELECT strategy_id, version, spec_hash, spec_json, origin, parent_id, parent_version, created_at "

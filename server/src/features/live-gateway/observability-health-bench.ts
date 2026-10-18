@@ -55,7 +55,7 @@ seedStrategies(
   [
     { id: 'C29', state: 'active' },
     { id: 'C30', state: 'active' },
-    { id: 'C32', state: 'active' },
+    { id: 'C32', state: 'deleted' },
   ],
   NOW,
 )

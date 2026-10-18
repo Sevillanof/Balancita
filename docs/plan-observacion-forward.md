@@ -19,7 +19,7 @@ Pregunta que este plan sí responde: _¿tenemos una fuente de información de me
 4. **Observado, simulado, estimado** son tres categorías separadas en todo informe. Nunca se asume un fill maker perfecto.
 5. **Piloto con BTC y ETH.** Los otros 6 productos solo si el piloto es estable.
 
-## Etapa 1. Auditoría de los forward existentes (C29, C30, C32, Kronos)
+## Etapa 1. Auditoría de los forward existentes (C29, C30, C32 [retirada el 2026-10-18, solo historial], Kronos)
 
 Objetivo: confirmar que registran operaciones sin duplicados y con resultado neto completo. Solo lectura.
 

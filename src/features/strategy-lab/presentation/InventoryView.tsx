@@ -155,6 +155,13 @@ export function AuditRow({ row }: { row: InventoryStrategy }) {
             <code>{row.spec_hash?.slice(0, 12) ?? 'No disponible'}</code> ·
             motivo del cierre:{' '}
             <code>{row.operational.reason ?? 'No disponible'}</code>
+            {row.operational.since_ms != null && (
+              <>
+                {' '}
+                · desde{' '}
+                {new Date(row.operational.since_ms).toISOString().slice(0, 10)}
+              </>
+            )}
           </p>
           {row.note && <p>{row.note}</p>}
           {backtest && Object.keys(backtest.ranges).length > 0 ? (

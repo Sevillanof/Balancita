@@ -1,6 +1,6 @@
 # Inventario de estrategias (`GET /api-strategies/inventory`)
 
-Lectura de solo lectura del registro S (`futures_strategy_registry.py`, código en `futures_strategy_inventory.py`). Combina, sin escribir nada, el estado del registro con `config/strategy-closed.json`, `strategy-freeze.json`, `forward-strategies.json`, `qwen-exit.json`, `strategy-reliability.json`, los specs de `config/strategies/`, el descriptor de Kronos y el contador de carry. `--config-dir` (CLI del registro) cambia la carpeta de config que lee el inventario (pruebas con una copia); por defecto es `config/`.
+Lectura de solo lectura del registro S (`futures_strategy_registry.py`, código en `futures_strategy_inventory.py`). `strategy-closed.json` puede traer `retired` (`{id: {date, reason}}`): el inventario muestra esa fecha (`since_ms`) y ese motivo en la fila cerrada; C32 se retiró así el 2026-10-18 (sin operaciones nuevas, historial y spec intactos). Combina, sin escribir nada, el estado del registro con `config/strategy-closed.json`, `strategy-freeze.json`, `forward-strategies.json`, `qwen-exit.json`, `strategy-reliability.json`, los specs de `config/strategies/`, el descriptor de Kronos y el contador de carry. `--config-dir` (CLI del registro) cambia la carpeta de config que lee el inventario (pruebas con una copia); por defecto es `config/`.
 
 Dos ejes que no se mezclan y se etiquetan igual en todas las vistas (`src/features/strategy-lab/domain/strategy-labels.ts`):
 

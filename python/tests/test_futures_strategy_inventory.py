@@ -50,9 +50,18 @@ class InventoryTest(unittest.TestCase):
         inv = self.inventory()
         closed = [r["id"] for r in inv["strategies"] if r["operational"]["state"] == "closed"]
         self.assertEqual(sorted(closed), ["c25-pullback-perp-v1", "c26-reversion-perp-v1",
-                                          "c27-breakout-perp-v1", "c28-adapter-perp-v1"])
+                                          "c27-breakout-perp-v1", "c28-adapter-perp-v1",
+                                          "c32-funding-contrarian-24h-perp-v1"])
         self.assertEqual(_row(inv, "c25-pullback-perp-v1")["research"]["backtest"]["trades"], 223652)
-        self.assertEqual(inv["counts"]["closed"], 4)
+        self.assertEqual(inv["counts"]["closed"], 5)
+
+    def test_c32_is_retired_with_its_date_and_reason_and_no_longer_forward_registered(self):
+        c32 = _row(self.inventory(), "c32-funding-contrarian-24h-perp-v1")
+        self.assertEqual(c32["operational"]["state"], "closed")
+        self.assertEqual(c32["operational"]["since_ms"], 1792281600000)  # 2026-10-18 UTC
+        self.assertIn("Retirada (18-oct)", c32["operational"]["reason"])
+        self.assertFalse(c32["forward"]["registered"])
+        self.assertTrue(c32["spec_hash"])  # the spec is kept: replay 9A depends on its hash
 
     def test_forward_results_are_never_invented(self):
         inv = self.inventory()
@@ -69,9 +78,8 @@ class InventoryTest(unittest.TestCase):
         self.assertIsNone(c31["research"]["backtest"])
         self.assertEqual(c31["operational"]["basis"], "config")
         self.assertEqual(c31["operational"]["state"], "off")
-        self.assertEqual(inv["counts"]["active"], 3)
+        self.assertEqual(inv["counts"]["active"], 2)
         self.assertEqual(_row(inv, "kronos-small-1h-h4-v1")["operational"]["state"], "unverified")
-        self.assertTrue(_row(inv, "c32-funding-contrarian-24h-perp-v1")["no_backtest"])
 
     def test_c31_is_listed_as_off_with_its_reason_and_returns_when_the_block_is_removed(self):
         c31 = _row(self.inventory(), "c31-qwen-exit-perp-v1")

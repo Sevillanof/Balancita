@@ -1,11 +1,18 @@
 {
   "schema": "futures-strategy-closed.v1",
-  "note": "Pedido de Fran (2026-10-11): lo que operaba en el motor viejo D se borra; todo corre en el motor nuevo. Sin ventaja tras costes (ver docs/strategy-reliability.md). Los specs se conservan en config/strategies porque C31 los usa como entradas.",
+  "note": "Pedido de Fran (2026-10-11): lo que operaba en el motor viejo D se borra; todo corre en el motor nuevo. Sin ventaja tras costes (ver docs/strategy-reliability.md). Los specs se conservan en config/strategies porque C31 los usa como entradas. C32 se retira el 2026-10-18 (ver retired): conserva spec y hash para el replay 9A y su historial forward, pero deja de operar.",
   "reason": "closed_with_engine_d",
   "ids": [
     "c25-pullback-perp-v1",
     "c26-reversion-perp-v1",
     "c27-breakout-perp-v1",
-    "c28-adapter-perp-v1"
-  ]
+    "c28-adapter-perp-v1",
+    "c32-funding-contrarian-24h-perp-v1"
+  ],
+  "retired": {
+    "c32-funding-contrarian-24h-perp-v1": {
+      "date": "2026-10-18",
+      "reason": "Retirada (18-oct): ya no se usa; las estrategias nuevas usan el funding como costo y la comparación de 24 h"
+    }
+  }
 }

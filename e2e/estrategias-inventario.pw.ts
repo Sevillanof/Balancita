@@ -265,7 +265,7 @@ test('Estrategias opens on the inventory and every interaction answers', async (
 
   // Filters.
   await page.getByRole('button', { name: /Cerradas/ }).click()
-  await expect(rows).toHaveCount(4)
+  await expect(rows).toHaveCount(5)
   await page.getByRole('button', { name: /Evidencia preliminar/ }).click()
   await expect(rows).toHaveCount(1)
   await page.getByRole('button', { name: /Todas/ }).click()
@@ -277,6 +277,17 @@ test('Estrategias opens on the inventory and every interaction answers', async (
     'closed_with_engine_d',
   )
   await shot(page, '2-auditoria-cerrada')
+
+  // C32 was retired by the owner: closed, with its own reason and date.
+  await page.getByRole('button', { name: /Auditar C32/ }).click()
+  const retired = page.locator('[data-id^="c32"]')
+  await expect(retired.getByTestId('operational-badge')).toHaveAttribute(
+    'title',
+    /^Cerrada desde 2026-10-18 · motivo: Retirada \(18-oct\): ya no se usa/,
+  )
+  await expect(page.getByTestId('inventory-audit').last()).toContainText(
+    'Retirada (18-oct): ya no se usa',
+  )
 
   // Detail opens the C29 detail view; the laboratory stays one click away.
   await page.getByRole('button', { name: /Detalle de C29/ }).click()
@@ -410,13 +421,6 @@ test('navigation: Terminal <-> Estrategias <-> inventory <-> detail, no new tabs
   await expect(detail.getByTestId('module-performance')).toContainText(
     'Fuera de muestra (OOS)',
   )
-  await detail.getByRole('button', { name: 'Estrategias' }).click()
-  // C32 has no backtest by design: «No disponible», not an empty table.
-  await page.getByRole('button', { name: /Detalle de C32/ }).click()
-  await expect(detail.getByRole('heading', { name: /^C32/ })).toBeVisible()
-  await expect(detail.getByTestId('module-performance')).toContainText(
-    'no tiene backtest por diseño',
-  )
   // Detail of C29 -> general Terminal (no C29 selection) -> back.
   await detail.getByRole('button', { name: 'Estrategias' }).click()
   await page.getByRole('button', { name: /Detalle de C29/ }).click()
@@ -433,7 +437,7 @@ test('navigation: Terminal <-> Estrategias <-> inventory <-> detail, no new tabs
   await page.goBack()
   await expect(page).toHaveURL(/\/estrategias$/)
   await expect(page.getByTestId('inventory-row')).toHaveCount(10)
-  await page.getByRole('button', { name: /Detalle de C32/ }).click()
+  await page.getByRole('button', { name: /Detalle de C30/ }).click()
   // Detail -> laboratory (explicit action) -> back to the inventory tab.
   await detail.getByRole('button', { name: 'Abrir en Laboratorio' }).click()
   await expect(page.getByRole('tab', { name: 'Laboratorio' })).toHaveAttribute(
