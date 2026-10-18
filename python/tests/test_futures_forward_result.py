@@ -140,6 +140,7 @@ class ForwardResultTest(unittest.TestCase):
         self.assertEqual(block["unclassified"]["closed"], 28)
         self.assertEqual(block["unclassified"]["net_usd"], 9.0)
         self.assertIn("#283", block["unclassified"]["note"])
+        self.assertIn("`--rebuild` los recalcula conservando la evidencia", block["unclassified"]["hint"])
         self.assertEqual((block["live"]["closed"], block["progress"]["live_trades"]), (7, 7))
         self.assertEqual(block["progress"]["remaining"], 93)
         self.seed()

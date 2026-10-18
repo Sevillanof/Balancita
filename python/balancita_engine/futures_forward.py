@@ -63,6 +63,11 @@ _CORE_KEYS = ("entry_price", "exit_bucket_ms", "exit_price", "exit_reason", "sid
 ERA_OLD = "bloqueo-antiguo"
 ERA_NOW = "actual"
 LEGACY_NOTE = "legado del cambio del 18-oct (#283): decididas con la regla anterior"
+
+
+def rebuild_hint(count):
+    return ("{} trades del legado (#283) no se reproducen con la regla actual; `--rebuild` los recalcula conservando "
+            "la evidencia y el inicio de cada estrategia".format(count))
 _FIRST_SEEN_SCHEMA = ("CREATE TABLE IF NOT EXISTS forward_first_seen("
                       "strategy_id TEXT NOT NULL, spec_hash TEXT NOT NULL, seen_ms INTEGER NOT NULL, "
                       "PRIMARY KEY(strategy_id, spec_hash)) STRICT;")
@@ -71,6 +76,9 @@ CREATE TABLE IF NOT EXISTS forward_era(
   strategy_id TEXT NOT NULL, product_id TEXT NOT NULL, entry_bucket_ms INTEGER NOT NULL,
   spec_hash TEXT NOT NULL, era TEXT NOT NULL, marked_ms INTEGER NOT NULL,
   PRIMARY KEY(strategy_id, product_id, entry_bucket_ms, spec_hash)) STRICT;
+CREATE TABLE IF NOT EXISTS forward_unclassified(
+  strategy_id TEXT NOT NULL, product_id TEXT NOT NULL, entry_bucket_ms INTEGER NOT NULL, marked_ms INTEGER NOT NULL,
+  PRIMARY KEY(strategy_id, product_id, entry_bucket_ms)) STRICT;
 CREATE TABLE IF NOT EXISTS forward_diverged(
   strategy_id TEXT NOT NULL, product_id TEXT NOT NULL, entry_bucket_ms INTEGER NOT NULL,
   PRIMARY KEY(strategy_id, product_id, entry_bucket_ms)) STRICT;
@@ -245,10 +253,19 @@ def make_entry_gate(ones, fives, gate_from_ms):
 
 
 def mark_legacy_era(db, now_ms):
-    """Marks every stored trade that has no era yet as ``ERA_OLD`` (decided before the marks existed). Append-only."""
+    """Once per database: marks every trade stored so far as ``ERA_OLD`` (decided before the marks existed).
+
+    The durable marker is ``forward_policy('legacy_era_marked_ms')``; after it exists nothing is marked old again, so
+    a trade written later (even by an old process still running during the deployment) is never turned into legacy.
+    Append-only. Returns True when it marked.
+    """
+    if db.execute("SELECT 1 FROM forward_policy WHERE name='legacy_era_marked_ms'").fetchone():
+        return False
     with db:
+        db.execute("INSERT OR IGNORE INTO forward_policy VALUES('legacy_era_marked_ms', ?)", (now_ms,))
         db.execute("INSERT OR IGNORE INTO forward_era SELECT strategy_id, product_id, entry_bucket_ms, spec_hash, ?, ? "
                    "FROM forward_trade", (ERA_OLD, now_ms))
+    return True
 
 
 def start_rebuild(out_dir, now_s=None):
@@ -261,7 +278,9 @@ def start_rebuild(out_dir, now_s=None):
     current = os.path.join(out_dir, "forward.sqlite")
     if not os.path.exists(current):
         return None
-    kept = "{}.before-rebuild-{}".format(current, int(time.time() if now_s is None else now_s))
+    kept = "{}.before-rebuild-{}".format(current, int((time.time() if now_s is None else now_s) * 1000))
+    if os.path.exists(kept):
+        raise FileExistsError("the rebuild evidence {} already exists; it is never overwritten".format(kept))
     os.rename(current, kept)
     old = sqlite3.connect("file:{}?mode=ro".format(kept), uri=True)
     new = sqlite3.connect(current)
@@ -336,8 +355,13 @@ def run_forward(market_db, db_path, specs, registration, products):
                     eras = dict(db.execute(
                         "SELECT entry_bucket_ms, era FROM forward_era WHERE strategy_id=? AND product_id=? "
                         "AND spec_hash=?", (strategy_id, product_id, digest)))
-                    legacy = sum(1 for bucket in diverged_buckets if eras.get(bucket) == ERA_OLD)
-                    diverged = len(diverged_buckets) - legacy
+                    # Once legacy, always legacy: the classification never flips because a later cycle reproduces it.
+                    db.executemany("INSERT OR IGNORE INTO forward_unclassified VALUES(?,?,?,?)",
+                                   [(strategy_id, product_id, bucket, now) for bucket in diverged_buckets
+                                    if eras.get(bucket) == ERA_OLD])
+                    legacy = db.execute("SELECT COUNT(*) FROM forward_unclassified WHERE strategy_id=? AND product_id=?",
+                                        (strategy_id, product_id)).fetchone()[0]
+                    diverged = sum(1 for bucket in diverged_buckets if eras.get(bucket) != ERA_OLD)
                     db.execute("DELETE FROM forward_diverged WHERE strategy_id=? AND product_id=?",
                                (strategy_id, product_id))
                     db.executemany("INSERT INTO forward_diverged VALUES(?,?,?)",
@@ -389,12 +413,8 @@ def write_summary(db_path, specs, registration, out_path):
             trades = [dict(json.loads(payload), product_id=product) for product, payload in rows]
             # Legacy: stored under the old rule and not reproduced by the current one. No ``recovered`` flag can be
             # computed for them, so they are neither live nor recovered: they have a block of their own.
-            diverged = {(product, bucket) for product, bucket in db.execute(
-                "SELECT product_id, entry_bucket_ms FROM forward_diverged WHERE strategy_id=?", (strategy_id,))}
-            old_era = {(product, bucket) for product, bucket in db.execute(
-                "SELECT product_id, entry_bucket_ms FROM forward_era WHERE strategy_id=? AND spec_hash=? AND era=?",
-                (strategy_id, digest, ERA_OLD))}
-            legacy_keys = diverged & old_era
+            legacy_keys = {(product, bucket) for product, bucket in db.execute(
+                "SELECT product_id, entry_bucket_ms FROM forward_unclassified WHERE strategy_id=?", (strategy_id,))}
             reconciled = load_reconciled(db, strategy_id, digest)
             for trade in trades:
                 trade["recovered"] = (trade["product_id"], trade["entry_bucket_ms"]) in recovered

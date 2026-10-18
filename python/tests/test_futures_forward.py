@@ -162,7 +162,8 @@ class RecoveryTests(unittest.TestCase):
         """A forward.sqlite as the previous version left it: trades across an unfilled hole and no era marks."""
         _, db = self._run(name, (3700, 3900), filled=False)
         with sqlite3.connect(db) as handle:
-            handle.executescript("DROP TABLE forward_era; DROP TABLE forward_diverged;")
+            handle.executescript("DROP TABLE forward_era; DROP TABLE forward_diverged; DROP TABLE forward_unclassified;"
+                                 "DELETE FROM forward_policy WHERE name='legacy_era_marked_ms';")
         filled = os.path.join(self.dir.name, name + "-filled.sqlite")
         _market(filled, hole=(3700, 3900))
         return db, filled
@@ -196,6 +197,51 @@ class RecoveryTests(unittest.TestCase):
         _, fresh = self._run("fresh", None)
         with sqlite3.connect(fresh) as handle:
             self.assertEqual(handle.execute("SELECT DISTINCT era FROM forward_era").fetchall(), [("actual",)])
+
+    def test_the_legacy_marking_runs_once_and_later_writes_are_never_legacy(self):
+        db, filled = self._stored_before_the_marks("once")
+        run_forward(filled, db, SPECS, self.registration, self.PRODUCTS)
+        with sqlite3.connect(db) as handle:
+            old = handle.execute("SELECT COUNT(*) FROM forward_era WHERE era='bloqueo-antiguo'").fetchone()[0]
+            self.assertGreaterEqual(old, 1)
+            # An old process keeps writing a trade without era after the marking.
+            handle.execute("INSERT INTO forward_trade SELECT strategy_id, product_id, ?, spec_hash, payload "
+                           "FROM forward_trade LIMIT 1", (START + 9_000 * MINUTE,))
+        run_forward(filled, db, SPECS, self.registration, self.PRODUCTS)
+        with sqlite3.connect(db) as handle:
+            self.assertEqual(handle.execute("SELECT COUNT(*) FROM forward_era WHERE era='bloqueo-antiguo'").fetchone()[0], old)
+            self.assertEqual(handle.execute("SELECT COUNT(*) FROM forward_era WHERE entry_bucket_ms=?",
+                                            (START + 9_000 * MINUTE,)).fetchone()[0], 0)
+
+    def test_a_classification_does_not_flip_between_cycles(self):
+        db, filled = self._stored_before_the_marks("flip")
+        path = os.path.join(self.dir.name, "s.json")
+        run_forward(filled, db, SPECS, self.registration, self.PRODUCTS)
+        first = write_summary(db, SPECS, self.registration, path)["strategies"][C30]
+        self.assertGreaterEqual(first["unclassified_trades"], 1)
+        # Second cycle on the market the trades were stored on: they are reproduced again, yet stay unclassified.
+        again = os.path.join(self.dir.name, "flip-unfilled.sqlite")
+        _market(again, hole=(3700, 3900), filled=False)
+        run_forward(again, db, SPECS, self.registration, self.PRODUCTS)
+        second = write_summary(db, SPECS, self.registration, path)["strategies"][C30]
+        for key in ("unclassified_trades", "live_trades", "recovered_trades", "legacy_diverged_trades"):
+            self.assertEqual(second[key], first[key], key)
+        run_forward(filled, db, SPECS, self.registration, self.PRODUCTS)
+        third = write_summary(db, SPECS, self.registration, path)["strategies"][C30]
+        self.assertEqual(third["unclassified_trades"], first["unclassified_trades"])
+
+    def test_two_rebuilds_in_the_same_instant_never_overwrite_the_evidence(self):
+        out = os.path.join(self.dir.name, "twice")
+        os.makedirs(out)
+        for text in ("a", "b"):
+            sqlite3.connect(os.path.join(out, "forward.sqlite")).close()
+        kept = futures_forward.start_rebuild(out, now_s=1000)
+        self.assertTrue(kept.endswith(".before-rebuild-1000000"))
+        sqlite3.connect(os.path.join(out, "forward.sqlite")).close()
+        with self.assertRaises(FileExistsError):
+            futures_forward.start_rebuild(out, now_s=1000)
+        self.assertTrue(os.path.exists(os.path.join(out, "forward.sqlite")))
+        self.assertTrue(os.path.exists(kept))
 
     def test_rebuild_keeps_first_seen_and_policy_the_old_file_and_says_where(self):
         out = os.path.join(self.dir.name, "rebuild-out")

@@ -362,8 +362,9 @@ describe('observability health', () => {
     const paper = component(report, 'paper')
     const anomalies = check(paper, 'forward_anomalies')
     expect(anomalies.status).toBe('ok')
-    expect(anomalies.detail).toContain('28 operación(es) del legado')
-    expect(anomalies.detail).toContain('#283')
+    expect(anomalies.detail).toContain(
+      '28 trades del legado (#283) no se reproducen con la regla actual; `--rebuild` los recalcula conservando la evidencia y el inicio de cada estrategia',
+    )
     expect(JSON.stringify(report)).toContain('"legacy_diverged_trades":28')
     expect(JSON.stringify(paper.limitations)).not.toContain('falta B5')
     expect(JSON.stringify(paper.limitations)).toContain(

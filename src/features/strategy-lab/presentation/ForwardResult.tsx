@@ -99,8 +99,8 @@ export function ForwardResult({
         <div data-testid="forward-unclassified-closed">
           <b>Sin clasificar</b>: {count(result.unclassified.closed)} cerradas
           <small>
-            {result.unclassified.note}. No cuentan como en vivo ni para el
-            mínimo.
+            {result.unclassified.note}. {result.unclassified.hint} No cuentan
+            como en vivo ni para el mínimo.
           </small>
         </div>
       )}

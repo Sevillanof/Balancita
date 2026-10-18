@@ -20,7 +20,7 @@ import os
 import sqlite3
 from decimal import Decimal
 
-from .futures_forward import LEGACY_NOTE
+from .futures_forward import LEGACY_NOTE, rebuild_hint
 from .futures_costs import exit_fill, fee_rate
 from .futures_strategy_reliability import FORWARD_SCHEMA
 
@@ -177,7 +177,8 @@ def read_forward(forward_db, summary_path, market_db, decisions_db, *, now_ms, n
                 "spec_hash": digest, "start_ms": entry.get("start_ms"),
                 "live": _side(entry.get("summary_without_recovered")),
                 "recovered": _side(entry.get("summary_recovered")),
-                "unclassified": dict(_side(entry.get("summary_unclassified")), note=entry.get("legacy_note", LEGACY_NOTE)),
+                "unclassified": dict(_side(entry.get("summary_unclassified")), note=entry.get("legacy_note", LEGACY_NOTE),
+                                      hint=rebuild_hint(entry.get("unclassified_trades", 0))),
                 "open": _open(positions),
                 "live_open": _open([p for p in positions if p["recovered"] is False]),
                 "recovered_open": _open([p for p in positions if p["recovered"] is True]),

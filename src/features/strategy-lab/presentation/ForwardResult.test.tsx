@@ -190,6 +190,7 @@ describe('ForwardResult (datos de ejemplo)', () => {
             unclassified: {
               ...legacy,
               note: 'legado del cambio del 18-oct (#283): decididas con la regla anterior',
+              hint: '28 trades del legado (#283) no se reproducen con la regla actual; `--rebuild` los recalcula conservando la evidencia y el inicio de cada estrategia',
             },
           }),
         )}
@@ -199,6 +200,7 @@ describe('ForwardResult (datos de ejemplo)', () => {
     const box = screen.getByTestId('forward-unclassified-closed')
     expect(box).toHaveTextContent('Sin clasificar: 28 cerradas')
     expect(box).toHaveTextContent('decididas con la regla anterior')
+    expect(box).toHaveTextContent('`--rebuild` los recalcula')
     expect(screen.getByTestId('forward-progress')).toHaveTextContent('37/100')
   })
 

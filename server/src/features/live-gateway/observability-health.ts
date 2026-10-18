@@ -1574,7 +1574,7 @@ function paperComponent(
     const legacy = sum((r) => r.legacyDiverged)
     const legacyText =
       legacy > 0
-        ? ` ${legacy} operación(es) del legado del cambio del 18-oct (#283): decididas con la regla anterior, sin clasificar y fuera del avance; no se juzgan como error.`
+        ? ` ${legacy} trades del legado (#283) no se reproducen con la regla actual; \`--rebuild\` los recalcula conservando la evidencia y el inicio de cada estrategia (sin clasificar, fuera del avance; no es un error).`
         : ''
     const anomalous = diverged > 0 || lagging > 0
     checks.push(

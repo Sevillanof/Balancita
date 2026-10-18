@@ -198,7 +198,7 @@ export type ForwardResult = {
   live: ForwardSide
   recovered: ForwardSide
   /** Closed under the rule PR #283 removed and not reproduced now: never live, never in the progress. */
-  unclassified?: Omit<ForwardSide, 'open'> & { note: string }
+  unclassified?: Omit<ForwardSide, 'open'> & { note: string; hint?: string }
   open: ForwardOpen
   /** Open before the classification existed: not live, not recovered, until the next cycle. */
   unclassified_open: ForwardOpen
