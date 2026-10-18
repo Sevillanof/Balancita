@@ -55,7 +55,7 @@ class PartialSampleTests(unittest.TestCase):
     def test_every_file_is_the_one_the_capture_session_delivered(self):
         with open(os.path.join(real_sample.PARTIAL_DIR, "README.md"), encoding="utf-8") as handle:
             listed = re.findall(r"`(paper_futures_\w+\.jsonl)`:.*?sha256 `([0-9a-f]{64})`", handle.read())
-        self.assertEqual(len(listed), 7)
+        self.assertEqual(len(listed), 8)
         for name, digest in listed:
             with open(os.path.join(real_sample.PARTIAL_DIR, name), "rb") as handle:
                 self.assertEqual(hashlib.sha256(handle.read()).hexdigest(), digest, name)
