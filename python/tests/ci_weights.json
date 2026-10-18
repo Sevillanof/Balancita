@@ -92,6 +92,7 @@
   "test_paper_live_resources_185": 75,
   "test_paper_live_source_185": 92,
   "test_paper_live_stale_stop_184": 190,
+  "test_paper_live_thresholds_184": 70,
   "test_paper_live_status_187": 1,
   "test_paper_observed_funding_184.TestObservedFunding": 86,
   "test_paper_observed_funding_184.TestObservedFundingScenarios": 66,
