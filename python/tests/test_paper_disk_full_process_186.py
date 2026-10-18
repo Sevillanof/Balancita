@@ -1,5 +1,5 @@
 """Issue #186 (and #185): the disk fills while the PROCESS (Supervisor) is running, seen from the process and not from one writer at a time.
-Invented data, simulated clock, nothing real. The runner, the session and each file already have their own disk-full tests (#189, #198,
+Real BTC candles and quotes (``real_world``), simulated clock. The runner, the session and each file already have their own disk-full tests (#189, #198,
 #195, #204/#205, #234); what was not covered is the whole path: the journal refuses a write in the middle of a run, the process halts
 durably, an unattended start is refused, and the operator's restart takes the session up again and ends with the same signals and the
 same open positions as a run that never had the problem. Nothing is retried, repaired or deleted by the process."""
@@ -13,10 +13,8 @@ import tempfile
 import unittest
 
 from balancita_engine import paper_live_process as LP
-from live_world import MIN, World
-from test_paper_live_integration import FIRST_DECISION
-from test_paper_live_process_185 import START, Base, Clock
-from test_paper_silent_source_process_186 import position_detail
+from real_session import Base, Clock, DECIDE_FROM, position_detail
+from real_world import MIN, RealWorld
 
 FULL = OSError(errno.ENOSPC, "No space left on device")
 STEPS = 40
@@ -33,13 +31,13 @@ def rejections(supervisor):
 
 class TestDiskFullSeenByTheProcess(Base):
     def reference(self):
-        """The same invented run with a disk that never fills: what the final signals and open positions must be."""
+        """The same run with a disk that never fills: what the final signals and open positions must be."""
         if "disk_full_reference" in self.cache:
             return self.cache["disk_full_reference"]
         root = tempfile.mkdtemp(dir=self.cache["dir"])
-        world = World(root)
+        world = RealWorld(root)
         self.addCleanup(world.close)
-        world.release_until(FIRST_DECISION - MIN)
+        world.release_until(DECIDE_FROM - MIN)
         directory = os.path.join(root, "session")
         continuous = self.supervisor(Clock(), world=world, directory=directory)
         continuous.start()
@@ -70,6 +68,7 @@ class TestDiskFullSeenByTheProcess(Base):
 
     def test_a_journal_that_refuses_in_the_middle_halts_durably_and_the_operator_restart_ends_as_if_nothing_had_happened(self):
         digests, positions, _ = self.reference()
+        self.assertTrue(positions)                                           # the comparison is not between two empty books
         clock = Clock()
         first = self.supervisor(clock, publish_blocks=True)
         first.start()
@@ -79,7 +78,7 @@ class TestDiskFullSeenByTheProcess(Base):
         self.assertIn("No space left", halt["reason"])
         self.assertEqual((report["ended_as"], beat["phase"]), (LP.HALTED, LP.HALTED))
         self.assertNotEqual(report["ended_as"], LP.STOPPED_PHASE)                          # a halted process never reports a clean stop
-        done = clock.index - START                                              # the step that failed did not complete
+        done = clock.index                                              # the step that failed did not complete
         self.assertGreater(done, 0)
         self.assertLess(done, STEPS)
 
@@ -105,7 +104,7 @@ class TestDiskFullSeenByTheProcess(Base):
         first.start()
         self.full_disk(first)
         self.assertEqual(first.run(max_steps=STEPS), LP.EXIT_HALTED)
-        done = clock.index - START
+        done = clock.index
         before_halt = signal_ids(first)
         second = self.supervisor(Clock(done), publish_blocks=True)
         second.start(restart=True)
