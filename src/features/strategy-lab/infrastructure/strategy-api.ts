@@ -152,6 +152,8 @@ export type InventoryBacktest = InventoryRange & {
 export type ForwardProblem = { code: string; reason: string }
 
 export type ForwardSide = {
+  /** Open positions classified by their entry (an exit on late data can still make a live one recovered). */
+  open: ForwardOpen
   closed: number
   net_usd: number
   mean_net_bp: number | null
@@ -160,12 +162,21 @@ export type ForwardSide = {
   net_is_definitive: boolean
 }
 
+export type ForwardOpen = {
+  count: number
+  label: string
+  pnl_usd: number
+  positions: ForwardOpenPosition[]
+}
+
 export type ForwardOpenPosition = {
   product_id: string
   side: string
   entry_price: string
   opened_at_ms: number
   label: string
+  recovered: boolean
+  classification: string
   mark_price: string | null
   mark_bucket_ms: number | null
   pnl_usd: number | null

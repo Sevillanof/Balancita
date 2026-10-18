@@ -36,6 +36,27 @@ function Side({
           cambiar.
         </small>
       )}
+      <div data-testid={`${testid}-open`}>
+        Abiertas: {side.open.count}
+        {side.open.positions.map((p) => (
+          <small key={p.product_id}>
+            {p.product_id} {p.side === 'LONG' ? 'larga' : 'corta'} desde{' '}
+            {p.entry_price} · {p.classification}
+            {p.pnl_usd == null ? (
+              ' · sin precio para valuarla'
+            ) : (
+              <>
+                {' '}
+                ·{' '}
+                <span className={p.pnl_usd >= 0 ? 'is-up' : 'is-down'}>
+                  {netUsd(p.pnl_usd)}
+                </span>{' '}
+                ({p.label}, cierre {p.mark_price})
+              </>
+            )}
+          </small>
+        ))}
+      </div>
     </div>
   )
 }
@@ -59,7 +80,7 @@ export function ForwardResult({
         ))}
       </section>
     )
-  const { progress, open } = result
+  const { progress } = result
   const ratio = progress.min_trades
     ? Math.min(100, (progress.live_trades / progress.min_trades) * 100)
     : 0
@@ -81,27 +102,6 @@ export function ForwardResult({
         operaciones en vivo para el mínimo
         <progress max={100} value={ratio} aria-label="Avance hacia el mínimo" />
         <small>Las recuperadas no cuentan para el mínimo.</small>
-      </div>
-      <div data-testid="forward-open">
-        <b>Abiertas</b>: {open.count}
-        {open.positions.map((p) => (
-          <small key={p.product_id}>
-            {p.product_id} {p.side === 'LONG' ? 'larga' : 'corta'} desde{' '}
-            {p.entry_price}
-            {p.pnl_usd == null ? (
-              ' · sin precio para valuarla'
-            ) : (
-              <>
-                {' '}
-                ·{' '}
-                <span className={p.pnl_usd >= 0 ? 'is-up' : 'is-down'}>
-                  {netUsd(p.pnl_usd)}
-                </span>{' '}
-                ({p.label}, cierre {p.mark_price})
-              </>
-            )}
-          </small>
-        ))}
       </div>
       <small data-testid="forward-last-run">
         Último ciclo: {ago ?? 'sin ciclos registrados'}

@@ -3,6 +3,8 @@ import { describe, expect, it } from 'vitest'
 import { agoText, stateLine } from '../domain/forward-text.ts'
 import { exampleRow } from '../testing/inventory-fixture.ts'
 import type {
+  ForwardOpen,
+  ForwardOpenPosition,
   ForwardHealth as Health,
   ForwardResult as Result,
 } from '../infrastructure/strategy-api.ts'
@@ -11,39 +13,58 @@ import { ForwardResult } from './ForwardResult.tsx'
 
 // DATOS DE EJEMPLO: cifras sintéticas de pruebas, nunca de la app.
 const NOW = 1_800_000_000_000
-const side = (closed: number, net: number) => ({
+const noOpen: ForwardOpen = {
+  count: 0,
+  label: 'abierta, valuada a mercado',
+  pnl_usd: 0,
+  positions: [],
+}
+const side = (closed: number, net: number, open = noOpen) => ({
   closed,
   net_usd: net,
   mean_net_bp: closed ? 10 : null,
   hit_rate: null,
   funding_incomplete: 0,
   net_is_definitive: true,
+  open,
 })
+
+const position = (
+  product: string,
+  recovered: boolean,
+): ForwardOpenPosition => ({
+  product_id: product,
+  side: 'SHORT',
+  entry_price: '100',
+  opened_at_ms: NOW - 3_600_000,
+  label: 'abierta, valuada a mercado',
+  recovered,
+  classification: recovered
+    ? 'recuperada (entrada con datos llegados tarde)'
+    : 'en vivo',
+  mark_price: '99',
+  mark_bucket_ms: NOW - 60_000,
+  pnl_usd: 1.2,
+  net_bp: 120,
+})
+
+const opened = (positions: ForwardOpenPosition[]): ForwardOpen => ({
+  count: positions.length,
+  label: 'abierta, valuada a mercado',
+  pnl_usd: 1.2 * positions.length,
+  positions,
+})
+
+const liveOpen = opened([position('PF_XBTUSD', false)])
+const recoveredOpen = opened([position('PF_ETHUSD', true)])
 
 const result = (patch: Partial<Result> = {}): Result => ({
   state: { code: 'active', reason: 'activa en el registro', since_ms: null },
   problems: [],
   available: true,
-  live: side(37, 12.5),
-  recovered: side(4, -3),
-  open: {
-    count: 1,
-    label: 'abierta, valuada a mercado',
-    pnl_usd: 1.2,
-    positions: [
-      {
-        product_id: 'PF_XBTUSD',
-        side: 'SHORT',
-        entry_price: '100',
-        opened_at_ms: NOW - 3_600_000,
-        label: 'abierta, valuada a mercado',
-        mark_price: '99',
-        mark_bucket_ms: NOW - 60_000,
-        pnl_usd: 1.2,
-        net_bp: 120,
-      },
-    ],
-  },
+  live: side(37, 12.5, liveOpen),
+  recovered: side(4, -3, recoveredOpen),
+  open: opened([position('PF_XBTUSD', false), position('PF_ETHUSD', true)]),
   progress: { live_trades: 37, min_trades: 100, remaining: 63, reached: false },
   last_run_ms: NOW - 20 * 60_000,
   late: false,
@@ -80,11 +101,17 @@ describe('ForwardResult (datos de ejemplo)', () => {
       '37/100 operaciones en vivo',
     )
     expect(screen.getByRole('progressbar')).toHaveAttribute('value', '37')
-    const open = screen.getByTestId('forward-open')
-    expect(open).toHaveTextContent('Abiertas: 1')
-    expect(open).toHaveTextContent('PF_XBTUSD corta desde 100')
-    expect(open).toHaveTextContent('+1,20 USD')
-    expect(open).toHaveTextContent('abierta, valuada a mercado')
+    const live = screen.getByTestId('forward-live-open')
+    expect(live).toHaveTextContent('Abiertas: 1')
+    expect(live).toHaveTextContent('PF_XBTUSD corta desde 100 · en vivo')
+    expect(live).toHaveTextContent('+1,20 USD')
+    expect(live).toHaveTextContent('abierta, valuada a mercado')
+    expect(live).not.toHaveTextContent('PF_ETHUSD')
+    const recovered = screen.getByTestId('forward-recovered-open')
+    expect(recovered).toHaveTextContent(
+      'PF_ETHUSD corta desde 100 · recuperada (entrada con datos llegados tarde)',
+    )
+    expect(recovered).toHaveTextContent('abierta, valuada a mercado')
     expect(screen.getByTestId('forward-last-run')).toHaveTextContent(
       'Último ciclo: hace 20 min',
     )
@@ -127,19 +154,18 @@ describe('ForwardResult (datos de ejemplo)', () => {
   })
 
   it('says a position cannot be valued instead of inventing a number', () => {
-    const base = result()
-    const position = {
-      ...base.open.positions[0],
+    const unpriced = {
+      ...position('PF_XBTUSD', false),
       pnl_usd: null,
       mark_price: null,
     }
     render(
       <ForwardResult
-        row={rowWith(result({ open: { ...base.open, positions: [position] } }))}
+        row={rowWith(result({ live: side(1, 0, opened([unpriced])) }))}
         now={NOW}
       />,
     )
-    expect(screen.getByTestId('forward-open')).toHaveTextContent(
+    expect(screen.getByTestId('forward-live-open')).toHaveTextContent(
       'sin precio para valuarla',
     )
   })

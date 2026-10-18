@@ -8,7 +8,7 @@ import unittest
 import urllib.request
 from http.server import ThreadingHTTPServer
 
-from balancita_engine.futures_forward import _SCHEMA
+from balancita_engine.futures_forward import _SCHEMA, open_is_recovered
 from balancita_engine.futures_forward_result import OPEN_LABEL, read_forward, read_q_skips, strategy_block
 from balancita_engine.futures_spec_strategy import load_specs
 from balancita_engine.futures_strategy_reliability import FORWARD_SCHEMA
@@ -34,7 +34,8 @@ class ForwardResultTest(unittest.TestCase):
         self.market = os.path.join(self.dir, "market.sqlite")
         self.decisions = os.path.join(self.dir, "decisions.sqlite")
 
-    def seed(self, *, last_run=NOW - HOUR // 2, live=7, recovered=2, side="LONG", funding_ok=True, position=True):
+    def seed(self, *, last_run=NOW - HOUR // 2, live=7, recovered=2, side="LONG", funding_ok=True, position=True,
+             entry_recovered=None):
         for path in (self.forward_db, self.market):
             if os.path.exists(path):
                 os.remove(path)
@@ -43,7 +44,8 @@ class ForwardResultTest(unittest.TestCase):
         db.execute("INSERT INTO forward_status VALUES(?,?,?)",
                    (SID, "PF_XBTUSD", json.dumps({"checked_ms": last_run})))
         db.execute("INSERT INTO forward_open VALUES(?,?,?,?)", (SID, "PF_XBTUSD", "hash1", json.dumps(
-            {"side": side, "entry": "100", "stop": "90", "target": "120", "opened_at": str(NOW - 2 * HOUR)}
+            {"side": side, "entry": "100", "stop": "90", "target": "120", "opened_at": str(NOW - 2 * HOUR),
+             **({} if entry_recovered is None else {"recovered": entry_recovered})}
             if position else None)))
         db.commit()
         db.close()
@@ -100,6 +102,46 @@ class ForwardResultTest(unittest.TestCase):
         self.assertEqual(position["pnl_usd"], 9.8943)
         self.assertEqual(position["net_bp"], 989.434)
         self.assertEqual(self.block()["open"]["pnl_usd"], position["pnl_usd"])
+
+    def test_open_position_is_classified_by_its_entry_inside_live_or_recovered(self):
+        self.seed(entry_recovered=False)
+        block = self.block()
+        self.assertEqual([p["classification"] for p in block["live"]["open"]["positions"]], ["en vivo"])
+        self.assertEqual(block["recovered"]["open"]["count"], 0)
+        self.assertEqual(block["open"]["count"], 1)
+        self.seed(entry_recovered=True)
+        block = self.block()
+        self.assertEqual(block["live"]["open"]["count"], 0)
+        self.assertEqual(block["live"]["open"]["pnl_usd"], 0)
+        (position,) = block["recovered"]["open"]["positions"]
+        self.assertEqual(position["classification"], "recuperada (entrada con datos llegados tarde)")
+        self.assertEqual(position["label"], OPEN_LABEL)
+        self.assertEqual(block["recovered"]["open"]["pnl_usd"], position["pnl_usd"])
+        self.assertEqual(block["open"]["count"], 1)
+
+    def test_a_row_written_before_the_classification_counts_as_live(self):
+        self.seed()
+        self.assertEqual(self.block()["live"]["open"]["count"], 1)
+
+    def test_entry_on_a_late_1m_candle_is_recovered_only_that_candle(self):
+        b = 1_000_000 * 60_000
+        self.assertTrue(open_is_recovered(b, {b}, set(), []))
+        self.assertFalse(open_is_recovered(b, {b - 60_000, b + 60_000}, set(), []))
+        self.assertFalse(open_is_recovered(b, set(), set(), []))
+
+    def test_entry_on_a_late_5m_candle_window(self):
+        b = 1_000_000 * 60_000
+        self.assertTrue(open_is_recovered(b, set(), {b}, []))
+        self.assertTrue(open_is_recovered(b, set(), {b - 240_000}, []))
+        self.assertFalse(open_is_recovered(b, set(), {b - 300_000}, []))
+        self.assertFalse(open_is_recovered(b, set(), {b + 60_000}, []))
+
+    def test_entry_on_late_funding_window(self):
+        b = 1_000_000 * 60_000
+        self.assertTrue(open_is_recovered(b, set(), set(), [b + 60_000]))
+        self.assertTrue(open_is_recovered(b, set(), set(), [b - 239_000]))
+        self.assertFalse(open_is_recovered(b, set(), set(), [b - 240_000]))
+        self.assertFalse(open_is_recovered(b, set(), set(), [b + 61_000]))
 
     def test_a_short_loses_when_the_market_rises(self):
         self.seed(side="SHORT")

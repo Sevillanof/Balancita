@@ -60,6 +60,11 @@ def _connect(path):
     return sqlite3.connect("file:{}?mode=ro".format(path), uri=True)
 
 
+def _open(positions):
+    return {"count": len(positions), "label": OPEN_LABEL, "positions": positions,
+            "pnl_usd": round(sum(p["pnl_usd"] for p in positions if p["pnl_usd"] is not None), 4)}
+
+
 def _side(summary):
     """The fields the owner reads of a group of closed trades; ``net_usd`` is after costs and the funding known."""
     summary = summary or {}
@@ -102,7 +107,10 @@ def _open_positions(forward, market, strategy_id, spec_hash, notional):
         entry, side = Decimal(position["entry"]), position["side"]
         item = {"product_id": product_id, "side": side, "entry_price": position["entry"],
                 "opened_at_ms": int(position["opened_at"]), "label": OPEN_LABEL,
-                "mark_price": None, "mark_bucket_ms": None, "pnl_usd": None, "net_bp": None}
+                "mark_price": None, "mark_bucket_ms": None, "pnl_usd": None, "net_bp": None,
+                "recovered": bool(position.get("recovered")),
+                "classification": ("recuperada (entrada con datos llegados tarde)" if position.get("recovered")
+                                   else "en vivo")}
         mark = _latest_close(market, product_id)
         if mark is not None:
             price, bucket = mark
@@ -165,8 +173,9 @@ def read_forward(forward_db, summary_path, market_db, decisions_db, *, now_ms, n
                 "spec_hash": digest, "start_ms": entry.get("start_ms"),
                 "live": _side(entry.get("summary_without_recovered")),
                 "recovered": _side(entry.get("summary_recovered")),
-                "open": {"count": len(positions), "label": OPEN_LABEL, "positions": positions,
-                         "pnl_usd": round(sum(p["pnl_usd"] for p in positions if p["pnl_usd"] is not None), 4)},
+                "open": _open(positions),
+                "live_open": _open([p for p in positions if not p["recovered"]]),
+                "recovered_open": _open([p for p in positions if p["recovered"]]),
                 "last_run_ms": _last_run(forward, strategy_id) or (summary or {}).get("updated_ms"),
                 "funding_state": entry.get("funding_state") or {},
                 "missing_candles_1m": entry.get("missing_candles_1m", 0),
@@ -239,6 +248,8 @@ def strategy_block(forward, strategy_id, operational, *, min_trades, spec_hash=N
     if running and not problems and live["closed"] + recovered["closed"] + raw["open"]["count"] == 0:
         problems.append({"code": "no_trades_yet", "reason": "todavía no hubo ninguna señal que abriera operación"})
     done = live["closed"]
+    live = dict(live, open=raw["live_open"])
+    recovered = dict(recovered, open=raw["recovered_open"])
     return dict(block, available=True, spec_hash=raw["spec_hash"], start_ms=raw["start_ms"], live=live,
                 recovered=recovered, open=raw["open"],
                 progress={"live_trades": done, "min_trades": min_trades,

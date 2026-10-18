@@ -29,7 +29,7 @@ SPECS = load_specs()
 ONES, FIVES = _candles(_calm_then_surge())
 
 
-def _market(path, product="PF_XBTUSD", hole=None, filled=True, no_fives=None):
+def _market(path, product="PF_XBTUSD", hole=None, filled=True, no_fives=None, until=None):
     """Official candles of the surge. ``hole`` = (first, last) minute index the capture was down for: its candles
     are either learned a day and a half later (``filled``: recovered from the public API) or missing."""
     db = sqlite3.connect(path)
@@ -39,6 +39,8 @@ def _market(path, product="PF_XBTUSD", hole=None, filled=True, no_fives=None):
     for c in ONES + FIVES:
         inside = hole is not None and first * MINUTE <= c["bucket_start"] - START <= last * MINUTE
         if inside and not filled:
+            continue
+        if until is not None and c["bucket_start"] - START > until * MINUTE:
             continue
         if no_fives and c["interval_ms"] == 300_000 and no_fives[0] * MINUTE <= c["bucket_start"] - START <= no_fives[1] * MINUTE:
             continue
@@ -103,6 +105,24 @@ class RecoveryTests(unittest.TestCase):
         self.assertEqual(self.reference[0]["exit_reason"], "time_stop")
         summary = write_summary(db, SPECS, self.registration, os.path.join(self.dir.name, "s.json"))["strategies"][C30]
         self.assertEqual(summary["recovered_trades"], 1)
+
+    def _open_position(self, name, hole):
+        """The open position stored while the market only reaches minute 3000 (entry at 2349, exit not yet)."""
+        market = os.path.join(self.dir.name, name + ".sqlite")
+        _market(market, hole=hole, until=3000)
+        db = os.path.join(self.dir.name, name + "-forward.sqlite")
+        run_forward(market, db, SPECS, self.registration, self.PRODUCTS)
+        (payload,) = sqlite3.connect(db).execute("SELECT payload FROM forward_open").fetchone()
+        return json.loads(payload)
+
+    def test_an_open_position_whose_entry_candle_was_filled_late_is_stored_as_recovered(self):
+        self.assertTrue(self._open_position("open-late", (2300, 2500))["recovered"])
+        # Only the entry's own 1m candle (minute 2349) arrived late.
+        self.assertTrue(self._open_position("open-edge", (2349, 2349))["recovered"])
+
+    def test_an_open_position_entered_on_live_data_is_stored_as_live_even_with_a_hole_after_it(self):
+        self.assertFalse(self._open_position("open-live", (2050, 2100))["recovered"])
+        self.assertFalse(self._open_position("open-after", (2600, 2700))["recovered"])
 
     def test_a_hole_that_does_not_touch_the_trade_leaves_it_unlabelled(self):
         _, db = self._run("elsewhere", (2050, 2100))
