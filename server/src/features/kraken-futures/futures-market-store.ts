@@ -4,6 +4,10 @@ import {
   fundingLiteralExtract,
   type HistoricalFundingResponse,
 } from './historical-funding.ts'
+import {
+  FUNDING_RECOVERY_LOOKBACK_MS,
+  recoveryFrom,
+} from './recovery-cursor.ts'
 import type { OfficialCandleResponse } from './official-candles.ts'
 import type { AnalyticsResponse } from './market-analytics.ts'
 import { existsSync, mkdirSync } from 'node:fs'
@@ -113,8 +117,12 @@ function time(value: unknown, name: string): number {
   return value
 }
 
-/** Closed periods that ended up to this long before a response get a sighting row. */
-const FUNDING_SIGHTING_WINDOW_MS = 2 * 3_600_000
+/**
+ * Periods that closed up to this long before a response are always sighted
+ * again (a rate revision shows as another sighting); older ones only when they
+ * have no post-close sighting yet.
+ */
+const FUNDING_RESIGHT_WINDOW_MS = 2 * 3_600_000
 export type FundingPollPurpose = 'startup' | 'hourly' | 'retry' | 'settle'
 export type FundingPollOutcome =
   'ok' | 'http_error' | 'timeout' | 'parse_error' | 'network_error' | 'aborted'
@@ -762,8 +770,8 @@ export class FuturesMarketStore {
 
   /**
    * Appends one funding attempt (any outcome, no body) and, when it got a
-   * response, one sighting per period that had closed up to two hours before
-   * it. A sighting is the rate Kraken showed at `received_at`; a rate change
+   * response, one sighting per closed period that has none after its close yet
+   * (recovery from the last sighted hour, capped; see recovery-cursor.ts). A sighting is the rate Kraken showed at `received_at`; a rate change
    * shows up as two sightings of one period with different rates. The store
    * does not say when a period is "definitive": Kraken sends no such signal.
    * `extract_text` is the literal text of those periods from the response
@@ -774,13 +782,34 @@ export class FuturesMarketStore {
       throw new Error('Cannot append to a read-only market store.')
     const response = poll.response
     const startedAt = time(poll.startedAt, 'startedAt')
+    // Recovery rule (docs/captura-recuperacion.md): every closed period of the
+    // response, from the last one already sighted after its close up to now
+    // (at most FUNDING_RECOVERY_LOOKBACK_MS back), that has no post-close
+    // sighting yet gets one stamped with this response's receive time; the
+    // last two hours are sighted on every poll, as before.
+    const since =
+      response === undefined
+        ? 0
+        : recoveryFrom(
+            undefined,
+            response.receivedAtMs,
+            FUNDING_RECOVERY_LOOKBACK_MS,
+          )
+    const sighted =
+      response === undefined
+        ? new Set<number>()
+        : this.sightedAfterClose(poll.productId, since)
     const closed =
       response === undefined
         ? []
-        : response.records.filter((record) => {
-            const lag = response.receivedAtMs - record.endMs
-            return lag >= 0 && lag <= FUNDING_SIGHTING_WINDOW_MS
-          })
+        : response.records.filter(
+            (record) =>
+              record.endMs <= response.receivedAtMs &&
+              record.startMs >= since &&
+              (response.receivedAtMs - record.endMs <=
+                FUNDING_RESIGHT_WINDOW_MS ||
+                !sighted.has(record.startMs)),
+          )
     if (
       response !== undefined &&
       sha256(response.rawResponse) !== response.sha256
@@ -846,6 +875,16 @@ export class FuturesMarketStore {
       this.db.exec('ROLLBACK')
       throw error
     }
+  }
+
+  /** Period starts of the product that already have a sighting at or after their close. */
+  private sightedAfterClose(productId: string, sinceMs: number): Set<number> {
+    const rows = this.db
+      .prepare(
+        'SELECT DISTINCT start_ms AS startMs FROM paper_futures_funding_sightings WHERE product_id=? AND start_ms>=? AND received_at>=end_ms',
+      )
+      .all(productId, sinceMs) as Array<{ startMs: number }>
+    return new Set(rows.map((row) => row.startMs))
   }
 
   /** `null` when the table does not exist (older database), `[]` when it is empty. */
