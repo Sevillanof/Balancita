@@ -192,7 +192,8 @@ class Ingestor(object):
         self.candle_first = {}            # (product, bucket) -> {digest, known} of the revision emitted
         self.candle_pending = {}          # (product, bucket) -> {digest, known} of the revision waiting for release
         self.stats = {"emitted": 0, "late_source_rows": 0, "candle_revisions_seen": 0, "candle_revisions_differing": 0,
-                      "unreadable_rows": 0, "candle_earlier_revision_after_emit": 0, "watermark_held_for_candle": 0}
+                      "unreadable_rows": 0, "candle_earlier_revision_after_emit": 0, "watermark_held_for_candle": 0,
+                      "candles_incomplete": 0}
         self.late = []
         self.rejected = []                # unreadable ticker rows kept as evidence
         self.alive_until = None           # last quote time + dead_after_ms: clock ticks only up to here
@@ -492,6 +493,8 @@ class Ingestor(object):
                 else:                                             # too late to replace: keep the revision already held
                     self.pending.append(held)
             return
+        if row["known_at"] < row["bucket_start"] + ONE_MINUTE_MS:   # first read before its minute was over: the session uses it as it came (D-17-oct 13:42Z)
+            self.stats["candles_incomplete"] += 1
         t_ms, event = _candle_event(row)
         self._last_candle_t = t_ms
         self.max_seen_ms = t_ms if self.max_seen_ms is None else max(self.max_seen_ms, t_ms)
@@ -598,7 +601,7 @@ class Ingestor(object):
             if name in state:
                 setattr(ing, name, state[name])
         ing.cursor = dict({"ticker": 0, "candle": 0, "gap": 0}, **ing.cursor)
-        for name in ("data_gaps", "product_silences", "source_silences", "epoch_changes"):
+        for name in ("data_gaps", "product_silences", "source_silences", "epoch_changes", "candles_incomplete"):
             ing.stats.setdefault(name, 0)
         ing.pending = [(t, o, e, tuple(k) if k else None) for t, o, e, k in state["pending"]]
         ing.candle_first = {tuple(k): dict(v, known=tuple(v["known"]), digest=tuple(v["digest"])) for k, v in state["candle_first"]}
