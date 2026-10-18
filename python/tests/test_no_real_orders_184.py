@@ -63,7 +63,7 @@ def audit(event, args):                         # sees what the patches above ca
 sys.addaudithook(audit)
 sys.path[:0] = sys.argv[1:3]                    # only now: the engine and the test helpers are imported with the traps in place
 NAMES = ["test_paper_live_process_185.TestLifecycle.test_warmup_then_live_then_an_orderly_stop_that_leaves_the_files_a_supervisor_needs",
-         "test_paper_live_process_185.TestObservedLifecycle.test_a_divergence_halts_the_process_with_the_evidence_and_the_pnl_not_verified"]
+         "test_paper_live_observed_lifecycle_185.TestObservedLifecycle.test_a_divergence_halts_the_process_with_the_evidence_and_the_pnl_not_verified"]
 result = unittest.TextTestRunner(stream=open(os.devnull, "w"), verbosity=0).run(unittest.defaultTestLoader.loadTestsFromNames(NAMES))
 engine = sorted(m for m in sys.modules if m.startswith("balancita_engine.") and getattr(sys.modules[m], "__file__", None))
 print("RESULT:" + json.dumps({"ran": result.testsRun, "ok": result.wasSuccessful(), "hits": hits, "engine": engine,

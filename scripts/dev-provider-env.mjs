@@ -789,7 +789,7 @@ export function devChildSpecs({
       },
       {
         // Forward paper book of the strategies registered in config/forward-strategies.json (market DB
-        // read-only -> its own forward DB and summary, sole writer of both). Runs every 30 minutes.
+        // read-only -> its own forward DB and summary, sole writer of both). Runs every hour.
         name: 'forward',
         command: python.command,
         cwd: serverCwd,
@@ -804,7 +804,7 @@ export function devChildSpecs({
           '--strategies-db',
           strategiesDb,
           '--loop-seconds',
-          '1800',
+          '3600',
         ],
         env: {
           ...env,
@@ -850,6 +850,10 @@ export function devChildSpecs({
           verdictsDb,
           '--market-db',
           marketDb,
+          '--forward-db',
+          `${forwardDir}/forward.sqlite`,
+          '--decisions-db',
+          decisionsDb,
           '--port',
           String(STRATEGIES_PORT),
         ],

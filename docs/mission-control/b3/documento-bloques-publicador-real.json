@@ -164,7 +164,7 @@
       "pid": 4242
     },
     "schema": "balancita-paper-session-blocks.v1",
-    "session_id": "4e186b95b804e196f097",
+    "session_id": "cfc5fcbc10075627dce9",
     "status": {
       "clock": null,
       "evidence_class": "not_forward_evidence",
@@ -202,7 +202,7 @@
   },
   "intervals_wait_before_decision": {
     "authority": "none",
-    "config_digest": "00e662d03f13dd267bed",
+    "config_digest": "5b3993cea5b1f2a15860",
     "derived": true,
     "intervals": {
       "clock_ms": 1791030005000,
@@ -294,7 +294,7 @@
       },
       "to_ms": null
     },
-    "observed_now_ms": 1763251800000,
+    "observed_now_ms": 1792259100000,
     "positions": {
       "account": {
         "class": "simulated",
@@ -364,7 +364,7 @@
       "pid": 4242
     },
     "schema": "balancita-paper-session-blocks.v1",
-    "session_id": "48374bbab2c106189ba4",
+    "session_id": "a07c8f24a2b4f5118d52",
     "status": {
       "clock": null,
       "evidence_class": "not_forward_evidence",
@@ -382,8 +382,8 @@
       "halt_reason": null,
       "liveness": "unknown",
       "mode": "integration",
-      "observed_now_ms": 1763251800000,
-      "open_positions": 0,
+      "observed_now_ms": 1792259100000,
+      "open_positions": 1,
       "orderly_stop": null,
       "pending_orders": 0,
       "phase": "LIVE",
@@ -393,17 +393,17 @@
       "reported_phase": "LIVE",
       "resources": null,
       "schema": "balancita-paper-session-status.v1",
-      "steps": 2,
+      "steps": 8,
       "thresholds": {
         "heartbeat_max_age_ms": 15000,
         "status": "hypothesis"
       }
     },
-    "steps": 2
+    "steps": 8
   },
   "operating_no_threshold": {
     "authority": "none",
-    "config_digest": "00e662d03f13dd267bed",
+    "config_digest": "5b3993cea5b1f2a15860",
     "derived": true,
     "intervals": {
       "clock_ms": 1791030005000,
@@ -495,7 +495,7 @@
       },
       "to_ms": null
     },
-    "observed_now_ms": 1763251800000,
+    "observed_now_ms": 1792259100000,
     "positions": {
       "account": {
         "class": "simulated",
@@ -565,7 +565,7 @@
       "pid": 4242
     },
     "schema": "balancita-paper-session-blocks.v1",
-    "session_id": "48374bbab2c106189ba4",
+    "session_id": "a07c8f24a2b4f5118d52",
     "status": {
       "clock": null,
       "evidence_class": "not_forward_evidence",
@@ -583,8 +583,8 @@
       "halt_reason": null,
       "liveness": "unknown",
       "mode": "integration",
-      "observed_now_ms": 1763251800000,
-      "open_positions": 0,
+      "observed_now_ms": 1792259100000,
+      "open_positions": 1,
       "orderly_stop": null,
       "pending_orders": 0,
       "phase": "LIVE",
@@ -594,17 +594,17 @@
       "reported_phase": "LIVE",
       "resources": null,
       "schema": "balancita-paper-session-status.v1",
-      "steps": 2,
+      "steps": 8,
       "thresholds": {
         "heartbeat_max_age_ms": null,
         "status": "not_approved"
       }
     },
-    "steps": 2
+    "steps": 8
   },
   "operating_threshold_hypothesis": {
     "authority": "none",
-    "config_digest": "00e662d03f13dd267bed",
+    "config_digest": "5b3993cea5b1f2a15860",
     "derived": true,
     "intervals": {
       "clock_ms": 1791030005000,
@@ -696,7 +696,7 @@
       },
       "to_ms": null
     },
-    "observed_now_ms": 1763251800000,
+    "observed_now_ms": 1792259100000,
     "positions": {
       "account": {
         "class": "simulated",
@@ -766,7 +766,7 @@
       "pid": 4242
     },
     "schema": "balancita-paper-session-blocks.v1",
-    "session_id": "48374bbab2c106189ba4",
+    "session_id": "a07c8f24a2b4f5118d52",
     "status": {
       "clock": null,
       "evidence_class": "not_forward_evidence",
@@ -784,8 +784,8 @@
       "halt_reason": null,
       "liveness": "unknown",
       "mode": "integration",
-      "observed_now_ms": 1763251800000,
-      "open_positions": 0,
+      "observed_now_ms": 1792259100000,
+      "open_positions": 1,
       "orderly_stop": null,
       "pending_orders": 0,
       "phase": "LIVE",
@@ -795,17 +795,17 @@
       "reported_phase": "LIVE",
       "resources": null,
       "schema": "balancita-paper-session-status.v1",
-      "steps": 2,
+      "steps": 8,
       "thresholds": {
         "heartbeat_max_age_ms": 15000,
         "status": "hypothesis"
       }
     },
-    "steps": 2
+    "steps": 8
   },
   "stopped_orderly": {
     "authority": "none",
-    "config_digest": "00e662d03f13dd267bed",
+    "config_digest": "5b3993cea5b1f2a15860",
     "derived": true,
     "intervals": {
       "clock_ms": 1791030005000,
@@ -897,7 +897,7 @@
       },
       "to_ms": null
     },
-    "observed_now_ms": 1763335800000,
+    "observed_now_ms": 1792260600000,
     "positions": {
       "account": {
         "class": "simulated",
@@ -967,29 +967,31 @@
       "pid": 4242
     },
     "schema": "balancita-paper-session-blocks.v1",
-    "session_id": "48374bbab2c106189ba4",
+    "session_id": "a07c8f24a2b4f5118d52",
     "status": {
       "clock": null,
       "evidence_class": "not_forward_evidence",
       "funding": {
-        "disputed_trades": null,
-        "divergence_evidence": null,
-        "incomplete_trades": null,
-        "pnl_verified": false,
-        "quarantined_periods": null,
-        "reasons": [
-          "funding_report_missing"
+        "disputed_trades": [],
+        "divergence_evidence": 0,
+        "incomplete_trades": [
+          "beaf130a9fc78a9b187c8c79"
         ],
-        "source": "unknown"
+        "pnl_verified": false,
+        "quarantined_periods": [],
+        "reasons": [
+          "trade_funding_incomplete"
+        ],
+        "source": "observed"
       },
       "halt_reason": null,
       "liveness": "final",
       "mode": "integration",
-      "observed_now_ms": 1763335800000,
-      "open_positions": 1,
+      "observed_now_ms": 1792260600000,
+      "open_positions": 0,
       "orderly_stop": {
         "cancelled": [],
-        "declared_ms": 1763335800000,
+        "declared_ms": 1792260600000,
         "expired": []
       },
       "pending_orders": 0,
@@ -998,13 +1000,13 @@
       "reported_phase": "STOPPED",
       "resources": null,
       "schema": "balancita-paper-session-status.v1",
-      "steps": 141,
+      "steps": 12,
       "thresholds": {
         "heartbeat_max_age_ms": 15000,
         "status": "hypothesis"
       }
     },
-    "steps": 141
+    "steps": 12
   },
   "without_status": {
     "authority": "none",

@@ -18,6 +18,8 @@ import {
   OperationalBadge,
   ResearchBadge,
 } from './StrategyStatusBadges.tsx'
+import { ForwardResult } from './ForwardResult.tsx'
+import { ForwardHealth } from './ForwardHealth.tsx'
 import './ComparisonView.css'
 
 const KIND_LABELS: Record<InventoryStrategy['kind'], string> = {
@@ -54,11 +56,13 @@ export function ExperimentCard({
   onOpen,
   onInventory,
   activity = null,
+  now,
 }: {
   row: InventoryStrategy
   inventory: Inventory
   /** Only read for Kronos (`kind === 'model'`); null while unknown. */
   activity?: KronosActivity | null
+  now: number
   onOpen: () => void
   onInventory: () => void
 }) {
@@ -158,11 +162,8 @@ export function ExperimentCard({
         )}
       </section>
 
-      <section className="comparison__block">
-        <h4>Forward paper</h4>
-        <em>No disponible (B5)</em>
-        {start && <small>{start}</small>}
-      </section>
+      <ForwardResult row={row} now={now} />
+      {start && <small className="comparison__start">{start}</small>}
 
       <section className="comparison__block comparison__verdict">
         <h4>Veredicto según la evidencia</h4>
@@ -314,6 +315,7 @@ export default function ComparisonView({
       onOpen={() => onOpen(row)}
       onInventory={onBack}
       activity={activity}
+      now={now}
     />
   )
   return (
@@ -337,6 +339,8 @@ export default function ComparisonView({
         otra unidad o metodología. No hay cartera consolidada.
       </div>
 
+      <ForwardHealth health={inventory.forward_health} now={now} />
+
       <h3 className="comparison__group">
         Experimentos · <span data-testid="running-count">{running.length}</span>
       </h3>
@@ -352,9 +356,9 @@ export default function ComparisonView({
         <article className="comparison__panel">
           <h3>Equity por experimento</h3>
           <p>
-            <b>No disponible.</b> Solo se mostrarán series reales por
-            experimento cuando exista el endpoint del forward (B5). Nunca una
-            curva consolidada.
+            <b>No disponible.</b> El forward aún no publica una serie de equity
+            por experimento; cuando exista se mostrará una curva por libro.
+            Nunca una curva consolidada.
           </p>
         </article>
         <article className="comparison__panel">
@@ -391,10 +395,7 @@ export default function ComparisonView({
               ))}
             </tbody>
           </table>
-          <p>
-            Resultados del forward, concurrencia cruzada y pérdida
-            correlacionada: no disponibles (B5).
-          </p>
+          <p>Concurrencia cruzada y pérdida correlacionada: no disponibles.</p>
         </article>
       </div>
     </section>

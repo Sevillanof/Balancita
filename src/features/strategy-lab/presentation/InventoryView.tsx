@@ -2,6 +2,7 @@ import { Fragment, useEffect, useState } from 'react'
 import { amount } from '../../../shared/finance/format.ts'
 import { DataState } from '../../../shared/mission-control/index.ts'
 import { count, netBpPerOp, netUsd } from '../domain/strategy-format.ts'
+import { forwardShort } from '../domain/forward-text.ts'
 import { marketText, validationDetail } from '../domain/inventory-text.ts'
 import type {
   Inventory,
@@ -76,8 +77,8 @@ export function InventoryRow({
         ) : (
           <em>Sin backtest</em>
         )}
-        <span title="Operaciones del forward: la fuente (B5) todavía no existe">
-          forward: B5
+        <span title={row.forward.missing ?? 'Operaciones en vivo del forward'}>
+          {forwardShort(row)}
         </span>
       </td>
       <td className="inventory__num">
@@ -95,8 +96,12 @@ export function InventoryRow({
         ) : (
           <em>No disponible</em>
         )}
-        <span title="Resultado del forward: la fuente (B5) todavía no existe">
-          paper: B5
+        <span
+          title={row.forward.missing ?? 'Resultado neto en vivo del forward'}
+        >
+          {row.forward.trades
+            ? `paper: ${netUsd(row.forward.trades.live.net_usd)} en vivo`
+            : 'paper: sin resultado'}
         </span>
       </td>
       <td>
@@ -125,7 +130,7 @@ export function InventoryRow({
             disabled={row.kind === 'qwen_exit'}
             title={
               row.kind === 'qwen_exit'
-                ? 'Sin detalle: los resultados de C31 son un archivo local (B5)'
+                ? 'Sin detalle: los resultados de C31 son un archivo local'
                 : undefined
             }
             onClick={onOpen}
@@ -414,9 +419,9 @@ export default function InventoryView({
           <h3>Backtest y forward, separados</h3>
           <p>
             Las cifras de esta tabla son de backtest
-            {days ? ` en dos rangos de ${days} días` : ''}. Los resultados del
-            forward paper se mostrarán cuando B5 los exponga; hasta entonces
-            figuran «forward: B5».
+            {days ? ` en dos rangos de ${days} días` : ''}. El forward paper
+            figura aparte, solo con operaciones en vivo; si no hay lectura se
+            dice el motivo.
           </p>
         </article>
       </div>
