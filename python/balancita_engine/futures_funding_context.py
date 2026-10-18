@@ -50,63 +50,123 @@ def periods_from_responses(raw_responses):
 _RATE_CACHE = {}  # (market DB path, response sha256, period start) -> relative rate or None; a stored body never changes
 
 
-def _relative_rates(db, path, sha, starts):
-    """``{start: relative_rate}`` of ``starts`` in the stored response ``sha`` (those it does not state are absent)."""
+def _tables(db):
+    return {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+
+
+def _extract_rates(text):
+    """``{start: relative_rate}`` from a poll's literal extract (``serverTime=...`` then one JSON period per line)."""
+    found = {}
+    for line in (text or "").splitlines()[1:]:
+        try:
+            rate = json.loads(line)
+            found[_start_ms(rate)] = float(rate["relativeFundingRate"])
+        except (TypeError, ValueError, KeyError):
+            continue
+    return found
+
+
+def _relative_rates(db, path, product_id, sha, starts, tables):
+    """``{start: relative_rate}`` of ``starts`` in response ``sha``: from the poll's literal extract (what the sightings
+    keep) or, if the full body was stored, from it. Hours neither states are absent: never guessed."""
     missing = {s for s in starts if (path, sha, s) not in _RATE_CACHE}
     if missing:
-        row = db.execute("SELECT raw_response FROM paper_futures_funding_responses WHERE sha256=?", (sha,)).fetchone()
         found = {}
-        try:
-            for rate in json.loads(row[0])["rates"]:
-                start = _start_ms(rate)
-                if start in missing:
-                    found[start] = float(rate["relativeFundingRate"])
-        except (TypeError, ValueError, KeyError):
-            found = {}
+        if "paper_futures_funding_polls" in tables:
+            for (text,) in db.execute("SELECT extract_text FROM paper_futures_funding_polls WHERE response_sha256=? "
+                                      "AND product_id=?", (sha, product_id)):
+                found.update({k: v for k, v in _extract_rates(text).items() if k in missing})
+        rest = missing - set(found)
+        row = db.execute("SELECT raw_response FROM paper_futures_funding_responses WHERE sha256=?", (sha,)).fetchone() \
+            if rest else None
+        if row is not None:
+            try:
+                for rate in json.loads(row[0])["rates"]:
+                    start = _start_ms(rate)
+                    if start in rest:
+                        found[start] = float(rate["relativeFundingRate"])
+            except (TypeError, ValueError, KeyError):
+                pass
         for start in missing:
             _RATE_CACHE[(path, sha, start)] = found.get(start)
     return {s: _RATE_CACHE[(path, sha, s)] for s in starts if _RATE_CACHE[(path, sha, s)] is not None}
 
 
-def load_periods(market_db_path, product_id, since_ms=None):
-    """Sorted ``[(start_ms, relative_rate, known_at_ms)]`` of a product from the market DB (read-only).
+def load_periods_detailed(market_db_path, product_id, since_ms=None):
+    """``(periods, info)``: ``periods`` is sorted ``[(start_ms, relative_rate, known_at_ms)]``; ``info`` is
+    ``{"approximate": {start, ...}, "conflicts": {start: other rates seen}}``. Read-only.
 
-    ``known_at_ms`` is when the capture first saw the period *after it had closed* (``paper_futures_funding_periods.known_at``,
-    the arrival of the response that carried it): Kraken lists a closed hour hours later (median about 16.8 h,
-    docs/captura-confirmacion-funding-184.md), so a period is not known at its end. A row written while the period was
-    still open holds a provisional rate and is ignored; the first row from after the close wins ("first seen wins", as in
-    the store). Only the stored responses that supplied those rows are parsed, each once per process (``_RATE_CACHE``),
-    and ``since_ms`` leaves out periods that start earlier: the cost follows the hours replayed, not the capture's age.
-    Periods whose response cannot be read are left out, never guessed.
+    Sightings era (``paper_futures_funding_sightings``, one row per closed period at every poll): ``known_at`` is the first
+    sighting after the period closed and the rate is that sighting's (first seen, for causality). If later sightings show a
+    different rate the period is listed in ``conflicts`` (how many other rates), never silently resolved.
+    Before that table existed (or in a DB without it) only ``paper_futures_funding_periods`` is left, which writes a row only
+    when ``(start, rate)`` is new: the first row from after the close is used as it was; an hour whose only row was seen
+    while it was still open gets ``known_at = end + 1 h`` (the next hourly poll, conservative) and is ``approximate``.
+    Relative rates come from the poll extracts or stored bodies, parsed once per process (``_RATE_CACHE``); ``since_ms`` leaves
+    out periods that start earlier, so the cost follows the hours replayed. Unreadable hours are left out.
     """
     db = sqlite3.connect("file:{}?mode=ro".format(market_db_path), uri=True)
+    info = {"approximate": set(), "conflicts": {}}
     try:
+        tables = _tables(db)
+        if "paper_futures_funding_periods" not in tables:
+            return [], info
         columns = [row[1] for row in db.execute("PRAGMA table_info(paper_futures_funding_periods)")]
-        if not columns:
-            return []
         if "product_id" in columns:
             where, args = "product_id=?", [product_id]
         elif product_id == BTC_PRODUCT:  # a market DB written before schema 7 holds the BTC perpetual only
             where, args = "1", []
         else:
-            return []
-        if since_ms is not None:
-            where, args = where + " AND start_ms>=?", args + [since_ms]
-        first = {}
+            return [], info
+        since = "" if since_ms is None else " AND start_ms>=?"
+        extra = [] if since_ms is None else [since_ms]
+        first, rates_seen, era_start = {}, {}, None
+        if "paper_futures_funding_sightings" in tables:
+            era = db.execute("SELECT MIN(received_at) FROM paper_futures_funding_sightings WHERE product_id=?",
+                             (product_id,)).fetchone()[0]
+            era_start = era
+            for start, end, received, rate, sha in db.execute(
+                    "SELECT start_ms, end_ms, received_at, funding_rate, response_sha256 FROM paper_futures_funding_sightings "
+                    "WHERE product_id=?" + since + " ORDER BY received_at, rowid", [product_id] + extra):
+                if received < end:
+                    continue
+                if start not in first:
+                    first[start] = (sha, received, rate)
+                elif rate != first[start][2]:
+                    rates_seen.setdefault(start, set()).add(rate)
+        info["conflicts"] = {start: len(rates) for start, rates in rates_seen.items()}
+        # Hours with no sighting after their close: only before the sightings existed (or without the table).
+        only_open = {}
         for sha, start, end, known_at in db.execute(
-                "SELECT response_sha256, start_ms, end_ms, known_at FROM paper_futures_funding_periods WHERE " + where
-                + " ORDER BY known_at, rowid", args):
-            if known_at >= end and start not in first:
-                first[start] = (sha, known_at)
+                "SELECT response_sha256, start_ms, end_ms, known_at FROM paper_futures_funding_periods WHERE " + where + since
+                + " ORDER BY known_at, rowid", args + extra):
+            if start in first or (era_start is not None and end > era_start):
+                continue
+            if known_at >= end:
+                first[start] = (sha, known_at, None)
+                only_open.pop(start, None)
+            elif start not in only_open:
+                only_open[start] = (sha, end + HOUR_MS)
+        for start, (sha, known_at) in only_open.items():
+            if start not in first:
+                first[start] = (sha, known_at, None)
+                info["approximate"].add(start)
         by_sha = {}
-        for start, (sha, _) in first.items():
+        for start, (sha, _, _) in first.items():
             by_sha.setdefault(sha, []).append(start)
         rates = {}
         for sha, starts in by_sha.items():
-            rates.update(_relative_rates(db, market_db_path, sha, starts))
+            rates.update(_relative_rates(db, market_db_path, product_id, sha, starts, tables))
     finally:
         db.close()
-    return sorted((start, rates[start], first[start][1]) for start in rates)
+    info["approximate"] &= set(rates)
+    info["conflicts"] = {k: v for k, v in info["conflicts"].items() if k in rates}
+    return sorted((start, rates[start], first[start][1]) for start in rates), info
+
+
+def load_periods(market_db_path, product_id, since_ms=None):
+    """Sorted ``[(start_ms, relative_rate, known_at_ms)]``; see ``load_periods_detailed`` for the rules and the flags."""
+    return load_periods_detailed(market_db_path, product_id, since_ms)[0]
 
 
 class FundingContext:
@@ -118,7 +178,9 @@ class FundingContext:
     ``MAX_PERIOD_AGE_MS`` old and the 30 days before it must be covered at least ``MIN_WINDOW_COVERAGE``.
     """
 
-    def __init__(self, periods, shift_ms=0):
+    def __init__(self, periods, shift_ms=0, approximate=(), conflicts=None):
+        """``approximate``: starts whose ``known_at`` is an estimate; ``conflicts``: ``{start: other rates seen}``."""
+        self.approximate, self.conflicts = set(approximate), dict(conflicts or {})
         rows = sorted(periods)
         self.starts = [row[0] for row in rows]
         self.rates = [row[1] for row in rows]
@@ -128,6 +190,11 @@ class FundingContext:
 
     def assess(self, at_ms):
         """``((rate, percentile), "ok")`` or ``(None, reason)``: ``no_history`` / ``stale`` / ``window_gaps``."""
+        return self.assess_detail(at_ms)[:2]
+
+    def assess_detail(self, at_ms):
+        """``(result, reason, quality)``; ``quality`` counts, for the judged period and its window, the hours whose
+        ``known_at`` is approximate and those with conflicting sightings (empty before a period is judged)."""
         at_ms -= self.shift_ms
         top = bisect.bisect_right(self.starts, at_ms - HOUR_MS)  # periods that have ended
         judged = None
@@ -139,15 +206,19 @@ class FundingContext:
                 break
         if judged is None:
             seen = any(k <= at_ms for k in self.known)
-            return None, ("stale" if seen else "no_history")
+            return None, ("stale" if seen else "no_history"), {}
         low = bisect.bisect_left(self.starts, self.starts[judged] - WINDOW_MS)
-        window = [self.rates[i] for i in range(low, judged) if self.known[i] <= at_ms]  # excludes the judged period
+        used = [i for i in range(low, judged) if self.known[i] <= at_ms]  # excludes the judged period
+        window = [self.rates[i] for i in used]
+        quality = {"approximate_hours": sum(1 for i in used + [judged] if self.starts[i] in self.approximate),
+                   "conflicting_hours": sum(1 for i in used + [judged] if self.starts[i] in self.conflicts),
+                   "window_hours": len(window)}
         if len(window) < MIN_WINDOW_COVERAGE * WINDOW:
-            return None, "window_gaps"
+            return None, "window_gaps", quality
         rate = self.rates[judged]
         below = sum(1 for x in window if x < rate)
         equal = sum(1 for x in window if x == rate)
-        return (rate, 100.0 * (below + 0.5 * equal) / len(window)), "ok"
+        return (rate, 100.0 * (below + 0.5 * equal) / len(window)), "ok", quality
 
     def percentile(self, at_ms):
         """``(rate, percentile)`` of the newest period usable at ``at_ms``, or ``None`` (see ``assess`` for why)."""
@@ -196,7 +267,7 @@ def funding_for(market_db_path, product_id, since_ms=None):
     margin); the default reads everything stored.
     """
     try:
-        periods = load_periods(market_db_path, product_id, since_ms)
+        periods, info = load_periods_detailed(market_db_path, product_id, since_ms)
     except sqlite3.Error:
         return None
-    return FundingContext(periods) if periods else None
+    return FundingContext(periods, approximate=info["approximate"], conflicts=info["conflicts"]) if periods else None

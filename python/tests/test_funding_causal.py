@@ -117,9 +117,68 @@ class LoadPeriodsTests(unittest.TestCase):
         self.response("later", 9 * H, [(5 * H, 0.3)], [(5 * H, "3")])              # a later revision
         self.assertEqual(fc.load_periods(self.path, "PF_XBTUSD"), [(5 * H, 0.2, 6 * H + 30)])
 
-    def test_a_period_only_ever_seen_open_is_left_out(self):
+    def test_an_hour_seen_only_while_open_before_the_sightings_existed_is_known_an_hour_after_its_end_and_flagged(self):
         self.response("open", 5 * H + 30, [(5 * H, 0.1)], [(5 * H, "1")])
-        self.assertEqual(fc.load_periods(self.path, "PF_XBTUSD"), [])
+        periods, info = fc.load_periods_detailed(self.path, "PF_XBTUSD")
+        self.assertEqual(periods, [(5 * H, 0.1, 7 * H)])  # end (6 h) + 1 h
+        self.assertEqual(info["approximate"], {5 * H})
+
+    def test_funding_for_hands_the_flags_to_the_context(self):
+        self.response("open", 5 * H + 30, [(5 * H, 0.1)], [(5 * H, "1")])
+        ctx = fc.funding_for(self.path, "PF_XBTUSD")
+        self.assertEqual(ctx.approximate, {5 * H})
+
+    def test_an_hour_with_a_row_after_the_close_is_exact_not_approximate(self):
+        self.response("closed", 6 * H + 30, [(5 * H, 0.2)], [(5 * H, "2")])
+        self.assertEqual(fc.load_periods_detailed(self.path, "PF_XBTUSD")[1]["approximate"], set())
+
+    def sightings(self, *rows):
+        """rows: (start, received_at, absolute_rate, relative_rate); the extract keeps the literal period, as the capture does."""
+        self.db.executescript(
+            "CREATE TABLE IF NOT EXISTS paper_futures_funding_sightings(product_id TEXT, start_ms INTEGER, received_at INTEGER,"
+            " funding_rate TEXT, end_ms INTEGER, server_time TEXT, response_sha256 TEXT);"
+            "CREATE TABLE IF NOT EXISTS paper_futures_funding_polls(product_id TEXT, started_at INTEGER, response_sha256 TEXT,"
+            " extract_text TEXT);")
+        for start, received, absolute, relative in rows:
+            sha = "s%d_%d" % (start, received)
+            self.db.execute("INSERT INTO paper_futures_funding_sightings VALUES(?,?,?,?,?,?,?)",
+                            ("PF_XBTUSD", start, received, absolute, start + H, "t", sha))
+            line = json.dumps({"timestamp": stamp(start), "fundingRate": 1, "relativeFundingRate": relative})
+            self.db.execute("INSERT INTO paper_futures_funding_polls VALUES(?,?,?,?)",
+                            ("PF_XBTUSD", received, sha, "serverTime=t\n" + line))
+        self.db.commit()
+
+    def test_a_sighting_after_the_close_gives_the_known_at_and_the_rate_even_when_the_periods_table_saw_it_open(self):
+        self.response("open", 5 * H + 30, [(5 * H, 0.5)], [(5 * H, "1")])  # the only periods row: seen open, same final rate
+        self.sightings((5 * H, 6 * H + 30, "1", 0.5))
+        periods, info = fc.load_periods_detailed(self.path, "PF_XBTUSD")
+        self.assertEqual(periods, [(5 * H, 0.5, 6 * H + 30)])  # no gap, not approximate
+        self.assertEqual((info["approximate"], info["conflicts"]), (set(), {}))
+
+    def test_a_sighting_while_the_period_was_open_does_not_count(self):
+        self.sightings((5 * H, 5 * H + 30, "1", 0.4), (5 * H, 6 * H + 30, "2", 0.6))
+        self.assertEqual(fc.load_periods(self.path, "PF_XBTUSD"), [(5 * H, 0.6, 6 * H + 30)])
+
+    def test_conflicting_sightings_keep_the_first_seen_and_are_counted(self):
+        self.sightings((5 * H, 6 * H + 30, "1", 0.5), (5 * H, 7 * H + 30, "2", 0.6), (5 * H, 9 * H, "3", 0.7), (5 * H, 9 * H + 1, "3", 0.7))
+        periods, info = fc.load_periods_detailed(self.path, "PF_XBTUSD")
+        self.assertEqual(periods, [(5 * H, 0.5, 6 * H + 30)])
+        self.assertEqual(info["conflicts"], {5 * H: 2})  # two other rates
+
+    def test_the_era_boundary_hours_before_use_the_periods_table_hours_after_need_a_sighting(self):
+        self.response("before", 5 * H + 40, [(4 * H, 0.1)], [(4 * H, "1")])        # closed at 5 h, seen at 5 h 40: exact
+        self.sightings((5 * H, 6 * H + 30, "1", 0.2))                                # sightings start at 6 h 30
+        self.response("poll-failed", 9 * H + 30, [(8 * H, 0.3)], [(8 * H, "1")])    # in the era but no sighting: not guessed
+        periods, info = fc.load_periods_detailed(self.path, "PF_XBTUSD")
+        self.assertEqual(periods, [(4 * H, 0.1, 5 * H + 40), (5 * H, 0.2, 6 * H + 30)])
+        self.assertEqual(info["approximate"], set())
+
+    def test_the_context_reports_how_many_hours_of_its_window_are_approximate_or_conflicting(self):
+        ctx = fc.FundingContext(hourly(800), approximate={5 * H, 790 * H}, conflicts={200 * H: 1, 799 * H: 2, 6 * H: 1})
+        result, reason, quality = ctx.assess_detail(800 * H + LAG)
+        self.assertEqual(reason, "ok")
+        self.assertEqual((quality["approximate_hours"], quality["conflicting_hours"]), (1, 2))
+        self.assertEqual(fc.FundingContext(hourly(800)).assess_detail(800 * H + LAG)[2]["approximate_hours"], 0)
 
     def test_a_response_that_cannot_be_read_leaves_its_periods_out_instead_of_guessing(self):
         self.response("bad", 7 * H, [], [(5 * H, "1")], raw="not json")
