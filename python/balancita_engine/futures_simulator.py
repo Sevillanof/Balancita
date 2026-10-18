@@ -22,6 +22,7 @@ from .canonical import normalize_decimal
 from .futures_costs import DEFAULT_PRODUCT, entry_fill, exit_fill, fee_rate, round_trip_rate
 from .futures_hits import direction_hit, gross_bp, trade_hit
 from .futures_indicators import FEATURE_SCHEMA_VERSION, INDICATOR_PRECISION, MINIMUM_CANDLES
+from .indicator_catalog import CATALOG, Step
 from .futures_spec_strategy import declared_indicators, propose_spec
 from .futures_strategies import update_regime
 
@@ -103,91 +104,30 @@ class IncrementalFeatures:
         self.highs.append(high)
         self.lows.append(low)
         self.volumes.append(volume)
-        for period, state in self._ema.items():
-            alpha = D(2) / D(period + 1)
-            if state[0] is None:
-                state[1].append(close)
-                if len(state[1]) == period:
-                    state[0] = sum(state[1], D(0)) / D(period)
-            else:
-                state[0] = alpha * close + (D(1) - alpha) * state[0]
         true_range = high - low
         if self._prev_close is not None:
             true_range = max(true_range, abs(high - self._prev_close), abs(low - self._prev_close))
-        for period, state in self._atr.items():
-            if state[0] is None:
-                state[1].append(true_range)
-                if len(state[1]) == period:
-                    state[0] = sum(state[1], D(0)) / D(period)
-            else:
-                state[0] = (state[0] * D(period - 1) + true_range) / D(period)
-        if self._prev_close is not None:
-            change = close - self._prev_close
-            gain, loss = max(change, D(0)), max(-change, D(0))
-            for period, state in self._rsi.items():
-                if state[0] is None:
-                    state[2].append((gain, loss))
-                    if len(state[2]) == period:
-                        state[0] = sum((g for g, _ in state[2]), D(0)) / D(period)
-                        state[1] = sum((l for _, l in state[2]), D(0)) / D(period)
-                else:
-                    state[0] = (state[0] * D(period - 1) + gain) / D(period)
-                    state[1] = (state[1] * D(period - 1) + loss) / D(period)
+        change = None if self._prev_close is None else close - self._prev_close
         log_return = None if self._prev_close is None else (close / self._prev_close).ln()
-        for period, state in self._logvol.items():
-            if log_return is not None:
-                square = log_return * log_return
-                alpha = D(2) / D(period + 1)
-                state[0] = square if state[0] is None else alpha * square + (D(1) - alpha) * state[0]
-                state[1] += 1
+        step = Step(close=close, high=high, low=low, volume=volume, true_range=true_range, change=change,
+                    log_return=log_return, closes=list(self.closes), before_highs=before_highs,
+                    before_lows=before_lows, before_volumes=before_volumes)
+        # The arithmetic of every indicator lives in indicator_catalog; this class only feeds it and keeps the windows.
+        active = [(kind, definition) for kind, definition in CATALOG.items() if kind in self.periods]
+        for kind, definition in active:
+            states = getattr(self, "_" + kind, {})
+            for period, state in states.items():
+                definition.update(period, state, step)
         self._prev_close = close
 
         out = {"schema_version": FEATURE_SCHEMA_VERSION, "ready": True, "reason_codes": [], "candidate_close": _n(close)}
         reasons = []
-        for period, state in self._ema.items():
-            out["ema{}".format(period)] = _n(state[0])
-        for period in self.periods.get("sma", ()):
-            out["sma{}".format(period)] = _n(
-                sum(list(self.closes)[-period:], D(0)) / D(period) if len(self.closes) >= period else None)
-        closes = list(self.closes)
-        for period in self.periods.get("logret", ()):
-            out["logret{}".format(period)] = _n((close / closes[-1 - period]).ln() if len(closes) > period else None)
-        for period, state in self._logvol.items():
-            out["logvol{}".format(period)] = _n(state[0].sqrt() if state[1] >= period else None)
-        for period, state in self._rsi.items():
-            rsi = None
-            if state[0] is not None:
-                if state[1] == 0:
-                    rsi = D(50) if state[0] == 0 else D(100)
-                else:
-                    rsi = D(100) - D(100) / (D(1) + state[0] / state[1])
-            out["rsi{}".format(period)] = _n(rsi)
-        for period, state in self._atr.items():
-            out["atr{}".format(period)] = _n(state[0])
-            if state[0] is None or state[0] <= 0:
-                reasons.append("invalid_or_zero_atr")
-        for period in self.periods.get("bollinger", ()):
-            window = list(self.closes)[-period:]
-            mid = sum(window, D(0)) / D(len(window))
-            variance = sum(((v - mid) ** 2 for v in window), D(0)) / D(period)
-            stddev = variance.sqrt()
-            out["bollinger_mid{}".format(period)] = _n(mid)
-            out["bollinger_variance{}".format(period)] = _n(variance)
-            out["bollinger_stddev{}".format(period)] = _n(stddev)
-            out["bollinger_lower{}".format(period)] = _n(mid - D(2) * stddev)
-            out["bollinger_upper{}".format(period)] = _n(mid + D(2) * stddev)
-        for period in self.periods.get("donchian", ()):
-            window = slice(-period, None) if before_highs else slice(0, 0)
-            ph, pl, pv = before_highs[window], before_lows[window], before_volumes[window]
-            if len(ph) == period:
-                d_high, d_low, prior = max(ph), min(pl), sum(pv, D(0)) / D(period)
-            else:
-                d_high = d_low = prior = None
-                reasons.append("insufficient_donchian_warmup")
-            out["donchian_high{}".format(period)] = _n(d_high)
-            out["donchian_low{}".format(period)] = _n(d_low)
-            out["donchian_mid{}".format(period)] = _n(None if d_high is None else (d_high + d_low) / D(2))
-            out["prior_volume_mean{}".format(period)] = _n(prior)
+        for kind, definition in active:
+            states = getattr(self, "_" + kind, {})
+            for period in self.periods[kind]:
+                items, why = definition.emit(period, states.get(period), step)
+                out.update(items)
+                reasons.extend(why)
         if self.count < MINIMUM_CANDLES:
             reasons.append("insufficient_candle_warmup")
         out.update({
