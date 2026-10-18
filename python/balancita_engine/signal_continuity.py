@@ -23,7 +23,6 @@ signal contract and the feature pipeline are ``multi_signals`` and ``futures_sim
 
 import argparse
 import functools
-import hashlib
 import inspect
 import json
 import os
@@ -716,10 +715,9 @@ class EffectSink:
         return True
 
 
-# ------------------------------------------------------------------------------------------------ synthetic demo
+# ------------------------------------------------------------------------------------------------ demo on captured candles
 DEMO_PRODUCT = "PF_XBTUSD"
 DEMO_START_MS = 1_791_000_000_000 - (1_791_000_000_000 % FIVE_MINUTES_MS)
-DEMO_MINUTES = 1_500
 
 
 class _MomentumV2(MomentumStrategy):
@@ -740,27 +738,34 @@ def demo_strategies(variant="same"):
     return base if swap is None else [swap() if s.id == "mx-momentum-v1" else s for s in base]
 
 
-def synthetic_candles(minutes=DEMO_MINUTES, start_ms=DEMO_START_MS, seed="demo"):
-    """Deterministic official-style candles (hash-derived noise, trend/range stretches). Invented data."""
-    def unit(i):
-        return D(int(hashlib.sha256("{}:{}".format(seed, i).encode()).hexdigest()[:8], 16)) / D(2 ** 32) - D("0.5")
-
-    def official(interval, bucket, close, volume):
-        return {"interval_ms": interval, "bucket_start": bucket, "close_at": bucket + interval,
-                "known_at": bucket + interval + 1_000, "open": str(close), "high": str(close + 6), "low": str(close - 6),
-                "close": str(close), "volume_btc": str(volume), "revision_hash": "h-{}-{}".format(interval, bucket)}
-
-    price, ones = D("100000"), []
-    for i in range(minutes):
-        drift = D(40) if (i // 120) % 3 == 0 else D(-40) if (i // 120) % 3 == 1 else D(0)
-        price += drift + (unit(i) * 120).quantize(D(1))
-        ones.append(official(ONE_MINUTE_MS, start_ms + i * ONE_MINUTE_MS, price, D(1) + abs(unit(i + 7)) * 4))
+def real_candles(path, product=DEMO_PRODUCT):
+    """Official candles of one product from a captured ``paper_futures_official_candles.jsonl``: ``(ones, fives)`` in the
+    shape the strategies read. The 1-minute rows are the capture's own (last revision per bucket); each 5-minute bar is
+    built from its five consecutive minutes. Raises ``ContinuityError`` if the minutes are not consecutive."""
+    latest = {}
+    with open(path, encoding="utf-8") as handle:
+        for line in handle:
+            row = json.loads(line) if line.strip() else None
+            if row and row["product_id"] == product and row["interval_ms"] == ONE_MINUTE_MS:
+                kept = latest.get(row["bucket_start"])
+                if kept is None or (row["known_at"], row["revision_hash"]) > (kept["known_at"], kept["revision_hash"]):
+                    latest[row["bucket_start"]] = row
+    ones = [{"interval_ms": ONE_MINUTE_MS, "bucket_start": r["bucket_start"], "close_at": r["bucket_start"] + ONE_MINUTE_MS,
+             "known_at": r["known_at"], "open": r["open_price"], "high": r["high_price"], "low": r["low_price"],
+             "close": r["close_price"], "volume_btc": r["volume_btc"], "revision_hash": r["revision_hash"]}
+            for _, r in sorted(latest.items())]
+    if not ones or any(b["bucket_start"] - a["bucket_start"] != ONE_MINUTE_MS for a, b in zip(ones, ones[1:])):
+        raise ContinuityError("candles_not_consecutive", "the captured candles have a hole or are empty")
+    first = -(-ones[0]["bucket_start"] // FIVE_MINUTES_MS) * FIVE_MINUTES_MS
     fives = []
-    for start in range(0, minutes - 4, 5):
+    for start in range((first - ones[0]["bucket_start"]) // ONE_MINUTE_MS, len(ones) - 4, 5):
         chunk = ones[start:start + 5]
-        bar = official(FIVE_MINUTES_MS, chunk[0]["bucket_start"], D(chunk[-1]["close"]), sum(D(c["volume_btc"]) for c in chunk))
-        bar["high"], bar["low"] = str(max(D(c["high"]) for c in chunk)), str(min(D(c["low"]) for c in chunk))
-        fives.append(bar)
+        fives.append({"interval_ms": FIVE_MINUTES_MS, "bucket_start": chunk[0]["bucket_start"],
+                      "close_at": chunk[0]["bucket_start"] + FIVE_MINUTES_MS, "known_at": chunk[-1]["known_at"],
+                      "open": chunk[0]["open"], "high": str(max(D(c["high"]) for c in chunk)),
+                      "low": str(min(D(c["low"]) for c in chunk)), "close": chunk[-1]["close"],
+                      "volume_btc": str(sum(D(c["volume_btc"]) for c in chunk)),
+                      "revision_hash": stable_hash([c["revision_hash"] for c in chunk])})
     return ones, fives
 
 
@@ -780,12 +785,13 @@ def _list(text):
 def cmd_produce(args):
     """Process A: delivers cycles [from, to) to the log + consumer. ``--drop`` loses events, ``--duplicate`` delivers
     every event twice, ``--crash point[:n]`` kills the process hard at a fault point."""
-    strategies, (ones, fives) = demo_strategies(), synthetic_candles()
+    strategies, (ones, fives) = demo_strategies(), real_candles(args.candles)
+    start_ms = ones[0]["bucket_start"]
     sink = EffectSink(os.path.join(args.dir, EFFECTS_FILE))
     clock_state = {"now": 0}
-    consumer = Consumer.start(args.dir, sink, lambda: clock_state["now"], DEMO_START_MS)
+    consumer = Consumer.start(args.dir, sink, lambda: clock_state["now"], start_ms)
     for strategy in strategies:
-        consumer.log.freeze_strategy(strategy, DEMO_START_MS)
+        consumer.log.freeze_strategy(strategy, start_ms)
     if args.crash:
         point, _, nth = args.crash.partition(":")
         arm(point, int(nth or 1))
@@ -812,9 +818,9 @@ def cmd_produce(args):
 
 def cmd_recover(args):
     """Process B: restores, finishes the unprocessed tail, detects gaps, reconstructs, writes ``report.json``."""
-    strategies, (ones, fives) = demo_strategies(args.variant), synthetic_candles()
+    strategies, (ones, fives) = demo_strategies(args.variant), real_candles(args.candles)
     sink = EffectSink(os.path.join(args.dir, EFFECTS_FILE))
-    now = DEMO_START_MS + DEMO_MINUTES * ONE_MINUTE_MS + 3_600_000   # 'long after' every cycle: nothing is executable
+    now = ones[-1]["close_at"] + 3_600_000   # 'long after' every cycle: nothing is executable
     try:
         consumer = Consumer.start(args.dir, sink, lambda: now, now)
         check_frozen(consumer.log, strategies)   # before writing anything: an incompatible build must leave no trace
@@ -842,6 +848,7 @@ def main(argv=None):
     sub = parser.add_subparsers(dest="role", required=True)
     produce = sub.add_parser("produce")
     produce.add_argument("--dir", required=True)
+    produce.add_argument("--candles", required=True, help="captured paper_futures_official_candles.jsonl")
     produce.add_argument("--start", type=int, default=0)
     produce.add_argument("--stop", type=int, default=10 ** 9)
     produce.add_argument("--drop", default="")
@@ -849,6 +856,7 @@ def main(argv=None):
     produce.add_argument("--crash", default="")
     recover = sub.add_parser("recover")
     recover.add_argument("--dir", required=True)
+    recover.add_argument("--candles", required=True, help="captured paper_futures_official_candles.jsonl")
     recover.add_argument("--variant", choices=("same", "bumped", "edited"), default="same")
     args = parser.parse_args(argv)
     try:

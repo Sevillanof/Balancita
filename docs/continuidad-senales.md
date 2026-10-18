@@ -56,8 +56,8 @@ Puntos de fallo (`arm`): `before_persist`, `mid_persist` (escritura a medias), `
 PYTHONPATH=python python3 -m unittest python/tests/test_signal_continuity.py          # ~30 s, incluye procesos independientes
 # a mano, dos procesos:
 D=$(mktemp -d)
-PYTHONPATH=python python3 -m balancita_engine.signal_continuity produce --dir $D --stop 100 --crash after_persist:40   # muere con 137
-PYTHONPATH=python python3 -m balancita_engine.signal_continuity recover --dir $D      # restaura, detecta, reconstruye, escribe report.json
+PYTHONPATH=python python3 -m balancita_engine.signal_continuity produce --dir $D --candles python/tests/fixtures/muestra-parcial/paper_futures_official_candles.jsonl --stop 100 --crash after_persist:40   # muere con 137
+PYTHONPATH=python python3 -m balancita_engine.signal_continuity recover --dir $D --candles python/tests/fixtures/muestra-parcial/paper_futures_official_candles.jsonl      # restaura, detecta, reconstruye, escribe report.json
 ```
 
 ## Limitaciones para la integración futura (decisión de Fran, 2026-10-13)
@@ -67,7 +67,7 @@ PYTHONPATH=python python3 -m balancita_engine.signal_continuity recover --dir $D
 
 ## Límites
 
-- Datos sintéticos; no demuestra ventaja de trading ni que el origen real entregue lo que aquí se simula.
+- Corre sobre 1168 velas reales de PF_XBTUSD (muestra parcial del 17-18 oct); no demuestra ventaja de trading ni que el origen real entregue lo que aquí se simula.
 - El «origen» es el productor de la demo. Conectar el forward o la cartera es trabajo posterior y requiere decisión de Fran.
 - `pipeline_hash` cubre las fuentes de indicadores, características incrementales, régimen, percentil de funding, contrato de señal y las funciones de este módulo que fijan inputs/claves; es deliberadamente más estrecho que «módulos enteros», así que cambios ajenos no bloquean la recuperación, pero un cambio dentro de ese perímetro sí (falla cerrado).
 - Solo una estrategia-versión por clave: cambiar parámetros exige subir la versión (y congelar la nueva).

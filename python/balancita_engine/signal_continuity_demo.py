@@ -14,7 +14,7 @@ PARENT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CRASH_AT = 40  # the n-th signal handled after the process starts, at which it is killed
 
 
-def run(role, directory, *extra):
+def _run(role, directory, *extra):
     """A brand-new interpreter for one role. Returns ``(exit code, RECOVERY_REFUSED reason or None, stderr)``."""
     env = dict(os.environ, PYTHONPATH=PARENT + os.pathsep + os.environ.get("PYTHONPATH", ""))
     done = subprocess.run([sys.executable, "-m", "balancita_engine.signal_continuity", role, "--dir", directory, *extra],
@@ -58,9 +58,13 @@ def report(directory):
         return json.load(handle)
 
 
-def scenarios(base):
-    """Runs every scenario under ``base`` and returns a plain, deterministic summary."""
+def scenarios(base, candles):
+    """Runs every scenario under ``base`` and returns a plain, deterministic summary. ``candles``: a captured
+    ``paper_futures_official_candles.jsonl`` with consecutive 1-minute candles of PF_XBTUSD."""
     out = {}
+
+    def run(role, directory, *extra):
+        return _run(role, directory, "--candles", candles, *extra)
 
     def fresh(name):
         path = os.path.join(base, name)
