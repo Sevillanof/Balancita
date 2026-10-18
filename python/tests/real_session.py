@@ -57,6 +57,11 @@ def config_dict(**over):
     return body
 
 
+def step_of(now):
+    """The index of the clock step that ``now`` belongs to (the first step whose instant is not before it)."""
+    return -(-(now - DECIDE_FROM) // STEP)
+
+
 class Clock(object):
     """``now`` is the instant of step ``index`` from the first decision; ``sleep`` moves to the next one."""
 
@@ -84,6 +89,7 @@ class Base(unittest.TestCase):
     """A real world released up to the minute before the first decision, a session directory, and ``supervisor`` to build processes on it."""
 
     cache = {}
+    buckets = BUY_AT                              # a test class names its own forced entries by overriding this
 
     @classmethod
     def setUpClass(cls):
@@ -112,7 +118,7 @@ class Base(unittest.TestCase):
         config = LP.validate_config(config_dict(**over))
         world = world or self.world
         supervisor = LP.Supervisor(config, directory or self.directory, world.path, clock=clock.now, sleep=clock.sleep,
-                                   tick=world.release_until, strategies=strategies())
+                                   tick=world.release_until, strategies=strategies(self.buckets))
         self.supervisors.append(supervisor)
         return supervisor
 

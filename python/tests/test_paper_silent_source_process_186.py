@@ -1,5 +1,5 @@
-"""Issue #186 (and #185): a source that goes silent for a long stretch, seen from the PROCESS (Supervisor), not from the runner. Invented data,
-simulated clock, nothing real. The session has no limit named for silence here: what is asserted is what the process does today, so a change
+"""Issue #186 (and #185): a source that goes silent for a long stretch, seen from the PROCESS (Supervisor), not from the runner. Real BTC
+candles and quotes (``real_world``), simulated clock. The session has no limit named for silence here: what is asserted is what the process does today, so a change
 that makes a silent source open entries, halt the session on its own, or touch an open position shows up as a failing test.
 
 What the process does (and does not do) while the capture file is still the same file but nothing new is written to it:
@@ -15,20 +15,12 @@ import os
 import unittest
 
 from balancita_engine import paper_live_process as LP
-from test_paper_live_integration import TIMES
-from test_paper_live_process_185 import START, Base
+from real_session import Base, Clock, position_detail, step_of
+from real_world import MIN, T0
 
-STEPS = 90                       # about the first third of the invented session: enough to see decisions before, during and after
-
-
-def position_detail(supervisor):
-    """Everything that identifies an open position and its protection, as the runner holds it (not a count)."""
-    rows = []
-    for product, book in sorted(supervisor.session.runner.portfolio.positions.items()):
-        pos = book.position
-        rows.append((product, book.intent["intent_id"], pos["side"], int(pos["entry_ms"]), str(pos["entry"]), str(pos["stop"]),
-                     str(pos["target"]), str(pos["quantity"])))
-    return rows
+STEPS = 52                       # 260 minutes of real market: decisions before, during and after the silences below
+CATCH_UP = 7                     # steps that say "stale" before the process is up to date: it starts on 270 minutes of real quotes (about 28 000 rows): it reads 5 000 a step and says "stale" until it is up to date
+SILENCE = (34, 40)               # a position (forced entry decided at step 31) is open all through it
 
 
 def kinds(supervisor):
@@ -36,7 +28,7 @@ def kinds(supervisor):
 
 
 class Gate(object):
-    """Lets rows through except in the window [first, last) of steps counted from START; remembers what the session had done at each edge."""
+    """Lets rows through except in the window [first, last) of steps of the clock; remembers what the session had done at each edge."""
 
     def __init__(self, supervisor, first, last):
         self.supervisor, self.first, self.last = supervisor, first, last
@@ -44,7 +36,7 @@ class Gate(object):
         supervisor.tick = self.tick
 
     def tick(self, now):
-        step = next((i for i, t in enumerate(TIMES) if t >= now), len(TIMES)) - START
+        step = step_of(now)
         if step in (self.first, self.last) and step not in self.edges:
             self.edges[step] = (kinds(self.supervisor).get("decision", 0), len(self.supervisor.session.runner.orders()))
             self.details[step] = position_detail(self.supervisor)
@@ -53,6 +45,8 @@ class Gate(object):
 
 
 class TestSilentSourceSeenByTheProcess(Base):
+    buckets = (T0 + 300 * MIN, T0 + 420 * MIN, T0 + 460 * MIN, T0 + 500 * MIN)          # entries decided at steps 7, 31, 39 (inside the silence) and 47
+
     def run_with_silence(self, first, last, steps=STEPS, **over):
         supervisor = self.supervisor(self.clock(), publish_blocks=True, **over)
         supervisor.start()
@@ -61,7 +55,6 @@ class TestSilentSourceSeenByTheProcess(Base):
         return supervisor, gate, code
 
     def clock(self):
-        from test_paper_live_process_185 import Clock
         return Clock()
 
     def test_a_source_silent_from_the_start_is_stepped_through_without_one_decision_and_stops_in_order(self):
@@ -76,25 +69,27 @@ class TestSilentSourceSeenByTheProcess(Base):
         self.assertFalse(os.path.exists(os.path.join(self.directory, LP.HALT_FILE)))
 
     def test_a_silence_in_the_middle_takes_no_decision_inside_it_and_decisions_come_back_with_the_data(self):
-        supervisor, gate, code = self.run_with_silence(30, 60)
+        supervisor, gate, code = self.run_with_silence(*SILENCE)
         self.assertEqual(code, LP.EXIT_OK)
-        before, after = gate.edges[30], gate.edges[60]
+        before, after = gate.edges[SILENCE[0]], gate.edges[SILENCE[1]]
         self.assertGreater(before[0], 0, "the session was deciding before the silence")
         self.assertEqual(before, after, "no decision and no order while nothing arrived")
         self.assertGreater(kinds(supervisor)["decision"], after[0], "decisions resume when rows come back")
+        silent = [o for o in supervisor.session.runner.orders() if T0 + 459 * MIN < o["timeline"]["decided_ms"] < T0 + 461 * MIN]
+        self.assertEqual([(o["state"], o["reasons"]) for o in silent], [("rejected", ["position_already_open"])])   # the entry of the silence is decided only when the rows return, and the earlier position is still open
         self.assertEqual(self.read(LP.REPORT_FILE)["halted"], None)
 
     def test_an_open_position_is_left_exactly_as_it_was_by_the_silence_and_by_the_stop(self):
-        supervisor, gate, code = self.run_with_silence(30, 10 ** 6, steps=60)          # the source never comes back; the process stops by itself
+        supervisor, gate, code = self.run_with_silence(SILENCE[0], 10 ** 6, steps=40)          # the source never comes back; the process stops by itself
         self.assertEqual(code, LP.EXIT_OK)
         report = self.read(LP.REPORT_FILE)
         beat = self.read(LP.HEARTBEAT_FILE)
         self.assertEqual(beat["open_positions"], 1, "the position opened before the silence is still there")
         self.assertEqual(report["positions"]["open_at_end"], 1)                        # reported as left open, not closed or modified by the stop
         self.assertIn("nobody evaluates their stops", report["positions"]["note"])
-        self.assertEqual(gate.edges[30][1], len(supervisor.session.runner.orders()))   # not one order was added after the last row
+        self.assertEqual(gate.edges[SILENCE[0]][1], len(supervisor.session.runner.orders()))   # not one order was added after the last row
         # the position itself (side, quantity, entry, stop, target, intent) is the one the silence found, not only the same count
-        before, after = gate.details[30], position_detail(supervisor)
+        before, after = gate.details[SILENCE[0]], position_detail(supervisor)
         self.assertEqual(len(before), 1)
         self.assertEqual(before, after)
         product, intent_id, side, entry_ms, entry, stop, target, quantity = after[0]
@@ -109,7 +104,7 @@ class TestSilentSourceSeenByTheProcess(Base):
         this is the only place, and it is the same block that already says the figures are not verified."""
         supervisor = self.supervisor(self.clock(), publish_blocks=True)
         supervisor.start()
-        Gate(supervisor, 30, 60)
+        Gate(supervisor, *SILENCE)
         seen, real = [], supervisor._beat
 
         def spy(now, state):
@@ -119,19 +114,22 @@ class TestSilentSourceSeenByTheProcess(Base):
             seen.append((state["source"], self.read(LP.BLOCKS_FILE)["positions"]["verification"]))
         supervisor._beat = spy
         self.assertEqual(supervisor.run(max_steps=STEPS), LP.EXIT_OK)
-        stale = [i for i, (source, _) in enumerate(seen) if source == "stale"]
+        self.assertEqual({source for source, _ in seen[:CATCH_UP]}, {"stale"})              # still reading the history that was there at the start
+        self.assertNotEqual(seen[CATCH_UP][0], "stale")                                    # and up to date at the next step
+        seen = [(i, *pair) for i, pair in enumerate(seen) if i >= CATCH_UP]
+        stale = [i for i, source, _ in seen if source == "stale"]
         self.assertTrue(stale)
         self.assertEqual(stale, list(range(stale[0], stale[-1] + 1)))                    # one contiguous stretch, inside the silence
-        self.assertGreaterEqual(stale[0], 30)
-        self.assertLess(stale[-1], 60)
-        for i, (source, verification) in enumerate(seen):
+        self.assertGreaterEqual(stale[0], SILENCE[0])
+        self.assertLess(stale[-1], SILENCE[1])
+        for i, source, verification in seen:
             with self.subTest(step=i, source=source):
                 self.assertEqual("source_stale" in verification["reasons"], source == "stale")
                 self.assertFalse(verification["verified"])                              # never verified, silent or not (no approved threshold)
                 self.assertEqual(verification["freshness"], "unknown")
 
     def test_the_silence_and_the_publication_together_never_present_the_session_as_confirmed_alive(self):
-        supervisor, _, _ = self.run_with_silence(30, 10 ** 6, steps=60)
+        supervisor, _, _ = self.run_with_silence(SILENCE[0], 10 ** 6, steps=40)
         document = self.read(LP.BLOCKS_FILE)
         self.assertIn(document["status"]["liveness"], ("unknown", "final"))               # the writer measures no age and claims no confirmation
         self.assertEqual(document["status"]["phase"], "STOPPED")
