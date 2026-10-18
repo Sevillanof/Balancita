@@ -290,8 +290,8 @@ def load_forward(path=None):
 def effective_reliability(table, forward, spec):
     """What a decision should believe about ``spec``: ``None`` when never measured.
 
-    The backtest entry stands until the strategy has ``FORWARD_MIN_TRADES`` forward trades; from then on the
-    forward trades alone decide the verdict (a pre-registered strategy needs no search correction).
+    The backtest entry stands until the strategy has ``FORWARD_MIN_TRADES`` live forward trades (those labelled
+    ``recovered`` are reported apart and never count); from then on the live forward trades alone decide the verdict (a pre-registered strategy needs no search correction).
     """
     entry = reliability_for(table, spec)
     if entry is None or entry.get("trades", 0) == 0:
@@ -300,7 +300,7 @@ def effective_reliability(table, forward, spec):
     result.update(source="backtest", forward_trades=None)
     registered = ((forward or {}).get("strategies") or {}).get(spec.get("id"))
     if registered is not None and registered.get("spec_hash") == spec_hash(spec):
-        summary = registered["summary"]
+        summary = registered.get("summary_without_recovered") or registered["summary"]  # only live trades count
         result["forward_trades"] = summary["trades"]
         if summary["trades"] >= FORWARD_MIN_TRADES:
             result.update(source="forward", verdict=summary["verdict"], trades=summary["trades"],
