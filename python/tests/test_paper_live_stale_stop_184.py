@@ -17,8 +17,8 @@ from real_world import BTC, MIN, SEC, T0, RealWorld
 from test_paper_live_integration import MAX_QUOTE_GAP_MS
 from test_paper_live_process_185 import config_dict
 
-DECIDE_FROM = T0 + 600 * MIN
-DECIDE_UNTIL = T0 + 1000 * MIN
+DECIDE_FROM = T0 + 120 * MIN
+DECIDE_UNTIL = T0 + 400 * MIN
 HOLE = (DECIDE_FROM + 10 * MIN, DECIDE_FROM + 10 * MIN + 130 * SEC)         # 130 s of real quotes left out
 
 
@@ -108,6 +108,18 @@ class TestSupervisorCheck(unittest.TestCase):
         self.assertFalse(supervisor.stop_requested)
         self.assertIsNone(supervisor.stop_reason)
 
+    def test_while_the_ingestor_still_has_rows_to_read_the_quote_time_is_not_a_silence(self):
+        supervisor = self.supervisor({BTC: 1_000})
+        supervisor.session.ingestor = SimpleNamespace(ticker_more=True, candle_more=False)
+        supervisor._check_quote_gap(10 ** 9)
+        self.assertFalse(supervisor.stop_requested)
+        supervisor.session.ingestor = SimpleNamespace(ticker_more=False, candle_more=True)
+        supervisor._check_quote_gap(10 ** 9)
+        self.assertFalse(supervisor.stop_requested)
+        supervisor.session.ingestor = SimpleNamespace(ticker_more=False, candle_more=False)
+        supervisor._check_quote_gap(10 ** 9)
+        self.assertTrue(supervisor.stop_requested)
+
     def test_without_the_parameter_nothing_is_checked(self):
         config = LP.validate_config(config_dict())
         supervisor = LP.Supervisor(config, "/nonexistent", "/nonexistent", clock=lambda: 0)
@@ -138,39 +150,47 @@ class Clock(object):
 
 
 class TestStaleStopInTheSession(unittest.TestCase):
-    """End to end on the real candles and quotes: a 130 s hole with a 60 s limit ends the session in order, with its own status."""
+    """End to end on the real candles and quotes. The session starts on 120 minutes of history (more tickers than one batch of the ingestor reads) that the ingestor reads batch by batch."""
 
     def setUp(self):
         SC.disarm()
         self.root = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, self.root, True)
-        self.world = RealWorld(self.root, quote_holes=[HOLE])
-        self.addCleanup(self.world.close)
-        self.world.release_until(DECIDE_FROM - MIN)
         self.directory = os.path.join(self.root, "session")
+
+    def run_session(self, holes, decide_until):
+        world = RealWorld(self.root, quote_holes=holes)
+        self.addCleanup(world.close)
+        world.release_until(DECIDE_FROM - MIN)
+        clock = Clock()
+        config = LP.validate_config(config_dict(decide_from_ms=DECIDE_FROM, decide_until_ms=decide_until, warmup_minutes=100,
+                                                funding_mode="observed", stale_stop={"stop_quote_gap_ms": 60_000}))
+        supervisor = LP.Supervisor(config, self.directory, world.path, clock=clock.now, sleep=clock.sleep,
+                                   tick=world.release_until, strategies=RS.load_frozen()[0])
+        self.addCleanup(lambda: supervisor.session is not None and supervisor.abandon())
+        supervisor.start()
+        return supervisor.run()
 
     def read(self, name):
         with open(os.path.join(self.directory, name), encoding="utf-8") as handle:
             return json.load(handle)
 
-    def test_the_hole_ends_the_session_in_order_with_status_5_and_the_reason_on_record(self):
-        clock = Clock()
-        config = LP.validate_config(config_dict(decide_from_ms=DECIDE_FROM, decide_until_ms=DECIDE_UNTIL, warmup_minutes=540,
-                                                funding_mode="observed", stale_stop={"stop_quote_gap_ms": 60_000}))
-        supervisor = LP.Supervisor(config, self.directory, self.world.path, clock=clock.now, sleep=clock.sleep,
-                                   tick=self.world.release_until, strategies=RS.load_frozen()[0])
-        self.addCleanup(lambda: supervisor.session is not None and supervisor.abandon())
-        supervisor.start()
-        code = supervisor.run()
-        self.assertEqual(code, LP.EXIT_STALE_STOP)
+    def test_the_hole_ends_the_session_in_order_with_status_5_at_the_hole_and_the_reason_on_record(self):
+        self.assertEqual(self.run_session([HOLE], DECIDE_UNTIL), LP.EXIT_STALE_STOP)
         report = self.read(LP.REPORT_FILE)
         self.assertEqual(report["ended_as"], LP.STOPPED_PHASE)
         self.assertEqual(report["stale_stop"]["stop_reason"], "quote_gap:" + BTC)
-        self.assertEqual(report["stale_stop"]["events"][0]["limit_ms"], 60_000)
-        self.assertGreater(report["stale_stop"]["events"][0]["gap_ms"], 60_000)
+        event = report["stale_stop"]["events"][0]
+        self.assertEqual(event["limit_ms"], 60_000)
+        self.assertGreater(event["gap_ms"], 60_000)
+        self.assertTrue(HOLE[0] + 60_000 <= event["observed_now_ms"] <= HOLE[1], event)      # at the hole, not before it
         beat = self.read(LP.HEARTBEAT_FILE)
         self.assertEqual(beat["phase"], LP.STOPPED_PHASE)
         self.assertEqual((beat["stale_stop"]["limit_ms"], beat["stale_stop"]["events"]), (60_000, report["stale_stop"]["events"]))
+
+    def test_the_same_run_without_the_hole_does_not_stop_for_silence(self):
+        self.assertEqual(self.run_session([], HOLE[1] + 5 * MIN), LP.EXIT_OK)
+        self.assertEqual(self.read(LP.REPORT_FILE)["stale_stop"]["events"], [])
 
 
 if __name__ == "__main__":

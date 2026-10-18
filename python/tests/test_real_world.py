@@ -38,6 +38,18 @@ class RealWorldTests(unittest.TestCase):
         world.release_until(RW.T_END + RW.HOUR)
         self.assertEqual((self.count(world, "paper_futures_official_candles"), self.count(world, "paper_futures_market_events")), (1168, 125589))
 
+    def test_a_row_is_written_when_it_arrived_not_when_Kraken_stamped_it(self):
+        late = next(q for q in RW.quotes() if q[2] - q[3] > 50 and q[2] > RW.T0 + RW.MIN)                  # stamped at least 50 ms before it arrived
+        world = RW.RealWorld(self.root)
+        self.addCleanup(world.close)
+        world.release_until(late[2] - 1)
+        rows = sqlite3.connect(world.path).execute("SELECT COUNT(*) FROM paper_futures_market_events WHERE seq=? AND epoch=?",
+                                                   (late[1], late[0])).fetchone()[0]
+        self.assertEqual(rows, 0)
+        world.release_until(late[2])
+        self.assertEqual(sqlite3.connect(world.path).execute("SELECT COUNT(*) FROM paper_futures_market_events WHERE seq=? AND epoch=?",
+                                                             (late[1], late[0])).fetchone()[0], 1)
+
     def test_a_hole_leaves_real_quotes_out_and_nothing_else(self):
         world = RW.RealWorld(self.root, quote_holes=[(RW.T0 + RW.HOUR, RW.T0 + RW.HOUR + 130 * RW.SEC)])
         self.addCleanup(world.close)
