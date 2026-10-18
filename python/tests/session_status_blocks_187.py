@@ -14,6 +14,7 @@ from balancita_engine import paper_live_process as LP           # noqa: E402
 from balancita_engine import paper_live_publish as PUB          # noqa: E402
 
 import test_paper_live_process_185 as P185                      # noqa: E402
+import test_paper_live_observed_lifecycle_185 as OBS            # noqa: E402
 
 TARGET = os.path.join(_HERE, "..", "..", "docs", "mission-control", "b3", "estado-sesion-publicador-real.json")
 HEARTBEAT_AGE_MS = 500
@@ -22,7 +23,7 @@ _CACHE = {}
 
 
 def _lifecycle():
-    """Warm-up, live (the first LIVE heartbeat) and an orderly stop of one invented session."""
+    """Warm-up, live (the first LIVE heartbeat) and an orderly stop of one session on the real market."""
     P185.TestLifecycle.setUpClass()
     case = P185.TestLifecycle("test_a_stopped_session_is_over")
     case.setUp()
@@ -38,7 +39,7 @@ def _lifecycle():
             if supervisor.phase == LP.LIVE and "live" not in seen:
                 seen["live"] = case.read(LP.HEARTBEAT_FILE)
         supervisor._beat = spy
-        assert supervisor.run(max_steps=len(P185.TIMES) // 2) == LP.EXIT_OK
+        assert supervisor.run(max_steps=P185.RUN_STEPS) == LP.EXIT_OK
         return warming, seen["live"], case.read(LP.HEARTBEAT_FILE), case.read(LP.REPORT_FILE)
     finally:
         case.tearDown()
@@ -47,7 +48,7 @@ def _lifecycle():
 
 def _halted():
     """A funding divergence halts the process (BAL-DECISION-184-01): heartbeat, halt file, report and the session's funding report."""
-    case = P185.TestObservedLifecycle("test_the_halt_does_not_depend_on_the_heartbeat")
+    case = OBS.TestObservedLifecycle("test_the_halt_does_not_depend_on_the_heartbeat")
     case.setUp()
     try:
         supervisor, _ = case.halted_run()

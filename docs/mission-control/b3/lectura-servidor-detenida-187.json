@@ -3,12 +3,12 @@
   "published_at_ms": 1800000000000,
   "evaluated_ms": 1801000000000,
   "document": {
-    "attempt": 144,
+    "attempt": 15,
     "authority": "none",
-    "config_digest": "ca545859422f680b648c",
+    "config_digest": "447462d0fe5a3febb64a",
     "derived": true,
     "intervals": {
-      "clock_ms": 1763335170000,
+      "clock_ms": 1792260297168,
       "contract": {
         "complete": true,
         "stages_missing": [],
@@ -24,61 +24,59 @@
       "from_ms": null,
       "intervals": [
         {
-          "at_ms": 1763254202000,
-          "decided_ms": 1763254202000,
-          "key": "98465f97729ed734b28d0e4a",
+          "at_ms": 1792258803412,
+          "decided_ms": 1792258803412,
+          "key": "a90adb92e2da6e41f17a86c6",
           "product_id": "PF_XBTUSD",
           "side": "LONG",
           "stages": {
             "decision": {
-              "decided_ms": 1763254202000,
+              "decided_ms": 1792258803412,
               "state": "recorded"
             },
             "order": {
-              "entry_ms": 1763254210000,
+              "entry_ms": 1792258805097,
               "reasons": [],
               "state": "opened"
             },
             "signal": {
               "action": "BUY",
-              "entry_hash": "38eb922933cf5cd26760c876f9b8dd06697f3e825fe6a8a36eb6cc49595bbbcf",
+              "entry_hash": "1c37f0ca5ed7bea03efbd04b7cf2a63e95926f5314ff88ca4b593a8ca72b44fc",
               "origin": "original",
-              "seq": 35,
-              "signal_key": "98465f97729ed734b28d0e4a",
+              "seq": 23,
+              "signal_key": "a90adb92e2da6e41f17a86c6",
               "state": "recorded"
             },
             "trade": {
               "exit_reason": "target",
               "state": "closed",
-              "trade_id": "162467f865dd15872fa319c0"
+              "trade_id": "beaf130a9fc78a9b187c8c79"
             }
           },
           "strategy_id": "c29-momentum-perp-v1"
         },
         {
-          "at_ms": 1763254502000,
-          "decided_ms": 1763254502000,
-          "key": "cd833d62f653de2ac8903d88",
+          "at_ms": 1792257003499,
+          "decided_ms": null,
+          "key": "2e8a9b082d572aba5ceeead5",
           "product_id": "PF_XBTUSD",
-          "side": "LONG",
+          "side": "none",
           "stages": {
             "decision": {
-              "decided_ms": 1763254502000,
-              "state": "recorded"
+              "decided_ms": null,
+              "state": "none"
             },
             "order": {
-              "entry_ms": 1763254510000,
-              "reasons": [
-                "position_already_open"
-              ],
-              "state": "rejected"
+              "entry_ms": null,
+              "reasons": [],
+              "state": "none"
             },
             "signal": {
-              "action": "BUY",
-              "entry_hash": "856bde7144e45d3ecc52f0915afbf8f9842e8ae2e8c79faf7da7b3d87f3f099f",
+              "action": "WAIT",
+              "entry_hash": "0b8128d2cd17f0886c07eb3b085d2f0a8105d8c496893b334a919292101eb771",
               "origin": "original",
-              "seq": 38,
-              "signal_key": "cd833d62f653de2ac8903d88",
+              "seq": 7,
+              "signal_key": "2e8a9b082d572aba5ceeead5",
               "state": "recorded"
             },
             "trade": {
@@ -87,32 +85,30 @@
               "trade_id": null
             }
           },
-          "strategy_id": "c29-momentum-perp-v1"
+          "strategy_id": "c32-funding-contrarian-24h-perp-v1"
         },
         {
-          "at_ms": 1763254802000,
-          "decided_ms": 1763254802000,
-          "key": "99811dc0a457d18e4fb11931",
+          "at_ms": 1792257003499,
+          "decided_ms": null,
+          "key": "37a936a5904a920479dad4a2",
           "product_id": "PF_XBTUSD",
-          "side": "LONG",
+          "side": "none",
           "stages": {
             "decision": {
-              "decided_ms": 1763254802000,
-              "state": "recorded"
+              "decided_ms": null,
+              "state": "none"
             },
             "order": {
-              "entry_ms": 1763254810000,
-              "reasons": [
-                "position_already_open"
-              ],
-              "state": "rejected"
+              "entry_ms": null,
+              "reasons": [],
+              "state": "none"
             },
             "signal": {
-              "action": "BUY",
-              "entry_hash": "b4dcd1606302bb076ac13d3038bd853e34c037c411ec58bfc946c5bd7aec4f82",
+              "action": "WAIT",
+              "entry_hash": "c587cc286146b1837558fa10592bc074e7d0d52a9e5baa72becbb2a4990a0d49",
               "origin": "original",
-              "seq": 41,
-              "signal_key": "99811dc0a457d18e4fb11931",
+              "seq": 6,
+              "signal_key": "37a936a5904a920479dad4a2",
               "state": "recorded"
             },
             "trade": {
@@ -121,7 +117,7 @@
               "trade_id": null
             }
           },
-          "strategy_id": "c29-momentum-perp-v1"
+          "strategy_id": "c30-momentum-12h-perp-v1"
         }
       ],
       "mode": "integration",
@@ -129,62 +125,33 @@
       "schema": "balancita-paper-session-intervals.v1",
       "signal_references": {
         "unverified": [],
-        "verified": 840
+        "verified": 33
       },
       "to_ms": null
     },
-    "observed_now_ms": 1763335800000,
+    "observed_now_ms": 1792260600000,
     "positions": {
       "account": {
         "class": "simulated",
         "committed_scope": "open_positions_only",
-        "committed_usd": "100.00",
-        "definitive_usd": "1006.6132",
-        "free_usd": "906.6132",
+        "committed_usd": "0",
+        "definitive_usd": "1000",
+        "free_usd": "1000",
         "initial_usd": "1000",
         "pending_orders": 0,
         "pending_reservation": "none",
         "pending_reserved_usd": "0",
-        "provisional_gains_usd": "0",
-        "total_simulated_usd": "1006.6132"
+        "provisional_gains_usd": "0.1407",
+        "total_simulated_usd": "1000.1407"
       },
-      "clock_ms": 1763335170000,
+      "clock_ms": 1792260297168,
       "evidence_class": "not_forward_evidence",
       "execution_class": "observed_quotes",
       "mode": "integration",
-      "positions": [
-        {
-          "accounting_verified": false,
-          "classes": {
-            "pnl": "estimated",
-            "position": "simulated",
-            "price": "observed"
-          },
-          "coverage": {
-            "gaps": [],
-            "last_quote_ms": 1763335170000,
-            "last_watched_ms": 1763335170000,
-            "quotes_watched": 3268,
-            "silent_now_ms": 0
-          },
-          "entry_ms": 1763269810000,
-          "entry_price": "108381.3502842000000",
-          "intent_id": "2c061951bad4c271c70c9687",
-          "product_id": "PF_XBTUSD",
-          "protection_evidence": "observed",
-          "quantity": "0.0009226679658241732928476158506",
-          "side": "LONG",
-          "stop": "105072.9555023886555694361556",
-          "stop_protection": "observed",
-          "strategy_id": "c29-momentum-perp-v1",
-          "strategy_version": 1,
-          "target": "113350.8167464170166458457666",
-          "verified": false
-        }
-      ],
+      "positions": [],
       "schema": "balancita-paper-session-positions.v1",
       "unrealized_class": "estimated",
-      "unrealized_usd": "3.9383",
+      "unrealized_usd": "0",
       "verification": {
         "freshness": "unknown",
         "reasons": [
@@ -211,29 +178,31 @@
       "pid": 4242
     },
     "schema": "balancita-paper-session-blocks.v1",
-    "session_id": "48374bbab2c106189ba4",
+    "session_id": "3ba4bf6894fa6a433bd3",
     "status": {
       "clock": null,
       "evidence_class": "not_forward_evidence",
       "funding": {
-        "disputed_trades": null,
-        "divergence_evidence": null,
-        "incomplete_trades": null,
-        "pnl_verified": false,
-        "quarantined_periods": null,
-        "reasons": [
-          "funding_report_missing"
+        "disputed_trades": [],
+        "divergence_evidence": 0,
+        "incomplete_trades": [
+          "beaf130a9fc78a9b187c8c79"
         ],
-        "source": "unknown"
+        "pnl_verified": false,
+        "quarantined_periods": [],
+        "reasons": [
+          "trade_funding_incomplete"
+        ],
+        "source": "observed"
       },
       "halt_reason": null,
       "liveness": "final",
       "mode": "integration",
-      "observed_now_ms": 1763335800000,
-      "open_positions": 1,
+      "observed_now_ms": 1792260600000,
+      "open_positions": 0,
       "orderly_stop": {
         "cancelled": [],
-        "declared_ms": 1763335800000,
+        "declared_ms": 1792260600000,
         "expired": []
       },
       "pending_orders": 0,
@@ -242,13 +211,13 @@
       "reported_phase": "STOPPED",
       "resources": null,
       "schema": "balancita-paper-session-status.v1",
-      "steps": 141,
+      "steps": 12,
       "thresholds": {
         "heartbeat_max_age_ms": null,
         "status": "not_approved"
       },
       "gateway": null
     },
-    "steps": 141
+    "steps": 12
   }
 }

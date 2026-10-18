@@ -26,12 +26,26 @@ INGEST_KW = {"clock_every_ms": 10 ** 12}
 D = Decimal
 
 
+class _Inner(object):
+    """The strategy ``Forcing`` wraps, with a repr that names it: the code hash of a session reads the repr of every attribute, and the
+    default one carries a memory address, so two runs of the same test would have two session identities."""
+
+    def __init__(self, strategy):
+        self.strategy = strategy
+
+    def __repr__(self):
+        return "inner:" + self.strategy.id
+
+    def decide(self, ctx):
+        return self.strategy.decide(ctx)
+
+
 class Forcing(Strategy):
     """A frozen strategy that buys at the named buckets and decides as itself everywhere else."""
 
     def __init__(self, inner, buckets):
         self.__dict__.update(inner.__dict__)
-        self.inner, self.buckets = inner, set(buckets)
+        self.inner, self.buckets = _Inner(inner), tuple(sorted(buckets))
 
     def decide(self, ctx):
         if ctx.bucket_ms in self.buckets:

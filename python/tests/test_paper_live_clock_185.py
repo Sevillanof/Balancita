@@ -1,11 +1,10 @@
-"""Issue #185: clock guard of the paper process (regression and jump stop in order). Invented data; the clock is simulated."""
+"""Issue #185: clock guard of the paper process (regression and jump stop in order). The market is the real one; the clock is simulated."""
 
 import os
 import unittest
 
 from balancita_engine import paper_live_process as LP
-from test_paper_live_integration import TIMES
-from test_paper_live_process_185 import START, Base, config_dict
+from real_session import DECIDE_FROM, STEP, Base, config_dict
 
 GUARD = {"max_forward_jump_ms": 15 * 60_000}          # arbitrary test number, not a proposal
 
@@ -107,17 +106,17 @@ class TestWallClockIsOffButReady(Base):
         with self.assertRaises(LP.ProcessError) as caught:
             LP.wall_clock_runtime(LP.validate_config(config_dict()))
         self.assertEqual(caught.exception.reason, "config_invalid")
-        self.assertEqual(self.run_main([TIMES[START]], guard=False), LP.EXIT_REFUSED)
+        self.assertEqual(self.run_main([DECIDE_FROM], guard=False), LP.EXIT_REFUSED)
         self.assertFalse(os.path.exists(self.directory))
 
     def test_with_the_gate_open_the_session_follows_the_clock_it_is_given(self):
-        t = TIMES[START:START + 6]
+        t = [DECIDE_FROM + i * STEP for i in range(6)]
         self.assertEqual(self.run_main(t), LP.EXIT_OK)
         self.assertEqual(self.read(LP.REPORT_FILE)["steps"], 4)
         self.assertEqual(self.read(LP.HEARTBEAT_FILE)["observed_now_ms"], t[4])      # the instants came from the injected wall clock, not a simulated one
 
     def test_with_the_gate_open_a_real_clock_that_goes_back_or_jumps_still_halts(self):
-        t = TIMES[START:START + 6]
+        t = [DECIDE_FROM + i * STEP for i in range(6)]
         self.assertEqual(self.run_main([t[0], t[1], t[0]]), LP.EXIT_HALTED)
         self.assertIn("clock_regression", self.read(LP.REPORT_FILE)["halted"])
         self.setUp()
@@ -125,7 +124,7 @@ class TestWallClockIsOffButReady(Base):
         self.assertIn("clock_jump", self.read(LP.REPORT_FILE)["halted"])
 
     def test_both_clocks_at_once_are_refused(self):
-        self.assertEqual(self.run_main([TIMES[START]], extra=("--clock-from-ms", "0")), LP.EXIT_REFUSED)
+        self.assertEqual(self.run_main([DECIDE_FROM], extra=("--clock-from-ms", "0")), LP.EXIT_REFUSED)
         self.assertFalse(os.path.exists(self.directory))
 
 
@@ -159,7 +158,7 @@ class TestRealCaptureStaysRefusedAndUntouched(Base):
         here = os.path.dirname(os.path.abspath(__file__))
         env = dict(os.environ, PYTHONPATH=os.path.dirname(here) + os.pathsep + here)
         done = subprocess.run([sys.executable, "-m", "balancita_engine.paper_live_process", "run", "--config", config, "--directory", self.directory,
-                               "--source", real, "--clock-from-ms", str(TIMES[START])], env=env, capture_output=True, text=True)
+                               "--source", real, "--clock-from-ms", str(DECIDE_FROM)], env=env, capture_output=True, text=True)
         self.assertEqual(done.returncode, LP.EXIT_REFUSED)
         self.assertIn("real_session_not_authorized", done.stderr)
         self.assertFalse(os.path.exists(self.directory))
@@ -178,7 +177,7 @@ class TestClockGuard(Base):
         return supervisor, supervisor.run(max_steps=20)
 
     def test_a_clock_that_goes_back_halts_before_stepping_on_it_and_a_restart_needs_the_operator(self):
-        t = TIMES[START:START + 5]
+        t = [DECIDE_FROM + i * STEP for i in range(5)]
         supervisor, code = self.go([t[0], t[1], t[2], t[1], t[3]], "back")
         self.assertEqual(code, LP.EXIT_HALTED)
         self.assertEqual(self.read(LP.HEARTBEAT_FILE)["phase"], LP.HALTED)
@@ -192,7 +191,7 @@ class TestClockGuard(Base):
         again.session = None
 
     def test_a_one_millisecond_regression_halts(self):
-        t = TIMES[START]
+        t = DECIDE_FROM
         _, code = self.go([t, t + 60_000, t + 59_999], "one-ms")
         self.assertEqual(code, LP.EXIT_HALTED)
         self.assertIn("clock_regression", self.read(LP.REPORT_FILE)["halted"])
@@ -201,7 +200,7 @@ class TestClockGuard(Base):
         self.assertEqual(code, LP.EXIT_OK)
 
     def test_a_jump_past_the_bound_halts_and_exactly_the_bound_does_not(self):
-        t = TIMES[START]
+        t = DECIDE_FROM
         _, code = self.go([t, t + GUARD["max_forward_jump_ms"] + 1], "jump")
         self.assertEqual((code, self.read(LP.REPORT_FILE)["steps"]), (LP.EXIT_HALTED, 1))
         self.assertIn("clock_jump", self.read(LP.REPORT_FILE)["halted"])
@@ -210,7 +209,7 @@ class TestClockGuard(Base):
         self.assertEqual(self.read(LP.REPORT_FILE)["clock"]["events"], [])
 
     def test_the_wall_time_changes_neither_the_decisions_nor_the_digests(self):
-        t = [TIMES[START + i] for i in range(4)]
+        t = [DECIDE_FROM + i * STEP for i in range(4)]
         out = []
         for name, wall in (("wall-a", 1), ("wall-b", 987_654_321)):
             clock = Scripted(t)
@@ -225,12 +224,12 @@ class TestClockGuard(Base):
         self.assertEqual((out[0][3], out[1][3]), (1, 987_654_321))
 
     def test_the_heartbeat_carries_the_wall_time_only_with_the_guard(self):
-        t = TIMES[START]
+        t = DECIDE_FROM
         self.go([t, t + 60_000], "beat")
         self.assertEqual(self.read(LP.HEARTBEAT_FILE)["wall_ms"], 123)
 
     def test_without_the_guard_nothing_is_added_and_the_clock_is_not_read(self):
-        clock = Scripted([TIMES[START], TIMES[START] - 1, TIMES[START]])
+        clock = Scripted([DECIDE_FROM, DECIDE_FROM - 1, DECIDE_FROM])
         self.directory = os.path.join(self.root, "plain")
         supervisor = self.supervisor(clock)
         supervisor.wall_time = lambda: self.fail("wall time read without the guard")
