@@ -11,7 +11,7 @@ from http.server import ThreadingHTTPServer
 from balancita_engine.futures_forward import _SCHEMA, open_is_recovered
 from balancita_engine.futures_forward_result import OPEN_LABEL, UNCLASSIFIED, read_forward, read_q_skips, strategy_block
 from balancita_engine.futures_spec_strategy import load_specs
-from balancita_engine.futures_strategy_reliability import FORWARD_SCHEMA
+from balancita_engine.futures_strategy_reliability import FORWARD_MIN_TRADES, FORWARD_SCHEMA
 from balancita_engine.futures_strategy_registry import StrategyRegistry, StrategyService, make_handler
 
 NOW = 1_800_000_000_000

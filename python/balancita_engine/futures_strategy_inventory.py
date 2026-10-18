@@ -115,7 +115,7 @@ def build_inventory(entries, specs, *, config_dir=None, carry=None, forward_resu
         os.path.join(config_dir, "strategies")) else {}
     products = (reliability.get("period") or {}).get("products") or []
     frozen = set(freeze.get("ids") or [])
-    min_forward = freeze.get("min_forward_trades") or forward.get("min_forward_trades")
+    min_forward = forward.get("min_forward_trades")
     registered = forward.get("strategies") or {}
     retired = closed.get("retired") or {}
 

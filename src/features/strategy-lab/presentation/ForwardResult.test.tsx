@@ -65,11 +65,11 @@ const result = (patch: Partial<Result> = {}): Result => ({
   state: { code: 'active', reason: 'activa en el registro', since_ms: null },
   problems: [],
   available: true,
-  live: side(37, 12.5, liveOpen),
+  live: side(7, 12.5, liveOpen),
   recovered: side(4, -3, recoveredOpen),
   open: opened([position('PF_XBTUSD', false), position('PF_ETHUSD', true)]),
   unclassified_open: noOpen,
-  progress: { live_trades: 37, min_trades: 100, remaining: 63, reached: false },
+  progress: { live_trades: 7, min_trades: 15, remaining: 8, reached: false },
   last_run_ms: NOW - 20 * 60_000,
   late: false,
   funding_state: {},
@@ -84,7 +84,7 @@ const rowWith = (trades: Result | null, missing: string | null = null) =>
       registered: true,
       start_ms: 1,
       registered_at: null,
-      min_trades: 100,
+      min_trades: 15,
       trades,
       available: trades !== null,
       missing,
@@ -96,15 +96,18 @@ describe('ForwardResult (datos de ejemplo)', () => {
   it('shows live and recovered apart, progress, the open position labelled and the last run', () => {
     render(<ForwardResult row={rowWith(result())} now={NOW} />)
     expect(screen.getByTestId('forward-live')).toHaveTextContent(
-      'En vivo: 37 cerradas · +12,50 USD netos',
+      'En vivo: 7 cerradas · +12,50 USD netos',
     )
     expect(screen.getByTestId('forward-recovered')).toHaveTextContent(
       'Recuperadas: 4 cerradas · −3,00 USD netos',
     )
     expect(screen.getByTestId('forward-progress')).toHaveTextContent(
-      '37/100 operaciones en vivo',
+      '7/15 operaciones en vivo',
     )
-    expect(screen.getByRole('progressbar')).toHaveAttribute('value', '37')
+    expect(screen.getByRole('progressbar')).toHaveAttribute(
+      'value',
+      String((7 / 15) * 100),
+    )
     const live = screen.getByTestId('forward-live-open')
     expect(live).toHaveTextContent('Abiertas: 1')
     expect(live).toHaveTextContent('PF_XBTUSD corta desde 100 · en vivo')
@@ -162,7 +165,7 @@ describe('ForwardResult (datos de ejemplo)', () => {
       <ForwardResult
         row={rowWith(
           result({
-            live: side(37, 12.5),
+            live: side(7, 12.5),
             unclassified_open: opened([position('PF_SOLUSD', null)]),
           }),
         )}
@@ -177,7 +180,7 @@ describe('ForwardResult (datos de ejemplo)', () => {
     expect(screen.getByTestId('forward-live-open')).toHaveTextContent(
       'Abiertas: 0',
     )
-    expect(screen.getByTestId('forward-progress')).toHaveTextContent('37/100')
+    expect(screen.getByTestId('forward-progress')).toHaveTextContent('7/15')
   })
 
   it('shows closed trades of the old rule apart and does not add them to the progress', () => {

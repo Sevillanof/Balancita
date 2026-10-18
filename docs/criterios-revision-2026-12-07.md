@@ -8,7 +8,7 @@ Alcance: solo paper, solo datos públicos, estrategias congeladas (C29, C30, Kro
 
 Una estrategia se marca **para revisión** solo si cumple todo:
 
-1. ≥ 100 operaciones independientes cerradas (agrupadas por día y producto).
+1. ≥ 15 operaciones forward en vivo cerradas (agrupadas por día y producto); es un punto de revisión, no prueba estadística (enmienda 2026-10-18 del ADR 0001; antes 100). Las sin clasificar no cuentan.
 2. Neto medio > 0 tras el modelo de costes vigente.
 3. _t_ con errores agrupados > 2.
 4. El resultado no depende de ≤ 3 operaciones (neto > 0 sin ellas).
