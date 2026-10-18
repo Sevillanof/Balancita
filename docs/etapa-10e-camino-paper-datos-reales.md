@@ -84,6 +84,10 @@ Ninguna sesión paper arranca sin la aprobación escrita de Fran.
   falta el freno por hueco de velas; el contador de velas incompletas ya está en el latido y en el informe). Siguen siendo parámetros que nombra el operador, no valores por
   defecto del código; `python/tests/test_paper_live_thresholds_184.py` corre el proceso con esos valores sobre el mercado real de BTC.
   Aprobar la sesión no es parte de esto: sigue necesitando la palabra de Fran (3.1).
+- Desfase de relojes (D-289-03): en la muestra real de BTC, 11.269 de 125.589 cotizaciones (9 %) llegaron hasta 149 ms **antes** de su hora
+  de Kraken. `parse_quote` las acepta si llegan hasta `CLOCK_SKEW_TOLERANCE_MS` = 500 ms antes (más de 3 veces lo medido) y les pone como
+  recepción la hora de Kraken (nunca una hora anterior a la real); más atrás sigue siendo cotización inválida. Sin esto el mayor tramo sin
+  cotización útil era de 8,0 s en vez de 3,7 s. Es un parámetro a revisar, no un límite medido (`test_quote_clock_skew_184.py`).
 
 ### 3.4 Reloj real (PR 5c, aparte)
 
