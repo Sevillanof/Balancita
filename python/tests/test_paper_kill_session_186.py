@@ -281,7 +281,8 @@ def backsteps(times):
 class TestWallClockJumpsDuringAnOpenSilence(Base):
     """S-U4 (matrix E6): the instant the session is given (``observed_now_ms``) jumps backwards or far forwards around the step that
     declares a silence of the source. Nothing may break, nothing may be declared twice, the cancelled order, the money and the signals
-    must be the ones of the run whose clock was normal, and the journal's own time never goes back. """
+    must be the ones of the run whose clock was normal, and the journal's time never goes back more often than in that normal run (the real history is older than the run start, so a
+    few steps back are part of any run). The branch where the clock itself carries the declaration (``observed_silence``) is not here."""
 
     JUMPS = {"back_before": (-1_800_000, 0), "forward_before": (10 * 86_400_000, 0), "forward_only": (10 * 86_400_000,),
              "back_after": (0, -1_800_000, 60_000), "forward_then_back": (3_600_000, 0, 60_000)}
