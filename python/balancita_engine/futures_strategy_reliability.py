@@ -62,11 +62,22 @@ TRIAL_SHARPE_SD = 0.11
 # How many configurations were looked at to arrive at each spec (1 = designed without a search).
 SELECTION_TRIALS = {"c29-momentum-perp-v1": 1000, "c30-momentum-12h-perp-v1": 1000}
 # Forward evidence (trades after a strategy's registered start in config/forward-strategies.json). A strategy
-# found by searching the past is promoted only by these: at least FORWARD_MIN_TRADES forward trades, then the
+# found by searching the past is promoted only by these: at least FORWARD_MIN_TRADES live forward trades (a review checkpoint, not proof), then the
 # ordinary verdict thresholds applied to the forward trades alone (pre-registered, so no search correction).
 FORWARD_STRATEGIES_PATH = os.path.normpath(os.path.join(DEFAULT_SPEC_DIR, "..", "forward-strategies.json"))
 FORWARD_SCHEMA = "futures-strategy-forward.v1"
-FORWARD_MIN_TRADES = 100
+
+
+def load_forward_min_trades(path=FORWARD_STRATEGIES_PATH):
+    """The review threshold, read from ``min_forward_trades`` in config/forward-strategies.json (single source)."""
+    with open(path, encoding="utf-8") as handle:
+        value = json.load(handle)["min_forward_trades"]
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        raise ValueError("min_forward_trades must be a positive integer")
+    return value
+
+
+FORWARD_MIN_TRADES = load_forward_min_trades()
 VERDICTS = ("insufficient_data", "negative_edge", "no_edge", "candidate_edge", "tentative_edge", "reliable_edge")
 
 

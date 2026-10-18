@@ -95,7 +95,7 @@ test.beforeAll(async ({}, info) => {
     'the registry',
   )
   // Hand-written forward summary (DATOS DE EJEMPLO, not a Kraken record): only
-  // C30 is measured, with 7 live and 2 recovered closed trades, 100 required.
+  // C30 is measured, with 7 live and 2 recovered closed trades, 15 required.
   // Written after the registry is up because it needs C30's real spec hash.
   const inventory = (await (
     await fetch(`http://127.0.0.1:${REGISTRY_PORT}/api-strategies/inventory`)
@@ -114,7 +114,7 @@ test.beforeAll(async ({}, info) => {
     JSON.stringify({
       schema: 'futures-strategy-forward.v1',
       updated_ms: now - 10 * 60_000,
-      min_forward_trades: 100,
+      min_forward_trades: 15,
       strategies: {
         [C30]: {
           spec_hash: inventory.strategies.find((row) => row.id === C30)!
@@ -350,7 +350,7 @@ test('the forward result of C30 renders live and recovered apart, with progress'
 }) => {
   await page.goto('/estrategias')
   const row = page.locator(`[data-id="${C30}"]`)
-  await expect(row).toContainText('forward: 7/100 en vivo')
+  await expect(row).toContainText('forward: 7/15 en vivo')
   await expect(row).toContainText('paper: +31,50 USD en vivo')
   await page.getByRole('button', { name: 'Ver comparación' }).click()
   const forward = page
@@ -366,7 +366,7 @@ test('the forward result of C30 renders live and recovered apart, with progress'
     '2 cerradas',
   )
   await expect(forward.getByTestId('forward-progress')).toContainText(
-    '7/100 operaciones en vivo',
+    '7/15 operaciones en vivo',
   )
   await expect(forward.getByTestId('forward-last-run')).toContainText(
     'hace 10 min',

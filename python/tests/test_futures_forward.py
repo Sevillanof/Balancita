@@ -15,6 +15,7 @@ from balancita_engine.futures_simulator import simulate_many
 from balancita_engine.futures_spec_strategy import load_specs, spec_hash
 from balancita_engine.futures_strategy_reliability import (
     FORWARD_MIN_TRADES,
+    FORWARD_STRATEGIES_PATH,
     FORWARD_SCHEMA,
     RELIABILITY_SCHEMA,
     effective_reliability,
@@ -75,7 +76,7 @@ class RecoveryTests(unittest.TestCase):
 
     def setUp(self):
         self.dir = tempfile.TemporaryDirectory()
-        self.registration = {"strategies": {C30: {"start_ms": START + 2000 * MINUTE}}, "min_forward_trades": 100}
+        self.registration = {"strategies": {C30: {"start_ms": START + 2000 * MINUTE}}, "min_forward_trades": FORWARD_MIN_TRADES}
         clean = os.path.join(self.dir.name, "clean.sqlite")
         _market(clean)
         self.reference_db = os.path.join(self.dir.name, "clean-forward.sqlite")
@@ -485,7 +486,7 @@ class ForwardTests(unittest.TestCase):
         self.market = os.path.join(self.dir.name, "market.sqlite")
         _market(self.market)
         self.db = os.path.join(self.dir.name, "forward.sqlite")
-        self.registration = {"strategies": {C30: {"start_ms": START + 2000 * MINUTE}}, "min_forward_trades": 100}
+        self.registration = {"strategies": {C30: {"start_ms": START + 2000 * MINUTE}}, "min_forward_trades": FORWARD_MIN_TRADES}
 
     def tearDown(self):
         self.dir.cleanup()
@@ -501,7 +502,7 @@ class ForwardTests(unittest.TestCase):
         self.assertEqual(again[(C30, "PF_XBTUSD")], 0)
 
     def test_a_start_after_the_move_has_no_trades(self):
-        late = {"strategies": {C30: {"start_ms": START + 4000 * MINUTE}}, "min_forward_trades": 100}
+        late = {"strategies": {C30: {"start_ms": START + 4000 * MINUTE}}, "min_forward_trades": FORWARD_MIN_TRADES}
         run_forward(self.market, self.db, SPECS, late, [("PF_XBTUSD", "0.0001")])
         self.assertEqual(sqlite3.connect(self.db).execute("SELECT COUNT(*) FROM forward_trade").fetchone()[0], 0)
 
@@ -561,6 +562,13 @@ class EffectiveReliabilityTests(unittest.TestCase):
         entry = effective_reliability(_table(), _forward(500, "reliable_edge", digest="old"), SPECS[C30])
         self.assertEqual((entry["source"], entry["verdict"], entry["forward_trades"]), ("backtest", "candidate_edge", None))
 
+    def test_the_minimum_has_one_source_and_is_fifteen_live_trades(self):
+        with open(FORWARD_STRATEGIES_PATH, encoding="utf-8") as handle:
+            configured = json.load(handle)["min_forward_trades"]
+        self.assertEqual(FORWARD_MIN_TRADES, configured)
+        self.assertEqual(FORWARD_MIN_TRADES, 15)
+        self.assertEqual(load_registration()["min_forward_trades"], FORWARD_MIN_TRADES)
+
     def test_unmeasured_strategies_stay_unmeasured(self):
         self.assertIsNone(effective_reliability({"schema": RELIABILITY_SCHEMA, "strategies": {}}, None, SPECS[C30]))
 
@@ -568,7 +576,7 @@ class EffectiveReliabilityTests(unittest.TestCase):
         verdict = {"proposals": [{"strategy_id": C30}]}
         early = q.STATE_FIELDS["strategy_reliability"](
             {"verdict": verdict, "specs": SPECS, "reliability": _table(), "forward": _forward(12, "no_edge")})
-        self.assertEqual(early, "strategy_reliability: {} candidate_edge hit=0.49 net_bp=58.2 trades=288 fwd=12/100".format(C30))
+        self.assertEqual(early, "strategy_reliability: {} candidate_edge hit=0.49 net_bp=58.2 trades=288 fwd=12/{}".format(C30, FORWARD_MIN_TRADES))
         late = q.STATE_FIELDS["strategy_reliability"](
             {"verdict": verdict, "specs": SPECS, "reliability": _table(), "forward": _forward(100, "negative_edge")})
         self.assertEqual(late, "strategy_reliability: {} negative_edge hit=0.55 net_bp=40.0 trades=100".format(C30))
@@ -694,7 +702,7 @@ class CandleLagTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             market = os.path.join(folder, "m.sqlite")
             _market(market)
-            registration = {"strategies": {C30: {"start_ms": START + 2000 * MINUTE}}, "min_forward_trades": 100}
+            registration = {"strategies": {C30: {"start_ms": START + 2000 * MINUTE}}, "min_forward_trades": FORWARD_MIN_TRADES}
             run_forward(market, os.path.join(folder, "f.sqlite"), SPECS, registration, PRODUCTS)
             (payload,) = sqlite3.connect(os.path.join(folder, "f.sqlite")).execute(
                 "SELECT payload FROM forward_status").fetchone()

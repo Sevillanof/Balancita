@@ -8,7 +8,7 @@ from balancita_engine.futures_forward import run_forward, write_summary
 from balancita_engine.futures_funding_reconcile import METHOD_VERSION, reconcile, reconcile_trade
 from balancita_engine.futures_simulator import simulate_many
 from balancita_engine.futures_spec_strategy import load_specs, spec_hash
-from balancita_engine.futures_strategy_reliability import summarize_trades
+from balancita_engine.futures_strategy_reliability import FORWARD_MIN_TRADES, summarize_trades
 
 from test_futures_forward import C30, ONES, FIVES, SPECS, START, _market, _trades
 from test_futures_spec_strategy import MINUTE
@@ -126,7 +126,7 @@ class ForwardReconciliationTests(unittest.TestCase):
         self.market = os.path.join(self.dir.name, "market.sqlite")
         _market(self.market)
         self.db = os.path.join(self.dir.name, "forward.sqlite")
-        self.registration = {"strategies": {C30: {"start_ms": START + 2000 * MINUTE}}, "min_forward_trades": 100}
+        self.registration = {"strategies": {C30: {"start_ms": START + 2000 * MINUTE}}, "min_forward_trades": FORWARD_MIN_TRADES}
         self.products = [("PF_XBTUSD", "0.0001")]
 
     def tearDown(self):

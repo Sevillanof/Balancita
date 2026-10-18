@@ -11,7 +11,7 @@ const forward = (start: number | null) => ({
   registered: start !== null,
   start_ms: start,
   registered_at: null,
-  min_trades: 100,
+  min_trades: 15,
   trades: null,
   available: false,
   missing: 'el servicio no tiene configurada la lectura del forward',
@@ -79,7 +79,7 @@ export const exampleInventory: Inventory = {
   cost_model: { version: 'kraken-futures-costs.v2', hash: 'af5187f6c6a18826' },
   notional_usd: '100',
   thresholds: { t_tentative: 1.64, t_reliable: 2.58, reliable_trades: 100 },
-  forward_min_trades: 100,
+  forward_min_trades: 15,
   period: {
     ranges: {
       previous: {
