@@ -102,7 +102,7 @@ describe('session status decoder against blocks the real publisher emitted', () 
         thresholds: { ...stale.thresholds, heartbeat_max_age_ms: null },
       },
       'a halt reason on a running block': { ...live, halt_reason: 'x' },
-      'verified synthetic funding': {
+      'verified funding with reasons against it on a live block': {
         ...live,
         funding: { ...live.funding, pnl_verified: true },
       },
@@ -111,15 +111,6 @@ describe('session status decoder against blocks the real publisher emitted', () 
         funding: {
           ...live.funding,
           source: 'unknown',
-          reasons: [],
-          pnl_verified: true,
-        },
-      },
-      'verified synthetic funding with no reasons': {
-        ...live,
-        funding: {
-          ...live.funding,
-          source: 'synthetic',
           reasons: [],
           pnl_verified: true,
         },

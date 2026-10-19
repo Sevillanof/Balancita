@@ -74,7 +74,6 @@ const GATEWAY_REASONS: Record<string, string> = {
 }
 
 const FUNDING_SOURCE = {
-  synthetic: 'Fondeo sintético (nunca verifica el resultado)',
   observed: 'Fondeo observado',
   unknown: 'Fondeo sin dato',
 } as const

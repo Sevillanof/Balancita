@@ -383,8 +383,8 @@ export const SESSION_PHASES = [
 export type SessionPhase = (typeof SESSION_PHASES)[number]
 
 export type SessionFunding = {
-  /** `synthetic` never verifies a result; `unknown` means nothing was given, which is not "fine". */
-  source: 'synthetic' | 'observed' | 'unknown'
+  /** `unknown` means nothing was given, which is not "fine". */
+  source: 'observed' | 'unknown'
   pnlVerified: boolean
   reasons: string[]
   /**
@@ -521,11 +521,7 @@ export function decodeSessionStatus(raw: unknown): SessionStatusBlock {
     resources: recordOrNull(r.resources),
     clock: recordOrNull(r.clock),
     funding: {
-      source: oneOf(
-        funding.source,
-        ['synthetic', 'observed', 'unknown'],
-        'funding.source',
-      ),
+      source: oneOf(funding.source, ['observed', 'unknown'], 'funding.source'),
       pnlVerified: bool(funding.pnl_verified, 'funding.pnl_verified'),
       reasons: list(funding.reasons, 'funding.reasons').map((s, i) =>
         str(s, `funding.reasons[${i}]`),

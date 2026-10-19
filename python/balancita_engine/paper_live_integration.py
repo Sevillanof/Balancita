@@ -242,7 +242,7 @@ def _session_config(runner_config, max_quote_gap_ms, block_stale_entries):
     return dataclasses.replace(runner_config, entry_max_quote_age_ms=int(max_quote_gap_ms))
 
 
-def _funding_source(path, funding_mode):
+def _funding_source(path):
     return ObservedFundingSource(path)
 
 
@@ -306,7 +306,7 @@ class LiveSession(object):
             audit = AuditJournal.create(os.path.join(directory, AUDIT_FILE), {"session_id": identity["session_id"]})
             reader = SourceReader(source_path)
             session = cls(directory, source_path, strategies, runner_config, runner, evaluator, audit, Ingestor(reader, expected_products=tuple(products), **ingest_kw),
-                          reader, _funding_source(source_path, funding_mode), identity, max_quote_gap_ms=max_quote_gap_ms,
+                          reader, _funding_source(source_path), identity, max_quote_gap_ms=max_quote_gap_ms,
                           funding_mode=funding_mode, on_funding_divergence=on_funding_divergence)
             _atomic_write(os.path.join(directory, SESSION_FILE), identity)
             session.save_checkpoint()
@@ -383,7 +383,7 @@ class LiveSession(object):
         for (_product, _from, gap_to), _loss in runner.source_losses.items():     # a loss the runner made durable is never delivered under
             ingestor.released_ms = max(ingestor.released_ms or 0, gap_to - 1)     # (the quote that ends it, at gap_to, still comes)
         session = cls(directory, source_path, strategies, runner_config, runner, evaluator, audit, ingestor, reader,
-                      _funding_source(source_path, funding_mode), stored, max_quote_gap_ms=max_quote_gap_ms,
+                      _funding_source(source_path), stored, max_quote_gap_ms=max_quote_gap_ms,
                       funding_mode=funding_mode, on_funding_divergence=on_funding_divergence)
         session.cursors = dict(checkpoint["cursors"])
         session.book = FundingBook.from_state(checkpoint["funding_book"])
