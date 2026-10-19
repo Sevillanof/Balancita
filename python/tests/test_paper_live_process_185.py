@@ -447,7 +447,7 @@ class TestCommandLine(Base):
         config = self.files()
         done = self.run_cli("run", "--config", config, "--directory", self.directory, "--source", self.world.path, "--wall-clock")
         self.assertEqual(done.returncode, LP.EXIT_REFUSED)
-        self.assertIn("wall_clock_not_authorized", done.stderr)
+        self.assertIn("config_invalid", done.stderr)                                  # the gate is open since BAL-DECISION-184-07, but a wall clock needs clock_guard
         real = os.path.join(self.root, "real.json")
         with open(real, "w", encoding="utf-8") as handle:
             json.dump(config_dict(source_id="kraken-live"), handle)

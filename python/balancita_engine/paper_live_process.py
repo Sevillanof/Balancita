@@ -7,17 +7,17 @@ Nothing here is a strategy, an indicator, a cost or a financial rule: it drives 
 next to the session's own records, ``heartbeat.json`` (what the supervisor sees while it runs) and ``report.json`` (what is left
 when the process ends). The clock and the sleep are injected, so a test runs a whole session without waiting.
 
-What this module refuses, on purpose, while the real-session GATE is NO-GO (decision of Fran, unchanged by #185):
+What this module refuses, on purpose (the real-session GATE is open only for the one session of BAL-DECISION-184-07):
 
 * any source that is not authorized (``real_session_not_authorized``). Two kinds exist: the synthetic fixture (``source_id: synthetic``,
   a test-only seam that carries the marker table ``balancita_synthetic_fixture``) and the capture of Kraken (``source_id:
   kraken-capture``, which must NOT carry that marker). The capture is authorized only by an entry of ``AUTHORIZED_SESSIONS`` in this
   file (a reviewed commit naming a BAL-DECISION) that matches the configuration's ``authorization_ref``, the source file and the first
-  decision; the list is empty, so no real session starts. The capture has no mark of its own in its tables: it is recognised by where it
+  decision; the list holds only the session of BAL-DECISION-184-07, so no other real session starts. The capture has no mark of its own in its tables: it is recognised by where it
   comes from. Paper trading on real prices and real orders are different things: nothing here can send an order (test_no_real_orders_184);
 * the wall clock (``wall_clock_not_authorized``): the command line runs on a simulated clock only. The code for the wall clock exists
-  (``wall_clock_runtime``, tested with a fake clock) but ``WALL_CLOCK_GATE`` is a constant of the code and is False: turning it on is a
-  reviewed commit that names a written authorization (BAL-DECISION), never a flag or a configuration key;
+  (``wall_clock_runtime``, tested with a fake clock) and ``WALL_CLOCK_GATE`` is a constant of the code: it is True only since the reviewed commit
+  that names the written authorization BAL-DECISION-184-07, never a flag or a configuration key (a source still has to be in ``AUTHORIZED_SESSIONS``);
 * a restart on its own of a directory that already holds a started session (``restart_requires_operator``, BAL-DECISION-185-01): after
   ANY run that did not end in order (HALTED, REFUSED, a kill, a power cut, a full disk) the operator decides, with ``--restart``, and
   nothing is opened, recovered or stepped before that. The gate does not read marks: ``halt.json``, the heartbeat and the audit are
@@ -104,8 +104,15 @@ SYNTHETIC_CLI = False                   # the command line refuses the synthetic
 # Sessions on the real capture that were authorized in writing, by ``authorization_ref``: the source file, the session directory and the window.
 # Empty on purpose: no session is authorized. Only a reviewed commit that names the BAL-DECISION adds an entry, so the configuration
 # alone (which anyone can write) never opens a real source. The capture has no mark in its tables, hence the path.
-AUTHORIZED_SESSIONS = {}                # {"BAL-DECISION-<n>-<n>": {"source_path": "/abs/futures-market.sqlite", "directory": "/abs/session", "decide_from_ms": int, "decide_until_ms": int}}
-WALL_CLOCK_GATE = False                  # OFF. Only a reviewed change of this constant, with a BAL-DECISION naming it, opens the wall clock
+AUTHORIZED_SESSIONS = {                 # {"BAL-DECISION-<n>-<n>": {"source_path": "/abs/futures-market.sqlite", "directory": "/abs/session", "decide_from_ms": int, "decide_until_ms": int}}
+    # BAL-DECISION-184-07: Fran, 19-oct-2026 08:24Z, in the project chat: "Autorizo la sesión paper en vivo con Bitcoin". One paper session on
+    # PF_XBTUSD (shared simulated portfolio, 100 USD per trade, no real order) from 2026-10-19T14:00Z for 24 h, on the wall clock, reading the
+    # live capture of the Mac read-only. config/paper-session-btc-1.json is the configuration this entry belongs to.
+    "BAL-DECISION-184-07": {"source_path": "/Users/franco.sevillano/balancita-data.noindex/dev-live/futures-market.sqlite",
+                            "directory": "/Users/franco.sevillano/balancita-data.noindex/paper-session-btc-1",
+                            "decide_from_ms": 1792418400000, "decide_until_ms": 1792504800000},
+}
+WALL_CLOCK_GATE = True                   # ON since BAL-DECISION-184-07 (the same written authorization). Only a reviewed change of this constant opens or closes the wall clock
 FRESH_MS = 600_000                               # the newest warm-up candle may be this far from the first decision
 
 INIT, WARMUP, LIVE, STOPPING, STOPPED_PHASE, HALTED, REFUSED_PHASE = "INIT", "WARMUP", "LIVE", "STOPPING", "STOPPED", "HALTED", "REFUSED"
