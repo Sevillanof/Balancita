@@ -15,7 +15,7 @@ What this module refuses, on purpose (the real-session GATE is open only for the
   file (a reviewed commit naming a BAL-DECISION) that matches the configuration's ``authorization_ref``, the source file and the first
   decision; the list holds only the session of BAL-DECISION-184-07, so no other real session starts. The capture has no mark of its own in its tables: it is recognised by where it
   comes from. Paper trading on real prices and real orders are different things: nothing here can send an order (test_no_real_orders_184);
-* the wall clock (``wall_clock_not_authorized``): the command line runs on a simulated clock only. The code for the wall clock exists
+* the wall clock (``wall_clock_not_authorized``): the command line runs on a simulated clock unless ``--wall-clock`` is given and the gate is open. The code for the wall clock exists
   (``wall_clock_runtime``, tested with a fake clock) and ``WALL_CLOCK_GATE`` is a constant of the code: it is True only since the reviewed commit
   that names the written authorization BAL-DECISION-184-07, never a flag or a configuration key (a source still has to be in ``AUTHORIZED_SESSIONS``);
 * a restart on its own of a directory that already holds a started session (``restart_requires_operator``, BAL-DECISION-185-01): after
@@ -102,7 +102,7 @@ SYNTHETIC_SOURCE = "synthetic"          # test-only seam (removed when the inven
 REAL_SOURCE = "kraken-capture"          # the capture of Kraken Futures: recognised by where it comes from, not by what the configuration says
 SYNTHETIC_CLI = False                   # the command line refuses the synthetic fixture; only a test entry (tests/cli_with_synthetic_source.py) turns it on
 # Sessions on the real capture that were authorized in writing, by ``authorization_ref``: the source file, the session directory and the window.
-# Empty on purpose: no session is authorized. Only a reviewed commit that names the BAL-DECISION adds an entry, so the configuration
+# One entry only (BAL-DECISION-184-07); any other session is refused. Only a reviewed commit that names the BAL-DECISION adds an entry, so the configuration
 # alone (which anyone can write) never opens a real source. The capture has no mark in its tables, hence the path.
 AUTHORIZED_SESSIONS = {                 # {"BAL-DECISION-<n>-<n>": {"source_path": "/abs/futures-market.sqlite", "directory": "/abs/session", "decide_from_ms": int, "decide_until_ms": int}}
     # BAL-DECISION-184-07: Fran, 19-oct-2026 08:24Z, in the project chat: "Autorizo la sesión paper en vivo con Bitcoin". One paper session on
@@ -778,7 +778,7 @@ def _read_json(path):
         return None
 
 
-# ---- wall clock (OFF) ----------------------------------------------------------------------------------------------
+# ---- wall clock (open only through WALL_CLOCK_GATE, BAL-DECISION-184-07) ----------------------------------------------------------------------------------------------
 def _wall_now_ms():
     return time.time_ns() // 1_000_000
 
@@ -795,7 +795,7 @@ def wall_clock_runtime(config, *, now_ms=None, sleeper=None):
 
 # ---- command line ------------------------------------------------------------------------------------------------
 def main(argv=None, *, tick=lambda now: None):
-    """``preflight`` and ``run`` on the simulated clock. Exit status: 0 ok, 2 refused (no file was written), 3 halted, 4 stopped in order by a resource limit, 5 stopped in order by a stale quote (``stale_stop``)."""
+    """``preflight`` and ``run``, on the simulated clock (``--clock-from-ms``) or, once the gate is open, on the wall clock (``--wall-clock``). Exit status: 0 ok, 2 refused (no file was written), 3 halted, 4 stopped in order by a resource limit, 5 stopped in order by a stale quote (``stale_stop``)."""
     parser = argparse.ArgumentParser(prog="paper_live_process", description="Offline paper session lifecycle (the capture of Kraken, once a session is authorized).")
     parser.add_argument("command", choices=("preflight", "run"))
     parser.add_argument("--config", required=True)
@@ -803,7 +803,7 @@ def main(argv=None, *, tick=lambda now: None):
     parser.add_argument("--source", required=True, help="SQLite file of the capture")
     parser.add_argument("--clock-from-ms", type=int, help="start of the simulated clock")
     parser.add_argument("--clock-step-ms", type=int, default=60_000)
-    parser.add_argument("--wall-clock", action="store_true", help="refused while WALL_CLOCK_GATE is False (the real-session GATE is NO-GO)")
+    parser.add_argument("--wall-clock", action="store_true", help="follow the real clock: refused unless WALL_CLOCK_GATE is True (BAL-DECISION-184-07) and the configuration has clock_guard")
     parser.add_argument("--max-steps", type=int)
     parser.add_argument("--step-sleep-s", type=float, default=0.0, help="real seconds between steps (to give a signal time to arrive)")
     parser.add_argument("--restart", action="store_true", help="take up a directory whose last run did not end in order (halt, refusal, kill, power cut)")
