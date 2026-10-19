@@ -133,6 +133,11 @@ de funding reales de BTC. Se perdieron a propósito dos pruebas que solo existí
 tiene una sola). Siguen en el archivo viejo, sobre el mundo inventado, adaptador/evidencia, cancelación por fuente caída, silencio y
 dos productos (esperan datos reales de un segundo producto).
 
+Segunda entrega (19-oct): la cancelación de la orden que espera en un hueco de la fuente (hueco de 39,5 s y corte literal de 26 s, con y sin
+el límite) pasó a `test_paper_source_stale_184.py`, con huecos hechos quitando cotizaciones reales. Cobertura que se pierde a propósito:
+la muerte del proceso en cada frontera de la sesión durante esa cancelación (la cubren `test_paper_kill_session_186` en el diario y
+`TestRealProcessTermination` en las fronteras de la sesión).
+
 ### 7.2 Etapas
 
 El orden importa: el camino sintético sostiene hoy unas 1.000 pruebas y no se saca antes de que exista su reemplazo.
