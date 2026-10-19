@@ -1,4 +1,3 @@
-import { useState } from 'react'
 import type { StrategySpec } from '../domain/strategy-spec.ts'
 import type {
   BacktestTrade,
@@ -8,6 +7,7 @@ import type {
 } from '../infrastructure/strategy-api.ts'
 import { price, signedUsd, utcTime } from '../../../shared/finance/format.ts'
 import { EXIT_LABELS, STATE_LABELS } from './strategy-lab-labels.ts'
+import { isProtectedStrategy } from '../domain/lifecycle-text.ts'
 
 function downloadJson(spec: StrategySpec) {
   const blob = new Blob([`${JSON.stringify(spec, null, 2)}\n`], {
@@ -67,15 +67,16 @@ export function VersionsTab({
   detail,
   busy,
   onState,
-  onDelete,
+  onRequestActivate,
+  onRequestDelete,
 }: {
   detail: StrategyDetail
   busy: boolean
-  onState: (state: StrategyState, paperNow?: boolean) => void
-  onDelete: (confirm: string) => void
+  onState: (state: StrategyState) => void
+  /** Opens the activation dialog: activating is the user's decision and is confirmed first. */
+  onRequestActivate: () => void
+  onRequestDelete: () => void
 }) {
-  const [step, setStep] = useState<0 | 1 | 2>(0)
-  const [typed, setTyped] = useState('')
   const active = detail.state === 'active'
   return (
     <div className="strategy-lab__tab-body">
@@ -104,74 +105,26 @@ export function VersionsTab({
             type="button"
             className="strategy-lab__button strategy-lab__button--primary"
             disabled={busy}
-            onClick={() => onState('active', true)}
+            onClick={onRequestActivate}
           >
             Activar
           </button>
         )}
-        {step === 0 && (
+        {!isProtectedStrategy(detail.id) && (
           <button
             type="button"
             className="strategy-lab__button strategy-lab__button--ghost"
             disabled={busy}
-            onClick={() => setStep(1)}
+            onClick={onRequestDelete}
           >
             Borrar
           </button>
         )}
       </div>
-      {step === 1 && (
-        <div className="strategy-lab__row-actions" role="group">
-          <span>
-            ¿Borrar {detail.id}? Deja de operar y desaparece de las listas.
-          </span>
-          <button
-            type="button"
-            className="strategy-lab__button"
-            onClick={() => setStep(2)}
-          >
-            Sí, continuar
-          </button>
-          <button
-            type="button"
-            className="strategy-lab__button strategy-lab__button--ghost"
-            onClick={() => setStep(0)}
-          >
-            Cancelar
-          </button>
-        </div>
-      )}
-      {step === 2 && (
-        <div className="strategy-lab__row-actions" role="group">
-          <input
-            aria-label="Escribí el id para confirmar"
-            placeholder={detail.id}
-            value={typed}
-            onChange={(event) => setTyped(event.target.value)}
-          />
-          <button
-            type="button"
-            className="strategy-lab__button strategy-lab__button--primary"
-            disabled={busy || typed !== detail.id}
-            onClick={() => onDelete(typed)}
-          >
-            Borrar definitivamente
-          </button>
-          <button
-            type="button"
-            className="strategy-lab__button strategy-lab__button--ghost"
-            onClick={() => {
-              setStep(0)
-              setTyped('')
-            }}
-          >
-            Cancelar
-          </button>
-        </div>
-      )}
       <small className="strategy-lab__context">
-        Activa = opera en paper (100 USD por operación, sin dinero real). Al
-        desactivar o borrar deja de abrir operaciones; el historial se conserva.
+        Toda estrategia empieza en borrador: solo opera en el paper real si
+        vos la activás (100 USD por operación, sin dinero real). Al desactivar
+        deja de abrir operaciones; al borrar se elimina todo lo suyo.
       </small>
     </div>
   )

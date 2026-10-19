@@ -47,6 +47,8 @@ from .futures_strategy_plan import all_plans, load_freeze
 from .futures_strategy_reliability import load_reliability, reliability_for
 from .futures_purged import cscv_pbo
 from .futures_strategy_gate_api import GateApi, GateApiError
+from . import strategy_purge
+from .futures_strategy_lifecycle import Lifecycle, LifecycleError
 from .futures_strategy_backtest import MIN_TRADES, load_verdict_rows, run_backtest
 from .futures_strategy_translate import TranslationError, default_provider, translate
 
@@ -172,7 +174,8 @@ class StrategyRegistry:
             CREATE INDEX IF NOT EXISTS strategy_backtests_by_hash ON strategy_backtests(spec_hash, product_id, seq);
             """
         )
-        for table in ("strategy_versions", "strategy_events", "strategy_backtests", "strategy_registry_meta"):
+        self._guard_triggers()
+        for table in ("strategy_registry_meta",):
             self.db.executescript(
                 "CREATE TRIGGER IF NOT EXISTS {0}_no_update BEFORE UPDATE ON {0} "
                 "BEGIN SELECT RAISE(ABORT, 'strategy registry is append-only'); END;"
@@ -184,14 +187,45 @@ class StrategyRegistry:
     # --- seeding and reads ------------------------------------------------
 
     def seed(self, specs):
-        """Records shipped specs (C25-C28) as active v1 the first time they are seen."""
+        """Records shipped specs as DRAFT v1 the first time they are seen.
+
+        Owner decision (2026-10-19): nothing runs in the real paper unless the user activates it. A shipped spec
+        is therefore never expected from ``config/forward-strategies.json`` either; only the registry state counts.
+        """
         with self.lock, self.db:
             for spec in specs.values():
                 if self._version_row(spec["id"], None) is not None:
                     continue
                 self._insert_version(spec, "builtin", None, None)
                 self.db.execute("INSERT INTO strategy_events(strategy_id, version, state, reason, known_at) "
-                                "VALUES(?,?,?,?,?)", (spec["id"], spec["version"], "active", "builtin", 0))
+                                "VALUES(?,?,?,?,?)", (spec["id"], spec["version"], "draft", "builtin", self.clock()))
+
+    ALL_DRAFT_KEY = "all_draft_v1"
+    ALL_DRAFT_REASON = "todas a borrador por decisión del usuario"
+
+    def migrate_all_to_draft(self):
+        """One time, idempotent: every live version (active, shadow or retired) becomes draft, as a new event.
+
+        Event-sourced like every state change: nothing is rewritten. A marker in the registry meta table makes the
+        migration run once; what the user activates afterwards stays active across restarts. Deleted strategies
+        are left alone. Returns the number of versions moved (0 when already done).
+        """
+        with self.lock, self.db:
+            if self.db.execute("SELECT 1 FROM strategy_registry_meta WHERE key=?", (self.ALL_DRAFT_KEY,)).fetchone():
+                return 0
+            now, moved = self.clock(), 0
+            for (strategy_id,) in self.db.execute("SELECT DISTINCT strategy_id FROM strategy_versions").fetchall():
+                if self._deleted(strategy_id):
+                    continue
+                for (version,) in self.db.execute(
+                        "SELECT version FROM strategy_versions WHERE strategy_id=? ORDER BY version",
+                        (strategy_id,)).fetchall():
+                    if self._state(strategy_id, version)["state"] in ("active", "shadow", "retired"):
+                        self.db.execute("INSERT INTO strategy_events(strategy_id, version, state, reason, known_at) "
+                                        "VALUES(?,?,?,?,?)", (strategy_id, version, "draft", self.ALL_DRAFT_REASON, now))
+                        moved += 1
+            self.db.execute("INSERT INTO strategy_registry_meta VALUES(?,?)", (self.ALL_DRAFT_KEY, str(now)))
+            return moved
 
     def apply_closed(self, path=None):
         """Deletes the strategies ``config/strategy-closed.json`` lists (once; later starts find them deleted)."""
@@ -279,6 +313,10 @@ class StrategyRegistry:
         """The same plan for every strategy: latest version of each spec, plus C31 and Kronos."""
         specs = {entry["id"]: self.version(entry["id"], entry["version"])["spec"] for entry in self.list()}
         return all_plans(specs)
+
+    def replayable_specs(self):
+        """Latest spec of every strategy that is not deleted: a replay is history, not paper, so drafts count."""
+        return {entry["id"]: self.version(entry["id"], entry["version"])["spec"] for entry in self.list()}
 
     def active_specs(self, as_of_ms):
         """Active spec per strategy as of ``as_of_ms`` (for C, PS-08c)."""
@@ -420,6 +458,87 @@ class StrategyRegistry:
                                 "VALUES(?,?,?,?,?)", (strategy_id, version, "deleted", reason, now))
             return {"id": strategy_id, "version": latest["version"], "state": "deleted"}
 
+    def active_ms(self, strategy_id, now_ms=None):
+        """Total time any version of ``strategy_id`` spent active in paper (sum of its active periods).
+
+        A period starts at the ``active`` event (a shipped one with ``known_at`` 0 starts when the version was
+        created) and ends at the version's next event, or ``now`` while it is still active.
+        """
+        now = self.clock() if now_ms is None else now_ms
+        total = 0
+        for (version, created) in self.db.execute(
+                "SELECT version, created_at FROM strategy_versions WHERE strategy_id=?", (strategy_id,)).fetchall():
+            start = None
+            for state, known_at in self.db.execute(
+                    "SELECT state, known_at FROM strategy_events WHERE strategy_id=? AND version=? ORDER BY seq",
+                    (strategy_id, version)).fetchall():
+                if state == "active" and start is None:
+                    start = known_at or created
+                elif state != "active" and start is not None:
+                    total += max(0, known_at - start)
+                    start = None
+            if start is not None:
+                total += max(0, now - start)
+        return total
+
+    def lifecycle(self, strategy_id):
+        """What the delete dialog shows about the registry side of a strategy (raises not_found when deleted)."""
+        if strategy_id is None or self._version_row(strategy_id, None) is None or self._deleted(strategy_id):
+            raise RegistryError("not_found", "No existe la estrategia indicada.", 404)
+        latest = self._version_row(strategy_id, None)
+        versions = [{"version": v, "state": self._state(strategy_id, v)["state"], "spec_hash": h,
+                     "created_at": c} for v, h, c in self.db.execute(
+            "SELECT version, spec_hash, created_at FROM strategy_versions WHERE strategy_id=? ORDER BY version",
+            (strategy_id,)).fetchall()]
+        return {"id": strategy_id, "name": latest["spec"].get("name") or strategy_id, "state": versions[-1]["state"],
+                "active_version": self._active_version(strategy_id), "versions": versions,
+                "created_at": min(v["created_at"] for v in versions), "origin": latest["origin"],
+                "builtin": latest["origin"] == "builtin", "active_ms": self.active_ms(strategy_id)}
+
+    _GUARDED = ("strategy_versions", "strategy_events", "strategy_backtests")
+
+    def _guard_triggers(self):
+        for table in self._GUARDED:
+            self.db.executescript(
+                "CREATE TRIGGER IF NOT EXISTS {0}_no_update BEFORE UPDATE ON {0} "
+                "BEGIN SELECT RAISE(ABORT, 'strategy registry is append-only'); END;"
+                "CREATE TRIGGER IF NOT EXISTS {0}_no_delete BEFORE DELETE ON {0} "
+                "BEGIN SELECT RAISE(ABORT, 'strategy registry is append-only'); END;".format(table))
+
+    def hard_delete(self, strategy_id):
+        """Removes every row of the strategy (versions, events, backtests): the owner's clean delete.
+
+        The append-only guard of the registry tables is lifted for this one transaction only and put back
+        afterwards, whatever happens. Returns the rows deleted per table.
+        """
+        with self.lock:
+            hashes = [h for (h,) in self.db.execute(
+                "SELECT spec_hash FROM strategy_versions WHERE strategy_id=?", (strategy_id,)).fetchall()]
+            counts, raw = {}, self.db._db
+            try:
+                raw.execute("BEGIN IMMEDIATE")
+                for table in self._GUARDED:
+                    raw.execute("DROP TRIGGER IF EXISTS {}_no_delete".format(table))
+                counts["strategy_events"] = raw.execute(
+                    "DELETE FROM strategy_events WHERE strategy_id=?", (strategy_id,)).rowcount
+                counts["strategy_backtests"] = raw.execute(
+                    "DELETE FROM strategy_backtests WHERE strategy_id=?", (strategy_id,)).rowcount
+                for digest in hashes:
+                    counts["strategy_backtests"] += raw.execute(
+                        "DELETE FROM strategy_backtests WHERE spec_hash=?", (digest,)).rowcount
+                counts["strategy_versions"] = raw.execute(
+                    "DELETE FROM strategy_versions WHERE strategy_id=?", (strategy_id,)).rowcount
+                raw.execute("COMMIT")
+            except BaseException:
+                try:
+                    raw.execute("ROLLBACK")
+                except sqlite3.Error:
+                    pass
+                raise
+            finally:
+                self._guard_triggers()
+            return counts
+
     def gates(self, row, state, current):
         """The checks a transition to ``state`` must pass (PS-08e)."""
         if state in ("retired", "draft") or (state == "shadow" and current == "active"):
@@ -500,7 +619,9 @@ class StrategyService:
 
     def __init__(self, registry, verdicts_db_path, products, provider_factory=None, replays=None,
                  market_db_path=None, config_dir=None, forward_db_path=None, forward_summary_path=None,
-                 decisions_db_path=None, gate_data_dir=None):
+                 decisions_db_path=None, gate_data_dir=None, purge_dir=None, specs_dir=None,
+                 forward_registration_path=None, freeze_path=None, qwen_exit_config=None, qwen_practice_dir=None,
+                 kronos_dir=None, qwen_exit_dir=None):
         self.config_dir = config_dir
         self.forward_db_path = forward_db_path
         self.forward_summary_path = forward_summary_path or os.environ.get("STRATEGY_FORWARD_PATH")
@@ -513,7 +634,12 @@ class StrategyService:
         self.products = products
         self._cache = {}
         self._results = {}
-        self.gate = GateApi(registry, data_dir=gate_data_dir)
+        self.gate = GateApi(registry, data_dir=gate_data_dir, kronos_dir=kronos_dir, qwen_exit_dir=qwen_exit_dir)
+        self.lifecycle = Lifecycle(registry, self.gate, forward_db_path=forward_db_path, purge_dir=purge_dir,
+                                   consumers=("forward",) if forward_db_path else (),
+                                   specs_dir=specs_dir, forward_registration_path=forward_registration_path,
+                                   freeze_path=freeze_path, qwen_exit_config=qwen_exit_config, replays=replays,
+                                   qwen_practice_dir=qwen_practice_dir)
 
     def _tick(self, product_id):
         if product_id not in self.products:
@@ -764,6 +890,12 @@ def make_handler(service):
                     raise RegistryError("not_found", str(error), 404) from error
             if method == "GET" and parts == ["ranking"]:
                 return service.ranking(product, days)
+            if method == "GET" and parts == ["purges"]:
+                return {"purges": service.lifecycle.purges()}
+            if method == "GET" and len(parts) == 2 and parts[0] == "purges":
+                return service.lifecycle.purge_status(parts[1])
+            if method == "GET" and len(parts) == 3 and parts[0] == "strategies" and parts[2] == "delete-preview":
+                return service.lifecycle.preview(parts[1])
             if method == "GET" and len(parts) == 2 and parts[0] == "strategies":
                 return registry.detail(parts[1], query.get("version"))
             if method == "GET" and len(parts) == 3 and parts[0] == "strategies" and parts[2] == "export":
@@ -818,7 +950,7 @@ def make_handler(service):
                 return registry.set_state(parts[1], body.get("version"), body.get("state"),
                                           body.get("reason") or "manual", skip_gates=bool(body.get("paper_now")))
             if len(parts) == 3 and parts[0] == "strategies" and parts[2] == "delete":
-                return registry.delete(parts[1], body.get("confirm"))
+                return service.lifecycle.delete(parts[1], body.get("confirm"))
             raise RegistryError("not_found", "no route", 404)
 
         def _gate(self, method):
@@ -845,7 +977,8 @@ def make_handler(service):
             if len(parts) == 3 and parts[0] == "strategies" and parts[2] == "gate" and method == "POST":
                 return gate.launch(parts[1], self._body())
             if len(parts) == 4 and parts[0] == "strategies" and parts[2] == "gate" and parts[3] == "runs" and method == "GET":
-                return gate.runs(parts[1])
+                version = {k: v[-1] for k, v in parse_qs(url.query).items()}.get("version")
+                return gate.runs(parts[1], int(version) if version and version.isdigit() else None)
             return None
 
         def _handle(self, method):
@@ -854,7 +987,7 @@ def make_handler(service):
                 if out is True:
                     return
                 self._send(200, out if out is not None else self._dispatch(method))
-            except GateApiError as error:
+            except (GateApiError, LifecycleError) as error:
                 self._send(error.status, {"error": error.code, "detail": error.detail})
             except RegistryError as error:
                 self._send(error.status, dict({"error": error.code, "detail": error.detail}, **error.extra))
@@ -882,22 +1015,38 @@ def main(argv=None):
     parser.add_argument("--forward-summary", help="forward-reliability.json (default: $STRATEGY_FORWARD_PATH)")
     parser.add_argument("--decisions-db", help="Q's decisions DB (read-only): why Q skipped")
     parser.add_argument("--gate-dir", help="strategy gate folder (default: data/strategy-gate or $STRATEGY_GATE_DIR)")
+    parser.add_argument("--purge-dir", help="where delete requests and acknowledgements live "
+                                            "(default: <strategies db folder>/purge)")
+    parser.add_argument("--kronos-dir", help="folder with kronos.sqlite (the gate judges Kronos by its saved trades)")
+    parser.add_argument("--qwen-exit-dir", help="folder with qwen-exit.sqlite (the gate judges Qwen by its saved trades)")
+    parser.add_argument("--qwen-practice-dir", help="folder with the offline Qwen practice files "
+                                                    "(default: data/qwen-practice)")
     parser.add_argument("--port", type=int, default=int(os.environ.get("STRATEGIES_PORT", DEFAULT_PORT)))
     args = parser.parse_args(argv)
     registry = StrategyRegistry(args.strategies_db)
     registry.seed(load_specs(args.specs_dir))
     registry.apply_closed()
+    registry.migrate_all_to_draft()
     products = dict(load_pinned_products())
+    config_root = os.path.dirname(CLOSED_PATH)
     replays = None
     if args.market_db:
         from .futures_replay import ReplayJobs, qwen_factory
 
         directory = args.replays_dir or os.path.join(os.path.dirname(os.path.abspath(args.strategies_db)), "replays")
-        replays = ReplayJobs(args.market_db, directory, lambda: registry.active_specs(_now_ms()), products,
+        replays = ReplayJobs(args.market_db, directory, lambda: registry.replayable_specs(), products,
                              qwen_factory(os.path.join(directory, "qwen-cache.db")))
     service = StrategyService(registry, args.verdicts_db, products, replays=replays, market_db_path=args.market_db,
                               config_dir=args.config_dir, forward_db_path=args.forward_db,
-                              forward_summary_path=args.forward_summary, decisions_db_path=args.decisions_db, gate_data_dir=args.gate_dir)
+                              forward_summary_path=args.forward_summary, decisions_db_path=args.decisions_db, gate_data_dir=args.gate_dir,
+                              purge_dir=args.purge_dir or os.path.join(os.path.dirname(os.path.abspath(args.strategies_db)), "purge"),
+                              specs_dir=args.specs_dir,
+                              forward_registration_path=os.path.join(config_root, "forward-strategies.json"),
+                              freeze_path=os.path.join(config_root, "strategy-freeze.json"),
+                              qwen_exit_config=os.path.join(config_root, "qwen-exit.json"),
+                              qwen_practice_dir=args.qwen_practice_dir or os.path.join(
+                                  os.path.dirname(config_root), "data", "qwen-practice"),
+                              kronos_dir=args.kronos_dir, qwen_exit_dir=args.qwen_exit_dir)
     server = ThreadingHTTPServer(("127.0.0.1", args.port), make_handler(service))
     print("[strategies] registry {} on http://127.0.0.1:{}".format(args.strategies_db, args.port), flush=True)
     try:
