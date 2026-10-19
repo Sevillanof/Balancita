@@ -141,7 +141,7 @@ _OPTION_ID = re.compile(r"^[a-z0-9_]{1,32}$")
 QUESTION_TYPES = ("choice", "bool", "score")
 # ``verdict`` (default, the only scope Q asks) questions describe a verdict STATE; ``news`` questions
 # are asked by the news process N about one news item (its text is the state), never by Q.
-QUESTION_SCOPES = ("verdict", "news", "exit")
+QUESTION_SCOPES = ("verdict", "news", "exit", "signal")
 
 
 def question_hash(question):
@@ -633,6 +633,11 @@ def _field_exit_lessons(ctx):
     return ctx.get("exit_lessons") or "exit_lessons: none yet"
 
 
+def _field_signal(ctx):
+    """The strategy signal a ``signal``-scope question is about (``futures_qwen_practice``): one normalized line, no outcome."""
+    return ctx.get("signal") or "signal: none"
+
+
 def _field_funding(ctx):
     """One normalized funding line (``futures_funding_context``); no question of the shipped catalog lists it yet."""
     return ctx.get("funding") or "funding: unknown"
@@ -658,6 +663,7 @@ STATE_FIELDS = {
     "position": _field_position,
     "exit_lessons": _field_exit_lessons,
     "funding": _field_funding,
+    "signal": _field_signal,
 }
 
 
@@ -672,7 +678,7 @@ def default_specs():
 
 
 def build_state(verdict, candles, fields, specs=None, reliability=None, forward=None, lessons=None,
-                position=None, exit_lessons=None, funding=None):
+                position=None, exit_lessons=None, funding=None, signal=None):
     """STATE text for one verdict from stored data only, in the order of ``fields``.
 
     ``specs`` (strategy id -> spec) feeds the strategy signal fields; the shipped specs by default.
@@ -688,7 +694,8 @@ def build_state(verdict, candles, fields, specs=None, reliability=None, forward=
     if not isinstance(features, dict) or features.get("ready") is not True:
         raise StateError("verdict features are not ready (indicator warmup)")
     ctx = {"verdict": verdict, "candles": candles, "specs": specs, "reliability": reliability, "forward": forward,
-           "lessons": lessons, "position": position, "exit_lessons": exit_lessons, "funding": funding}
+           "lessons": lessons, "position": position, "exit_lessons": exit_lessons, "funding": funding,
+           "signal": signal}
     return sanitize_text("\n".join(STATE_FIELDS[field](ctx) for field in fields))
 
 
