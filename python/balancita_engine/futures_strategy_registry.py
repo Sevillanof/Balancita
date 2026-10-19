@@ -147,6 +147,7 @@ class iter_rows(list):
 class StrategyRegistry:
     def __init__(self, path, *, clock=_now_ms):
         self.clock = clock
+        self.path = path
         self.db = _LockedDb(path)
         self.lock = self.db.lock
         self.db.executescript(

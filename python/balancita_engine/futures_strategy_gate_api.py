@@ -163,6 +163,9 @@ class GateApi:
         start, products, exam = self._validate(body)
         args = [self.python, "-m", "balancita_engine.strategy_gate", "--data-dir", self.data_dir, "evaluate",
                 "--strategy", strategy_id]
+        registry_db = getattr(self.registry, "path", None)
+        if isinstance(registry_db, str) and registry_db:
+            args += ["--registry-db", os.path.abspath(registry_db)]
         if start:
             args += ["--from", start]
         if products:

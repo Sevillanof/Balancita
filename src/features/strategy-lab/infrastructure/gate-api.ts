@@ -49,6 +49,8 @@ export type GateApi = {
   overview: (strategyId: string) => Promise<GateOverview>
   start: (strategyId: string, request: GateRequest) => Promise<void>
   cancel: (runId: number) => Promise<void>
+  /** The Markdown text of a run's report. */
+  report: (runId: number) => Promise<string>
 }
 
 export function gateReportUrl(runId: number) {
@@ -93,5 +95,10 @@ export const gateApi: GateApi = {
       {},
     )
     if (!response.ok) throw await failure(response)
+  },
+  async report(runId) {
+    const response = await fetch(gateReportUrl(runId))
+    if (!response.ok) throw await failure(response)
+    return await response.text()
   },
 }

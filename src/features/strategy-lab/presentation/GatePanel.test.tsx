@@ -38,10 +38,59 @@ function fakeApi(overview: GateOverview | (() => GateOverview)): GateApi {
     ),
     start: vi.fn(async () => undefined),
     cancel: vi.fn(async () => undefined),
+    report: vi.fn(async () => '# Informe\n\nTexto del informe.'),
   }
 }
 
 afterEach(() => vi.useRealTimers())
+
+describe('GatePanel report viewer', () => {
+  it('shows the Markdown report in a dialog next to the download link', async () => {
+    const api = fakeApi(idle)
+    vi.mocked(api.report).mockResolvedValue(
+      '# Mi estrategia\n\n## ❌ NO PASA\n\n- **Perdió** en promedio\n\n| A | B |\n| --- | --- |\n| 1 | 2 |\n\n<img src=x onerror="alert(1)">',
+    )
+    render(<GatePanel strategyId="x2" strategyName="X2" api={api} />)
+    await screen.findByTestId('gate-result')
+    const result = screen.getByTestId('gate-result')
+    expect(
+      within(result).getByRole('link', { name: 'Descargar (.md)' }),
+    ).toHaveAttribute('href', expect.stringContaining('/gate/runs/1/report.md'))
+    await userEvent.click(
+      within(result).getByRole('button', { name: 'Ver informe' }),
+    )
+    expect(api.report).toHaveBeenCalledWith(1)
+    const dialog = await screen.findByRole('dialog', { name: /Informe/ })
+    expect(
+      await within(dialog).findByRole('heading', { name: 'Mi estrategia' }),
+    ).toBeInTheDocument()
+    expect(within(dialog).getByText('Perdió').tagName).toBe('STRONG')
+    expect(within(dialog).getByRole('table')).toBeInTheDocument()
+    // raw HTML is shown as text, never injected
+    expect(dialog.querySelector('img')).toBeNull()
+    expect(dialog).toHaveTextContent('<img src=x onerror="alert(1)">')
+    await userEvent.click(
+      within(dialog).getByRole('button', { name: 'Cerrar' }),
+    )
+    expect(screen.queryByRole('dialog')).toBeNull()
+  })
+
+  it('says so when the report cannot be read', async () => {
+    const api = fakeApi(idle)
+    vi.mocked(api.report).mockRejectedValue(
+      new Error('Esa corrida no tiene informe.'),
+    )
+    render(<GatePanel strategyId="x2" strategyName="X2" api={api} />)
+    await userEvent.click(
+      within(await screen.findByTestId('gate-result')).getByRole('button', {
+        name: 'Ver informe',
+      }),
+    )
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Esa corrida no tiene informe.',
+    )
+  })
+})
 
 describe('GatePanel', () => {
   it('launches a practice test with the chosen date and products', async () => {
@@ -118,7 +167,7 @@ describe('GatePanel', () => {
     expect(taken).toHaveTextContent('2026-10-05')
     expect(within(taken).getByTestId('verdict')).toHaveTextContent('PASA')
     expect(
-      within(taken).getByRole('link', { name: 'Descargar informe (.md)' }),
+      within(taken).getByRole('link', { name: 'Descargar (.md)' }),
     ).toHaveAttribute('href', '/api-strategies/gate/runs/7/report.md')
     expect(screen.getByRole('button', { name: 'Examen final' })).toBeDisabled()
   })
@@ -198,7 +247,7 @@ describe('GatePanel', () => {
     expect(history).toHaveTextContent('Historial de pruebas (1)')
     expect(within(history).getByText('práctica')).toBeInTheDocument()
     expect(
-      within(history).getByRole('link', { name: 'Descargar informe (.md)' }),
+      within(history).getByRole('link', { name: 'Descargar (.md)' }),
     ).toHaveAttribute('href', '/api-strategies/gate/runs/1/report.md')
     unmount()
     render(

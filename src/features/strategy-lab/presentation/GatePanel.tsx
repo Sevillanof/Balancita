@@ -7,6 +7,7 @@ import {
   type GateRun,
 } from '../infrastructure/gate-api.ts'
 import { LAB_PRODUCTS, DEFAULT_LAB_PRODUCT } from '../domain/products.ts'
+import MarkdownView from './MarkdownView.tsx'
 import './GatePanel.css'
 
 const DEFAULT_FROM = '2025-01-01'
@@ -34,11 +35,26 @@ function day(ms: number) {
   return new Date(ms).toISOString().slice(0, 10)
 }
 
-function Download({ runId }: { runId: number }) {
+function ReportLinks({
+  runId,
+  onView,
+}: {
+  runId: number
+  onView: (runId: number) => void
+}) {
   return (
-    <a className="gate__link" href={gateReportUrl(runId)} download>
-      Descargar informe (.md)
-    </a>
+    <span className="gate__links">
+      <button
+        type="button"
+        className="gate__button gate__button--small"
+        onClick={() => onView(runId)}
+      >
+        Ver informe
+      </button>
+      <a className="gate__link" href={gateReportUrl(runId)} download>
+        Descargar (.md)
+      </a>
+    </span>
   )
 }
 
@@ -64,6 +80,31 @@ export default function GatePanel({
   const [products, setProducts] = useState<string[]>([DEFAULT_LAB_PRODUCT])
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState<string | null>(null)
+  const [report, setReport] = useState<{
+    runId: number
+    text: string | null
+    error: string | null
+  } | null>(null)
+
+  const viewReport = useCallback(
+    async (runId: number) => {
+      setReport({ runId, text: null, error: null })
+      try {
+        const text = await api.report(runId)
+        setReport((current) =>
+          current?.runId === runId ? { runId, text, error: null } : current,
+        )
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error)
+        setReport((current) =>
+          current?.runId === runId
+            ? { runId, text: null, error: detail }
+            : current,
+        )
+      }
+    },
+    [api],
+  )
 
   const refresh = useCallback(async () => {
     try {
@@ -215,7 +256,9 @@ export default function GatePanel({
               {last.status === 'cancelled' ? 'CANCELADA' : 'FALLÓ'}
             </span>
           )}
-          {last.has_report && <Download runId={last.id} />}
+          {last.has_report && (
+            <ReportLinks runId={last.id} onView={viewReport} />
+          )}
         </div>
       )}
 
@@ -242,7 +285,7 @@ export default function GatePanel({
         <p className="gate__exam" data-testid="gate-exam-taken">
           Examen final rendido el {exam.date}:{' '}
           <VerdictBadge verdict={exam.verdict} />{' '}
-          <Download runId={exam.run_id} />
+          <ReportLinks runId={exam.run_id} onView={viewReport} />
           {!exam.same_version &&
             ' La estrategia cambió después del examen: para otro examen hay que crear una versión nueva.'}
         </p>
@@ -329,6 +372,48 @@ export default function GatePanel({
         </div>
       )}
 
+      {report && (
+        <div className="gate__backdrop">
+          <div
+            className="gate__dialog gate__dialog--report"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="gate-report-title"
+          >
+            <div className="gate__report-head">
+              <h4 id="gate-report-title">
+                Informe de la corrida #{report.runId}
+              </h4>
+              <span className="gate__links">
+                <a
+                  className="gate__link"
+                  href={gateReportUrl(report.runId)}
+                  download
+                >
+                  Descargar (.md)
+                </a>
+                <button
+                  type="button"
+                  className="gate__button"
+                  onClick={() => setReport(null)}
+                >
+                  Cerrar
+                </button>
+              </span>
+            </div>
+            {report.error && (
+              <p role="alert" className="gate__warn">
+                No se pudo leer el informe: {report.error}
+              </p>
+            )}
+            {report.text === null && !report.error && (
+              <p className="gate__hint">Cargando el informe…</p>
+            )}
+            {report.text !== null && <MarkdownView source={report.text} />}
+          </div>
+        </div>
+      )}
+
       <details className="gate__history" data-testid="gate-history">
         <summary>Historial de pruebas ({runs.length})</summary>
         {runs.length === 0 ? (
@@ -359,7 +444,13 @@ export default function GatePanel({
                           : 'falló'}
                   </td>
                   <td>{run.attempts ?? '—'}</td>
-                  <td>{run.has_report ? <Download runId={run.id} /> : '—'}</td>
+                  <td>
+                    {run.has_report ? (
+                      <ReportLinks runId={run.id} onView={viewReport} />
+                    ) : (
+                      '—'
+                    )}
+                  </td>
                 </tr>
               ))}
             </tbody>

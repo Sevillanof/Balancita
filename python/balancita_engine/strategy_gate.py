@@ -9,7 +9,8 @@ What it does
     live == replay), prices them with ``futures_costs`` (taker fees + modelled impact) and the funding Kraken
     publishes, and judges them with the rules of ``config/strategy-gate.json`` (printed in every report):
 
-    PASA only if ALL of: n >= 100 trades (else INCONCLUSO) · mean net bp > 0 with the 95 % bootstrap interval's lower
+    PASA only if ALL of: n >= 100 trades (fewer: NO PASA "(pocas operaciones)" if any other rule fails, INCONCLUSO only if
+    every other rule passes) · mean net bp > 0 with the 95 % bootstrap interval's lower
     bound > 0 · percentile >= 95 against 1000 random-entry draws (same count, side mix, product and holding time) ·
     deflated Sharpe probability >= 0.95 with the number of ATTEMPTS on the strategy family as trials · positive in
     >= 60 % of the time folds and in >= half of the products · still positive with costs x 1.5.
@@ -59,7 +60,7 @@ from .futures_products import resolve_products
 from .futures_qwen_practice import _date_ms, horizon_net_bp
 from .futures_qwen_practice_report import bootstrap_ci, metrics
 from .futures_simulator import DEFAULT_PERIODS, Book, frames, merge_periods
-from .futures_spec_strategy import DEFAULT_SPEC_DIR, declared_indicators, load_specs, spec_hash
+from .futures_spec_strategy import DEFAULT_SPEC_DIR, declared_indicators, load_specs, spec_hash, validate_spec
 from .futures_strategy_reliability import TRIAL_SHARPE_SD, deflated_probability
 
 SCHEMA = "balancita-strategy-gate.v1"
@@ -112,6 +113,51 @@ def version_key_of(spec):
 
 def _stamp(ms):
     return time.strftime("%Y-%m-%d", time.gmtime(ms / 1000))
+
+
+def registry_specs(registry_db):
+    """Latest non-deleted spec per id from the S registry DB, opened READ-ONLY (``{}`` when absent or unreadable).
+
+    Same rows, same ``spec_json`` and therefore the same ``spec_hash`` the registry itself uses (the UI's "Nueva
+    estrategia" writes there). Invalid specs are skipped, never repaired.
+    """
+    if not registry_db or not os.path.isfile(registry_db):
+        return {}
+    try:
+        db = sqlite3.connect("file:{}?mode=ro".format(os.path.abspath(registry_db)), uri=True, timeout=10)
+    except sqlite3.Error:
+        return {}
+    out = {}
+    try:
+        for strategy_id, version, text in db.execute(
+                "SELECT v.strategy_id, v.version, v.spec_json FROM strategy_versions v WHERE v.version="
+                "(SELECT MAX(version) FROM strategy_versions WHERE strategy_id=v.strategy_id) ORDER BY v.strategy_id"):
+            last = db.execute("SELECT state FROM strategy_events WHERE strategy_id=? AND version=? ORDER BY seq DESC "
+                              "LIMIT 1", (strategy_id, version)).fetchone()
+            if last is not None and last[0] == "deleted":
+                continue
+            try:
+                out[strategy_id] = validate_spec(json.loads(text))
+            except Exception:  # noqa: BLE001 - one bad row must not hide the others
+                continue
+    except sqlite3.Error:
+        return {}
+    finally:
+        db.close()
+    return out
+
+
+def find_spec(strategy_id, specs_dir=None, registry_db=None):
+    """The spec to judge. Precedence: ``config/strategies`` first (versioned in git, what the live forward also
+    loads), then the S registry. The registry seeds the shipped specs from the same files, so a shared id carries the
+    same content; a registry-only id (created in the UI) is judged from the registry row."""
+    specs = load_specs(specs_dir or DEFAULT_SPEC_DIR)
+    if strategy_id in specs:
+        return specs[strategy_id]
+    extra = registry_specs(registry_db)
+    if strategy_id in extra:
+        return extra[strategy_id]
+    raise GateError("estrategia desconocida: {} (hay: {})".format(strategy_id, ", ".join(sorted(set(specs) | set(extra)))))
 
 
 # --------------------------------------------------------------------------- the gate's own DB (single writer)
@@ -439,11 +485,19 @@ def judge(trades, series, cfg, *, kind, start_ms, end_ms, attempts, products, se
     funding_status = collections.Counter(t["funding_status"] for t in ordered)
     sens = None
     if neighbors:
-        sens = []
+        sens, seen = [], {}
         for item in neighbors:
             s = summarize(item["trades"])
-            sens.append({"param": item["param"], "direction": item["direction"], "value": item["value"],
-                         "n": s["n"], "mean_bp": s["mean_bp"]})
+            signature = tuple(sorted((t["product"], t["side"], t["entry_ms"], t["exit_ms"], round(t["net_bp"], 9))
+                                     for t in item["trades"]))
+            if signature in seen:      # exactly the same trades: the parameters are coupled in the rules; show once
+                seen[signature]["also"].append({"param": item["param"], "direction": item["direction"],
+                                                "value": item["value"]})
+                continue
+            row = {"param": item["param"], "direction": item["direction"], "value": item["value"],
+                   "n": s["n"], "mean_bp": s["mean_bp"], "also": []}
+            seen[signature] = row
+            sens.append(row)
 
     def rule(rid, label, value, threshold, ok):
         return {"id": rid, "label": label, "value": value, "threshold": threshold, "ok": bool(ok)}
@@ -470,34 +524,60 @@ def judge(trades, series, cfg, *, kind, start_ms, end_ms, attempts, products, se
         rule("cost_stress", "Sigue positiva con costes x{}".format(mult), stress_mean, 0,
              stress_mean is not None and stress_mean > 0),
     ]
-    if n < rules["min_trades"]:
-        verdict = INCONCLUSIVE
+    few_trades = n < rules["min_trades"]
+    others_ok = all(c["ok"] for c in checks if c["id"] != "n_trades")
+    note = None
+    if few_trades and others_ok:
+        verdict = INCONCLUSIVE          # too little data and nothing else failed: we cannot tell
+    elif few_trades:
+        verdict, note = FAIL, "(pocas operaciones)"   # too little data AND another rule failed: it does not pass
     else:
         verdict = PASS if all(c["ok"] for c in checks) else FAIL
-    return {"verdict": verdict, "rules": checks, "overall": overall, "ci": ci, "folds": folds, "edges": edges,
+    return {"verdict": verdict, "verdict_note": note, "rules": checks, "overall": overall, "ci": ci, "folds": folds, "edges": edges,
             "per_product": per_product, "per_side": per_side, "baseline": baseline, "percentile": percentile,
             "deflated": dsr, "attempts": attempts, "stress_mean_bp": stress_mean, "stress_multiplier": mult,
             "funding_status": dict(funding_status), "sensitivity": sens, "trial_sharpe_sd": TRIAL_SHARPE_SD,
             "sharpe_per_trade": sharpe_per_trade(values)}
 
 
-# --------------------------------------------------------------------------- report (Spanish)
+# --------------------------------------------------------------------------- report (Spanish Markdown)
 
 
-def _num(value, places=2):
-    return "n/d" if value is None else "{:.{p}f}".format(value, p=places)
+def _es(value, places=2, sign=False):
+    """Number with a decimal comma (``-0,52``); ``n/d`` for ``None``; never ``-0,00``."""
+    if value is None:
+        return "n/d"
+    text = "{:{s}.{p}f}".format(value, p=places, s="+" if sign else "")
+    if not text.lstrip("+-").replace(".", "").strip("0"):
+        text = text.lstrip("+-")
+    return text.replace(".", ",")
 
 
-def _pct(value, places=1):
-    return "n/d" if value is None else "{:.{p}f}%".format(value * 100, p=places)
+def _pct_bp(bp, places=2, sign=False):
+    """Basis points as a percentage of the 100 USD position: ``-0,52 %``."""
+    return "n/d" if bp is None else "{} %".format(_es(bp / 100.0, places, sign))
 
 
-def _pf(value):
-    return "∞" if value is None else "{:.2f}".format(value)
+def _pct_bp_full(bp):
+    """``-0,52 % (-52,3 bp)``."""
+    return "n/d" if bp is None else "{} ({} bp)".format(_pct_bp(bp, 2, True), _es(bp, 1, True))
+
+
+def _share(value, places=0):
+    return "n/d" if value is None else "{} %".format(_es(value * 100, places))
+
+
+def _usd(bp, places=2):
+    """Fixed 100 USD per trade: ``bp`` of one trade is ``bp / 100`` USD."""
+    return "n/d" if bp is None else "{} USD".format(_es(bp / 100.0, places, True))
+
+
+def _factor(value):
+    return "sin pérdidas" if value is None else _es(value, 2)
 
 
 def _mark(ok):
-    return "✓" if ok else "✕"
+    return "✅" if ok else "❌"
 
 
 def _table(header, rows):
@@ -506,104 +586,215 @@ def _table(header, rows):
     return lines
 
 
-def _summary_row(label, s):
-    return [label, s["n"], _num(s["mean_bp"]), _pct(s["hit_rate"]), _pf(s["profit_factor"]),
-            _num(s["max_drawdown_bp"], 1), _num(s["total_bp"], 1)]
+def _row(label, s):
+    return [label, s["n"], _pct_bp(s["mean_bp"], 2, True) if s["n"] else "n/d", _share(s["hit_rate"]),
+            _factor(s["profit_factor"]) if s["n"] else "n/d", _usd(s["total_bp"]) if s["n"] else "n/d"]
 
 
-SUMMARY_HEADER = ["", "operaciones", "media neta (bp)", "aciertos", "factor de beneficio", "máx. caída (bp)", "total (bp)"]
+ROW_HEADER = ["Operaciones", "Promedio por operación", "Acierto", "Factor de beneficio", "Resultado total"]
 
 
-def _rule_value(rule_):
-    v = rule_["value"]
-    if rule_["id"] == "mean_net_positive":
-        return "media {} bp, IC [{}, {}]".format(_num(v["mean"]), _num(v["ci_low"]), _num(v["ci_high"]))
-    if rule_["id"] in ("positive_folds", "positive_products"):
-        return "{} de {}".format(v["positive"], v["total"])
-    if rule_["id"] == "deflated_sharpe":
-        return _num(v, 3)
-    return _num(v, 1) if isinstance(v, float) else str(v)
+def _rule_by_id(result):
+    return {c["id"]: c for c in result["rules"]}
+
+
+def _checklist(r, cfg):
+    """The rules as plain-language bullets: (ok, text)."""
+    rules, c, items = cfg["rules"], _rule_by_id(r), []
+    v = c["n_trades"]
+    items.append((v["ok"], "**Operaciones suficientes**: {} de las {} que se piden como mínimo. _Con muy pocas operaciones "
+                  "el resultado puede ser casualidad._".format(v["value"], rules["min_trades"])))
+    v = c["mean_net_positive"]
+    m = v["value"]
+    items.append((v["ok"], "**Gana dinero después de costos**: promedio {} por operación; con un 95 % de confianza el "
+                  "verdadero promedio está entre {} y {}. _Para pasar, todo ese rango debe quedar por encima de cero._"
+                  .format(_pct_bp(m["mean"], 2, True), _pct_bp(m["ci_low"], 2, True), _pct_bp(m["ci_high"], 2, True))))
+    v = c["percentile_random"]
+    if v["value"] is None:
+        text = "**Mejor que entrar al azar**: no hay operaciones para comparar."
+    else:
+        text = ("**Mejor que entrar al azar**: superó al {} % de {} sorteos de entradas al azar (se pide al menos {} %). "
+                "_Compara contra operar lo mismo, pero en momentos elegidos a la suerte._").format(
+            _es(v["value"], 0), cfg["random_draws"], _es(rules["min_percentile_vs_random"], 0))
+    items.append((v["ok"], text))
+    v = c["deflated_sharpe"]
+    items.append((v["ok"], "**No es suerte por probar muchas veces**: probabilidad {} (se pide al menos {}), contando {} "
+                  "prueba{} de esta familia de estrategias. _Es el Sharpe desinflado: cuantas más veces se prueba, más "
+                  "exigente se vuelve._".format(_es(v["value"], 2), _es(rules["min_deflated_probability"], 2),
+                                                r["attempts"], "" if r["attempts"] == 1 else "s")))
+    v = c["positive_folds"]
+    items.append((v["ok"], "**Gana de forma constante en el tiempo**: ganó en {} de {} periodos (se pide al menos el {} %). "
+                  "_Un buen resultado no debe venir de un solo mes afortunado._".format(
+                      v["value"]["positive"], v["value"]["total"], _es(rules["min_positive_fold_share"] * 100, 0))))
+    v = c["positive_products"]
+    items.append((v["ok"], "**Funciona en varios productos**: ganó en {} de {} producto{} (se pide al menos el {} %)."
+                  .format(v["value"]["positive"], v["value"]["total"], "" if v["value"]["total"] == 1 else "s", _es(rules["min_positive_product_share"] * 100, 0))))
+    v = c["cost_stress"]
+    items.append((v["ok"], "**Aguanta costos más altos**: con comisiones y deslizamiento x{} el promedio sería {} por "
+                  "operación. _Debe seguir siendo positivo._".format(_es(r["stress_multiplier"], 1),
+                                                                      _pct_bp(v["value"], 2, True))))
+    return items
+
+
+def _summary_points(r, cfg):
+    """3-5 plain-language bullets."""
+    ov, rules, c = r["overall"], cfg["rules"], _rule_by_id(r)
+    points = []
+    if ov["n"] == 0:
+        return ["No hizo ninguna operación en el periodo evaluado, así que no hay nada que juzgar."]
+    mean = ov["mean_bp"]
+    points.append("{} en promedio **{} por operación** después de costos ({} operaciones; resultado total {} sobre "
+                  "posiciones de 100 USD).".format("Ganó" if mean > 0 else "Perdió", _pct_bp(abs(mean)), ov["n"],
+                                                   _usd(ov["total_bp"])))
+    pc = r["percentile"]
+    if pc is not None:
+        if pc >= 50:
+            points.append("Le fue mejor que entrar al azar (mejor que el {} % de los sorteos).".format(_es(pc, 0)))
+        else:
+            points.append("Le fue peor que entrar al azar (peor que el {} % de los sorteos).".format(_es(100 - pc, 0)))
+    f = c["positive_folds"]["value"]
+    pp = c["positive_products"]["value"]
+    points.append("Ganó en {} de {} periodos de tiempo y en {} de {} producto{}.".format(
+        f["positive"], f["total"], pp["positive"], pp["total"], "" if pp["total"] == 1 else "s"))
+    if r["stress_mean_bp"] is not None:
+        points.append("Con costos {} % más altos el promedio sería {} por operación ({}).".format(
+            _es((r["stress_multiplier"] - 1) * 100, 0), _pct_bp(r["stress_mean_bp"], 2, True),
+            "sigue ganando" if r["stress_mean_bp"] > 0 else "no se salva"))
+    if ov["n"] < rules["min_trades"]:
+        points.append("Hizo solo {} operaciones y se piden al menos {}: es poco para sacar conclusiones firmes.".format(
+            ov["n"], rules["min_trades"]))
+    return points[:5]
+
+
+def _verdict_line(r, cfg):
+    v, rules = r["verdict"], cfg["rules"]
+    if v == PASS:
+        return "## ✅ PASA\n\nCumplió todas las reglas que se fijaron de antemano."
+    if v == INCONCLUSIVE:
+        return ("## ⚠️ INCONCLUSO\n\nHay muy pocas operaciones (menos de {}) para decidir, pero ninguna otra regla "
+                "falló. Hace falta más historia o más productos.".format(rules["min_trades"]))
+    extra = " (pocas operaciones)" if r.get("verdict_note") else ""
+    failed = [c for c in r["rules"] if not c["ok"]]
+    return "## ❌ NO PASA{}\n\nNo cumplió {} de {} reglas.{}".format(
+        extra, len(failed), len(r["rules"]),
+        " Además tuvo menos de {} operaciones, por eso la evidencia es escasa.".format(rules["min_trades"])
+        if r.get("verdict_note") else "")
+
+
+def _neighbor_label(item):
+    return "{} {}".format(item["param"], item["direction"])
 
 
 def build_report(meta, result, cfg, extra_notes=()):
     r, ov = result, result["overall"]
-    verdict = r["verdict"]
     exam = meta["kind"] == "exam"
-    lines = ["# {} de la estrategia {}".format("EXAMEN FINAL" if exam else "Práctica", meta["strategy_id"]), "",
-             "## Veredicto: **{}**".format(verdict), ""]
+    name = meta.get("name") or meta["strategy_id"]
+    lines = ["# {}".format(name), "", "<sub>`{}` · {} · corrida #{}</sub>".format(
+        meta["strategy_id"], "examen final" if exam else "práctica", meta["run_id"]), "",
+        _verdict_line(r, cfg), ""]
+    warnings = [n for n in extra_notes if n.startswith("Atención")]
+    for note in warnings:
+        lines += ["> ⚠️ " + note, ""]
     if exam:
-        lines += ["Este examen consumió el único intento de esta versión (`{}`).".format(meta["version_key"]), ""]
-    lines += ["- Tipo: {} · corrida #{}".format("examen (solo datos desde el corte)" if exam else
-                                                 "práctica (solo datos anteriores al corte)", meta["run_id"]),
+        lines += ["> Este examen consumió el único intento de esta versión.", ""]
+    lines += ["### En pocas palabras", ""] + ["- " + p for p in _summary_points(r, cfg)] + [""]
+    lines += ["## Qué revisamos", "",
+              "Reglas fijadas antes de mirar resultados. Para pasar hay que cumplir **todas**.", ""]
+    lines += ["- {} {}".format(_mark(ok), text) for ok, text in _checklist(r, cfg)] + [""]
+    lines += ["## Resultado general", "", "Cuánto ganó o perdió en total, con comisiones y deslizamiento incluidos "
+              "(posiciones fijas de 100 USD).", ""]
+    lines += _table([""] + ROW_HEADER + ["Caída máxima"], [_row("Todas", ov) + [
+        _usd(-ov["max_drawdown_bp"]) if ov["n"] else "n/d"]])
+    lines += ["", "## Por periodo", "", "Cómo le fue en {} tramos consecutivos de tiempo; sirve para ver si el resultado "
+              "es estable. No se ajusta ningún parámetro.".format(len(r["folds"])), ""]
+    lines += _table(["Periodo", "Desde", "Hasta"] + ROW_HEADER,
+                    [[f["index"], _stamp(f["from_ms"]), _stamp(f["to_ms"])] + _row("", f)[1:] for f in r["folds"]])
+    lines += ["", "## Por producto", "", "El mismo resultado separado por producto.", ""]
+    lines += _table(["Producto"] + ROW_HEADER, [_row(p, s) for p, s in r["per_product"].items()])
+    lines += ["", "## Compra contra venta", "", "Separado entre operaciones largas (apuesta a que sube) y cortas "
+              "(apuesta a que baja).", ""]
+    lines += _table(["Lado"] + ROW_HEADER, [_row("Compra (largo)" if s == "LONG" else "Venta (corto)", v)
+                                            for s, v in r["per_side"].items()])
+    b = r["baseline"]
+    lines += ["", "## Comparación con entradas al azar", ""]
+    if b is None:
+        lines += ["Sin operaciones: no hay con qué comparar."]
+    else:
+        lines += ["Se repitió {} veces la misma cantidad de operaciones, del mismo lado, producto y duración, pero "
+                  "entrando en momentos al azar. Así se ve cuánto aporta la estrategia frente a la suerte.".format(b["draws"]),
+                  ""]
+        lines += _table(["", "Promedio por operación"], [
+            ["**La estrategia** (sin funding, para comparar parejo)", _pct_bp(b["observed_ex_funding"], 2, True)],
+            ["Al azar, promedio", _pct_bp(b["mean"], 2, True)],
+            ["Al azar, caso malo (5 % peores)", _pct_bp(b["p05"], 2, True)],
+            ["Al azar, caso típico (mediana)", _pct_bp(b["p50"], 2, True)],
+            ["Al azar, caso bueno (5 % mejores)", _pct_bp(b["p95"], 2, True)]])
+        pc = r["percentile"]
+        lines += ["", "La estrategia quedó en el **puesto {} de 100** entre los sorteos (100 = mejor que todos).".format(
+            _es(pc, 0))]
+        if b["skipped"]:
+            lines += ["", "{} operaciones cuya duración no cabía en las velas quedaron fuera de los sorteos.".format(b["skipped"])]
+    lines += ["", "## Con costos más altos", "", "Se repite el cálculo con comisiones y deslizamiento multiplicados por "
+              "{}, para ver si el resultado aguanta un mercado menos favorable.".format(_es(r["stress_multiplier"], 1)), ""]
+    lines += _table(["", "Promedio por operación"], [
+        ["Costos normales", _pct_bp(ov["mean_bp"], 2, True)],
+        ["Costos x{}".format(_es(r["stress_multiplier"], 1)), _pct_bp(r["stress_mean_bp"], 2, True)]])
+    lines += ["", "## Parámetros vecinos", "", "Se mueve cada parámetro numérico un 20 % hacia arriba y hacia abajo para ver "
+              "si el resultado se sostiene o depende de un valor exacto. Es solo informativo: no decide el veredicto.", ""]
+    if not r["sensitivity"]:
+        lines += ["No disponible (la estrategia no tiene parámetros numéricos, o se desactivó con --sin-vecinos)."]
+    else:
+        rows = []
+        for item in r["sensitivity"]:
+            label = " y ".join([_neighbor_label(item)] + [_neighbor_label(o) for o in item.get("also", [])])
+            rows.append([label, item["value"] if not item.get("also") else "ver nota", item["n"],
+                         _pct_bp(item["mean_bp"], 2, True) if item["n"] else "n/d"])
+        lines += _table(["Cambio", "Valor probado", "Operaciones", "Promedio por operación"], rows)
+        positive = sum(1 for s in r["sensitivity"] if s["mean_bp"] is not None and s["mean_bp"] > 0)
+        lines += ["", "Variantes con promedio positivo: {} de {}.".format(positive, len(r["sensitivity"]))]
+        if any(item.get("also") for item in r["sensitivity"]):
+            lines += ["", "> Cuando dos parámetros dan exactamente las mismas operaciones se muestran juntos: en las reglas "
+                      "se combinan (por ejemplo, se multiplican en el umbral de entrada), así que moverlos por separado "
+                      "es lo mismo y cuenta como una sola variante."]
+    lines += ["", "## Cómo se separaron los datos", ""]
+    if exam:
+        lines += ["- Examen: solo cuentan entradas desde el {} (lo anterior solo sirve para calentar los indicadores). "
+                  "Cada versión lo rinde una sola vez.".format(cfg["holdout_from"])]
+    else:
+        lines += ["- Práctica: solo se usan datos anteriores al {} (los últimos meses quedan guardados para el examen "
+                  "final).".format(cfg["holdout_from"]),
+                  "- Operaciones aún abiertas en esa fecha: {} (se descartan; nunca se cierran con precios posteriores)."
+                  .format(meta.get("open_at_end", 0))]
+    lines += ["", "## Glosario", "",
+              "- **bp (punto básico)**: una centésima de punto porcentual. 100 bp = 1 %. Aquí se muestra como % y, "
+              "cuando ayuda, el bp va entre paréntesis.",
+              "- **Factor de beneficio**: lo que ganó en las operaciones buenas dividido por lo que perdió en las malas. "
+              "Más de 1 es ganar; menos de 1 es perder.",
+              "- **Caída máxima**: la mayor pérdida acumulada desde un pico hasta el punto más bajo siguiente.",
+              "- **Sharpe desinflado**: el Sharpe (ganancia en relación con su irregularidad) corregido por la cantidad "
+              "de variantes probadas; mide si el resultado podría ser solo suerte de tanto probar.",
+              "- **Intervalo de confianza**: el rango donde, con un 95 % de seguridad, está el verdadero promedio.",
+              "- **Entradas al azar**: operar la misma cantidad de veces, pero en momentos elegidos a la suerte; es la "
+              "vara mínima que una estrategia debe superar.", ""]
+    lines += ["## Detalles técnicos", ""]
+    lines += ["- Tipo: {}".format("examen (solo datos desde el corte)" if exam else "práctica (solo datos anteriores al corte)"),
               "- Versión: `{}`".format(meta["version_key"]),
               "- Ventana evaluada: {} a {} (exclusivo); fecha de corte (holdout): {}".format(
                   _stamp(meta["start_ms"]), _stamp(meta["end_ms"]), cfg["holdout_from"]),
               "- Productos: {}".format(", ".join(meta["products"])),
-              "- intentos: {} (corridas de práctica sobre la familia `{}`; más intentos, Sharpe desinflado más exigente)".format(
-                  r["attempts"], meta["family"]),
-              "- Modelo de costes: {} · configuración `{}` (sha {})".format(
-                  COST_MODEL_VERSION, SCHEMA, meta["config_hash"][:12]), ""]
-    lines += ["## Reglas (declaradas de antemano en config/strategy-gate.json)", ""]
-    lines += _table(["", "regla", "valor", "umbral"],
-                    [[_mark(c["ok"]), c["label"], _rule_value(c), c["threshold"] if c["id"] != "mean_net_positive" else "> 0"]
-                     for c in r["rules"]])
-    lines += ["", "PASA solo si cumple TODAS las reglas. Con menos de {} operaciones el resultado es INCONCLUSO "
-              "(se muestran igual las demás reglas).".format(cfg["rules"]["min_trades"]), ""]
-    lines += ["## Resultado global (bp netos por operación, 100 USD fijos)", ""]
-    lines += _table(SUMMARY_HEADER, [_summary_row("todas", ov)])
-    lines += ["", "- Costes: comisiones taker más impacto modelado (`futures_costs`) y funding donde Kraken lo publica "
-              "(estado del funding de las operaciones: {}).".format(
+              "- Intentos: {} (corridas de práctica sobre la familia `{}`)".format(r["attempts"], meta["family"]),
+              "- Modelo de costos: {} · configuración `{}` (sha {})".format(COST_MODEL_VERSION, SCHEMA, meta["config_hash"][:12]),
+              "- Funding de las operaciones: {}.".format(
                   ", ".join("{} {}".format(k, v) for k, v in sorted(r["funding_status"].items())) or "n/d"),
               "- Sharpe por operación: {} · desviación de los intentos usada: {}".format(
-                  _num(r["sharpe_per_trade"], 3), r["trial_sharpe_sd"]), ""]
-    lines += ["## Por tramo de tiempo (walk-forward)", ""]
-    lines += _table(["tramo", "desde", "hasta"] + SUMMARY_HEADER[1:],
-                    [[f["index"], _stamp(f["from_ms"]), _stamp(f["to_ms"])] + _summary_row("", f)[1:] for f in r["folds"]])
-    lines += ["", "No se ajusta ningún parámetro: los tramos miden la estabilidad en el tiempo. Cada operación va al "
-              "tramo de su entrada.", ""]
-    lines += ["## Por producto", ""]
-    lines += _table(SUMMARY_HEADER, [_summary_row(p, s) for p, s in r["per_product"].items()])
-    lines += ["", "## Por lado", ""]
-    lines += _table(SUMMARY_HEADER, [_summary_row(s, v) for s, v in r["per_side"].items()])
-    b = r["baseline"]
-    lines += ["", "## Entradas al azar (misma cantidad, mismo lado, mismo producto, misma duración)", ""]
-    if b is None:
-        lines += ["Sin operaciones: no hay línea base."]
-    else:
-        lines += ["- {} sorteos; media al azar {} bp (p05 {}, mediana {}, p95 {}).".format(
-            b["draws"], _num(b["mean"]), _num(b["p05"]), _num(b["p50"]), _num(b["p95"])),
-            "- Estrategia sin funding: {} bp → percentil {} (la comparación excluye el funding porque el azar no lo "
-            "modela).".format(_num(b["observed_ex_funding"]), _num(r["percentile"], 1))]
-        if b["skipped"]:
-            lines += ["- {} operaciones cuya duración no cabía en las velas quedaron fuera de los sorteos.".format(b["skipped"])]
-    lines += ["", "## Costes x{}".format(r["stress_multiplier"]), "",
-              "Media neta con comisiones e impacto multiplicados por {}: **{} bp** ({}).".format(
-                  r["stress_multiplier"], _num(r["stress_mean_bp"]),
-                  "sigue positiva" if r["stress_mean_bp"] is not None and r["stress_mean_bp"] > 0 else "deja de ser positiva"), ""]
-    lines += ["## Sensibilidad a parámetros vecinos (informativa, no decide el veredicto)", ""]
-    if not r["sensitivity"]:
-        lines += ["n/d (la estrategia no expone parámetros numéricos, o se desactivó con --sin-vecinos)."]
-    else:
-        lines += _table(["parámetro", "cambio", "valor", "operaciones", "media neta (bp)"],
-                        [[s["param"], s["direction"], s["value"], s["n"], _num(s["mean_bp"])] for s in r["sensitivity"]])
-        positive = sum(1 for s in r["sensitivity"] if s["mean_bp"] is not None and s["mean_bp"] > 0)
-        lines += ["", "Vecinos con media positiva: {} de {}.".format(positive, len(r["sensitivity"]))]
-    lines += ["", "## Cómo se separaron los datos", ""]
-    if exam:
-        lines += ["- Examen: solo entradas desde {} (velas anteriores solo calientan los indicadores). Se rinde una vez "
-                  "por versión.".format(cfg["holdout_from"])]
-    else:
-        lines += ["- Práctica: las velas, el funding y los resultados se piden solo por debajo de {} y se filtran otra "
-                  "vez dentro del simulador.".format(cfg["holdout_from"]),
-                  "- Operaciones aún abiertas en el corte: {} (descartadas, nunca se cierran con precios posteriores).".format(
-                      meta.get("open_at_end", 0))]
-    lines += ["- Calentamiento de indicadores: {} días antes del inicio.".format(WARMUP_MS // 86_400_000)]
-    lines += ["- Funding: solo el historial público de Kraken (aprox. un año); donde no hay, la operación queda con "
-              "estado `unknown`/`partial` y no se inventa."]
-    lines += ["- Las señales salen del mismo código que usa la estrategia en vivo (`propose_spec` y `Book`); live == replay."]
-    lines += ["- Tiempo de cálculo: {:.0f} s.".format(meta.get("seconds", 0))]
+                  _es(r["sharpe_per_trade"], 3), r["trial_sharpe_sd"]),
+              "- Calentamiento de indicadores: {} días antes del inicio; funding solo del historial público de Kraken.".format(
+                  WARMUP_MS // 86_400_000),
+              "- Las señales salen del mismo código que usa la estrategia en vivo (`propose_spec` y `Book`).",
+              "- Semilla: {} · tiempo de cálculo: {:.0f} s.".format(cfg["seed"], meta.get("seconds", 0))]
     for note in extra_notes:
-        lines += ["- " + note]
+        if note not in warnings:
+            lines += ["- " + note]
     lines += ["", "```json", json.dumps({"rules": cfg["rules"], "holdout_from": cfg["holdout_from"],
                                          "practice_folds": cfg["practice_folds"], "exam_folds": cfg["exam_folds"],
                                          "random_draws": cfg["random_draws"], "seed": cfg["seed"]},
@@ -718,7 +909,7 @@ def _run_tasks(runner, jobs_list, workers, base, span):
 
 def evaluate(strategy_id, *, kind="practice", from_date=None, products=None, cfg=None, data_dir=None, spec=None,
              specs_dir=None, provider=None, trade_source=None, jobs=None, neighbors=True, json_progress=False,
-             on_progress=None, now_ms=None, install_signals=False, stream=None):
+             on_progress=None, now_ms=None, install_signals=False, stream=None, registry_db=None):
     """Runs the gate for one strategy. Returns ``{"run_id", "verdict", "report_path", "status"}``.
 
     ``spec`` / ``provider`` / ``trade_source`` / ``cfg`` are for tests (a spec outside the shipped directory, synthetic
@@ -729,10 +920,7 @@ def evaluate(strategy_id, *, kind="practice", from_date=None, products=None, cfg
     if kind not in ("practice", "exam"):
         raise GateError("tipo desconocido: {}".format(kind))
     if spec is None:
-        specs = load_specs(specs_dir or DEFAULT_SPEC_DIR)
-        if strategy_id not in specs:
-            raise GateError("estrategia desconocida: {} (hay: {})".format(strategy_id, ", ".join(sorted(specs))))
-        spec = specs[strategy_id]
+        spec = find_spec(strategy_id, specs_dir, registry_db)
     if spec["id"] != strategy_id:
         raise GateError("el id de la especificación ({}) no coincide con --strategy ({})".format(spec["id"], strategy_id))
     holdout_ms = _date_ms(cfg["holdout_from"])
@@ -780,7 +968,8 @@ def evaluate(strategy_id, *, kind="practice", from_date=None, products=None, cfg
             for sig in (signal.SIGTERM, signal.SIGINT):
                 previous[sig] = signal.signal(sig, stop)
         meta = {"run_id": run_id, "strategy_id": strategy_id, "family": family, "version_key": key, "kind": kind,
-                "start_ms": start_ms, "end_ms": end_ms, "products": names, "config_hash": config_hash(cfg)}
+                "start_ms": start_ms, "end_ms": end_ms, "products": names, "config_hash": config_hash(cfg),
+                "name": spec.get("name") or strategy_id}
         started = time.time()
         try:
             outcome = _execute(runner, db, spec, cfg, meta, product_list, provider, trade_source, jobs, neighbors,
@@ -884,7 +1073,7 @@ def _execute(runner, db, spec, cfg, meta, product_list, provider, trade_source, 
     meta["seconds"] = time.time() - runner.started
     notes = []
     if not any(funding.values()):
-        notes.append("Atención: no se pudo leer el historial de funding de Kraken; los costes de funding no están incluidos.")
+        notes.append("Atención: no se pudo leer el historial de funding de Kraken; los costos de funding no están incluidos.")
     report = build_report(meta, result, cfg, notes)
     reports = os.path.join(data_dir, "reports")
     os.makedirs(reports, exist_ok=True)
@@ -936,6 +1125,8 @@ def _parser():
     e.add_argument("--sin-vecinos", action="store_true", help="omite la sensibilidad a parámetros vecinos (más rápido)")
     e.add_argument("--jobs", type=int, help="procesos de cálculo (por defecto min(CPU, 8))")
     e.add_argument("--specs-dir", default=DEFAULT_SPEC_DIR)
+    e.add_argument("--registry-db", help="futures-strategies.sqlite del registro S (solo lectura): también se juzgan "
+                                         "las estrategias creadas allí")
     r = sub.add_parser("runs", help="lista las corridas anteriores (una línea JSON por corrida)")
     r.add_argument("--strategy")
     c = sub.add_parser("cancel", help="pide cancelar una corrida en curso")
@@ -955,7 +1146,7 @@ def main(argv=None):
             print("cancelación pedida para la corrida {}".format(args.run))
             return 0
         out = evaluate(args.strategy, kind="exam" if args.exam else "practice", from_date=args.from_date,
-                       products=args.products, data_dir=args.data_dir, specs_dir=args.specs_dir, jobs=args.jobs,
+                       products=args.products, data_dir=args.data_dir, specs_dir=args.specs_dir, registry_db=args.registry_db, jobs=args.jobs,
                        neighbors=not args.sin_vecinos, json_progress=args.json_progress, install_signals=True)
     except (GateError, HistoryError, ValueError) as error:
         print(str(error), file=sys.stderr)

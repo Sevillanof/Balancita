@@ -152,6 +152,14 @@ class GateApiTests(unittest.TestCase):
         self.assertNotIn("--exam", args)
         self.assertIn("python", env["PYTHONPATH"])
 
+    def test_launch_hands_the_registry_db_to_the_gate_so_registry_only_ids_work(self):
+        registry = FakeRegistry()
+        registry.path = "/tmp/some/futures-strategies.sqlite"
+        gate = GateApi(registry, data_dir=self.dir, python="py", spawn=self.spawn, wait_s=0.3, products=["PF_XBTUSD"])
+        gate.launch("c29-test-v1", {})
+        args = self.spawned[-1][0]
+        self.assertEqual(args[args.index("--registry-db") + 1], "/tmp/some/futures-strategies.sqlite")
+
     def test_launch_returns_the_run_id_when_the_child_registers(self):
         self.insert(status="running", pid=424242)  # someone else's row must not be mistaken for ours
         self.insert(status="done", pid=0)
