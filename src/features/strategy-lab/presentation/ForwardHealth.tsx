@@ -1,5 +1,4 @@
 import { useState } from 'react'
-import { StatusPill } from '../../../shared/mission-control/index.ts'
 import { percent } from '../../../shared/finance/format.ts'
 import {
   agoText,
@@ -28,6 +27,19 @@ function optionsText(item: QDecisionCase) {
     .join(' · ')
 }
 
+/** `lee el prompt 591 ms · responde 0 ms`: where the time went, when llama-server reported it. */
+function timeSplit(item: QDecisionCase) {
+  const parts = [
+    item.prompt_ms == null
+      ? null
+      : `lee el prompt ${Math.round(item.prompt_ms)} ms`,
+    item.predicted_ms == null
+      ? null
+      : `responde ${Math.round(item.predicted_ms)} ms`,
+  ].filter(Boolean)
+  return parts.length === 0 ? '' : ` · ${parts.join(' · ')}`
+}
+
 function DecisionLines({
   item,
   now,
@@ -50,6 +62,7 @@ function DecisionLines({
         {item.question_id} v{item.question_version} · {item.latency_ms} ms
         {detail &&
           ` · prompt v${item.prompt_version} · probabilidades ${item.probability_source} · ${item.model_ref}`}
+        {detail && timeSplit(item)}
       </small>
     </>
   )
@@ -154,7 +167,7 @@ function Qwen({ health, now }: { health: Health; now: number }) {
   )
 }
 
-/** One compact panel: funding per product and the forward cycle, plus what Qwen last decided. */
+/** One compact panel: what Qwen last decided, and the earlier cases behind a button. The funding lives in the header. */
 export function ForwardHealth({
   health,
   now,
@@ -169,35 +182,9 @@ export function ForwardHealth({
         del forward.
       </p>
     )
-  const products = Object.entries(health.funding)
   return (
     <article className="comparison__panel" data-testid="forward-health">
-      <h3>
-        Forward y Qwen{' '}
-        <small>
-          ciclo del forward cada {Math.round(health.cadence_s / 60)} min
-        </small>
-      </h3>
-      {products.length === 0 ? (
-        <p>
-          {health.summary_available
-            ? 'El resumen no trae estado de funding.'
-            : 'Sin resumen del forward: no se puede leer el funding.'}
-        </p>
-      ) : (
-        <ul data-testid="funding-list" className="comparison__funding">
-          {products.map(([product, state]) => (
-            <li key={product}>
-              <StatusPill tone={state.usable ? 'ok' : 'warn'}>
-                {state.usable ? 'Funding usable' : 'Funding no usable'}
-              </StatusPill>{' '}
-              {product}
-              {!state.usable && `: ${state.reason}`}
-              <small> · {agoText(state.checked_ms, now)}</small>
-            </li>
-          ))}
-        </ul>
-      )}
+      <h3>Qwen</h3>
       <Qwen health={health} now={now} />
     </article>
   )

@@ -146,6 +146,9 @@ Sin red, `capture` y la fuente Real avisan; `vite` y el resto siguen funcionando
 | `LLAMA_PARALLEL`        | `2`           | Slots paralelos                                                                                                                          |
 | `LLAMA_UBATCH`          | (servidor)    | Opcional, `-ub`. Con modelos híbridos (Qwen3.5) decide dónde se guarda el punto de reuso del prompt; ver `futures_qwen_prefill_probe.py` |
 | `LLAMA_CTX_CHECKPOINTS` | (servidor)    | Opcional, `--ctx-checkpoints`                                                                                                            |
+| `LLAMA_NGL`             | `99`          | `-ngl`: capas en la GPU (Metal en macOS); también `auto` o `all`                                                                         |
+| `LLAMA_FLASH_ATTN`      | `on`          | `-fa on\|off\|auto` (flash attention)                                                                                                    |
+| `LLAMA_CACHE_REUSE`     | (apagado)     | Opcional, `--cache-reuse N` (reuso por desplazamiento del KV; los modelos híbridos como Qwen3.5 pueden no admitirlo)                     |
 | `DECISIONS_PRODUCTS`    | `PF_XBTUSD`   | Productos que decide Q (separados por comas)                                                                                             |
 | `NEWS_ENABLED`          | activo        | `0` desactiva `news`                                                                                                                     |
 | `NEWS_EXTRA_RSS_FEEDS`  | -             | Feeds extra `id\|label\|https url\|license`                                                                                              |

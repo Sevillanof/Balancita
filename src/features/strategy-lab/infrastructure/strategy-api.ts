@@ -246,6 +246,9 @@ export type QDecisionCase = QCaseBase & {
   probability_source: string
   prompt_version: number
   latency_ms: number
+  /** llama-server: time reading the prompt and time answering; null when it did not report them. */
+  prompt_ms?: number | null
+  predicted_ms?: number | null
   model_ref: string
 }
 

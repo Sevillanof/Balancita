@@ -676,6 +676,10 @@ describe('optional LLM decision children (llm and q)', () => {
       '8192',
       '-np',
       '2',
+      '-ngl',
+      '99',
+      '-fa',
+      'on',
       '--no-mmproj',
       '--no-webui',
     ])
@@ -1189,6 +1193,48 @@ describe('devChildSpecs model selection', () => {
       ['-m', '/p.gguf'],
     )
     assert.equal(specs({}), undefined)
+  })
+})
+
+describe('llm child: GPU offload, flash attention and prompt reuse flags', () => {
+  const llmArgs = (env) =>
+    devChildSpecs({
+      root,
+      env,
+      allowedFlags: noFlags,
+      python: { command: 'python3', prefixArgs: [] },
+      llm: { command: 'llama-server' },
+      findModel: () => '/found/Qwen3.5-4B-Q8_0.gguf',
+    }).find((spec) => spec.name === 'llm').args
+  const valueOf = (args, flag) => args[args.indexOf(flag) + 1]
+
+  it('offloads every layer and turns flash attention on by default', () => {
+    const args = llmArgs({})
+    assert.equal(valueOf(args, '-ngl'), '99')
+    assert.equal(valueOf(args, '-fa'), 'on')
+  })
+
+  it('lets LLAMA_NGL and LLAMA_FLASH_ATTN (on, off, auto) override them', () => {
+    const args = llmArgs({ LLAMA_NGL: '33', LLAMA_FLASH_ATTN: 'auto' })
+    assert.equal(valueOf(args, '-ngl'), '33')
+    assert.equal(valueOf(args, '-fa'), 'auto')
+  })
+
+  it('ignores a flash attention value llama-server would not accept', () => {
+    assert.equal(valueOf(llmArgs({ LLAMA_FLASH_ATTN: 'yes' }), '-fa'), 'on')
+    assert.equal(valueOf(llmArgs({ LLAMA_NGL: 'many' }), '-ngl'), '99')
+  })
+
+  it('adds --cache-reuse only when asked: KV shifting is off by default and not every model supports it', () => {
+    assert.ok(!llmArgs({}).includes('--cache-reuse'))
+    assert.equal(
+      valueOf(llmArgs({ LLAMA_CACHE_REUSE: '256' }), '--cache-reuse'),
+      '256',
+    )
+  })
+
+  it('does not switch prompt caching off', () => {
+    assert.ok(!llmArgs({}).includes('--no-cache-prompt'))
   })
 })
 

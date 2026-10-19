@@ -299,7 +299,7 @@ class OrderDebiasTests(unittest.TestCase):
         self.assertLess(done["result"]["confidence"], 1e-9)
         self.assertEqual(len(done["output"]["timings"]["order_probabilities"]), 3)
         # the prompt kept for the audit is the written order
-        self.assertTrue(done["prompt"].split("\n")[2].startswith("A) buy"))
+        self.assertTrue(next(l for l in done["prompt"].split("\n") if l[1:3] == ") ").startswith("A) buy"))
 
     def test_a_real_preference_survives_the_permutations(self):
         def likes_sell(prompt, letters):
@@ -797,7 +797,7 @@ class ServiceTests(ServiceBase):
         self.assertEqual(json.loads(row["top_logprobs_json"])[0]["token"], "A")
         self.assertAlmostEqual(sum(json.loads(row["probabilities_json"]).values()), 1.0, places=9)
         self.assertEqual(row["prompt_hash"], q.prompt_hash(self.provider.prompts[0], q.default_template()))
-        self.assertEqual(row["prompt_version"], 2)
+        self.assertEqual(row["prompt_version"], 4)
         self.assertEqual(row["probability_source"], "raw_logprobs")
         self.assertGreaterEqual(row["latency_ms"], 0)
         self.assertIn("predicted_ms", json.loads(row["timings_json"]))
@@ -1149,6 +1149,7 @@ PROMPT_PINS = {
     1: "c041ddb1868927030786b51af7bc2fefa3955a7bbd03863ae128b6f0062b02bd",
     2: "ab31e2629d0511111668ec85f0d4e5114daac14e169b7070b0d493049830beb7",
     3: "177a9aa488a1423eefd15969aadbea1262cdc5164f88072469d8455d48eb7f4e",
+    4: "a0c93e68febe7a9e0b1502611448636f8d722a172c682420b8fa34c776d5e757",
 }
 SYSTEM_TEXT = "You are a classifier. Reply with exactly one option letter and nothing else."
 OLD_BODY_KEYS = {"messages", "max_tokens", "temperature", "grammar", "logprobs", "top_logprobs",
@@ -1161,10 +1162,10 @@ class PromptVersionTests(unittest.TestCase):
         self.config = q.load_prompt_config()
 
     def test_shipped_config_defaults(self):
-        self.assertEqual(self.config["default_version"], 2)
+        self.assertEqual(self.config["default_version"], 4)
         self.assertEqual(self.config["probability_source"], "auto")
-        self.assertEqual(sorted(self.config["templates"]), [1, 2, 3])
-        self.assertEqual(q.default_template()["version"], 2)
+        self.assertEqual(sorted(self.config["templates"]), [1, 2, 3, 4])
+        self.assertEqual(q.default_template()["version"], 4)
         self.assertEqual(q.default_template()["system"], SYSTEM_TEXT)
 
     def test_version_one_is_the_old_prompt(self):
@@ -1178,7 +1179,7 @@ class PromptVersionTests(unittest.TestCase):
         self.assertEqual(q.build_prompt("s", self.question), old)
 
     def test_new_prompt_keeps_state_first_question_last_and_ends_with_the_answer_line(self):
-        prompt = q.build_prompt("regime: range", self.question, q.default_template())
+        prompt = q.build_prompt("regime: range", self.question, self.config["templates"][2])
         lines = prompt.split("\n")
         self.assertEqual(lines[0], "STATE: regime: range")
         self.assertTrue(lines[1].startswith("QUESTION: "))
@@ -1188,7 +1189,7 @@ class PromptVersionTests(unittest.TestCase):
         self.assertEqual(len(lines), 6)
 
     def test_answer_line_follows_the_option_letters(self):
-        template = q.default_template()
+        template = self.config["templates"][2]
         for count, expected in ((2, "(A or B)"), (3, "(A, B or C)"), (5, "(A, B, C, D or E)")):
             prompt = q.build_prompt("s", choice_question(count), template)
             self.assertEqual(prompt.split("\n")[-1], "Answer with one letter " + expected + ":")
@@ -1222,6 +1223,45 @@ class PromptVersionTests(unittest.TestCase):
         for version, template in self.config["templates"].items():
             self.assertEqual(q.template_hash(template), PROMPT_PINS[version],
                              "prompt v{} text changed: add a new version instead".format(version))
+
+    def test_version_four_puts_the_static_part_first_and_the_state_last_so_the_server_reuses_its_prefix(self):
+        v4 = self.config["templates"][4]
+        self.assertTrue(v4["state_last"])
+        self.assertFalse(any(self.config["templates"][v].get("state_last") for v in (1, 2, 3)))
+        one = q.build_prompt("regime: range\nrsi14: 52.0", self.question, v4)
+        two = q.build_prompt("regime: trend\nrsi14: 31.0", self.question, v4)
+        lines = one.split("\n")
+        self.assertTrue(lines[0].startswith("QUESTION: "))
+        self.assertTrue(lines[1].startswith("A) up"))
+        self.assertEqual(lines[4], "Answer with one letter (A, B or C):")
+        self.assertEqual(lines[5], "STATE: regime: range")
+        self.assertEqual(lines[-1], "rsi14: 52.0")
+        # Everything before the STATE is the same text whatever the minute's state is.
+        static = one[: one.index("STATE: ")]
+        self.assertEqual(static, two[: two.index("STATE: ")])
+        self.assertNotIn("regime", static)
+        # Nothing but the question's own state reaches the model, once.
+        self.assertEqual(one.count("STATE:"), 1)
+        self.assertEqual(one.count("rsi14"), 1)
+
+    def test_version_four_keeps_the_one_token_grammar_and_logprobs_request(self):
+        v4 = self.config["templates"][4]
+        body = q.request_body(q.build_prompt("s", self.question, v4), ["A", "B", "C"], v4)
+        self.assertEqual(set(body), OLD_BODY_KEYS)
+        self.assertIs(body["cache_prompt"], True)
+        self.assertEqual(body["max_tokens"], 1)
+        self.assertEqual(body["grammar"], 'root ::= "A" | "B" | "C"')
+        self.assertEqual(body["messages"][0], {"role": "system", "content": SYSTEM_TEXT})
+
+    def test_the_probe_checks_that_the_letters_still_appear_with_version_four(self):
+        out = io.StringIO()
+        provider = q.FakeProvider(entries=entries())
+        q.probe_prompt_variants(provider, {"direction_1h": self.question}, out=out)
+        self.assertRegex(out.getvalue(), r"v4\s+raw_logprobs\s+A B C \(3/3\)")
+
+    def test_state_last_must_be_a_boolean(self):
+        with self.assertRaises(ValueError):
+            q.validate_prompt_config({"default_version": 1, "versions": {"1": {"state_last": "yes"}}})
 
     def test_prompt_hash_includes_the_version_and_the_template(self):
         prompt = "same user text"
@@ -1361,7 +1401,7 @@ class AutoSourceTests(ServiceBase):
         row = self.run_service()
         self.assertEqual(len(self.server.completions()), 1)
         self.assertEqual(row["probability_source"], "raw_logprobs")
-        self.assertEqual(row["prompt_version"], 2)
+        self.assertEqual(row["prompt_version"], 4)
 
     def test_auto_reasks_with_post_sampling_when_letters_are_missing(self):
         self.server.completion = self.no_letters
@@ -1485,7 +1525,7 @@ class ProbeSourcesTests(unittest.TestCase):
         self.assertRegex(text, r"raw_logprobs\s+none \(0/3\)")
         self.assertIn("service would use: post_sampling", text)
         self.assertIn("RESULT: ok", text)
-        self.assertIn("prompt v2", text)
+        self.assertIn("prompt v4", text)
 
     def test_both_sources_fine_uses_raw(self):
         self.server.post_completion = self.post
@@ -1542,11 +1582,11 @@ class ProbeSourcesTests(unittest.TestCase):
         code = q.probe_prompt_variants(self.provider, q.load_questions(), out=out)
         text = out.getvalue()
         bodies = self.server.completions()
-        self.assertEqual(len(bodies), 6)  # 3 versions x 2 sources
+        self.assertEqual(len(bodies), 8)  # 4 versions x 2 sources
         self.assertEqual([m["role"] for m in bodies[0]["messages"]], ["user"])
         self.assertEqual([m["role"] for m in bodies[2]["messages"]], ["system", "user"])
         self.assertEqual([m["role"] for m in bodies[4]["messages"]], ["system", "user", "assistant"])
-        for version in ("v1", "v2", "v3"):
+        for version in ("v1", "v2", "v3", "v4"):
             self.assertRegex(text, r"\b" + version + r"\b")
         self.assertIn("(default prompt)", text)
         self.assertRegex(text, r"RESULT: ")

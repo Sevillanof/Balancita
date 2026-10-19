@@ -30,7 +30,7 @@ class QCasesTest(unittest.TestCase):
         raw.execute(
             "INSERT INTO paper_futures_llm_decisions VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (product, bucket, "trade_action", 3, "h", "choice", "Qwen3-4B", "{}", "p", 2, "raw", "state", "[]",
-             json.dumps(probabilities), 1.0, chosen, None, 0.6, 840, "{}", written_at))
+             json.dumps(probabilities), 1.0, chosen, None, 0.6, 840, json.dumps({"prompt_ms": 412.5, "predicted_ms": 0.4}), written_at))
         raw.commit()
 
     def skip(self, raw, bucket, written_at, code, reason, product="PF_XBTUSD"):
@@ -59,6 +59,18 @@ class QCasesTest(unittest.TestCase):
         self.assertEqual((case["probability_source"], case["prompt_version"], case["latency_ms"]), ("raw", 2, 840))
         self.assertEqual(case["model_ref"], "Qwen3-4B")
         self.assertEqual(case["written_at"], NOW - 4 * MINUTE)
+
+    def test_the_time_is_split_between_reading_the_prompt_and_answering(self):
+        raw = self.schema()
+        self.decide(raw, NOW - 5 * MINUTE, NOW - 4 * MINUTE)
+        [case] = read_q_cases(self.db, NOW, env={})["latest"]
+        self.assertEqual((case["prompt_ms"], case["predicted_ms"]), (412.5, 0.4))
+        # A decision stored without timings says so instead of inventing them.
+        raw.execute("DROP TRIGGER paper_futures_llm_decisions_no_update")
+        raw.execute("UPDATE paper_futures_llm_decisions SET timings_json='{}'")
+        raw.commit()
+        [case] = read_q_cases(self.db, NOW, env={})["latest"]
+        self.assertEqual((case["prompt_ms"], case["predicted_ms"]), (None, None))
 
     def test_skips_and_errors_say_why_there_is_no_decision_and_everything_is_newest_first(self):
         raw = self.schema()

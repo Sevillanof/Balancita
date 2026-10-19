@@ -310,6 +310,8 @@ const decision = (patch: Partial<QDecisionCase> = {}): QDecisionCase => ({
   probability_source: 'raw',
   prompt_version: 2,
   latency_ms: 840,
+  prompt_ms: 590.6,
+  predicted_ms: 0.4,
   model_ref: 'Qwen3-4B',
   written_at: NOW - 5 * 60_000,
   ...patch,
@@ -343,14 +345,13 @@ const cases = (latest: QCase[], patch: Partial<QCases> = {}): QCases => ({
 const HISTORY = 'Históricos de Qwen'
 
 describe('ForwardHealth: un solo panel con el forward y lo que decide Qwen (datos de ejemplo)', () => {
-  it('lists funding per product with the reason of the unusable ones', () => {
+  it('is one panel about Qwen and no longer carries the funding, which lives in the header', () => {
     render(<ForwardHealth health={health()} now={NOW} />)
-    const funding = within(screen.getByTestId('funding-list'))
-    expect(funding.getByText(/PF_XBTUSD/)).toBeInTheDocument()
-    expect(
-      screen.getByText(/PF_ETHUSD: el funding llega con retraso/),
-    ).toBeInTheDocument()
     expect(screen.getAllByTestId('forward-health')).toHaveLength(1)
+    expect(screen.queryByTestId('funding-list')).toBeNull()
+    expect(screen.getByTestId('forward-health')).not.toHaveTextContent(
+      /funding/i,
+    )
   })
 
   it('shows only the latest decision in plain words, with the details kept out of the main view', () => {
@@ -415,6 +416,7 @@ describe('ForwardHealth: un solo panel con el forward y lo que decide Qwen (dato
     expect(rows[0]).toHaveTextContent('tramo en calma')
     expect(rows[1]).toHaveTextContent('Qwen decide: Vender')
     expect(rows[1]).toHaveTextContent('prompt v2 · probabilidades raw')
+    expect(rows[1]).toHaveTextContent('lee el prompt 591 ms · responde 0 ms')
     fireEvent.click(button)
     expect(screen.queryByTestId('q-history')).toBeNull()
   })
@@ -504,8 +506,6 @@ describe('ForwardHealth: un solo panel con el forward y lo que decide Qwen (dato
     const { rerender } = render(
       <ForwardHealth
         health={health({
-          funding: {},
-          summary_available: false,
           q_cases: cases([], {
             available: false,
             reason: 'sin base de decisiones de Q',
@@ -514,7 +514,6 @@ describe('ForwardHealth: un solo panel con el forward y lo que decide Qwen (dato
         now={NOW}
       />,
     )
-    expect(screen.getByText(/Sin resumen del forward/)).toBeInTheDocument()
     expect(screen.getByText(/sin base de decisiones de Q/)).toBeInTheDocument()
     rerender(
       <ForwardHealth health={health({ q_cases: cases([]) })} now={NOW} />,

@@ -22,7 +22,7 @@ Q_CASES_LIMIT = 20
 
 _DECISIONS = (
     "SELECT product_id, bucket_start, question_id, question_version, chosen, probabilities_json, confidence, "
-    "probability_source, prompt_version, latency_ms, model_ref, written_at "
+    "probability_source, prompt_version, latency_ms, model_ref, timings_json, written_at "
     "FROM paper_futures_llm_decisions ORDER BY written_at DESC, bucket_start DESC LIMIT ?"
 )
 _SKIPS = (
@@ -33,6 +33,15 @@ _ERRORS = (
     "SELECT product_id, bucket_start, question_id, question_version, kind, message, written_at "
     "FROM paper_futures_llm_errors ORDER BY written_at DESC, error_id DESC LIMIT ?"
 )
+
+
+def _timings(text):
+    """``prompt_ms`` (reading the prompt) and ``predicted_ms`` (answering) llama-server reported; empty when absent."""
+    try:
+        found = json.loads(text)
+    except (TypeError, ValueError):
+        return {}
+    return found if isinstance(found, dict) else {}
 
 
 def _health_process(env, name):
@@ -84,12 +93,15 @@ def read_q_cases(decisions_db, now_ms, env=None):
     try:
         cases = []
         for row in db.execute(_DECISIONS, (Q_CASES_LIMIT,)):
-            product, bucket, question, version, chosen, probabilities, confidence, source, prompt, latency, model, at = row
+            (product, bucket, question, version, chosen, probabilities, confidence, source, prompt, latency, model,
+             timings, at) = row
+            timings = _timings(timings)
             cases.append({"kind": "decision", "product_id": product, "bucket_start": bucket,
                           "question_id": question, "question_version": version, "chosen": chosen,
                           "probabilities": json.loads(probabilities), "confidence": confidence,
                           "probability_source": source, "prompt_version": prompt, "latency_ms": latency,
-                          "model_ref": model, "written_at": at})
+                          "model_ref": model, "written_at": at,
+                          "prompt_ms": timings.get("prompt_ms"), "predicted_ms": timings.get("predicted_ms")})
         for kind, query in (("skip", _SKIPS), ("error", _ERRORS)):
             for product, bucket, question, version, code, reason, at in db.execute(query, (Q_CASES_LIMIT,)):
                 cases.append({"kind": kind, "product_id": product, "bucket_start": bucket,

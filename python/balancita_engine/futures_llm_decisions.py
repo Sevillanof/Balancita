@@ -300,6 +300,8 @@ def validate_prompt_config(config):
             value = template.get(field)
             if value is not None and not isinstance(value, str):
                 raise ValueError("prompt version {}: {} must be a string or null".format(key, field))
+        if not isinstance(template.get("state_last", False), bool):
+            raise ValueError("prompt version {}: state_last must be a boolean".format(key))
     default = config.get("default_version")
     if isinstance(default, bool) or not isinstance(default, int) or str(default) not in versions:
         raise ValueError("default_version must name one of the versions")
@@ -313,6 +315,8 @@ def load_prompt_config(path=None):
     templates = {}
     for key, template in config["versions"].items():
         templates[int(key)] = dict({field: template.get(field) for field in _TEMPLATE_TEXT_FIELDS}, version=int(key))
+        if template.get("state_last"):
+            templates[int(key)]["state_last"] = True
     return {
         "default_version": config["default_version"],
         "probability_source": config.get("probability_source", "auto"),
@@ -328,6 +332,8 @@ def default_template(path=None):
 def template_hash(template):
     """Hash of a template's full definition; pinned per version in the tests."""
     fields = {field: template.get(field) for field in _TEMPLATE_TEXT_FIELDS}
+    if template.get("state_last"):  # only when set: the pinned hashes of versions 1-3 stay as released
+        fields["state_last"] = True
     return text_hash(json.dumps(dict(fields, version=template["version"]), sort_keys=True, separators=(",", ":")))
 
 
@@ -348,17 +354,19 @@ def _letters_phrase(letters):
 
 
 def build_prompt(state_text, question, template=None):
-    """The user message: STATE first, QUESTION and the options, then the template's answer line."""
+    """The user message: STATE first, QUESTION and the options, then the template's answer line.
+
+    With ``state_last`` (version 4) the order is QUESTION, options, answer line and only then the STATE: everything
+    before it is the same text every minute, so llama-server reuses that cached prefix and only processes the state.
+    """
     template = template or LEGACY_TEMPLATE
-    lines = [
-        "STATE: " + sanitize_text(state_text),
-        "QUESTION: " + sanitize_text(question["instruction"]),
-    ]
+    state = "STATE: " + sanitize_text(state_text)
+    lines = ["QUESTION: " + sanitize_text(question["instruction"])]
     for letter, (option_id, description, _) in zip(LETTERS, question_options(question)):
         lines.append("{}) {}".format(letter, option_id) + ("" if description is None else " - " + sanitize_text(description)))
     if template.get("answer_line"):
         lines.append(template["answer_line"].format(letters=_letters_phrase(question_letters(question))))
-    return "\n".join(lines)
+    return "\n".join(lines + [state] if template.get("state_last") else [state] + lines)
 
 
 def grammar_for(letters):

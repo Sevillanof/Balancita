@@ -132,6 +132,18 @@ function optionalFlag(flag, value) {
   return text ? [flag, text] : []
 }
 
+/** `LLAMA_NGL`: a layer count, `auto` or `all`; anything else keeps the default 99 (every layer). */
+function gpuLayers(value) {
+  const text = (value ?? '').trim()
+  return /^(\d{1,3}|auto|all)$/.test(text) ? text : '99'
+}
+
+/** `LLAMA_FLASH_ATTN`: `on`, `off` or `auto`; anything else keeps `on`. */
+function flashAttention(value) {
+  const text = (value ?? '').trim().toLowerCase()
+  return ['on', 'off', 'auto'].includes(text) ? text : 'on'
+}
+
 /** Port of the optional `llama-server` child (`LLAMA_PORT`, default 8088). */
 export function llamaPort(env) {
   const port = Number(env.LLAMA_PORT)
@@ -702,6 +714,14 @@ export function devChildSpecs({
           '-np',
           (env.LLAMA_PARALLEL ?? '').trim() || '2',
           // Opt-in server flags for prompt reuse between option orders (see futures_qwen_prefill_probe.py).
+          // Every layer on the GPU and flash attention on (Metal on macOS): the prompt is what takes the time.
+          // `-ngl N|auto|all` and `-fa on|off|auto` are the llama.cpp server's current syntax.
+          '-ngl',
+          gpuLayers(env.LLAMA_NGL),
+          '-fa',
+          flashAttention(env.LLAMA_FLASH_ATTN),
+          // KV-shift reuse of a cached prefix: off in llama-server unless a chunk size is given.
+          ...optionalFlag('--cache-reuse', env.LLAMA_CACHE_REUSE),
           ...optionalFlag('-ub', env.LLAMA_UBATCH),
           ...optionalFlag('--ctx-checkpoints', env.LLAMA_CTX_CHECKPOINTS),
           '--no-mmproj',
