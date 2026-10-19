@@ -112,7 +112,7 @@ referencia independiente, que no los tiene. Se agregan dos clases que usan los `
 5 s de tiempo de la fuente, más de 10.000 eventos en el día sintético):
 
 - `TestClockAtItsNormalCadence`: los `clock` llegan al runner a la cadencia normal; una segunda corrida que parte de una recuperación llega al mismo estado paso a paso; las nueve fronteras de `POINTS` en la entrada dan el mismo resultado que la corrida continua; una muerte entre dos `clock` ni repite ni salta un tick.
-- `TestRealProcessTermination`: el proceso hijo `python/tests/live_kill_worker.py` recupera el directorio, arma `os.kill(os.getpid(), SIGKILL)` en una frontera y da un paso. El padre verifica que terminó por SIGKILL (si la frontera no se cruzó, la prueba falla), recupera el directorio desde disco en otro proceso y compara cada paso posterior contra la corrida continua. Cubre las nueve fronteras y la muerte en el séptimo ciclo de un paso con varias velas.
+- `TestRealProcessTermination`: el proceso hijo `python/tests/live_kill_circuit_worker.py` (desde #308, sobre BTC real; antes `live_kill_worker.py`) recupera el directorio, arma `os.kill(os.getpid(), SIGKILL)` en una frontera y da un paso. El padre verifica que terminó por SIGKILL (si la frontera no se cruzó, la prueba falla), recupera el directorio desde disco en otro proceso y compara cada paso posterior contra la corrida continua. Cubre las nueve fronteras y la muerte en el séptimo ciclo de un paso con varias velas.
 
 Limitación: el padre y el hijo comparten sistema de archivos y caché; no se simula pérdida de datos no sincronizados.
 
