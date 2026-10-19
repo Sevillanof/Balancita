@@ -348,10 +348,10 @@ def preflight(config, directory, source_path, *, strategies=None):
             except Exception as error:       # noqa: BLE001
                 check("warmup_" + product, False, "source has no candles table: " + str(error))
                 continue
-            fresh = newest is not None and newest >= config["decide_from_ms"] - FRESH_MS
-            check("warmup_" + product, fresh and have >= need,
-                  "{} of {} one-minute candles in the {} ms up to the newest before the first decision ({}; at most {} ms before it)".format(
-                      have, need, warmup_ms, newest, FRESH_MS))
+            check("warmup_" + product, have >= need,
+                  "{} of {} one-minute candles in the {} ms up to the newest before the first decision ({})".format(have, need, warmup_ms, newest))
+            check("warmup_fresh_" + product, newest is not None and newest >= config["decide_from_ms"] - FRESH_MS,
+                  "newest candle {}; it must be at most {} ms before the first decision ({})".format(newest, FRESH_MS, config["decide_from_ms"]))
     finally:
         reader.close()
     return {"ok": all(c["ok"] for c in checks), "checks": checks}
