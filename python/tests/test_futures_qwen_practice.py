@@ -137,6 +137,7 @@ class SignalTests(unittest.TestCase):
             self.assertIn("side=" + s["side"], text)
             self.assertIn("stop_atr=", text)
             self.assertIn("target_atr=", text)
+            self.assertIn("stop_bp=", text)
             self.assertIn("rsi14:", text)
             self.assertNotIn("PF_", text)
             self.assertNotRegex(text, r"\b20\d\d\b")
@@ -247,6 +248,11 @@ class CatalogTests(unittest.TestCase):
         self.assertEqual([o["id"] for o in question["options"]], ["approve", "reject"])
         self.assertIn("signal", question["state_fields"])
         self.assertEqual(q.option_orders(question), [[0, 1], [1, 0]])
+
+    def test_signal_filter_text_is_pinned_per_version(self):
+        """Changing the question's text without a new version fails here: its calibration would no longer apply."""
+        question = q.load_questions(scope="signal")["signal_filter"]
+        self.assertEqual(q.question_hash(question), "4187ff574d13927aca814b1e5e402f7e074eba55507b9334f5ef0fe73cd4fc00")
 
     def test_signal_state_field(self):
         verdict = {"bucket_start_ms": 0, "regime": "trend", "proposals": [],

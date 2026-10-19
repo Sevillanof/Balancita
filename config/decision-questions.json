@@ -99,7 +99,7 @@
       "scope": "signal",
       "type": "choice",
       "order_debias": "cyclic",
-      "instruction": "The trading strategy described in signal has just produced a buy or sell signal; its side (LONG opens a buy, SHORT opens a sell), its stop and target distances in ATR units and its maximum holding time are in signal. Using only the normalized market state and the strategy description in signal, should this particular signal be approved so the trade is opened, or rejected so the strategy skips it?",
+      "instruction": "The trading strategy described in signal has just produced a buy or sell signal; its side (LONG opens a buy, SHORT opens a sell), its stop and target distances (in ATR units and in basis points) and its maximum holding time are in signal. Using only the normalized market state and the strategy description in signal, should this particular signal be approved so the trade is opened, or rejected so the strategy skips it?",
       "options": [
         {
           "id": "approve",

@@ -24,12 +24,14 @@ import random
 import re
 import sqlite3
 
-from .futures_qwen_practice import DUPLICATE_STRATEGIES, QWEN3_RELEASE_DATE, read_meta, read_signals
+from .futures_qwen_practice import (
+    DUPLICATE_STRATEGIES, LIGHT_COLUMNS, QWEN3_RELEASE_DATE, read_meta, read_signals, read_state_texts)
 
 DRAWS = 1000
 BOOTSTRAP_DRAWS = 500
 MIN_VALIDATION_N = 100   # practiced validation signals needed to say anything
 MIN_GROUP_N = 30         # kept and rejected signals needed to compare them
+LR_TRAIN_MAX = 4000      # calibration signals the logistic regression trains on per strategy (seeded random subsample)
 MIN_AGREEMENT = 0.80
 MAX_MEAN_SHIFT = 0.10
 SIGNIFICANT_PERCENTILE = 95.0
@@ -100,7 +102,7 @@ def _sigmoid(x):
     return 1.0 / (1.0 + math.exp(-x)) if x >= 0 else math.exp(x) / (1.0 + math.exp(x))
 
 
-def fit_logistic(rows, labels, *, l2=0.01, iterations=400, rate=0.5):
+def fit_logistic(rows, labels, *, l2=0.01, iterations=300, rate=0.5):
     """L2-regularised logistic regression by batch gradient descent on standardised features (pure Python).
 
     Returns ``{"weights", "bias", "mean", "std"}``. One class only (or no rows): the base rate, no weights.
@@ -138,7 +140,7 @@ def predict_logistic(model, row):
 
 _NUMBER = r"(-?\d+(?:\.\d+)?|n/a)"
 FEATURE_NAMES = (
-    "side", "stop_atr", "target_atr", "max_hold_min", "regime_trend", "regime_range",
+    "side", "stop_atr", "target_atr", "stop_bp", "target_bp", "max_hold_min", "regime_trend", "regime_range",
     "ret_1m", "ret_5m", "ret_15m", "ret_60m", "dist_ema9", "dist_ema21", "dist_sma50",
     "rsi14", "bollinger_pos", "donchian_pos", "atr_bp", "volume_rel",
     "ret_1m_missing", "ret_5m_missing", "ret_15m_missing", "ret_60m_missing", "dist_ema9_missing",
@@ -160,7 +162,7 @@ def state_features(text):
 
     side = re.search(r"side=(LONG|SHORT)", text)
     found["side"] = 1.0 if side and side.group(1) == "LONG" else -1.0
-    for key in ("stop_atr", "target_atr", "max_hold_min"):
+    for key in ("stop_atr", "target_atr", "stop_bp", "target_bp", "max_hold_min"):
         match = re.search(key + r"=" + _NUMBER, text)
         found[key] = float(match.group(1)) if match and match.group(1) != "n/a" else 0.0
     regime = re.search(r"regime: (\w+)", text)
@@ -275,8 +277,8 @@ def _row(label, values, seed):
     m = metrics(values)
     low, high = wilson(m["wins"], m["n"])
     mlow, mhigh = bootstrap_ci(values, seed=seed)
-    hit = "n/d" if m["n"] == 0 else "{} [{}–{}]".format(_pct(m["hit_rate"], 0), _pct(low, 0), _pct(high, 0))
-    mean = "n/d" if m["n"] == 0 else "{} [{}–{}]".format(_fmt(m["mean_bp"]), _fmt(mlow), _fmt(mhigh))
+    hit = "n/d" if m["n"] == 0 else "{} [{} a {}]".format(_pct(m["hit_rate"], 0), _pct(low, 0), _pct(high, 0))
+    mean = "n/d" if m["n"] == 0 else "{} [{} a {}]".format(_fmt(m["mean_bp"]), _fmt(mlow), _fmt(mhigh))
     return "| {} | {} | {} | {} | {} |".format(label, m["n"], hit, mean, _fmt(m["profit_factor"], 2))
 
 
@@ -284,17 +286,26 @@ TABLE_HEAD = ("| Filtro | N | Acierto [IC95] | bp neto medio [IC95] | Factor de 
               "|---|---:|---|---|---:|")
 
 
-def _lr_scores(universe_by_strategy, items_by_strategy):
-    """Per-strategy logistic regression trained on the calibration fold of ALL its labelled signals."""
-    scores = {}
+def _lr_scores(signals_path, universe_by_strategy, items_by_strategy):
+    """Per-strategy logistic regression trained on the calibration fold of ALL its labelled signals (a seeded subsample
+    of at most ``LR_TRAIN_MAX``: pure-Python gradient descent, ~34 features)."""
+    trains = {}
     for strategy, signals in universe_by_strategy.items():
         train = [s for s in signals if s["fold"] == "calibration"]
         if len(train) < MIN_GROUP_N:
             continue
-        rows = [state_features(s["state_text"])[1] for s in train]
+        if len(train) > LR_TRAIN_MAX:
+            train = random.Random(7).sample(train, LR_TRAIN_MAX)
+        trains[strategy] = train
+    needed = {s["signal_id"] for rows in trains.values() for s in rows}
+    needed |= {i["signal_id"] for rows in items_by_strategy.values() for i in rows}
+    texts = read_state_texts(signals_path, needed)
+    scores = {}
+    for strategy, train in trains.items():
+        rows = [state_features(texts[s["signal_id"]])[1] for s in train]
         model = fit_logistic(rows, [1 if s["own_net_bp"] > 0 else 0 for s in train])
         for item in items_by_strategy.get(strategy, []):
-            scores[item["signal_id"]] = predict_logistic(model, state_features(item["state_text"])[1])
+            scores[item["signal_id"]] = predict_logistic(model, state_features(texts[item["signal_id"]])[1])
     return scores
 
 
@@ -335,7 +346,7 @@ def _block(title, ev, threshold, seed):
              _row("    Qwen rechaza (umbral {})".format(_fmt(threshold, 3)), ev["rejected"], seed + 3)]
     if ev["random"]:
         rnd = ev["random"]
-        lines.append("| (c) filtro aleatorio, misma tasa de rechazo ({} sorteos) | {} | media {} bp, P5–P95 [{}; {}] | | |".format(
+        lines.append("| (c) filtro aleatorio, misma tasa de rechazo ({} sorteos) | {} | media {} bp, P5 a P95 [{} a {}] | | |".format(
             rnd["draws"], len(ev["kept"]), _fmt(rnd["mean"]), _fmt(rnd["p05"]), _fmt(rnd["p95"])))
     if ev["lr"] is not None:
         lines.append(_row("(d) regresión logística, mismo nº de aprobadas", ev["lr"], seed + 4))
@@ -362,10 +373,8 @@ def build_report(signals_path, practice_path, cutoff_date=None):
         import time
         cutoff_ms = calendar.timegm(time.strptime(cutoff_date, "%Y-%m-%d")) * 1000
         cutoff_text = cutoff_date
-    signals = []
-    for s in read_signals(signals_path):
-        if s["tradable"] and s["own_net_bp"] is not None:
-            signals.append(dict(s, period="pre_cutoff" if s["decision_ms"] < cutoff_ms else "post_cutoff"))
+    signals = [dict(s, period="pre_cutoff" if s["decision_ms"] < cutoff_ms else "post_cutoff")
+               for s in read_signals(signals_path, LIGHT_COLUMNS, "WHERE tradable=1 AND own_net_bp IS NOT NULL")]
     universe = [s for s in signals if s["strategy_id"] not in DUPLICATE_STRATEGIES]
     practiced = []
     for s in signals:
@@ -384,7 +393,7 @@ def build_report(signals_path, practice_path, cutoff_date=None):
     by_strategy_pooled = collections.defaultdict(list)
     for i in pooled:
         by_strategy_pooled[i["strategy_id"]].append(i)
-    lr = _lr_scores(by_strategy_universe, by_strategy_pooled)
+    lr = _lr_scores(signals_path, by_strategy_universe, by_strategy_pooled)
 
     ev_val = _evaluate(val, threshold, lr, seed=101)
     ev_cal = _evaluate(cal, threshold, {}, seed=201)

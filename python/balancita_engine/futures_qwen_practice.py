@@ -224,8 +224,10 @@ def signal_line(spec, proposal, close, atr):
     atr, close = Decimal(atr), Decimal(close)
     stop_atr = Decimal(proposal["stop_distance"]) / atr
     target_atr = Decimal(proposal["target_distance"]) / atr
-    return "signal: strategy={} ({}) side={} stop_atr={:.2f} target_atr={:.2f} max_hold_min={}".format(
-        label, blurb, proposal["action"], stop_atr, target_atr, proposal["horizon_minutes"])
+    stop_bp = Decimal(proposal["stop_distance"]) / close * 10_000
+    target_bp = Decimal(proposal["target_distance"]) / close * 10_000
+    return "signal: strategy={} ({}) side={} stop_atr={:.2f} target_atr={:.2f} stop_bp={:.0f} target_bp={:.0f} max_hold_min={}".format(
+        label, blurb, proposal["action"], stop_atr, target_atr, stop_bp, target_bp, proposal["horizon_minutes"])
 
 
 def _window_slice(starts, rows, left, right):
@@ -377,11 +379,29 @@ def write_signals(path, rows, meta):
     return build_id
 
 
-def read_signals(path):
+LIGHT_COLUMNS = tuple(c for c in SIGNAL_COLUMNS if c != "state_text")
+
+
+def read_signals(path, columns=SIGNAL_COLUMNS, where=""):
+    """The signals as dicts ordered by time. A real build holds hundreds of thousands: ``columns=LIGHT_COLUMNS``
+    leaves out the STATE text (``read_state_texts`` fetches it for the few that need it)."""
     db = sqlite3.connect("file:{}?mode=ro".format(path), uri=True)
     try:
-        cursor = db.execute("SELECT {} FROM signals ORDER BY decision_ms, signal_id".format(",".join(SIGNAL_COLUMNS)))
-        return [dict(zip(SIGNAL_COLUMNS, row)) for row in cursor]
+        cursor = db.execute("SELECT {} FROM signals {} ORDER BY decision_ms, signal_id".format(",".join(columns), where))
+        return [dict(zip(columns, row)) for row in cursor]
+    finally:
+        db.close()
+
+
+def read_state_texts(path, signal_ids):
+    db = sqlite3.connect("file:{}?mode=ro".format(path), uri=True)
+    try:
+        out, ids = {}, list(signal_ids)
+        for i in range(0, len(ids), 500):
+            chunk = ids[i:i + 500]
+            out.update(db.execute("SELECT signal_id, state_text FROM signals WHERE signal_id IN ({})".format(
+                ",".join("?" * len(chunk))), chunk))
+        return out
     finally:
         db.close()
 
@@ -465,9 +485,9 @@ def run_practice(signals_path, practice_path, provider, *, question=None, templa
     orders = llm.option_orders(question)
     meta = read_meta(signals_path)
     wanted = set(strategies) if strategies else None
-    eligible = [s for s in read_signals(signals_path)
-                if s["tradable"] and s["own_net_bp"] is not None
-                and (wanted is None or s["strategy_id"] in wanted)
+    eligible = [s for s in read_signals(signals_path, ("signal_id", "strategy_id", "side", "period"),
+                                        "WHERE tradable=1 AND own_net_bp IS NOT NULL")
+                if (wanted is None or s["strategy_id"] in wanted)
                 and (wanted is not None or include_duplicates or s["strategy_id"] not in DUPLICATE_STRATEGIES)]
     os.makedirs(os.path.dirname(os.path.abspath(practice_path)), exist_ok=True)
     db = sqlite3.connect(practice_path)
@@ -530,6 +550,8 @@ def run_practice(signals_path, practice_path, provider, *, question=None, templa
                 break
             order = orders[variant]
             asked = llm.permuted(question, order)
+            if "state_text" not in signal:
+                signal["state_text"] = read_state_texts(signals_path, [signal["signal_id"]])[signal["signal_id"]]
             text = llm.build_prompt(signal["state_text"], asked, template)
             t0 = clock()
             try:
