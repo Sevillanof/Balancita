@@ -862,6 +862,9 @@ export function devChildSpecs({
           '--decisions-db',
           decisionsDb,
           // The gate judges Qwen (C31) and Kronos by the trades they saved (read-only).
+          // D's history DB: rewritten (chain intact) if a deleted strategy has rows in it.
+          '--account-db',
+          accountDb,
           '--kronos-dir',
           kronosDir,
           '--qwen-exit-dir',

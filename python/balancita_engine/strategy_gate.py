@@ -102,6 +102,17 @@ def config_hash(cfg):
     return hashlib.sha256(json.dumps(cfg, sort_keys=True).encode("utf-8")).hexdigest()
 
 
+def family_hash(family):
+    return hashlib.sha256(family.encode("utf-8")).hexdigest()
+
+
+def attempts_of(db, family):
+    """Practice attempts of the family: the live rows plus those carried over from deleted strategies (anonymous)."""
+    live = db.execute("SELECT COUNT(*) FROM attempts WHERE family=?", (family,)).fetchone()[0]
+    carried = db.execute("SELECT n FROM attempt_counts WHERE family_hash=?", (family_hash(family),)).fetchone()
+    return live + (carried[0] if carried else 0)
+
+
 def family_of(strategy_id):
     """The strategy family: the id without its version suffix (``c29-momentum-perp-v1`` -> ``c29-momentum-perp``)."""
     return re.sub(r"-v\d+$", "", strategy_id)
@@ -184,6 +195,8 @@ CREATE INDEX IF NOT EXISTS attempts_family ON attempts(family);
 -- Written by `purge` (strategy_purge.KEEP_EXAM_TOMBSTONE); a deleted-and-recreated identical version stays locked.
 CREATE TABLE IF NOT EXISTS exam_tombstones(
   spec_hash TEXT PRIMARY KEY, exam_date TEXT NOT NULL, verdict TEXT NOT NULL);
+-- Anonymous: practice attempts of deleted strategies, per sha256(family name). Added to the live count of the family.
+CREATE TABLE IF NOT EXISTS attempt_counts(family_hash TEXT PRIMARY KEY, n INTEGER NOT NULL);
 """
 
 
@@ -970,7 +983,7 @@ def evaluate(strategy_id, *, kind="practice", from_date=None, products=None, cfg
             if kind == "practice":
                 db.execute("INSERT INTO attempts(family,strategy_id,version_key,run_id,at) VALUES(?,?,?,?,?)",
                            (family, strategy_id, key, run_id, _now_ms()))
-        attempts = db.execute("SELECT COUNT(*) FROM attempts WHERE family=?", (family,)).fetchone()[0]
+        attempts = attempts_of(db, family)
         with db:
             db.execute("UPDATE runs SET attempts=? WHERE id=?", (attempts, run_id))
         runner = Runner(db, run_id, data_dir, json_progress=json_progress, on_progress=on_progress, stream=stream)
@@ -1138,6 +1151,11 @@ def purge_strategy(strategy_id, data_dir=None, keep_tombstone=None):
                         counts["tombstones"] += db.execute(
                             "INSERT OR IGNORE INTO exam_tombstones VALUES(?,?,?)",
                             (lock["code_hash"], _stamp(lock["locked_at"]), label)).rowcount
+                if strategy_purge.KEEP_ATTEMPT_COUNTER:
+                    for family, n in db.execute("SELECT family, COUNT(*) FROM attempts WHERE strategy_id=? GROUP BY family",
+                                                (strategy_id,)).fetchall():
+                        db.execute("INSERT INTO attempt_counts VALUES(?,?) ON CONFLICT(family_hash) DO UPDATE SET n=n+?",
+                                   (family_hash(family), n, n))
                 counts["attempts"] = db.execute("DELETE FROM attempts WHERE strategy_id=?", (strategy_id,)).rowcount
                 counts["exam_locks"] = db.execute("DELETE FROM exam_locks WHERE strategy_id=?", (strategy_id,)).rowcount
                 counts["runs"] = db.execute("DELETE FROM runs WHERE strategy_id=?", (strategy_id,)).rowcount

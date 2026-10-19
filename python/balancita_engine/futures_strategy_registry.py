@@ -446,7 +446,8 @@ class StrategyRegistry:
             return dict(self._entry(row), gates=gates)
 
     def delete(self, strategy_id, confirm, reason="manual_delete"):
-        """Hides a strategy from the lists and stops it; the append-only history stays. Needs the id typed back."""
+        """Soft delete (``deleted`` event): hides a strategy and stops it. Only startup uses it (``apply_closed``);
+        the front's delete is ``StrategyRegistry.hard_delete`` through ``Lifecycle``. Needs the id typed back."""
         if confirm != strategy_id:
             raise RegistryError("confirmation_required", "escribe el id de la estrategia para borrarla", 409)
         with self.lock, self.db:
@@ -621,7 +622,7 @@ class StrategyService:
                  market_db_path=None, config_dir=None, forward_db_path=None, forward_summary_path=None,
                  decisions_db_path=None, gate_data_dir=None, purge_dir=None, specs_dir=None,
                  forward_registration_path=None, freeze_path=None, qwen_exit_config=None, qwen_practice_dir=None,
-                 kronos_dir=None, qwen_exit_dir=None):
+                 kronos_dir=None, qwen_exit_dir=None, account_db_path=None):
         self.config_dir = config_dir
         self.forward_db_path = forward_db_path
         self.forward_summary_path = forward_summary_path or os.environ.get("STRATEGY_FORWARD_PATH")
@@ -639,7 +640,7 @@ class StrategyService:
                                    consumers=("forward",) if forward_db_path else (),
                                    specs_dir=specs_dir, forward_registration_path=forward_registration_path,
                                    freeze_path=freeze_path, qwen_exit_config=qwen_exit_config, replays=replays,
-                                   qwen_practice_dir=qwen_practice_dir)
+                                   qwen_practice_dir=qwen_practice_dir, account_db_path=account_db_path)
 
     def _tick(self, product_id):
         if product_id not in self.products:
@@ -1017,6 +1018,8 @@ def main(argv=None):
     parser.add_argument("--gate-dir", help="strategy gate folder (default: data/strategy-gate or $STRATEGY_GATE_DIR)")
     parser.add_argument("--purge-dir", help="where delete requests and acknowledgements live "
                                             "(default: <strategies db folder>/purge)")
+    parser.add_argument("--account-db", help="D's account DB (retired, history): rewritten, chain intact, when a "
+                                             "deleted strategy has rows in it")
     parser.add_argument("--kronos-dir", help="folder with kronos.sqlite (the gate judges Kronos by its saved trades)")
     parser.add_argument("--qwen-exit-dir", help="folder with qwen-exit.sqlite (the gate judges Qwen by its saved trades)")
     parser.add_argument("--qwen-practice-dir", help="folder with the offline Qwen practice files "
@@ -1046,7 +1049,8 @@ def main(argv=None):
                               qwen_exit_config=os.path.join(config_root, "qwen-exit.json"),
                               qwen_practice_dir=args.qwen_practice_dir or os.path.join(
                                   os.path.dirname(config_root), "data", "qwen-practice"),
-                              kronos_dir=args.kronos_dir, qwen_exit_dir=args.qwen_exit_dir)
+                              kronos_dir=args.kronos_dir, qwen_exit_dir=args.qwen_exit_dir,
+                              account_db_path=args.account_db)
     server = ThreadingHTTPServer(("127.0.0.1", args.port), make_handler(service))
     print("[strategies] registry {} on http://127.0.0.1:{}".format(args.strategies_db, args.port), flush=True)
     try:

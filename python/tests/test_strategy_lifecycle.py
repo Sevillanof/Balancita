@@ -271,7 +271,8 @@ class DeleteFlowTests(Base):
         self.assertEqual((preview["forward_trades"], preview["forward_net_usd"]), (1, -1.25))
         self.assertEqual((preview["gate_runs"], preview["exam"]["taken"], preview["exam"]["verdict"]),
                          (3, True, "NO PASA"))
-        self.assertTrue(preview["builtin"] and preview["ledger_kept"])
+        self.assertTrue(preview["builtin"])
+        self.assertFalse(preview["ledger_kept"])  # ADR amendment 2026-10-19: the trades go too
         self.assertEqual(preview["versions"][0]["version"], 1)
 
     def test_the_name_or_a_wrong_text_is_checked_before_anything_is_touched(self):
@@ -317,8 +318,9 @@ class DeleteFlowTests(Base):
             self.assertEqual(self.count(forward_db, table), 0, table)
             self.assertEqual(self.count(forward_db, table, value=C30), 1, table)
         self.assertNotIn(C29, json.load(open(os.path.join(self.forward_dir, "forward-reliability.json")))["strategies"])
-        # ADR 0001: the append-only paper trades stay while PURGE_PAPER_LEDGER is off.
-        self.assertEqual(self.count(forward_db, "forward_trade"), 1)
+        # ADR 0001 amendment 2026-10-19: the paper trades go too; the other strategy's stay.
+        self.assertEqual(self.count(forward_db, "forward_trade"), 0)
+        self.assertEqual(self.count(forward_db, "forward_trade", value=C30), 1)
         done = self.life.purge_status(result["purge_id"])
         self.assertEqual((done["state"], done["consumers"]), ("done", {"forward": "done"}))
         self.assertEqual(os.listdir(self.purge_dir), [])  # nothing about the delete is left behind
@@ -350,15 +352,10 @@ class DeleteFlowTests(Base):
         self.assertEqual(self.count(os.path.join(self.gate_dir, "gate.sqlite"), "exam_tombstones",
                                     "spec_hash", spec_hash(self.spec)), 0)
 
-    def test_the_ledger_is_deleted_only_when_the_adr_switch_is_turned_on(self):
-        old = strategy_purge.PURGE_PAPER_LEDGER
-        strategy_purge.PURGE_PAPER_LEDGER = True
-        self.addCleanup(setattr, strategy_purge, "PURGE_PAPER_LEDGER", old)
+    def test_the_forward_ledger_guard_is_restored_after_the_purge_and_the_switch_can_keep_trades(self):
         self.life.delete(C29, C29)
         fwd.consume_purges(self.forward_dir, self.purge_dir)
         forward_db = os.path.join(self.forward_dir, "forward.sqlite")
-        self.assertEqual(self.count(forward_db, "forward_trade"), 0)
-        self.assertEqual(self.count(forward_db, "forward_trade", value=C30), 1)
         with self.assertRaises(sqlite3.IntegrityError):  # the guard is back
             db = sqlite3.connect(forward_db)
             try:
@@ -366,6 +363,26 @@ class DeleteFlowTests(Base):
                     db.execute("DELETE FROM forward_trade")
             finally:
                 db.close()
+        old = strategy_purge.PURGE_PAPER_LEDGER
+        strategy_purge.PURGE_PAPER_LEDGER = False
+        self.addCleanup(setattr, strategy_purge, "PURGE_PAPER_LEDGER", old)
+        self.life.delete(C30, C30)
+        fwd.consume_purges(self.forward_dir, self.purge_dir)
+        self.assertEqual(self.count(forward_db, "forward_trade", value=C30), 1)
+
+    def test_attempts_survive_deletion_only_as_an_anonymous_counter_per_hashed_family(self):
+        import hashlib
+        self.life.delete(C29, C29)
+        db = strategy_gate.open_db(os.path.join(self.gate_dir, "gate.sqlite"))
+        family = "c29-momentum-perp"
+        self.assertEqual(strategy_gate.attempts_of(db, family), 1)
+        rows = db.execute("SELECT * FROM attempt_counts").fetchall()
+        self.assertEqual([tuple(r) for r in rows], [(hashlib.sha256(family.encode()).hexdigest(), 1)])
+        with db:
+            db.execute("INSERT INTO attempts(family,strategy_id,version_key,run_id,at) VALUES(?,?,?,?,?)",
+                       (family, "c29-momentum-perp-v2", "k", 9, 1))
+        self.assertEqual(strategy_gate.attempts_of(db, family), 2)  # recreating does not reset the trial count
+        db.close()
 
     def test_a_running_gate_test_blocks_the_delete_and_qwen_inputs_are_protected(self):
         db = strategy_gate.open_db(os.path.join(self.gate_dir, "gate.sqlite"))
@@ -407,6 +424,99 @@ class DeleteFlowTests(Base):
         db.close()
         self.assertTrue(gate.runs(C29)["passed"]["any"])
         self.assertFalse(gate.runs(C30)["passed"]["any"])  # a PASA of another content does not count
+
+
+class PaperAccountPurgeTests(unittest.TestCase):
+    """D's hash-chained account DB: the purge keeps the chain valid and the other books untouched."""
+
+    def build(self):
+        from balancita_engine import futures_paper_execution as d
+
+        self.d = d
+        self.dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.dir, True)
+        self.path = os.path.join(self.dir, "account.sqlite")
+        self.config = {"version": "x", "books": [C29, C30], "products": ["PF_XBTUSD"], "initial_cash_usd": "1000"}
+        store = d.AccountStore(self.path, self.config)
+        books = {"{}:PF_XBTUSD".format(C29): {"cash": "900", "events_since_snapshot": 2},
+                 "{}:PF_XBTUSD".format(C30): {"cash": "1010", "events_since_snapshot": 1}}
+        order = [C29, C30, C29, C30, C30, C29]
+        for i, sid in enumerate(order, 1):
+            store.emit("fill", 1000 + i, {"book": "{}:PF_XBTUSD".format(sid), "pnl": str(i), "strategy_id": sid})
+            if i in (3, 5):
+                store.snapshot(1000 + i, {"version": 1, "books": books, "events_since_snapshot": 3, "last_snapshot_time": 1},
+                               {"ticker": i})
+        store.flush()
+        store.close()
+        return order
+
+    def test_the_chain_verifies_after_the_purge_and_other_books_are_untouched(self):
+        self.build()
+        before = [r for r in self.rows() if C30 in r[3]]
+        out = __import__("balancita_engine.futures_paper_account_purge", fromlist=["x"]).purge_strategy(self.path, C29)
+        self.assertEqual((out["events_removed"], out["events_kept"], out["snapshots"]), (3, 3, 2))
+        self.assertEqual(self.d.verify_chain(self.path), out["head_hash"])
+        after = self.rows()
+        self.assertEqual([r[0] for r in after], [1, 2, 3])
+        self.assertEqual([r[3] for r in after], [r[3] for r in before])  # payloads of the other strategy: identical
+        dump = sqlite3.connect(self.path)
+        text = "\n".join(dump.iterdump())
+        dump.close()
+        self.assertNotIn(C29, text)  # no trace: events, snapshots, config
+        # Snapshots keep pointing at the same events, the surviving book keeps its balance, the DB reopens.
+        store = self.d.AccountStore(self.path, dict(self.config, books=[C30]))
+        engine, cursors = store.restored
+        self.assertEqual(engine["books"], {"{}:PF_XBTUSD".format(C30): {"cash": "1010", "events_since_snapshot": 1}})
+        self.assertEqual((store.head_seq, cursors), (3, {"ticker": 5}))
+        store.close()
+
+    def test_the_guards_come_back_and_a_second_purge_changes_nothing(self):
+        from balancita_engine import futures_paper_account_purge as purge
+
+        self.build()
+        purge.purge_strategy(self.path, C29)
+        head = self.d.verify_chain(self.path)
+        self.assertEqual(purge.purge_strategy(self.path, C29)["events_removed"], 0)
+        self.assertEqual(self.d.verify_chain(self.path), head)
+        db = sqlite3.connect(self.path)
+        with self.assertRaises(sqlite3.IntegrityError):
+            with db:
+                db.execute("DELETE FROM paper_execution_events")
+        db.close()
+        self.assertFalse(purge.has_strategy(self.path, C29))
+        self.assertTrue(purge.has_strategy(self.path, C30))
+
+    def test_a_delete_through_the_lifecycle_rewrites_the_account_db(self):
+        self.build()
+        registry = StrategyRegistry(os.path.join(self.dir, "s.sqlite"))
+        self.addCleanup(registry.close)
+        registry.seed(SPECS)
+        registry.migrate_all_to_draft()
+
+        class Child:
+            returncode = 0
+
+            def poll(self):
+                return 0
+
+        def spawn(args, env, cwd, log_path):
+            from balancita_engine import futures_paper_account_purge as purge
+            purge.main(args[3:])
+            return Child()
+
+        gate = GateApi(registry, data_dir=os.path.join(self.dir, "gate"), python="py", spawn=spawn)
+        life = Lifecycle(registry, gate, account_db_path=self.path)
+        result = life.delete(C29, C29)
+        self.assertEqual(result["steps"]["paper_account"], {"skipped": False})
+        self.d.verify_chain(self.path)
+        self.assertFalse(__import__("balancita_engine.futures_paper_account_purge", fromlist=["x"]).has_strategy(self.path, C29))
+
+    def rows(self):
+        db = sqlite3.connect(self.path)
+        try:
+            return db.execute("SELECT seq, kind, time_ms, payload_json FROM paper_execution_events ORDER BY seq").fetchall()
+        finally:
+            db.close()
 
 
 class HttpTests(Base):

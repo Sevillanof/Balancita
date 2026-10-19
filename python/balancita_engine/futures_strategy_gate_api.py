@@ -255,16 +255,22 @@ class GateApi:
             raise GateApiError("busy", "Hay una prueba en curso de esta estrategia: cancelala antes de borrarla.", 409)
         if not os.path.isdir(self.data_dir):
             return {"skipped": True}
-        args = [self.python, "-m", "balancita_engine.strategy_gate", "--data-dir", self.data_dir, "purge",
-                "--strategy", strategy_id]
+        self.run_module(["balancita_engine.strategy_gate", "--data-dir", self.data_dir, "purge", "--strategy",
+                         strategy_id], "purge", wait_s)
+        return {"skipped": False}
+
+    def run_module(self, module_args, label, wait_s=60.0):
+        """Runs ``python -m <module_args>`` as a detached child, waits for it, raises GateApiError if it fails."""
+        args = [self.python, "-m"] + list(module_args)
         env = dict(os.environ)
         env["PYTHONPATH"] = os.pathsep.join(p for p in (os.path.join(ROOT, "python"), env.get("PYTHONPATH")) if p)
-        log_path = os.path.join(self.data_dir, "logs", "purge-{}.log".format(int(time.time() * 1000)))
+        os.makedirs(self.data_dir, exist_ok=True)
+        log_path = os.path.join(self.data_dir, "logs", "{}-{}.log".format(label, int(time.time() * 1000)))
         child = self.spawn(args, env, ROOT, log_path)
         deadline = time.time() + wait_s
         while child.poll() is None:
             if time.time() >= deadline:
-                raise GateApiError("gate_purge_pending", "El borrado de las pruebas sigue en curso.", 504)
+                raise GateApiError("purge_pending", "El borrado de {} sigue en curso.".format(label), 504)
             time.sleep(0.05)
         text = self._refusal(log_path)
         try:
@@ -272,8 +278,7 @@ class GateApi:
         except OSError:
             pass
         if child.returncode not in (0, None):
-            raise GateApiError("gate_purge_failed", text, 500)
-        return {"skipped": False}
+            raise GateApiError("purge_failed", text, 500)
 
     def _running_public(self):
         row = self._running()

@@ -154,7 +154,7 @@ def effective_registration(db_path, registration, specs, candidates, now_ms):
     really has no registry gets the file alone, as before.
     A strategy of the file measures from ``max(start_ms, activation)``; any other active strategy starts when it was
     activated (a shipped one with no activation time: the first time this runner saw it, written down once and never
-    moved). A strategy that is switched off or deleted adds no more trades; its history stays.
+    moved). A strategy that is switched off or deleted adds no more trades; its history stays until the user deletes it (ADR 0001, amendment 2026-10-19).
     Returns ``(registration, specs)``; the inputs are not modified.
     """
     file_entries = dict(registration["strategies"])

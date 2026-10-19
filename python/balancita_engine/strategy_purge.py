@@ -10,8 +10,8 @@ and the acknowledgements so that nothing about the strategy stays on disk.
     <purge_dir>/<purge_id>.<consumer>.ack.json written by that consumer only: {consumer, done_ms, deleted: {...}}
 
 ``PURGE_PAPER_LEDGER`` is the single switch for the append-only paper ledgers (forward trades and their funding
-reconciliation, D's hash-chained account). It is OFF: ADR 0001 says those rows are append-only and that deleting a
-strategy "keeps its trades". See the TODO(ADR) in ``odd/tasks/strategy-lifecycle.md``.
+reconciliation; D's hash-chained account DB). It is ON since the user's explicit amendment of ADR 0001
+(2026-10-19): a user-initiated delete removes everything, trades included.
 """
 
 import json
@@ -21,15 +21,17 @@ import sqlite3
 import time
 import uuid
 
-# TODO(ADR 0001): flip to True only if the user amends the ADR. Conflicting sentences:
-#   "Switching a strategy off or deleting it stops new trades and keeps its trades." (Amendment 2026-10-11, Supersedes)
-#   "Records are append-only guarded, while projections are reconstructible." (storage) and
-#   "D, paper execution (Python): ... hash-chained append-only account DB."
-PURGE_PAPER_LEDGER = False
+# ADR 0001, amendment 2026-10-19 (explicit user request): deleting a strategy also deletes its paper trades.
+# Set False to go back to keeping the append-only ledgers.
+PURGE_PAPER_LEDGER = True
 
 # Single flag: keep, in gate.sqlite, an anonymous exam tombstone (spec_hash, exam date, verdict; no id, name or params)
 # so a deleted-and-recreated identical version cannot take the final exam again. Set False to drop it entirely.
 KEEP_EXAM_TOMBSTONE = True
+
+# Single flag: keep, in gate.sqlite, an anonymous counter of practice attempts per family, keyed by the SHA-256 of
+# the family name, so deleting and re-creating a family does not reset the deflated-Sharpe trial count.
+KEEP_ATTEMPT_COUNTER = True
 
 PROTECTED_MESSAGE = "Qwen y Kronos solo se pueden quitar desde el código"
 _SAFE = re.compile(r"[^A-Za-z0-9_.-]")

@@ -71,12 +71,13 @@ def _drop_from_json(path, edit):
 class Lifecycle:
     def __init__(self, registry, gate, *, forward_db_path=None, purge_dir=None, consumers=("forward",),
                  specs_dir=None, forward_registration_path=None, freeze_path=None, qwen_exit_config=None,
-                 replays=None, qwen_practice_dir=None):
+                 replays=None, qwen_practice_dir=None, account_db_path=None):
         self.registry, self.gate = registry, gate
         self.forward_db_path, self.purge_dir, self.consumers = forward_db_path, purge_dir, tuple(consumers)
         self.specs_dir, self.forward_registration_path = specs_dir, forward_registration_path
         self.freeze_path, self.qwen_exit_config = freeze_path, qwen_exit_config
         self.replays, self.qwen_practice_dir = replays, qwen_practice_dir
+        self.account_db_path = account_db_path
 
     # ------------------------------------------------------------------ what the dialog shows
 
@@ -129,6 +130,7 @@ class Lifecycle:
         hashes = [v["spec_hash"] for v in info["versions"]]
         steps = {}
         steps["gate"] = self.gate.purge(strategy_id)
+        steps["paper_account"] = self._purge_account(strategy_id)
         if self.replays is not None:
             steps["replays"] = self.replays.purge_strategy(strategy_id)
         steps["qwen_practice"] = self._purge_practice(strategy_id)
@@ -139,6 +141,17 @@ class Lifecycle:
             purge_id = strategy_purge.write_request(self.purge_dir, strategy_id, hashes, self.consumers)
         return {"id": strategy_id, "deleted": True, "purge_id": purge_id, "state": "running" if purge_id else "done",
                 "steps": steps, "ledger_kept": not strategy_purge.PURGE_PAPER_LEDGER}
+
+    def _purge_account(self, strategy_id):
+        """D's hash-chained account DB (retired, so nobody else writes it): the purge tool rechains it (ADR 0001)."""
+        from . import futures_paper_account_purge
+
+        if not strategy_purge.PURGE_PAPER_LEDGER or not futures_paper_account_purge.has_strategy(
+                self.account_db_path, strategy_id):
+            return {"skipped": True}
+        self.gate.run_module(["balancita_engine.futures_paper_account_purge", "--account-db",
+                              os.path.abspath(self.account_db_path), "--strategy", strategy_id], "account")
+        return {"skipped": False}
 
     def _purge_practice(self, strategy_id):
         if not self.qwen_practice_dir or not os.path.isdir(self.qwen_practice_dir):

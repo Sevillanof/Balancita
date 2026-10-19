@@ -46,17 +46,15 @@ Deleting a builtin's JSON means the registry does not re-seed it (S seeds only f
 
 ### The one exception (to confirm with the user)
 
-`gate.sqlite` keeps an anonymous exam tombstone: `exam_tombstones(spec_hash, exam_date, verdict)`, no id, name or params, so a deleted-and-recreated identical version cannot retake the exam (`check_exam_allowed` refuses it with the usual message). Recreating with other content is a new hash and is allowed. Single flag: `strategy_purge.KEEP_EXAM_TOMBSTONE`. Side effect to know: purging also removes the attempts of that strategy, so the deflated Sharpe of a recreated family starts from fewer trials.
+`gate.sqlite` keeps an anonymous exam tombstone: `exam_tombstones(spec_hash, exam_date, verdict)`, no id, name or params, so a deleted-and-recreated identical version cannot retake the exam (`check_exam_allowed` refuses it with the usual message). Recreating with other content is a new hash and is allowed. Single flag: `strategy_purge.KEEP_EXAM_TOMBSTONE`. Also anonymous and always on (`strategy_purge.KEEP_ATTEMPT_COUNTER`): `attempt_counts(family_hash, n)` keyed by `sha256(family name)`, so deleting and re-creating a family does not reset the deflated-Sharpe trial count (`strategy_gate.attempts_of` adds it to the live attempts).
 
-### TODO(ADR 0001): paper ledgers are NOT deleted
+### Paper trades are deleted too (ADR 0001, amendment 2026-10-19)
 
-`strategy_purge.PURGE_PAPER_LEDGER = False`. The forward trades (`forward_trade`, `forward_trade_funding`; append-only triggers) and D's hash-chained account DB are kept. Conflicting sentences of `docs/adr/0001-isolated-paper-futures-accounting.md`:
+The user asked explicitly ("El ADR esta mal. Que no conserve nada"), so `docs/adr/0001-...md` got a new dated amendment (nothing rewritten) superseding "Switching a strategy off or deleting it stops new trades and keeps its trades." and the append-only rules only for a user-initiated delete. `strategy_purge.PURGE_PAPER_LEDGER = True`:
 
-- Amendment 2026-10-11, Supersedes: «Switching a strategy off or deleting it stops new trades and keeps its trades.»
-- Same amendment: «C25-C28 are deleted from the strategy registry at startup (...); the history stays because the registry is append-only.» (the user asked for a hard delete of the registry rows; done, flagged here)
-- Storage: «Records are append-only guarded, while projections are reconstructible.» and the D line «hash-chained append-only account DB».
-
-The delete dialog says so («sus operaciones de paper ya registradas se conservan») when there are trades. To delete them too, the user must amend the ADR; then flip the flag (the code lifts and restores the triggers around the delete; tested).
+- Forward trades and funding reconciliation: the forward process lifts the append-only triggers for that one transaction and restores them.
+- D's account DB (hash-chained, `futures_paper_account_purge.py`, run as a child by S; D is retired so it is the only writer): events of the strategy's books (`body.book = "<id>:<product>"`) are removed, the rest renumbered and the chain recomputed from the first affected event; snapshots drop the deleted books and re-point `head_seq`/`head_hash`; the stored config loses the id in `books`. The new chain is verified in memory before the transaction commits. Books are independent (own cash), so the other strategies' balances and payloads are unchanged; no trace of the id stays. D cannot resume with the code's config afterwards (it is retired). Tests: chain verifies, payloads identical, `AccountStore` reopens, guards restored, idempotent.
+- S passes `--account-db`; `Lifecycle` only runs the tool when the DB mentions the strategy.
 
 ## Gate for Qwen and Kronos
 
