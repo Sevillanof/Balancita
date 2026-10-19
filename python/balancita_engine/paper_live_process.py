@@ -167,7 +167,7 @@ def validate_config(raw):
         raise ProcessError("config_invalid", "decide_until_ms")
     if not isinstance(config["block_stale_entries"], bool):
         raise ProcessError("config_invalid", "block_stale_entries")
-    if config["funding_mode"] not in (LI.SYNTHETIC_FUNDING, LI.OBSERVED_FUNDING):
+    if config["funding_mode"] != LI.OBSERVED_FUNDING:
         raise ProcessError("config_invalid", "funding_mode")
     if config["on_funding_divergence"] != "halt":                    # BAL-DECISION-184-01: an unexplained divergence stops the session
         raise ProcessError("config_invalid", "on_funding_divergence")
@@ -670,7 +670,7 @@ class Supervisor(object):
         self.publication["attempts"] += 1                        # the document carries this number: a reader can tell a stale one from the heartbeat's
         try:
             session = self.session
-            funding = session.funding_report() if self.config["funding_mode"] == LI.OBSERVED_FUNDING else None
+            funding = session.funding_report()
             document = PUB.session_blocks(session.runner, beat, _read_json(os.path.join(self.directory, HALT_FILE)),
                                           _read_json(os.path.join(self.directory, REPORT_FILE)), source_state=state, funding=funding)
             document["attempt"] = self.publication["attempts"]
@@ -700,8 +700,7 @@ class Supervisor(object):
         ingestor = getattr(session, "ingestor", None)
         if ingestor is not None:
             body["candles_incomplete"] = ingestor.stats["candles_incomplete"]     # first versions read before their minute was over; the session used them as they came
-        if self.config["funding_mode"] == LI.OBSERVED_FUNDING:
-            body["funding"] = session.funding_report()
+        body["funding"] = session.funding_report()
         _write_json(os.path.join(self.directory, REPORT_FILE), body)
         self._beat(now, None)
         self._close()

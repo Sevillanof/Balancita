@@ -22,11 +22,11 @@ DAY = 24 * HOUR
 LOAD_START = FIRST_DECISION - 4 * DAY
 QUOTE_FROM = FIRST_DECISION - 10 * MIN
 WORLD_END = LAST_DECISION + 6 * HOUR           # market keeps moving after the last decision, so positions can close
-ACCRUAL_RATE = "0.0001"                        # explicit synthetic rate applied to open positions (relative, per hour)
 FUNDING_TABLES = """
-CREATE TABLE synthetic_fundpct (product_id TEXT NOT NULL, start_ms INTEGER NOT NULL, rate REAL NOT NULL, arrival_ms INTEGER NOT NULL);
-CREATE TABLE synthetic_accrual (product_id TEXT NOT NULL, start_ms INTEGER NOT NULL, end_ms INTEGER NOT NULL, rate TEXT NOT NULL,
-  arrival_ms INTEGER NOT NULL);
+CREATE TABLE paper_futures_funding_responses(sha256 TEXT PRIMARY KEY, received_at INTEGER NOT NULL, server_time TEXT NOT NULL,
+  raw_response TEXT NOT NULL) STRICT;
+CREATE TABLE paper_futures_funding_periods(response_sha256 TEXT NOT NULL, start_ms INTEGER NOT NULL, end_ms INTEGER NOT NULL,
+  funding_rate TEXT NOT NULL, known_at INTEGER NOT NULL, unit TEXT NOT NULL, product_id TEXT NOT NULL) STRICT;
 """
 
 
@@ -63,7 +63,7 @@ def quotes_of(candle):
 class World(object):
     """Builds the market once and releases it into the capture-shaped file with ``release_until``."""
 
-    def __init__(self, directory, accrual_rate=ACCRUAL_RATE, with_quotes=True, quote_holes=(), second_product_shift=None,
+    def __init__(self, directory, with_quotes=True, quote_holes=(), second_product_shift=None,
                  second_product_holes=(), quote_moves=()):
         self.dir = directory
         history = os.path.join(directory, "history.sqlite")
@@ -100,23 +100,6 @@ class World(object):
             for candle in self.second["ones"]:
                 if candle["bucket_start"] >= QUOTE_FROM:
                     self.second["quotes"] += [q for q in dense_quotes_of(candle) if not any(a <= q[0] < b for a, b in second_product_holes)]
-        self.accrual_rate = accrual_rate
-        self._write_funding()
-
-    def _write_funding(self):
-        db = self.source.db
-        for start, rate in self.fundpct:
-            db.execute("INSERT INTO synthetic_fundpct VALUES(?,?,?,?)", (BTC, start, float(rate), start + HOUR + RP.FUNDING_LAG_MS))
-        if self.second is not None:
-            for start, rate in self.second["fundpct"]:
-                db.execute("INSERT INTO synthetic_fundpct VALUES(?,?,?,?)", (ETH, start, float(rate), start + HOUR + RP.FUNDING_LAG_MS))
-        hour = (FIRST_DECISION // HOUR) * HOUR - 2 * HOUR
-        while hour < WORLD_END:
-            for product in ((BTC,) if self.second is None else (BTC, ETH)):
-                db.execute("INSERT INTO synthetic_accrual VALUES(?,?,?,?,?)",
-                           (product, hour, hour + HOUR, self.accrual_rate, hour + HOUR + RP.FUNDING_LAG_MS))
-            hour += HOUR
-        self.source.commit()
 
     def release_until(self, t_ms):
         """Writes every market row whose time is not after ``t_ms`` (candles at close + 2 s, quotes at their instant)."""

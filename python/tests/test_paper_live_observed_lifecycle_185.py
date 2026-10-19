@@ -270,11 +270,11 @@ class TestObservedLifecycle(unittest.TestCase):
         self.assertEqual(caught.exception.reason, "real_session_not_authorized")
         self.assertFalse(os.path.exists(self.directory))
 
-    def test_the_funding_mode_is_part_of_what_a_directory_was_created_with(self):
+    def test_the_configuration_is_part_of_what_a_directory_was_created_with(self):
         first = self.supervisor(Clock())
         first.start()
         first.abandon()
-        config = LP.validate_config(config_dict(funding_mode="synthetic"))
+        config = LP.validate_config(config_dict(max_quote_gap_ms=20_000))
         self.assertNotEqual(config["digest"], first.config["digest"])
         report = LP.preflight(config, self.directory, self.world.path, strategies=self.strategies)
         self.assertIn("configuration_matches_directory", [c["name"] for c in report["checks"] if not c["ok"]])
