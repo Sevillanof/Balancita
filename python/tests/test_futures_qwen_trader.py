@@ -749,5 +749,281 @@ class ReportAndExportTests(unittest.TestCase):
         self.assertEqual(row["closed"], {"qwen": 0.25, "stop": 0.25, "tiempo": 0.25, "fin_de_bloque": 0.25})
 
 
+# --------------------------------------------------------------------------- counterfactual exits, entry quality, diagnostics
+
+
+class SynthHistory(qt.History):
+    """In-memory candles that keep the holdout guard of the real History and log every read."""
+
+    def __init__(self, bars, holdout, funding=()):
+        super().__init__("/nonexistent", holdout, offline=True)
+        self.all, self.rows, self.requests = bars, list(funding), []
+
+    def bars(self, product, from_ms, to_ms):
+        self._check(to_ms)
+        self.requests.append((from_ms, to_ms))
+        return [b for b in self.all if from_ms <= b["bucket_start"] < to_ms]
+
+    def funding(self, product):
+        return self.rows
+
+
+def drift_bars(start, n, price, step=0.0002, crash_at=None):
+    """Smooth path: price * (1 + step) per bar, optionally a -50 % crash at bar ``crash_at``."""
+    out = []
+    for i in range(n):
+        new = price * (1 + step)
+        if crash_at is not None and i == crash_at:
+            new = price * 0.5
+        high, low = max(price, new) * 1.00005, min(price, new) * 0.99995
+        out.append({"bucket_start": start + i * BAR, "open": repr(price), "high": repr(high), "low": repr(low),
+                    "close": repr(new), "volume_btc": "5"})
+        price = new
+    return out
+
+
+def qwen_trade(entry_ms, net=-30.0, side="LONG", block="b0", fold="validation", hold=60):
+    return {"block_id": block, "trade_no": 1, "product": "PF_XBTUSD", "side": side, "fold": fold, "time_bin": 0,
+            "entry_ms": entry_ms, "exit_ms": entry_ms + hold * MIN, "net_bp": net, "gross_bp": net + 10,
+            "funding_bp": 0.0, "funding_status": "complete", "closed_by": "qwen", "hold_min": hold, "entry_p": 0.8,
+            "entry_reason": "tendencia", "exit_reason": "sin_ventaja"}
+
+
+class CounterfactualTests(unittest.TestCase):
+    HOUR = qt.HOUR_MS
+
+    def setUp(self):
+        self.warm, self.entry = warm_bars()
+        self.last = float(self.warm[-1]["close"])
+
+    def data(self, trades, block_end, holdout):
+        blocks = {"b0": {"block_id": "b0", "product": "PF_XBTUSD", "start_ms": self.entry - 3 * DAY, "end_ms": block_end,
+                         "fold": "validation", "closes": [], "seconds": 1.0}}
+        return {"meta": {"holdout_ms": holdout}, "blocks": blocks, "trades": trades, "decisions": [],
+                "calls": {"n": 0, "mean_ms": None}, "runs": []}
+
+    def history(self, post, holdout):
+        return SynthHistory(self.warm + post, holdout)
+
+    def test_hold_until_the_close_Qwen_chose_reproduces_the_real_trade_exactly(self):
+        script = Script(lambda t_ms, step, q: {"LARGO": 1.0} if q["id"] == "trader_flat" else {"CERRAR": 1.0})
+        t = trader(script, self.warm)
+        post = walk(30, 9, start=self.entry, price=self.last, sigma=0.0004)
+        events = feed_all(t, post)
+        real = [e["trade"] for e in events if e["type"] == "trade"][0]
+        self.assertEqual(real["closed_by"], "qwen")
+        bars = qt.fill_gaps(self.warm + post, BAR)
+        got = rep.hold_outcome(CFG, real, bars, qt.FundingLine(), horizon_ms=real["exit_ms"] - real["entry_ms"],
+                               limit_ms=real["exit_ms"])
+        self.assertAlmostEqual(got["net_bp"], real["net_bp"], places=6)
+        self.assertAlmostEqual(got["gross_bp"], real["gross_bp"], places=6)
+
+    def test_holding_on_in_a_rally_beats_closing_and_the_numbers_add_up(self):
+        post = drift_bars(self.entry, 700, self.last)
+        block_end, holdout = self.entry + 12 * self.HOUR, self.entry + 30 * self.HOUR
+        trade = qwen_trade(self.entry)
+        rows = rep.counterfactuals(self.data([trade], block_end, holdout), CFG, self.history(post, holdout))
+        self.assertEqual(len(rows), 1)
+        sc = rows[0]["scenarios"]
+        self.assertTrue(all(sc[k] is not None for k in ("guardrails", "h4", "h8", "h24")), sc)
+        self.assertEqual(sc["guardrails"]["closed_by"], "fin_de_bloque")
+        self.assertEqual(sc["guardrails"]["exit_ms"], block_end)
+        self.assertEqual(sc["h4"]["exit_ms"], self.entry + 4 * self.HOUR)
+        self.assertEqual(sc["h24"]["exit_ms"], self.entry + 24 * self.HOUR)       # past the block end, still before the holdout
+        self.assertLess(sc["h4"]["net_bp"], sc["h8"]["net_bp"])
+        self.assertLess(sc["h8"]["net_bp"], sc["h24"]["net_bp"])
+        s = rep.counterfactual_summary(rows, "h4")
+        self.assertEqual((s["n"], s["better"], s["worse"]), (1, 0, 1))
+        self.assertAlmostEqual(s["diff_bp"], sc["h4"]["net_bp"] - trade["net_bp"])
+        self.assertIn("Cerrar antes le costó", rep.counterfactual_sentence(rows))
+
+    def test_a_short_earns_a_crash_and_a_long_hits_the_stop(self):
+        post = drift_bars(self.entry, 700, self.last, crash_at=60)               # -50 % at hour 5
+        block_end, holdout = self.entry + 12 * self.HOUR, self.entry + 30 * self.HOUR
+        rows = rep.counterfactuals(self.data([qwen_trade(self.entry, side="SHORT", net=-20.0)], block_end, holdout),
+                                   CFG, self.history(post, holdout))
+        self.assertGreater(rows[0]["scenarios"]["h8"]["net_bp"], 1000)
+        long_rows = rep.counterfactuals(self.data([qwen_trade(self.entry, side="LONG")], block_end, holdout), CFG,
+                                        self.history(post, holdout))
+        lsc = long_rows[0]["scenarios"]
+        self.assertEqual(lsc["h8"]["closed_by"], "stop")
+        self.assertEqual(lsc["guardrails"]["closed_by"], "stop")
+        self.assertEqual(lsc["h4"]["closed_by"], "tiempo")
+
+    def test_rule_a_never_reads_past_the_end_of_the_block(self):
+        block_end, holdout = self.entry + 6 * self.HOUR, self.entry + 30 * self.HOUR
+        calm = drift_bars(self.entry, 700, self.last)
+        poisoned = drift_bars(self.entry, 700, self.last, crash_at=84)           # crash at hour 7, after the block
+        a = rep.counterfactuals(self.data([qwen_trade(self.entry)], block_end, holdout), CFG, self.history(calm, holdout))
+        b = rep.counterfactuals(self.data([qwen_trade(self.entry)], block_end, holdout), CFG, self.history(poisoned, holdout))
+        self.assertEqual(a[0]["scenarios"]["guardrails"], b[0]["scenarios"]["guardrails"])
+        self.assertEqual(a[0]["scenarios"]["h4"], b[0]["scenarios"]["h4"])        # ends before the crash
+        self.assertEqual(b[0]["scenarios"]["guardrails"]["closed_by"], "fin_de_bloque")
+        self.assertEqual(b[0]["scenarios"]["h8"]["closed_by"], "stop")            # fixed horizons may cross the block end
+        self.assertNotEqual(a[0]["scenarios"]["h8"]["net_bp"], b[0]["scenarios"]["h8"]["net_bp"])
+
+    def test_holdout_guard_a_horizon_that_would_end_after_the_cut_is_not_computed_and_not_read(self):
+        post = drift_bars(self.entry, 700, self.last)
+        block_end, holdout = self.entry + 6 * self.HOUR, self.entry + 10 * self.HOUR
+        history = self.history(post, holdout)
+        data = self.data([qwen_trade(self.entry)], block_end, holdout)
+        rows = rep.counterfactuals(data, CFG, history)
+        sc = rows[0]["scenarios"]
+        self.assertIsNotNone(sc["h8"])
+        self.assertIsNone(sc["h24"])
+        self.assertTrue(history.requests)
+        self.assertLessEqual(max(hi for _, hi in history.requests), holdout)
+        summary = rep.counterfactual_summary(rows, "h24")
+        self.assertEqual((summary["n"], summary["total"]), (0, 1))
+        entry = rep.entry_moves(data, history)
+        self.assertIsNotNone(entry[0]["moves"]["h4"])
+        self.assertIsNone(entry[0]["moves"]["h24"])
+        self.assertLessEqual(max(hi for _, hi in history.requests), holdout)
+        with self.assertRaises(qt.HoldoutError):
+            history.bars("PF_XBTUSD", self.entry, holdout + BAR)
+
+    def test_missing_candles_give_nd_not_a_guess(self):
+        block_end, holdout = self.entry + 6 * self.HOUR, self.entry + 30 * self.HOUR
+        rows = rep.counterfactuals(self.data([qwen_trade(self.entry)], block_end, holdout), CFG,
+                                   SynthHistory([], holdout))
+        self.assertTrue(all(v is None for v in rows[0]["scenarios"].values()))
+        self.assertIn("No se pudo calcular", rep.counterfactual_sentence(rows))
+        hole = [b for b in drift_bars(self.entry, 200, self.last) if not 20 <= (b["bucket_start"] - self.entry) // BAR < 30]
+        got = rep.hold_outcome(CFG, qwen_trade(self.entry), self.warm + hole, qt.FundingLine(), horizon_ms=4 * self.HOUR,
+                               limit_ms=self.entry + 4 * self.HOUR)
+        self.assertIsNone(got)        # the history layer fills quiet gaps; a raw hole is never bridged here
+
+    def test_only_trades_closed_by_qwen_are_compared(self):
+        block_end, holdout = self.entry + 6 * self.HOUR, self.entry + 30 * self.HOUR
+        other = dict(qwen_trade(self.entry), closed_by="stop")
+        rows = rep.counterfactuals(self.data([other], block_end, holdout), CFG,
+                                   self.history(drift_bars(self.entry, 700, self.last), holdout))
+        self.assertEqual(rows, [])
+        self.assertIn("ninguna operación", rep.counterfactual_sentence(rows))
+
+    def test_entry_quality_splits_gross_move_from_cost(self):
+        post = drift_bars(self.entry, 700, self.last)
+        block_end, holdout = self.entry + 6 * self.HOUR, self.entry + 30 * self.HOUR
+        data = self.data([qwen_trade(self.entry), qwen_trade(self.entry, side="SHORT")], block_end, holdout)
+        moves = rep.entry_moves(data, self.history(post, holdout))
+        long_move, short_move = moves[0]["moves"]["h4"], moves[1]["moves"]["h4"]
+        self.assertGreater(long_move, 0)
+        self.assertAlmostEqual(long_move, -short_move)
+        self.assertAlmostEqual(long_move, ((1.0002 ** 48) - 1) * 1e4, delta=1.0)
+        self.assertGreater(moves[0]["cost_bp"], 0)
+        text = "\n".join(rep.entry_quality_lines(moves, list(PRODUCTS)))
+        self.assertIn("antes de costos", text)
+        self.assertIn("Costo ida y vuelta", text)
+
+
+class DiagnosticsTests(unittest.TestCase):
+    def decision(self, kind, action, reason):
+        letters = ["movimiento_exagerado", "tendencia", "funding_extremo", "sin_ventaja", "proteger_ganancia",
+                   "cortar_perdida", "otro"]
+        names = ["LARGO", "CORTO", "ESPERAR"] if kind == "flat" else ["MANTENER", "CERRAR"]
+        orders = [{"order": names, "probabilities": {n: (0.9 if n == names[0] else 0.05) for n in names}},
+                  {"order": names[::-1], "probabilities": {n: (0.9 if n == names[-1] else 0.05) for n in names}}]
+        return {"kind": kind, "action": action, "reason": reason, "orders_json": json.dumps(orders),
+                "reason_json": json.dumps({"orders": [{"order": letters}]}) if reason else None}
+
+    def test_the_same_reason_every_time_is_flagged_as_degenerate(self):
+        ds = [self.decision("flat", "LARGO", "tendencia") for _ in range(20)] + \
+             [self.decision("position", "CERRAR", "sin_ventaja") for _ in range(19)] + \
+             [self.decision("position", "CERRAR", "cortar_perdida")]
+        div = rep.reason_diversity(ds)
+        self.assertEqual(dict(div["reasons"]["Entrada"]), {"tendencia": 20})
+        self.assertEqual(dict(div["letters"]["Entrada"]), {"B": 20})
+        self.assertEqual(div["letters"]["Cierre de Qwen"]["D"], 19)
+        text = "\n".join(rep.reason_diversity_lines(ds))
+        self.assertIn("**motivo degenerado**", text)
+        self.assertIn("Misma letra en los dos órdenes", text)
+
+    def test_varied_reasons_are_not_flagged_and_few_data_is_not_flagged(self):
+        names = ["movimiento_exagerado", "tendencia", "funding_extremo", "otro"]
+        varied = [self.decision("flat", "LARGO", names[i % 4]) for i in range(24)]
+        self.assertNotIn("**motivo degenerado**", "\n".join(rep.reason_diversity_lines(varied)))
+        few = [self.decision("flat", "LARGO", "tendencia") for _ in range(4)]
+        text = "\n".join(rep.reason_diversity_lines(few))
+        self.assertNotIn("**motivo degenerado**", text)
+        self.assertIn("pocos datos", text)
+
+    def test_letter_bias_is_visible_when_the_option_changes_with_the_order_but_the_letter_does_not(self):
+        # first listed option wins in the first order, last listed in the second -> different options, letters A and C
+        div = rep.reason_diversity([self.decision("flat", "ESPERAR", None) for _ in range(10)])
+        row = div["action"]["flat"]
+        self.assertEqual((row["n"], row["same_option"]), (10, 0))
+        div = rep.reason_diversity([dict(self.decision("flat", "ESPERAR", None), orders_json=json.dumps(
+            [{"order": ["LARGO", "CORTO", "ESPERAR"], "probabilities": {"LARGO": 0.8, "CORTO": 0.1, "ESPERAR": 0.1}},
+             {"order": ["CORTO", "LARGO", "ESPERAR"], "probabilities": {"LARGO": 0.1, "CORTO": 0.8, "ESPERAR": 0.1}}]))] * 10)
+        row = div["action"]["flat"]
+        self.assertEqual((row["same_letter"], row["same_option"]), (10, 0))
+
+    def test_throughput_estimates_remaining_batches_from_the_measured_latency(self):
+        blocks = {"b{}".format(i): {"seconds": 400.0} for i in range(10)}
+        data = {"meta": {"target_blocks": 60}, "blocks": blocks, "calls": {"n": 1000, "mean_ms": 900.0},
+                "runs": [{"args": json.dumps({"max_minutes": 55})}]}
+        t = rep.throughput(data, CFG)
+        self.assertEqual((t["remaining"], t["calls_per_block"]), (50, 100.0))
+        self.assertAlmostEqual(t["remaining_minutes"], 75.0)
+        self.assertEqual(t["batches"], 2)
+        text = "\n".join(rep.throughput_lines(data, CFG))
+        self.assertIn("900 ms por llamada", text)
+        self.assertIn("2 tandas", text)
+        empty = dict(data, blocks={}, calls={"n": 0, "mean_ms": None})
+        self.assertIn("Todavía no hay llamadas", "\n".join(rep.throughput_lines(empty, CFG)))
+
+
+class ReportOnlyTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.mkdtemp()
+        cls.db = os.path.join(cls.tmp, "practice.sqlite")
+        qt.run_practice(MemHistory(), cls.db, ClockedProvider([0.0], entries=hashed_policy), small_cfg(), HOLDOUT, blocks=4,
+                        log=lambda *a: None, clock=lambda: 0.0)
+
+    @classmethod
+    def tearDownClass(cls):
+        import shutil
+        shutil.rmtree(cls.tmp, ignore_errors=True)
+
+    def digest(self):
+        with open(self.db, "rb") as handle:
+            return hashlib.sha256(handle.read()).hexdigest()
+
+    def test_the_report_has_the_new_sections_reads_the_cache_and_changes_nothing(self):
+        before, cfg_hash = self.digest(), qt.config_hash(small_cfg())
+        history = MemHistory()
+        history.requests = []
+        text = rep.build_report(self.db, small_cfg(), history=history)
+        for needle in ("## ¿Qué habría pasado si no cerraba?", "## Calidad de las entradas", "## ¿Elige motivos distintos",
+                       "## Velocidad de la práctica", "Diferencia", "Promedio si seguía", "Latencia medida"):
+            self.assertIn(needle, text)
+        self.assertIsNone(re.search(r"\bnan\b", text.lower()))
+        self.assertEqual(self.digest(), before)                             # the practice database is untouched
+        self.assertEqual(qt.config_hash(small_cfg()), cfg_hash)
+        self.assertTrue(history.requests and all(hi <= HOLDOUT for _, _, hi in history.requests))
+        self.assertEqual(rep.build_report(self.db, small_cfg(), history=MemHistory()), text)       # deterministic
+
+    def test_without_a_candle_cache_the_report_still_works_and_creates_no_file(self):
+        cache = os.path.join(self.tmp, "no-cache")
+        text = rep.build_report(self.db, small_cfg(), cache_dir=cache)
+        self.assertIn("## ¿Qué habría pasado si no cerraba?", text)
+        self.assertFalse(os.path.exists(cache))
+
+    def test_a_report_over_a_real_cache_directory_matches_the_in_memory_history(self):
+        cache = os.path.join(self.tmp, "cache")
+        for product in PRODUCTS:
+            store = CandleCache(os.path.join(cache, "candles-{}.sqlite".format(product)))
+            try:
+                store.ensure(product, "5m", SERIES[product][0]["bucket_start"], HOLDOUT,
+                             fetch=lambda p, r, lo, hi, product=product: [b for b in SERIES[product] if lo <= b["bucket_start"] < hi])
+            finally:
+                store.close()
+            with open(os.path.join(cache, "funding-{}.json".format(product)), "w") as handle:
+                json.dump([list(r) for r in MemHistory().funding(product)], handle)
+        self.assertEqual(rep.build_report(self.db, small_cfg(), cache_dir=cache),
+                         rep.build_report(self.db, small_cfg(), history=MemHistory()))
+
+
 if __name__ == "__main__":
     unittest.main()

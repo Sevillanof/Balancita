@@ -1164,7 +1164,7 @@ def main(argv=None):
                              blocks=args.blocks)
         elif args.command == "report":
             from .futures_qwen_trader_report import build_report
-            text = build_report(args.db, cfg)
+            text = build_report(args.db, cfg, args.cache_dir)
             os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
             with open(args.out, "w", encoding="utf-8") as handle:
                 handle.write(text)

@@ -9,11 +9,13 @@ datos con los que se eligió el umbral.
 import array
 import collections
 import json
+import math
+import os
 import random
 import statistics
 
 from . import futures_qwen_trader as qt
-from .futures_costs import COST_MODEL_VERSION
+from .futures_costs import COST_MODEL_VERSION, entry_fill, round_trip_cost_bps
 from .futures_qwen_practice_report import bootstrap_ci
 from .strategy_gate import (
     FAIL, INCONCLUSIVE, PASS, _es, _factor, _mark, _pct_bp, _share, _stable_seed, _table, _usd, percentile_in,
@@ -36,11 +38,12 @@ def load(db_path):
             closes.frombytes(r["closes"] or b"")
             data["blocks"][r["block_id"]] = {
                 "block_id": r["block_id"], "product": r["product"], "start_ms": r["start_ms"], "end_ms": r["end_ms"],
-                "bin": r["time_bin"], "fold": r["fold"], "wakes": r["wakes"], "closes": list(closes)}
+                "bin": r["time_bin"], "fold": r["fold"], "wakes": r["wakes"], "seconds": r["seconds"],
+                "closes": list(closes)}
         data["trades"] = [dict(r) for r in pdb.db.execute("SELECT * FROM trades ORDER BY exit_ms, entry_ms")]
         data["decisions"] = [dict(r) for r in pdb.db.execute(
             "SELECT block_id, seq, t_ms, kind, product, fold, model_action, p_action, action, override, reason, "
-            "orders_json, outcome_json, net_bp_now, latency_ms, wake_json, prompt_version FROM decisions")]
+            "orders_json, reason_json, outcome_json, net_bp_now, latency_ms, wake_json, prompt_version FROM decisions")]
         data["calls"] = dict(pdb.db.execute("SELECT COUNT(*) AS n, AVG(latency_ms) AS mean_ms FROM calls").fetchone())
         data["runs"] = [dict(r) for r in pdb.db.execute("SELECT * FROM runs ORDER BY id")]
         return data
@@ -244,6 +247,384 @@ def reasons_table(trades):
     return out
 
 
+# --------------------------------------------------------------------------- counterfactuals (report only, no model)
+#
+# Everything below re-uses the candle cache that ``prefetch`` already stored and the SAME accounting as the practice
+# (``qt.settle``: fills, taker fees, funding). It never calls the model and never changes what the practice did.
+#
+# No-lookahead / holdout rule: a counterfactual path only reads candles that CLOSED before its end. Rule (a) never goes past
+# the end of the trade's block. Fixed horizons may go past the block end (the next candles exist in the cache) but a path
+# whose end would fall after the holdout date (``meta.holdout_ms``, 2026-04-19 in the real config) is not computed at all
+# (``n/d``): it is never truncated, and ``History`` refuses the read anyway.
+
+HORIZONS_H = (4, 8, 24)
+SCENARIOS = (("guardrails", "a) Solo los límites automáticos (stop o 24 h, o fin del bloque)"),
+             ("h4", "b) Mantener 4 h (o hasta el stop)"), ("h8", "c) Mantener 8 h (o hasta el stop)"),
+             ("h24", "d) Mantener 24 h (o hasta el stop)"))
+DEGENERATE_SHARE = 0.9
+MIN_DIVERSITY_N = 10
+_EPS_BP = 1e-9
+
+
+class ReadOnlyHistory(qt.History):
+    """Offline reader of the prefetch cache for the report: never downloads, never creates a cache file."""
+
+    def __init__(self, cache_dir, holdout_ms):
+        super().__init__(cache_dir, holdout_ms, offline=True)
+
+    def bars(self, product, from_ms, to_ms):
+        self._check(to_ms)
+        if not os.path.exists(os.path.join(self.cache_dir, "candles-{}.sqlite".format(product))):
+            return []
+        return super().bars(product, from_ms, to_ms)
+
+
+def _stop_pct(cfg, bars_before):
+    """The stop distance the practice computed when the position opened (same formula, same clamp)."""
+    guard = cfg["guardrails"]
+    closes = [math.log(float(b["close"])) for b in bars_before[-(qt.H24 + 1):]]
+    sigma = qt._std([y - x for x, y in zip(closes, closes[1:])])
+    return min(guard["max_stop_pct"], max(guard["min_stop_pct"], guard["stop_sigma_24h"] * sigma * math.sqrt(qt.H24)))
+
+
+def hold_outcome(cfg, trade, bars, funding, *, horizon_ms, limit_ms):
+    """Net result if ``trade`` had been held instead of closed by Qwen: until the stop is touched, ``horizon_ms`` passed, or
+    ``limit_ms`` (block end for rule (a)). ``bars``: gap-filled 5m candles that include the 289 before the entry. Returns
+    ``{net_bp, gross_bp, closed_by, exit_ms}`` or ``None`` when the candles do not cover the path."""
+    entry_ms = trade["entry_ms"]
+    before = [b for b in bars if b["bucket_start"] < entry_ms]
+    after = [b for b in bars if entry_ms <= b["bucket_start"] and b["bucket_start"] + qt.BAR_MS <= limit_ms]
+    if len(before) < qt.H24 + 1 or before[-1]["bucket_start"] != entry_ms - qt.BAR_MS:
+        return None
+    side = trade["side"]
+    long = side == "LONG"
+    ref = float(before[-1]["close"])
+    stop_pct = _stop_pct(cfg, before)
+    stop_px = ref * (1 - stop_pct) if long else ref * (1 + stop_pct)
+    notional = qt.D(cfg["notional_usd"])
+    entry = entry_fill(qt.D(repr(ref)), side, trade["product"])
+    position = qt.Position(side=side, entry_ms=entry_ms, entry_px=entry, qty=notional / entry)
+    expected = entry_ms
+    for bar in after:
+        if bar["bucket_start"] != expected:
+            return None                      # a hole in the cache: do not guess
+        expected += qt.BAR_MS
+        t_ms = bar["bucket_start"] + qt.BAR_MS
+        high, low, open_, close = (float(bar[k]) for k in ("high", "low", "open", "close"))
+        if (low <= stop_px) if long else (high >= stop_px):
+            level = min(stop_px, open_) if long else max(stop_px, open_)
+            how, price, reason = "stop", level, "stop"
+        elif t_ms - entry_ms >= horizon_ms or t_ms == limit_ms:
+            how = "tiempo" if t_ms - entry_ms >= horizon_ms else "fin_de_bloque"
+            price, reason = close, "strategy_exit"
+        else:
+            continue
+        done = qt.settle(trade["product"], position, price, reason, t_ms, funding, notional)
+        return {"net_bp": done["net_bp"], "gross_bp": done["gross_bp"], "closed_by": how, "exit_ms": t_ms}
+    return None
+
+
+def _holdout_of(meta):
+    return meta.get("holdout_ms") or qt.load_holdout_ms()
+
+
+def counterfactuals(data, cfg, history):
+    """For every trade Qwen closed: the four held-on outcomes. Pure given the candles. Returns
+    ``(rows, notes)``; each row is ``{trade, scenarios: {id: result|None}}``."""
+    holdout = _holdout_of(data["meta"])
+    blocks, rows, funding_cache = data["blocks"], [], {}
+    for t in data["trades"]:
+        if t["closed_by"] != "qwen":
+            continue
+        block = blocks.get(t["block_id"])
+        if block is None or history is None:
+            continue
+        if t["product"] not in funding_cache:
+            funding_cache[t["product"]] = qt.FundingLine(history.funding(t["product"]))
+        funding = funding_cache[t["product"]]
+        reach = min(t["entry_ms"] + qt.DAY_MS, holdout)
+        try:
+            bars = history.bars(t["product"], t["entry_ms"] - (qt.H24 + 1) * qt.BAR_MS, reach)
+        except (qt.HoldoutError, qt.HistoryError):
+            bars = []
+        out = {}
+        out["guardrails"] = hold_outcome(cfg, t, bars, funding, horizon_ms=cfg["guardrails"]["max_hold_min"] * qt.MINUTE_MS,
+                                         limit_ms=min(block["end_ms"], holdout))
+        for hours in HORIZONS_H:
+            end = t["entry_ms"] + hours * qt.HOUR_MS
+            out["h{}".format(hours)] = None if end > holdout else hold_outcome(
+                cfg, t, bars, funding, horizon_ms=hours * qt.HOUR_MS, limit_ms=end)
+        rows.append({"trade": t, "scenarios": out})
+    return rows
+
+
+def entry_moves(data, history):
+    """Gross price move from the entry (last close before it) to 4 h and 24 h later, in the trade's direction and before
+    any cost, for every trade (whoever closed it). ``None`` when the candles are missing or would pass the holdout."""
+    holdout = _holdout_of(data["meta"])
+    rows = []
+    for t in data["trades"]:
+        out = {"h4": None, "h24": None}
+        if history is not None:
+            end = t["entry_ms"] + 24 * qt.HOUR_MS
+            try:
+                bars = history.bars(t["product"], t["entry_ms"] - qt.BAR_MS, min(end, holdout))
+            except (qt.HoldoutError, qt.HistoryError):
+                bars = []
+            by_t = {b["bucket_start"]: float(b["close"]) for b in bars}
+            ref = by_t.get(t["entry_ms"] - qt.BAR_MS)
+            sign = 1.0 if t["side"] == "LONG" else -1.0
+            for hours in (4, 24):
+                last = by_t.get(t["entry_ms"] + hours * qt.HOUR_MS - qt.BAR_MS)
+                if ref and last and t["entry_ms"] + hours * qt.HOUR_MS <= holdout:
+                    out["h{}".format(hours)] = sign * (last / ref - 1.0) * 10_000
+        rows.append({"trade": t, "moves": out, "cost_bp": float(round_trip_cost_bps(t["product"]))})
+    return rows
+
+
+def _groups(products):
+    out = [("Calibración", None, "calibration"), ("Validación", None, "validation"), ("**Todo**", None, None)]
+    for p in products:
+        out += [("{} · calibración".format(p), p, "calibration"), ("{} · validación".format(p), p, "validation"),
+                ("**{} · todo**".format(p), p, None)]
+    return out
+
+
+def _pick(rows, product, fold):
+    return [r for r in rows if (product is None or r["trade"]["product"] == product)
+            and (fold is None or r["trade"]["fold"] == fold)]
+
+
+def counterfactual_summary(rows, scenario, product=None, fold=None):
+    """``n`` comparable trades, mean real / counterfactual net bp, how many Qwen exits were better / worse, and the total
+    difference (counterfactual minus real: positive means closing cost money)."""
+    chosen = [r for r in _pick(rows, product, fold) if r["scenarios"].get(scenario) is not None]
+    real = [r["trade"]["net_bp"] for r in chosen]
+    cf = [r["scenarios"][scenario]["net_bp"] for r in chosen]
+    n = len(chosen)
+    return {"n": n, "mean_real_bp": statistics.fmean(real) if n else None, "mean_cf_bp": statistics.fmean(cf) if n else None,
+            "better": sum(1 for a, b in zip(real, cf) if a > b + _EPS_BP), "worse": sum(1 for a, b in zip(real, cf) if a < b - _EPS_BP),
+            "diff_bp": sum(b - a for a, b in zip(real, cf)), "total": len(_pick(rows, product, fold))}
+
+
+def counterfactual_sentence(rows):
+    """One plain sentence from the numbers (all trades Qwen closed)."""
+    if not rows:
+        return "Qwen no cerró ninguna operación todavía: no hay nada que comparar."
+    parts, ok = [], False
+    for scenario, text in (("guardrails", "dejar correr hasta los límites automáticos"), ("h4", "mantener 4 h"),
+                           ("h8", "mantener 8 h"), ("h24", "mantener 24 h")):
+        s = counterfactual_summary(rows, scenario)
+        if not s["n"]:
+            continue
+        ok = True
+        lead = "Cerrar antes le {} {} frente a {}".format("costó" if s["diff_bp"] > 0 else "ahorró",
+                                                           _usd(abs(s["diff_bp"])).replace("+", ""), text) \
+            if scenario == "guardrails" else "{} {} ({})".format("costó" if s["diff_bp"] > 0 else "ahorró",
+                                                                  _usd(abs(s["diff_bp"])).replace("+", ""), text)
+        parts.append(lead)
+    if not ok:
+        return ("No se pudo calcular: faltan velas en la caché para las operaciones que cerró Qwen (ejecutá `prefetch` "
+                "con la misma configuración).")
+    first, rest = parts[0], parts[1:]
+    n = counterfactual_summary(rows, "guardrails")["n"] or max(counterfactual_summary(rows, k)["n"] for k in
+                                                                ("h4", "h8", "h24"))
+    return "{}{} (sobre {} operaciones que cerró Qwen, posiciones de 100 USD y mismos costos).".format(
+        first, "; en los otros casos " + ", ".join(rest) if rest else "", n)
+
+
+def counterfactual_lines(rows, products):
+    lines = ["## ¿Qué habría pasado si no cerraba?", "",
+             "Para cada operación que cerró Qwen se recalcula, con el mismo simulador, costos y funding, qué habría ocurrido "
+             "si la hubiera dejado abierta. **Diferencia** = lo que habría dado dejarla menos lo que dio cerrarla: un número "
+             "positivo significa que cerrar costó dinero. «Qwen mejor / peor» cuenta las operaciones donde cerrar fue mejor o "
+             "peor que seguir.", "", counterfactual_sentence(rows), ""]
+    for scenario, title in SCENARIOS:
+        table = []
+        for label, product, fold in _groups(products):
+            s = counterfactual_summary(rows, scenario, product, fold)
+            if not s["total"]:
+                table.append([label, 0, "n/d", "n/d", "n/d", "n/d", "n/d"])
+                continue
+            table.append([label, "{} de {}".format(s["n"], s["total"]) if s["n"] != s["total"] else s["n"],
+                          _pct_bp(s["mean_real_bp"], 2, True), _pct_bp(s["mean_cf_bp"], 2, True),
+                          s["better"] if s["n"] else "n/d", s["worse"] if s["n"] else "n/d",
+                          _usd(s["diff_bp"]) if s["n"] else "n/d"])
+        lines += ["**{}**".format(title), ""]
+        lines += _table(["Grupo", "Operaciones", "Promedio real", "Promedio si seguía", "Qwen mejor", "Qwen peor", "Diferencia"],
+                        table) + [""]
+    lines += ["_Notas: se usan solo velas cerradas. La opción a) no pasa del final del bloque (la operación se cierra al último "
+              "precio, como en la práctica). Los horizontes fijos pueden pasar del fin del bloque usando las velas siguientes "
+              "de la caché, pero solo si terminan antes de la fecha de reserva (holdout); si no, la operación no cuenta "
+              "(«n de total»). En todos los casos sigue activo el stop de la práctica. No se llamó al modelo._", ""]
+    return lines
+
+
+def entry_quality_lines(moves, products):
+    lines = ["## Calidad de las entradas (sin contar las salidas)", "",
+             "¿Entrar donde entró Qwen tenía ventaja por sí solo? Se mide cuánto se movió el precio a favor (o en contra) de la "
+             "posición 4 h y 24 h después de entrar, **antes de costos**, y se compara con el costo de ida y vuelta. Si el "
+             "movimiento bruto no supera el costo, la entrada no tenía ventaja, sea cual sea la salida.", ""]
+    table, cells = [], {}
+    for label, product, fold in _groups(products):
+        sub = _pick(moves, product, fold)
+        row = [label, len(sub)]
+        for key in ("h4", "h24"):
+            vals = [m["moves"][key] for m in sub if m["moves"][key] is not None]
+            row.append(_pct_bp(statistics.fmean(vals), 2, True) if vals else "n/d")
+            if vals:
+                cost = statistics.fmean([m["cost_bp"] for m in sub if m["moves"][key] is not None])
+                row.append(_pct_bp(statistics.fmean(vals) - cost, 2, True))
+                cells[(label, key)] = (statistics.fmean(vals), cost, len(vals))
+            else:
+                row.append("n/d")
+        costs = [m["cost_bp"] for m in sub]
+        row.append(_pct_bp(statistics.fmean(costs), 2) if costs else "n/d")
+        table.append(row)
+    lines += _table(["Grupo", "Operaciones", "Movimiento a 4 h (bruto)", "A 4 h menos costo", "Movimiento a 24 h (bruto)",
+                     "A 24 h menos costo", "Costo ida y vuelta"], table) + [""]
+    key = ("**Todo**", "h24")
+    k4 = ("**Todo**", "h4")
+    if key in cells or k4 in cells:
+        sentence = []
+        for name, k, h in (("4 h", k4, "h4"), ("24 h", key, "h24")):
+            if k in cells:
+                move, cost, n = cells[k]
+                sentence.append("a {} el precio se movió {} a favor de la posición contra un costo de {} ({} operaciones)"
+                                .format(name, _pct_bp(move, 2, True), _pct_bp(cost, 2), n))
+        edge = cells.get(key, cells.get(k4))
+        verdict = ("las entradas, por sí solas, **sí** superan el costo" if edge[0] > edge[1] else
+                   "las entradas, por sí solas, **no** superan el costo: no se ve ventaja en cuándo entra")
+        lines += ["En resumen: {}; {}.".format("; ".join(sentence), verdict), ""]
+    else:
+        lines += ["No hay velas en la caché para medirlo (ejecutá `prefetch`).", ""]
+    return lines
+
+
+def _letter(order_ids, option):
+    return chr(ord("A") + order_ids.index(option)) if order_ids and option in order_ids else None
+
+
+def reason_diversity(decisions):
+    """Distribution of the reasons Qwen chose (entry / exit), the letter each one had in the prompt, and the letter
+    positions of the action question in both option orders."""
+    reasons = {"Entrada": collections.Counter(), "Cierre de Qwen": collections.Counter()}
+    letters = {"Entrada": collections.Counter(), "Cierre de Qwen": collections.Counter()}
+    for d in decisions:
+        if not d["reason"] or d["action"] not in ("LARGO", "CORTO", "CERRAR"):
+            continue
+        kind = "Cierre de Qwen" if d["action"] == "CERRAR" else "Entrada"
+        reasons[kind][d["reason"]] += 1
+        try:
+            answer = json.loads(d["reason_json"]) if d.get("reason_json") else None
+            order = (answer or {}).get("orders", [{}])[0].get("order")
+        except (ValueError, AttributeError, IndexError):
+            order = None
+        letters[kind][_letter(order, d["reason"]) or "?"] += 1
+    action_letters = collections.defaultdict(lambda: {"n": 0, "same_letter": 0, "same_option": 0,
+                                                       "letters": [collections.Counter(), collections.Counter()]})
+    for d in decisions:
+        orders = json.loads(d["orders_json"]) if d["orders_json"] else None
+        if not orders or len(orders) < 2 or "probabilities" not in orders[0] or "order" not in orders[0]:
+            continue
+        picks = []
+        for o in orders[:2]:
+            probs = o["probabilities"]
+            best = max(probs, key=lambda k: (probs[k], k in qt.SAFE_FIRST))
+            picks.append((best, _letter(o["order"], best)))
+        row = action_letters[d["kind"]]
+        row["n"] += 1
+        row["same_letter"] += int(picks[0][1] == picks[1][1])
+        row["same_option"] += int(picks[0][0] == picks[1][0])
+        for i in (0, 1):
+            row["letters"][i][picks[i][1] or "?"] += 1
+    return {"reasons": reasons, "letters": letters, "action": action_letters}
+
+
+def reason_diversity_lines(decisions):
+    div = reason_diversity(decisions)
+    lines = ["## ¿Elige motivos distintos o siempre el mismo?", "",
+             "Si Qwen contesta casi siempre lo mismo (más del {} %), la pregunta del motivo no aporta información: se marca "
+             "«motivo degenerado». El motivo se pregunta en un solo orden, así que cada opción tiene siempre la misma letra."
+             .format(_es(DEGENERATE_SHARE * 100, 0)), ""]
+    table, flags = [], []
+    for kind in ("Entrada", "Cierre de Qwen"):
+        counter = div["reasons"][kind]
+        total = sum(counter.values())
+        if not total:
+            table.append([kind, 0, "n/d", "n/d", "n/d", "sin datos"])
+            continue
+        top, top_n = counter.most_common(1)[0]
+        share = top_n / total
+        degenerate = share > DEGENERATE_SHARE and total >= MIN_DIVERSITY_N
+        letter = div["letters"][kind].most_common(1)[0][0]
+        spread = ", ".join("{} {}".format(r.replace("_", " "), n) for r, n in counter.most_common())
+        table.append([kind, total, top.replace("_", " "), "{} (letra {})".format(_share(share), letter), spread,
+                      "**motivo degenerado**" if degenerate else ("pocos datos" if total < MIN_DIVERSITY_N else "variado")])
+        if degenerate:
+            flags.append("{}: {} de {} veces «{}»".format(kind.lower(), top_n, total, top.replace("_", " ")))
+    lines += _table(["Cuándo", "Veces", "Más elegido", "Su parte", "Reparto", "Veredicto"], table) + [""]
+    if flags:
+        lines += ["> **Motivo degenerado**: " + "; ".join(flags) + ". El motivo que se guarda no distingue operaciones buenas "
+                  "de malas: no se debe usar como señal ni como dato de aprendizaje sin revisar la pregunta.", ""]
+    rows = []
+    for kind, label in (("flat", "Sin posición"), ("position", "Con posición")):
+        row = div["action"].get(kind)
+        if row and row["n"]:
+            top = lambda c: ", ".join("{} {}".format(k, v) for k, v in c.most_common()) or "n/d"
+            rows.append([label, row["n"], _share(row["same_letter"] / row["n"]), _share(row["same_option"] / row["n"]),
+                         top(row["letters"][0]), top(row["letters"][1])])
+    if rows:
+        lines += ["**Letra elegida en la pregunta de acción, en cada orden de opciones**", ""]
+        lines += _table(["Momento", "Preguntas", "Misma letra en los dos órdenes", "Misma opción", "Letras (orden 1)",
+                         "Letras (orden 2)"], rows) + [""]
+        lines += ["_Si la misma letra sale en los dos órdenes pero la opción cambia, Qwen está contestando por la posición y "
+                  "no por el contenido._", ""]
+    return lines
+
+
+def throughput(data, cfg):
+    """Measured latency and how many more batches the planned blocks need at that latency."""
+    done = len(data["blocks"])
+    target = data["meta"].get("target_blocks", done)
+    calls, mean_ms = data["calls"]["n"], data["calls"]["mean_ms"]
+    max_minutes = 55.0
+    for run in reversed(data["runs"]):
+        try:
+            max_minutes = float(json.loads(run["args"]).get("max_minutes", max_minutes))
+            break
+        except (TypeError, ValueError, AttributeError):
+            continue
+    remaining = max(0, target - done)
+    out = {"done": done, "target": target, "remaining": remaining, "calls": calls, "mean_ms": mean_ms,
+           "max_minutes": max_minutes, "calls_per_block": calls / done if done else None, "batches": None,
+           "remaining_minutes": None, "sec_per_block": None}
+    secs = [b["seconds"] for b in data["blocks"].values() if b.get("seconds")]
+    out["sec_per_block"] = statistics.fmean(secs) if secs else None
+    if done and calls and mean_ms is not None:
+        out["remaining_minutes"] = remaining * out["calls_per_block"] * mean_ms / 60_000.0
+        out["batches"] = math.ceil(out["remaining_minutes"] / max_minutes - 1e-9) if remaining else 0
+    return out
+
+
+def throughput_lines(data, cfg):
+    t = throughput(data, cfg)
+    lines = ["## Velocidad de la práctica", ""]
+    if t["batches"] is None:
+        return lines + ["Todavía no hay llamadas guardadas para estimar la velocidad.", ""]
+    lines += ["- Latencia medida: **{} ms por llamada** ({} llamadas, unas {} por bloque).".format(
+        _es(t["mean_ms"], 0), t["calls"], _es(t["calls_per_block"], 0)),
+        "- Bloques hechos: {} de {}; faltan {}.".format(t["done"], t["target"], t["remaining"])]
+    if t["sec_per_block"]:
+        lines += ["- Tiempo medido por bloque: {} min (incluye el cálculo de velas).".format(_es(t["sec_per_block"] / 60.0, 1))]
+    if t["remaining"]:
+        lines += ["- Al ritmo medido faltan unos **{} min** de modelo: unas **{} tandas** de {} min.".format(
+            _es(t["remaining_minutes"], 0), t["batches"], _es(t["max_minutes"], 0))]
+    else:
+        lines += ["- Todos los bloques planeados están hechos."]
+    return lines + [""]
+
+
 # --------------------------------------------------------------------------- the text
 
 
@@ -311,12 +692,15 @@ def _points(r, sel, ov, coverage_text, cal_s):
     return points[:5]
 
 
-def build_report(db_path, cfg):
+def build_report(db_path, cfg, cache_dir=None, history=None):
+    """``cache_dir``: the prefetch cache (default ``qt.DEFAULT_CACHE``), read-only, for the counterfactual sections."""
     data = load(db_path)
-    return render(data, cfg)
+    if history is None:
+        history = ReadOnlyHistory(cache_dir or qt.DEFAULT_CACHE, _holdout_of(data["meta"]))
+    return render(data, cfg, history)
 
 
-def render(data, cfg):
+def render(data, cfg, history=None):
     rules = cfg["rules"]
     blocks, meta, trades = data["blocks"], data["meta"], data["trades"]
     products = cfg["products"]
@@ -420,6 +804,11 @@ def render(data, cfg):
     rr = reasons_table(chosen)
     lines += _table(["Cuándo", "Motivo", "Operaciones", "Acierto", "Promedio por operación", "Resultado total"], rr) \
         if rr else ["Sin operaciones."]
+
+    lines += [""] + counterfactual_lines(counterfactuals(dict(data, trades=chosen), cfg, history), products)
+    lines += entry_quality_lines(entry_moves(dict(data, trades=chosen), history), products)
+    lines += reason_diversity_lines(data["decisions"])
+    lines += throughput_lines(data, cfg)
 
     lines += ["", "## Umbral de entrada", "",
               "Se prueba una grilla fijada de antemano en el tramo de calibración y se elige el umbral con mayor resultado "
