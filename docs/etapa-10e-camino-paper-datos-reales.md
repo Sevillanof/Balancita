@@ -126,6 +126,13 @@ y las demos (`paper_runner_demo`, `signal_continuity_demo`). Las más pesadas: `
 Esas pruebas son hoy la red de seguridad de reglas de dinero (costes, funding, liquidación, recuperación). Borrarlas sin reemplazo
 deja esas reglas sin prueba, así que el borrado va por etapas y cada archivo se decide por separado.
 
+Avance (18-oct): el circuito completo de `test_paper_live_integration` (circuito financiero, caídas en cada frontera, reloj, muerte real
+del proceso, identidad y checkpoints; 27 pruebas) pasó a `test_paper_live_circuit_184.py`, sobre las velas, cotizaciones y respuestas
+de funding reales de BTC. Se perdieron a propósito dos pruebas que solo existían con el mundo inventado: la del oráculo independiente
+(necesita 24 h de funding real para el percentil, trabajo de «Balancita en la Nube») y las de las dos tablas de funding (el camino real
+tiene una sola). Siguen en el archivo viejo, sobre el mundo inventado, adaptador/evidencia, cancelación por fuente caída, silencio y
+dos productos (esperan datos reales de un segundo producto).
+
 ### 7.2 Etapas
 
 El orden importa: el camino sintético sostiene hoy unas 1.000 pruebas y no se saca antes de que exista su reemplazo.
