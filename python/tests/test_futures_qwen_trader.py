@@ -206,7 +206,7 @@ class WakeRuleTests(unittest.TestCase):
         for bars, rate in ((clean, 1e-6), (poisoned, 5e-3)):
             funding = qt.FundingLine([(nxt + i * qt.HOUR_MS, 1e-6 if i * qt.HOUR_MS < cut * BAR else rate)
                                       for i in range(-3, 40)])
-            decider = qt.LlmDecider(llm.FakeProvider(entries=policy), CFG)
+            decider = qt.LlmDecider(llm.FakeProvider(entries=policy), CFG, clock=lambda: 0.0)
             t = trader(decider, warm, funding=funding, threshold=0.5)
             results.append(feed_all(t, bars))
         limit = nxt + cut * BAR
@@ -1023,6 +1023,245 @@ class ReportOnlyTests(unittest.TestCase):
                 json.dump([list(r) for r in MemHistory().funding(product)], handle)
         self.assertEqual(rep.build_report(self.db, small_cfg(), cache_dir=cache),
                          rep.build_report(self.db, small_cfg(), history=MemHistory()))
+
+
+# --------------------------------------------------------------------------- trader v2 (no stop, no time limit)
+
+CFG2 = qt.load_config(qt.CONFIG_PATH_V2)
+V1_CONFIG_HASH = "3a6c1587820cee8942a8f356fe977d22faaa7d29340c25ac3b5d00b3305d8041"     # v1 stays reproducible
+
+
+def small_cfg2():
+    cfg = copy.deepcopy(CFG2)
+    cfg["practice"] = dict(CFG2["practice"], block_days=1, time_bins=3, target_blocks=4, **{"from": START_DAY})
+    cfg["practice_entry_threshold"] = 0.5
+    return cfg
+
+
+def small_cfg_v1_same_plan():
+    return small_cfg()
+
+
+class V2IdentityTests(unittest.TestCase):
+    def test_v1_is_untouched_and_v2_is_a_different_run_with_its_own_files(self):
+        self.assertEqual(qt.config_hash(CFG), V1_CONFIG_HASH)
+        self.assertNotEqual(qt.config_hash(CFG2), qt.config_hash(CFG))
+        self.assertEqual((CFG["version"], CFG["prompt"]["version"]), (1, 1))
+        self.assertEqual((CFG2["version"], CFG2["prompt"]["version"]), (2, 2))
+        self.assertEqual(CFG2["practice"], CFG["practice"])                      # same seed, period and blocks
+        self.assertEqual(qt.block_plan(CFG2, HOLDOUT)[0], qt.block_plan(CFG, HOLDOUT)[0])
+        self.assertNotEqual(qt.version_paths(1)[1], qt.version_paths(2)[1])
+        self.assertEqual(qt.version_paths(1)[1], qt.DEFAULT_DB)
+        self.assertIsNone(CFG2["guardrails"]["stop_sigma_24h"])
+        self.assertIsNone(CFG2["guardrails"]["max_hold_min"])
+        self.assertEqual(CFG2["guardrails"]["cooldown_min"], 15)
+        self.assertEqual(CFG2["notional_usd"], "100")
+
+
+class V2EngineTests(unittest.TestCase):
+    def enter(self):
+        warm, nxt = warm_bars()
+        script = Script(lambda t_ms, step, q: {"LARGO": 1.0} if q["id"] == "trader_flat" else {"MANTENER": 1.0})
+        t = trader(script, warm, cfg=CFG2)
+        t.feed(walk(1, 8, start=nxt, price=float(warm[-1]["close"]), sigma=0.0001)[0])
+        self.assertIsNotNone(t.position)
+        return t, nxt + BAR, script
+
+    def test_no_stop_and_no_time_limit_only_the_block_end_closes_a_position_nobody_closes(self):
+        t, bucket, _ = self.enter()
+        self.assertIsNone(t.position.stop_px)
+        self.assertIsNone(t.position.max_hold_ms)
+        price = t.c[-1]
+        events = t.feed({"bucket_start": bucket, "open": repr(price), "high": repr(price), "low": repr(price * 0.5),
+                         "close": repr(price * 0.6), "volume_btc": "50"})
+        self.assertFalse([e for e in events if e["type"] in ("trade", "guardrail")])      # a -40 % bar: no stop
+        price *= 0.6
+        for i in range(1, 600):                                                  # 50 hours: no 24 h limit
+            events = t.feed({"bucket_start": bucket + i * BAR, "open": repr(price), "high": repr(price * 1.0001),
+                             "low": repr(price * 0.9999), "close": repr(price), "volume_btc": "1"})
+            self.assertFalse([e for e in events if e["type"] in ("trade", "guardrail")])
+        self.assertIsNotNone(t.position)
+        trade = [e["trade"] for e in t.force_close() if e["type"] == "trade"][0]
+        self.assertEqual(trade["closed_by"], "fin_de_bloque")
+        self.assertLess(trade["net_bp"], -3000)
+        self.assertEqual(t.cooldown_until, trade["exit_ms"] + 15 * MIN)          # the cooldown after a close stays
+
+    def test_v2_position_state_has_after_cost_result_fee_note_time_and_move_sizes_without_hints(self):
+        t, bucket, _ = self.enter()
+        for i in range(0, 6):
+            t.feed(walk(1, 30 + i, start=bucket + i * BAR, price=t.c[-1], sigma=0.0003)[0])
+        text = t.state_text(bucket + 6 * BAR, ["cada_15_min"])
+        for needle in ("Posicion: LARGO abierta hace", "Resultado si cerras ahora, ya con todos los costos:", "USD)",
+                       "comision de entrada ya esta pagada", "cerrar solo agrega la de salida", "proxima 1h +-",
+                       "proximas 4h +-", "Movimiento a favor de la posicion desde que abriste",
+                       "No hay stop ni limite de tiempo"):
+            self.assertIn(needle, text)
+        for banned in ("stop automatico", "cierre obligatorio", "Distancia al stop", "deberias", "te conviene", "conviene"):
+            self.assertNotIn(banned, text)
+        self.assertNotRegex(text, r"20\d\d")
+        self.assertNotIn("PF_", text)
+        instruction = qt.questions_for(CFG2, "PF_XBTUSD")["position"]["instruction"]
+        self.assertIn("el de entrada ya está pagado", instruction)
+        self.assertNotIn("Hay un stop automático", instruction)
+
+    def test_v1_state_text_is_unchanged(self):
+        t = trader(Script(lambda *a: {"ESPERAR": 1.0}), warm_bars()[0], cfg=CFG)
+        text = t.state_text(T0 + 3000 * BAR, ["hora_cerrada"])
+        self.assertIn("stop automatico", text)
+        self.assertIn("cierre obligatorio", text)
+
+    def test_a_big_move_wakes_a_position_between_boundaries_but_forces_nothing(self):
+        t, bucket, script = self.enter()
+        price = t.c[-1]
+        wakes = []
+        # one bar that moves the price by far more than a daily volatility, landing OFF a 15-minute boundary
+        for i in range(0, 4):
+            bar = {"bucket_start": bucket + i * BAR, "open": repr(price), "high": repr(price * 1.05 if i == 0 else price * 1.0001),
+                   "low": repr(price * 0.9999), "close": repr(price * 1.05 if i == 0 else price * 1.05), "volume_btc": "5"}
+            price = price * 1.05 if i == 0 else price
+            events = t.feed(bar)
+            wakes += [e["wake"] for e in events if e["type"] == "decision"]
+        self.assertTrue(any("movimiento_grande_en_posicion" in w for w in wakes), wakes)
+        self.assertIsNotNone(t.position)                                          # Qwen said MANTENER: nothing forced
+        self.assertNotIn("cerca_del_stop", [x for w in wakes for x in w])
+
+    def test_the_reason_is_asked_in_two_option_orders_in_v2_and_in_one_in_v1(self):
+        def policy(prompt, letters):
+            return [{"token": l, "logprob": -0.05 if re.search(r"^{}\) (LARGO)".format(l), prompt, re.M) or
+                     (not re.search(r"LARGO|MANTENER", prompt) and l == "A") else -5.0} for l in letters]
+        for cfg, reason_prompts in ((CFG2, 2), (CFG, 1)):
+            warm, nxt = warm_bars()
+            provider = llm.FakeProvider(entries=policy)
+            t = trader(qt.LlmDecider(provider, cfg), warm, cfg=cfg, threshold=0.5)
+            events = t.feed(walk(1, 14, start=nxt, price=float(warm[-1]["close"]))[0])
+            asked = [p for p in provider.prompts if "motivo principal" in p]
+            self.assertEqual(len(asked), reason_prompts)
+            if reason_prompts == 2:
+                firsts = [re.findall(r"^A\) (\w+)", p, re.M)[0] for p in asked]
+                self.assertNotEqual(firsts[0], firsts[1])
+                letters = [dict(re.findall(r"^([A-G])\) (\w+)", p, re.M)) for p in asked]
+                self.assertTrue(all(letters[0][k] != letters[1][k] for k in "ABCDEFG"))      # no option keeps its letter
+                self.assertEqual(len(events[0]["reason_answer"]["orders"]), 2)
+
+
+class V2PracticeTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.mkdtemp()
+        cls.db1, cls.db2 = os.path.join(cls.tmp, "practice.sqlite"), os.path.join(cls.tmp, "practice-v2.sqlite")
+        qt.run_practice(MemHistory(), cls.db1, ClockedProvider([0.0], entries=hashed_policy), small_cfg(), HOLDOUT, blocks=4,
+                        log=lambda *a: None, clock=lambda: 0.0)
+        with open(cls.db1, "rb") as handle:
+            cls.v1_digest = hashlib.sha256(handle.read()).hexdigest()
+        cls.provider2 = ClockedProvider([0.0], entries=hashed_policy)
+        qt.run_practice(MemHistory(), cls.db2, cls.provider2, small_cfg2(), HOLDOUT, blocks=4, log=lambda *a: None,
+                        clock=lambda: 0.0)
+
+    @classmethod
+    def tearDownClass(cls):
+        import shutil
+        shutil.rmtree(cls.tmp, ignore_errors=True)
+
+    def test_v2_runs_the_same_blocks_in_its_own_database_and_leaves_v1_alone(self):
+        ids = lambda db: rows(db, "SELECT block_id, fold FROM blocks ORDER BY block_id")
+        self.assertEqual(ids(self.db1), ids(self.db2))
+        with open(self.db1, "rb") as handle:
+            self.assertEqual(hashlib.sha256(handle.read()).hexdigest(), self.v1_digest)
+        meta1, meta2 = (dict(rows(db, "SELECT key, value FROM meta")) for db in (self.db1, self.db2))
+        self.assertNotEqual(meta1["config_hash"], meta2["config_hash"])
+        self.assertEqual(rows(self.db2, "SELECT DISTINCT prompt_version FROM decisions"), [(2,)])
+        with self.assertRaises(qt.TraderError):                                  # a v2 run cannot be mixed into the v1 base
+            qt.run_practice(MemHistory(), self.db1, ClockedProvider([0.0], entries=hashed_policy), small_cfg2(), HOLDOUT,
+                            blocks=4, log=lambda *a: None, clock=lambda: 0.0)
+
+    def test_v2_trades_close_only_by_qwen_or_the_block_end(self):
+        closed = {r[0] for r in rows(self.db2, "SELECT DISTINCT closed_by FROM trades")}
+        self.assertTrue(closed)
+        self.assertTrue(closed <= {"qwen", "fin_de_bloque"}, closed)
+        self.assertEqual(rows(self.db2, "SELECT COUNT(*) FROM decisions WHERE override='stop' OR override='tiempo'")[0][0], 0)
+        reasons = rows(self.db2, "SELECT reason_json FROM decisions WHERE reason IS NOT NULL LIMIT 5")
+        self.assertTrue(reasons and all(len(json.loads(r[0])["orders"]) == 2 for r in reasons))
+
+    def test_report_shows_v1_against_v2_on_the_same_blocks_plus_the_counterfactual_of_v2(self):
+        text = rep.build_report(self.db2, small_cfg2(), history=MemHistory(), baseline=(self.db1, small_cfg()))
+        self.assertIn("## Versión 1 contra versión 2 (mismos bloques)", text)
+        self.assertIn("v1 · todo", text)
+        self.assertIn("v2 · validación", text)
+        self.assertIn("a) Mantener hasta el fin del bloque (v2 no tiene stop", text)
+        self.assertIn("Esta versión no tiene stop.", text)
+        self.assertIsNone(re.search(r"\bnan\b", text.lower()))
+        alone = rep.build_report(self.db2, small_cfg2(), history=MemHistory())
+        self.assertNotIn("Versión 1 contra", alone)
+
+    def test_export_labels_every_exit_decision_with_the_other_choice(self):
+        out = os.path.join(self.tmp, "d2.jsonl")
+        qt.export_dataset(self.db2, out, small_cfg2())
+        with open(out, encoding="utf-8") as handle:
+            lines = [json.loads(x) for x in handle]
+        pos = [x for x in lines if x["kind"] == "position"]
+        self.assertTrue(pos)
+        self.assertTrue(all(x["exit_labels"] is not None for x in pos))
+        flat = [x for x in lines if x["kind"] == "flat"]
+        self.assertTrue(all(x["exit_labels"] is None for x in flat))
+        for x in pos:
+            lab = x["exit_labels"]
+            self.assertAlmostEqual(lab["close_now_net_bp"], x["net_bp_now"], places=1)
+            self.assertIsNotNone(lab["hold_block_end_net_bp"])
+            for h in ("1h", "4h", "block_end"):
+                if lab["hold_{}_net_bp".format(h)] is not None:
+                    self.assertAlmostEqual(lab["hold_better_{}_bp".format(h)],
+                                           lab["hold_{}_net_bp".format(h)] - lab["close_now_net_bp"], delta=0.02)
+                    self.assertEqual(lab["best_" + h], "MANTENER" if lab["hold_better_{}_bp".format(h)] >= 0 else "CERRAR")
+
+    def test_exit_label_marks_the_hold_from_the_stored_candles_and_uses_a_forced_close_that_came_first(self):
+        start = T0
+        closes = [100.0 + i * 0.01 for i in range(288)]                        # a day of rising closes
+        block = {"start_ms": start, "end_ms": start + DAY, "closes": closes}
+        entry_px = qt.D("100.05")
+        snap = {"side": "LONG", "entry_ms": start + 12 * BAR, "entry_px": str(entry_px), "qty": str(qt.D(100) / entry_px),
+                "trade_no": 1}
+        t_ms = start + 24 * BAR
+        net_now = qt.settle("PF_XBTUSD", qt.Position(side="LONG", entry_ms=snap["entry_ms"], entry_px=entry_px,
+                                                      qty=qt.D(100) / entry_px), closes[23], "strategy_exit", t_ms, None,
+                            qt.D(100))["net_bp"]
+        lab = qt.exit_labels("PF_XBTUSD", snap, t_ms, net_now, block, None, qt.FundingLine(), qt.D(100))
+        self.assertGreater(lab["hold_1h_net_bp"], lab["close_now_net_bp"])
+        self.assertEqual(lab["best_1h"], "MANTENER")
+        hour = (t_ms + qt.HOUR_MS - start) // BAR - 1
+        want = qt.settle("PF_XBTUSD", qt.Position(side="LONG", entry_ms=snap["entry_ms"], entry_px=entry_px,
+                                                   qty=qt.D(100) / entry_px), closes[hour], "strategy_exit",
+                         t_ms + qt.HOUR_MS, None, qt.D(100))["net_bp"]
+        self.assertAlmostEqual(lab["hold_1h_net_bp"], want, places=1)
+        late = qt.exit_labels("PF_XBTUSD", snap, start + 280 * BAR, net_now, block, None, qt.FundingLine(), qt.D(100))
+        self.assertIsNone(late["hold_1h_net_bp"])                              # past the block end: no label
+        self.assertIsNotNone(late["hold_block_end_net_bp"])
+        forced = qt.exit_labels("PF_XBTUSD", snap, t_ms, net_now, block, {"closed_by": "stop", "exit_ms": t_ms + 2 * BAR,
+                                                                          "net_bp": -123.0}, qt.FundingLine(), qt.D(100))
+        self.assertEqual((forced["hold_1h_net_bp"], forced["hold_1h_how"]), (-123.0, "closed_stop"))
+        self.assertEqual(forced["best_block_end"], "CERRAR")
+
+    def test_cli_defaults_to_v2_prints_which_version_runs_and_reports_both(self):
+        for flag, expect in (([], "versión 2"), (["--version", "1"], "versión 1")):
+            out = io.StringIO()
+            with contextlib.redirect_stderr(io.StringIO()), contextlib.redirect_stdout(out):
+                code = qt.main(["practice", "--offline", "--cache-dir", self.tmp, "--db", os.path.join(self.tmp, "x.sqlite"),
+                                "--llama-url", "http://example.com:8088"] + flag)
+            self.assertEqual(code, 2)
+            self.assertIn(expect, out.getvalue())
+        o1, o2 = os.path.join(self.tmp, "i1.md"), os.path.join(self.tmp, "i2.md")
+        real = (qt.DEFAULT_DB, qt.DEFAULT_DB_V2)
+        try:
+            qt.DEFAULT_DB, qt.DEFAULT_DB_V2 = self.db1, self.db2
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                code = qt.main(["report", "--cache-dir", os.path.join(self.tmp, "nocache"), "--out", o1, "--out-v2", o2])
+        finally:
+            qt.DEFAULT_DB, qt.DEFAULT_DB_V2 = real
+        self.assertEqual(code, 0, out.getvalue())
+        with open(o2, encoding="utf-8") as handle:
+            self.assertIn("Versión 1 contra versión 2", handle.read())
+        with open(o1, encoding="utf-8") as handle:
+            self.assertNotIn("Versión 1 contra", handle.read())
 
 
 if __name__ == "__main__":

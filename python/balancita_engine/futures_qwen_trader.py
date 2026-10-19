@@ -62,9 +62,11 @@ STATE_VERSION = "qwen-trader-state.v1"
 DATASET_SCHEMA = "balancita-qwen-trader-dataset.v1"
 ROOT = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", ".."))
 CONFIG_PATH = os.path.join(ROOT, "config", "qwen-trader.json")
+CONFIG_PATH_V2 = os.path.join(ROOT, "config", "qwen-trader-v2.json")
 GATE_CONFIG_PATH = os.path.join(ROOT, "config", "strategy-gate.json")
 DATA_DIR = os.path.join(ROOT, "data", "qwen-trader")
 DEFAULT_DB = os.path.join(DATA_DIR, "practice.sqlite")
+DEFAULT_DB_V2 = os.path.join(DATA_DIR, "practice-v2.sqlite")
 DEFAULT_CACHE = os.path.join(DATA_DIR, "cache")
 DEFAULT_URL = "http://127.0.0.1:{}".format(llm.DEFAULT_LLAMA_PORT)
 
@@ -101,6 +103,15 @@ class DecisionError(Exception):
 
 
 # --------------------------------------------------------------------------- config and identity
+
+
+def version_paths(version):
+    """``(config path, practice database)`` of a trader version. v1 stays exactly where it was; v2 has its own files."""
+    if int(version) == 1:
+        return CONFIG_PATH, DEFAULT_DB
+    if int(version) == 2:
+        return CONFIG_PATH_V2, DEFAULT_DB_V2
+    raise TraderError("versión desconocida: {!r} (1 o 2)".format(version))
 
 
 def load_config(path=None):
@@ -415,6 +426,14 @@ class Trader:
                 return True
         return False
 
+    def _big_move(self):
+        """v2: the price is far (either way) from the entry, in daily volatilities. Only a reason to ask again."""
+        position, k = self.position, self.cfg["wake"].get("position_big_move_sigma_24h")
+        if position is None or not k:
+            return False
+        sigma24 = self._sigma5() * math.sqrt(H24)
+        return sigma24 > 0 and abs(self.c[-1] / position.entry_ref - 1) >= k * sigma24
+
     def _near_stop(self):
         position = self.position
         if position is None or not position.stop_pct:
@@ -436,11 +455,14 @@ class Trader:
         sigma5 = self._sigma5()
         if self._strong_move(sigma5):
             extras.append("movimiento_fuerte")
-        if in_position and self._near_stop():
+        if in_position and "near_stop_share" in wake and self._near_stop():
             extras.append("cerca_del_stop")
         gap = wake["extra_wake_min_gap_min"] * MINUTE_MS
         if extras and (boundary or self.last_call_ms is None or t_ms - self.last_call_ms >= gap):
             reasons += extras
+        if in_position and self._big_move() and (boundary or self.last_call_ms is None or t_ms - self.last_call_ms >=
+                                                  wake["position_big_move_gap_min"] * MINUTE_MS):
+            reasons.append("movimiento_grande_en_posicion")      # v2: informative only, forces nothing
         published = self.funding.published(t_ms - BAR_MS, t_ms)
         if published is not None:
             previous, new = published
@@ -495,6 +517,8 @@ class Trader:
         lines.append("Costo de entrar y salir: ~{} % del tamaño".format(
             es(float(round_trip_cost_bps(self.product)) / 100.0, 2)))
         guard = self.cfg["guardrails"]
+        if self.cfg.get("state_variant", 1) >= 2:
+            return self._state_v2(lines, t_ms, sigma5)
         lines.append("Reglas fijas que no podés cambiar: stop automatico a {} x la volatilidad diaria; cierre obligatorio "
                      "a las {} h; espera de {} min despues de cerrar; tamaño fijo de 100 USD; una sola posicion; "
                      "sin limite de operaciones por dia.".format(es(guard["stop_sigma_24h"], 1),
@@ -510,6 +534,32 @@ class Trader:
                          "stop: {} %. Tiempo hasta el cierre obligatorio: {}.".format(
                              "LARGO" if position.side == "LONG" else "CORTO", _hm((t_ms - position.entry_ms) / MINUTE_MS),
                              es(now["net_bp"] / 100.0, 2, True), es(to_stop * 100, 2), _hm(left / MINUTE_MS)))
+        return "\n".join(lines)
+
+    def _state_v2(self, lines, t_ms, sigma5):
+        """v2 tail of the state: no stop, no time limit; the exit decision gets the after-cost result, the fee logic and the
+        size of the moves to expect. Facts only, no hint about what to choose."""
+        guard, last = self.cfg["guardrails"], self.c[-1]
+        lines.append("Reglas fijas que no podés cambiar: espera de {} min despues de cerrar; tamaño fijo de 100 USD; una sola "
+                     "posicion; sin limite de operaciones por dia. No hay stop ni limite de tiempo: la posicion solo se "
+                     "cierra cuando la cerras.".format(guard["cooldown_min"]))
+        position = self.position
+        if position is None:
+            lines.append("Posicion: ninguna.")
+            return "\n".join(lines)
+        now = settle(self.product, position, last, "strategy_exit", t_ms, self.funding, self.notional)
+        exit_cost = float(fee_rate("taker") * 10_000 + side_impact_bps(self.product)) / 100.0
+        sign = 1.0 if position.side == "LONG" else -1.0
+        captured = sign * (last / position.entry_ref - 1.0) * 100.0
+        lines.append("Posicion: {} abierta hace {}.".format("LARGO" if position.side == "LONG" else "CORTO",
+                                                           _hm((t_ms - position.entry_ms) / MINUTE_MS)))
+        lines.append("Resultado si cerras ahora, ya con todos los costos: {} % ({} USD).".format(
+            es(now["net_bp"] / 100.0, 2, True), es(now["net_bp"] / 100.0 * float(self.notional) / 100.0, 2, True)))
+        lines.append("La comision de entrada ya esta pagada y ya esta en ese resultado; cerrar solo agrega la de salida "
+                     "(~{} % del tamaño).".format(es(exit_cost, 2)))
+        lines.append("Movimiento tipico del precio esperable (segun la volatilidad actual): proxima 1h +-{} % | proximas "
+                     "4h +-{} %. Movimiento a favor de la posicion desde que abriste, sin costos: {} %.".format(
+                         es(sigma5 * math.sqrt(H1) * 100, 2), es(sigma5 * math.sqrt(H4) * 100, 2), es(captured, 2, True)))
         return "\n".join(lines)
 
     # ---- feeding
@@ -546,11 +596,11 @@ class Trader:
                                                                                     (1 - high / ref) * 1e4)
         position.mfe_bp = max(position.mfe_bp, best)
         position.mae_bp = min(position.mae_bp, worst)
-        touched = low <= position.stop_px if long else high >= position.stop_px
+        touched = position.stop_px is not None and (low <= position.stop_px if long else high >= position.stop_px)
         if touched:
             level = min(position.stop_px, open_) if long else max(position.stop_px, open_)
             return self._close(t_ms, level, "stop", "stop", None)
-        if t_ms - position.entry_ms >= position.max_hold_ms:
+        if position.max_hold_ms is not None and t_ms - position.entry_ms >= position.max_hold_ms:
             return self._close(t_ms, self.c[-1], "strategy_exit", "tiempo", None)
         return []
 
@@ -582,14 +632,16 @@ class Trader:
     def _open(self, t_ms, side, probability, reason):
         guard = self.cfg["guardrails"]
         last = self.c[-1]
-        stop_pct = guard["stop_sigma_24h"] * self._sigma5() * math.sqrt(H24)
-        stop_pct = min(guard["max_stop_pct"], max(guard["min_stop_pct"], stop_pct))
+        stop_pct = None                                  # v2: no stop (config guardrails.stop_sigma_24h is null)
+        if guard["stop_sigma_24h"] is not None:
+            stop_pct = guard["stop_sigma_24h"] * self._sigma5() * math.sqrt(H24)
+            stop_pct = min(guard["max_stop_pct"], max(guard["min_stop_pct"], stop_pct))
         entry = entry_fill(D(repr(last)), side, self.product)
         self.trade_seq += 1
         self.position = Position(
             side=side, entry_ms=t_ms, entry_ref=last, entry_px=entry, qty=self.notional / entry,
-            stop_px=last * (1 - stop_pct) if side == "LONG" else last * (1 + stop_pct), stop_pct=stop_pct,
-            max_hold_ms=guard["max_hold_min"] * MINUTE_MS, entry_p=probability, entry_reason=reason,
+            stop_px=None if stop_pct is None else (last * (1 - stop_pct) if side == "LONG" else last * (1 + stop_pct)),
+            stop_pct=stop_pct, max_hold_ms=None if guard["max_hold_min"] is None else guard["max_hold_min"] * MINUTE_MS, entry_p=probability, entry_reason=reason,
             trade_no=self.trade_seq, mfe_bp=0.0, mae_bp=0.0)
 
     def _decide(self, t_ms, reasons):
@@ -626,7 +678,7 @@ class Trader:
         try:
             asked = self.decider.ask(self.key, t_ms, "reason", dict(
                 self.questions["reason"], instruction=self.questions["reason"]["instruction"].replace("{action}", action)),
-                state, single=True)
+                state, single=self.cfg["prompt"].get("reason_orders") != "both")
             event["reason_answer"], reason = asked, asked["chosen"]
         except DecisionError:
             reason = "otro"
@@ -1063,7 +1115,37 @@ def run_practice(history, db_path, provider, cfg, holdout_ms, *, max_minutes=55.
 # --------------------------------------------------------------------------- export
 
 
-def export_dataset(db_path, out_path, cfg=None):
+def exit_labels(product, snapshot, t_ms, net_now, block, trade, funding, notional):
+    """Learning label of one MANTENER / CERRAR decision: what closing now gives against holding, from the candles stored
+    with the block. ``hold_*``: net bp (after costs, funding included when known) if the position were kept to +1 h, +4 h
+    and the block end and closed there; ``None`` when that moment is past the block end. A forced close
+    (v1 stop / 24 h limit) that comes first is used as it happened. ``best_*`` says which choice was the better one."""
+    closes, start, end = block["closes"], block["start_ms"], block["end_ms"]
+
+    def at(moment):
+        index = (moment - start) // BAR_MS - 1
+        if moment <= start or moment > end or index >= len(closes) or index < 0:
+            return None
+        position = Position(side=snapshot["side"], entry_ms=snapshot["entry_ms"], entry_px=D(snapshot["entry_px"]),
+                            qty=D(snapshot["qty"]))
+        return round(settle(product, position, closes[index], "strategy_exit", moment, funding, notional)["net_bp"], 2)
+
+    forced = trade is not None and trade["closed_by"] in ("stop", "tiempo")
+    out = {"close_now_net_bp": None if net_now is None else round(net_now, 2)}
+    for name, moment in (("1h", t_ms + HOUR_MS), ("4h", t_ms + 4 * HOUR_MS), ("block_end", end)):
+        if forced and trade["exit_ms"] <= moment:
+            value, how = round(trade["net_bp"], 2), "closed_" + trade["closed_by"]
+        else:
+            value, how = at(moment), "marked"
+        out["hold_" + name + "_net_bp"] = value
+        out["hold_" + name + "_how"] = how if value is not None else None
+        gain = None if value is None or net_now is None else round(value - net_now, 2)
+        out["hold_better_" + name + "_bp"] = gain
+        out["best_" + name] = None if gain is None else ("MANTENER" if gain >= 0 else "CERRAR")
+    return out
+
+
+def export_dataset(db_path, out_path, cfg=None, cache_dir=None):
     """One JSON line per decision: the STATE exactly as prompted, the answer, the guardrail info and the outcome.
 
     ``source`` is ``practice`` here (``live`` once the live process writes the same rows). The lines are ordered by block
@@ -1073,11 +1155,26 @@ def export_dataset(db_path, out_path, cfg=None):
     try:
         meta = pdb.meta()
         trades = {(r["block_id"], r["trade_no"]): dict(r) for r in pdb.db.execute("SELECT * FROM trades")}
+        blocks = {}
+        for b in pdb.db.execute("SELECT block_id, start_ms, end_ms, closes FROM blocks WHERE status='done'"):
+            closes = array.array("d")
+            closes.frombytes(b["closes"] or b"")
+            blocks[b["block_id"]] = {"start_ms": b["start_ms"], "end_ms": b["end_ms"], "closes": list(closes)}
+        funding, notional = {}, D(cfg["notional_usd"])
         os.makedirs(os.path.dirname(os.path.abspath(out_path)), exist_ok=True)
         count = 0
         with open(out_path, "w", encoding="utf-8") as out:
             for r in pdb.db.execute("SELECT * FROM decisions ORDER BY block_id, seq"):
                 trade = trades.get((r["block_id"], r["trade_no"])) if r["trade_no"] else None
+                snapshot = json.loads(r["position_json"] or "null")
+                label = None
+                if r["kind"] == "position" and snapshot and r["block_id"] in blocks:
+                    if r["product"] not in funding:
+                        rows = History(cache_dir, meta["holdout_ms"], offline=True).funding(r["product"]) \
+                            if cache_dir and meta.get("holdout_ms") else []
+                        funding[r["product"]] = FundingLine(rows)
+                    label = exit_labels(r["product"], snapshot, r["t_ms"], r["net_bp_now"], blocks[r["block_id"]],
+                                        trades.get((r["block_id"], snapshot["trade_no"])), funding[r["product"]], notional)
                 line = {
                     "schema": DATASET_SCHEMA, "source": "practice", "fold": r["fold"], "block_id": r["block_id"],
                     "seq": r["seq"], "product": r["product"], "t_ms": r["t_ms"], "kind": r["kind"],
@@ -1088,7 +1185,7 @@ def export_dataset(db_path, out_path, cfg=None):
                     "guardrail": {"override": r["override"], "forced": r["kind"] == "guardrail"},
                     "reason": r["reason"], "reason_probabilities": (json.loads(r["reason_json"] or "null") or {}).get(
                         "probabilities"),
-                    "position": json.loads(r["position_json"] or "null"), "net_bp_now": r["net_bp_now"],
+                    "position": snapshot, "net_bp_now": r["net_bp_now"], "exit_labels": label,
                     "outcome": json.loads(r["outcome_json"] or "null"),
                     "trade": None if trade is None else {k: trade[k] for k in (
                         "side", "entry_ms", "exit_ms", "net_bp", "gross_bp", "funding_bp", "closed_by", "hold_min",
@@ -1116,9 +1213,13 @@ def _parser():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest="command", required=True)
 
-    def common(p):
-        p.add_argument("--config", default=CONFIG_PATH)
-        p.add_argument("--db", default=DEFAULT_DB, help="practice database (default %(default)s)")
+    def common(p, version_default="2", versions=("1", "2")):
+        p.add_argument("--version", default=version_default, choices=versions,
+                       help="trader version (default %(default)s): 1 = stop + 24 h limit, 2 = only Qwen (or the block end) "
+                            "closes; each has its own config and practice database")
+        p.add_argument("--config", default=None, help="default: the config of the version")
+        p.add_argument("--db", default=None, help="practice database (default: practice.sqlite for v1, practice-v2.sqlite "
+                                                  "for v2, in data/qwen-trader)")
         p.add_argument("--cache-dir", default=DEFAULT_CACHE, help="candle and funding cache (default %(default)s)")
 
     pf = sub.add_parser("prefetch", help="download and cache the public candles and funding of the plan's blocks")
@@ -1133,8 +1234,9 @@ def _parser():
     pr.add_argument("--seed", type=int, default=None)
     pr.add_argument("--offline", action="store_true", help="use only the local cache: no Kraken request at all")
     rp = sub.add_parser("report", help="Spanish markdown report (no model)")
-    common(rp)
-    rp.add_argument("--out", default=os.path.join(DATA_DIR, "informe.md"))
+    common(rp, "all", ("1", "2", "all"))
+    rp.add_argument("--out", default=os.path.join(DATA_DIR, "informe.md"), help="report of v1")
+    rp.add_argument("--out-v2", default=os.path.join(DATA_DIR, "informe-v2.md"), help="report of v2 (with v1 vs v2)")
     ex = sub.add_parser("export", help="learning data: one JSON line per decision")
     common(ex)
     ex.add_argument("--out", default=os.path.join(DATA_DIR, "dataset.jsonl"))
@@ -1144,7 +1246,11 @@ def _parser():
 def main(argv=None):
     args = _parser().parse_args(argv)
     try:
-        cfg = load_config(args.config)
+        if args.command != "report":
+            config_path, default_db = version_paths(args.version)
+            args.config, args.db = args.config or config_path, args.db or default_db
+            print("Qwen operador: versión {} (config {}, base {})".format(args.version, args.config, args.db))
+        cfg = load_config(args.config) if args.command != "report" else None
         holdout_ms = load_holdout_ms()
         if args.command in ("prefetch", "practice"):
             history = History(args.cache_dir, holdout_ms, offline=getattr(args, "offline", False))
@@ -1164,13 +1270,33 @@ def main(argv=None):
                              blocks=args.blocks)
         elif args.command == "report":
             from .futures_qwen_trader_report import build_report
-            text = build_report(args.db, cfg, args.cache_dir)
-            os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
-            with open(args.out, "w", encoding="utf-8") as handle:
-                handle.write(text)
-            print("informe escrito en " + args.out)
+            wanted = ("1", "2") if args.version == "all" else (args.version,)
+            paths = {v: version_paths(v) for v in wanted}
+            if args.db and len(wanted) == 1:
+                paths[wanted[0]] = (paths[wanted[0]][0], args.db)
+            base = None
+            if "1" in wanted and "2" in wanted and os.path.exists(paths["1"][1]) and os.path.exists(paths["2"][1]):
+                base = (paths["1"][1], load_config(paths["1"][0]))
+            written = 0
+            for v in wanted:
+                config_path, db = paths[v]
+                if not os.path.exists(db):
+                    if args.version == "all":
+                        print("versión {}: no hay base ({}); se omite".format(v, db))
+                        continue
+                    raise TraderError("no existe la base de la versión {}: {}".format(v, db))
+                text = build_report(db, load_config(args.config or config_path), args.cache_dir,
+                                    baseline=base if v == "2" else None)
+                out = args.out if v == "1" else args.out_v2
+                os.makedirs(os.path.dirname(os.path.abspath(out)), exist_ok=True)
+                with open(out, "w", encoding="utf-8") as handle:
+                    handle.write(text)
+                print("informe de la versión {} escrito en {}".format(v, out))
+                written += 1
+            if not written:
+                raise TraderError("no hay ninguna base de práctica que informar (ejecutá `practice` primero)")
         else:
-            print("{} decisiones escritas en {}".format(export_dataset(args.db, args.out, cfg), args.out))
+            print("{} decisiones escritas en {}".format(export_dataset(args.db, args.out, cfg, args.cache_dir), args.out))
         return 0
     except (TraderError, HistoryError, ValueError) as error:
         print("error: {}".format(error), file=sys.stderr)

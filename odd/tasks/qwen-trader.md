@@ -60,6 +60,18 @@ Also `fold` and `source` (`practice` now, `live` when the live process writes th
 
 How it feeds a future offline LoRA fine-tune (no training code in this PR): each cycle exports `practice` + `live` rows; the supervised target of a flat row is the best of {LARGO, CORTO, ESPERAR} by its 60-minute net (ESPERAR = 0) and of a position row MANTENER / CERRAR by `hold_better_bp`, optionally weighted by the size of the difference so that near-ties teach little; the prompt is `state_text` plus the question of that prompt version, so a new training set is tied to `prompt_version`. Train only on the `calibration` fold and on live rows older than the evaluation window; the `validation` fold and later live data stay out and judge the new adapter with the same report (and the holdout is touched only by the strategy-gate exam, once). The adapter is a new model reference, never an in-place update, and a new `config_hash` makes the practice DB start from scratch.
 
+## Version 2 (owner decision, 2026-10-19): only Qwen exits
+
+First real v1 practice (Qwen3-4B, 11 of 60 blocks, 28 trades): 26 of 28 trades closed by Qwen with reason `sin_ventaja`, 0 % win, mean -0.32 %, about 2 h holding; the 2 trades closed at the block end were the winners; the reason call was degenerate (always `tendencia` on entry, `sin_ventaja` on exit). "Qwen tiene que lograr decidir bien cuando salir, no que alguien salga por él": v2 removes the safety nets to test that.
+
+- Files: `config/qwen-trader-v2.json` (version 2, `prompt.version` 2) and `data/qwen-trader/practice-v2.sqlite`. v1 (`config/qwen-trader.json`, `practice.sqlite`) is untouched and stays reproducible (its config hash is pinned in the tests). Same `practice` section (seed, period, block days, bins), so v2 plays the SAME seeded blocks as v1; the candle cache is shared.
+- No stop and no 24 h limit (`guardrails.stop_sigma_24h` and `max_hold_min` are `null`). A position closes only by Qwen's CERRAR or, in the practice, at the block end (`closed_by = fin_de_bloque`, not a Qwen decision). Kept: 15 min cooldown after a close, fixed 100 USD, one position per product. The `cerca_del_stop` wake is gone; `movimiento_grande_en_posicion` wakes Qwen (at most once an hour between the 15 min boundaries) when the price is at least one daily volatility away from the entry, in either direction. It only asks; nothing is forced.
+- Exit information (state text, facts only): result if closing now after all costs (% and USD), a note that the entry fee is already paid and in that result and that closing only adds the exit fee, time open, typical move over the next 1 h / 4 h from the current volatility (`sigma5 * sqrt(bars)`) and the move already made in the position's favour (gross). The position question says the same and that there is no stop or time limit.
+- Reason call: asked in two option orders (`prompt.reason_orders = "both"`, 7 options rotated by 4, so no option keeps its letter), both stored, probabilities averaged. If it is still degenerate the report says so ("motivo degenerado", more than 90 % the same option); nothing more is done about it.
+- CLI: `practice --version 2` is the default and prints which version runs; `--version 1` still works. `report` (default `--version all`) writes `informe.md` (v1) and `informe-v2.md` (v2, with a v1 vs v2 section over the blocks both finished, plus the counterfactual-exit section: with no stop the "guardrails only" case is "hold to the block end"). `export --version 2` adds `exit_labels` to every MANTENER / CERRAR line: `close_now_net_bp`, `hold_1h/4h/block_end_net_bp` (marked from the stored block candles, funding included when the cache is given by `--cache-dir`; a v1 stop / 24 h close that came first is used as it happened; `null` past the block end), `hold_better_*_bp` and `best_*` (`MANTENER` or `CERRAR`), so exits can be trained later from either choice.
+
+Report-only additions (also for v1 databases, no model calls): counterfactual exits ("¿Qué habría pasado si no cerraba?": guardrails only / 4 h / 8 h / 24 h; the block-end rule never reads past the block, fixed horizons may cross it but never reach the holdout), entry quality (gross move at 4 h / 24 h against the round-trip cost), reason diversity and letter bias, and measured latency with the estimated remaining batches.
+
 ## Constraints
 
 - No network except the loopback llama-server and Kraken's public candle / funding endpoints through the existing cache (`futures_history`). No credentials, no orders.
@@ -72,5 +84,6 @@ How it feeds a future offline LoRA fine-tune (no training code in this PR): each
 - [x] Report with predeclared verdict rules and baselines.
 - [x] Export of learning data.
 - [x] Tests: `PYTHONPATH=python:python/tests python3 -m unittest test_futures_qwen_trader` (fake llama provider).
+- [x] v2 (no stop, no limit, richer exit state, two-order reason, v1 vs v2 report, exit labels).
 - [ ] Mac: `prefetch`, `practice` in 55-minute batches until the 60 blocks are done, `report`; note the verdict and the measured seconds per call here.
 - [ ] Next PR: live process (same `Trader`), switch off Q and C31, paper accounting, `source = live` rows.

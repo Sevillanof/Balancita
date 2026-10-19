@@ -261,6 +261,8 @@ HORIZONS_H = (4, 8, 24)
 SCENARIOS = (("guardrails", "a) Solo los límites automáticos (stop o 24 h, o fin del bloque)"),
              ("h4", "b) Mantener 4 h (o hasta el stop)"), ("h8", "c) Mantener 8 h (o hasta el stop)"),
              ("h24", "d) Mantener 24 h (o hasta el stop)"))
+SCENARIOS_V2 = (("guardrails", "a) Mantener hasta el fin del bloque (v2 no tiene stop ni límite de 24 h)"),
+                ("h4", "b) Mantener 4 h"), ("h8", "c) Mantener 8 h"), ("h24", "d) Mantener 24 h"))
 DEGENERATE_SHARE = 0.9
 MIN_DIVERSITY_N = 10
 _EPS_BP = 1e-9
@@ -289,7 +291,7 @@ def _stop_pct(cfg, bars_before):
 
 def hold_outcome(cfg, trade, bars, funding, *, horizon_ms, limit_ms):
     """Net result if ``trade`` had been held instead of closed by Qwen: until the stop is touched, ``horizon_ms`` passed, or
-    ``limit_ms`` (block end for rule (a)). ``bars``: gap-filled 5m candles that include the 289 before the entry. Returns
+    ``limit_ms`` (block end for rule (a)); ``horizon_ms=None``: no time limit (v2). ``bars``: gap-filled 5m candles that include the 289 before the entry. Returns
     ``{net_bp, gross_bp, closed_by, exit_ms}`` or ``None`` when the candles do not cover the path."""
     entry_ms = trade["entry_ms"]
     before = [b for b in bars if b["bucket_start"] < entry_ms]
@@ -299,8 +301,10 @@ def hold_outcome(cfg, trade, bars, funding, *, horizon_ms, limit_ms):
     side = trade["side"]
     long = side == "LONG"
     ref = float(before[-1]["close"])
-    stop_pct = _stop_pct(cfg, before)
-    stop_px = ref * (1 - stop_pct) if long else ref * (1 + stop_pct)
+    stop_px = None                                  # v2 has no stop: only the horizon / block end close the path
+    if cfg["guardrails"]["stop_sigma_24h"] is not None:
+        stop_pct = _stop_pct(cfg, before)
+        stop_px = ref * (1 - stop_pct) if long else ref * (1 + stop_pct)
     notional = qt.D(cfg["notional_usd"])
     entry = entry_fill(qt.D(repr(ref)), side, trade["product"])
     position = qt.Position(side=side, entry_ms=entry_ms, entry_px=entry, qty=notional / entry)
@@ -311,11 +315,11 @@ def hold_outcome(cfg, trade, bars, funding, *, horizon_ms, limit_ms):
         expected += qt.BAR_MS
         t_ms = bar["bucket_start"] + qt.BAR_MS
         high, low, open_, close = (float(bar[k]) for k in ("high", "low", "open", "close"))
-        if (low <= stop_px) if long else (high >= stop_px):
+        if stop_px is not None and ((low <= stop_px) if long else (high >= stop_px)):
             level = min(stop_px, open_) if long else max(stop_px, open_)
             how, price, reason = "stop", level, "stop"
-        elif t_ms - entry_ms >= horizon_ms or t_ms == limit_ms:
-            how = "tiempo" if t_ms - entry_ms >= horizon_ms else "fin_de_bloque"
+        elif (horizon_ms is not None and t_ms - entry_ms >= horizon_ms) or t_ms == limit_ms:
+            how = "tiempo" if horizon_ms is not None and t_ms - entry_ms >= horizon_ms else "fin_de_bloque"
             price, reason = close, "strategy_exit"
         else:
             continue
@@ -342,13 +346,15 @@ def counterfactuals(data, cfg, history):
         if t["product"] not in funding_cache:
             funding_cache[t["product"]] = qt.FundingLine(history.funding(t["product"]))
         funding = funding_cache[t["product"]]
-        reach = min(t["entry_ms"] + qt.DAY_MS, holdout)
+        max_hold = cfg["guardrails"]["max_hold_min"]
+        reach = min(t["entry_ms"] + qt.DAY_MS if max_hold is not None else max(t["entry_ms"] + qt.DAY_MS, block["end_ms"]),
+                    holdout)
         try:
             bars = history.bars(t["product"], t["entry_ms"] - (qt.H24 + 1) * qt.BAR_MS, reach)
         except (qt.HoldoutError, qt.HistoryError):
             bars = []
         out = {}
-        out["guardrails"] = hold_outcome(cfg, t, bars, funding, horizon_ms=cfg["guardrails"]["max_hold_min"] * qt.MINUTE_MS,
+        out["guardrails"] = hold_outcome(cfg, t, bars, funding, horizon_ms=None if max_hold is None else max_hold * qt.MINUTE_MS,
                                          limit_ms=min(block["end_ms"], holdout))
         for hours in HORIZONS_H:
             end = t["entry_ms"] + hours * qt.HOUR_MS
@@ -407,12 +413,12 @@ def counterfactual_summary(rows, scenario, product=None, fold=None):
             "diff_bp": sum(b - a for a, b in zip(real, cf)), "total": len(_pick(rows, product, fold))}
 
 
-def counterfactual_sentence(rows):
+def counterfactual_sentence(rows, no_stop=False):
     """One plain sentence from the numbers (all trades Qwen closed)."""
     if not rows:
         return "Qwen no cerró ninguna operación todavía: no hay nada que comparar."
     parts, ok = [], False
-    for scenario, text in (("guardrails", "dejar correr hasta los límites automáticos"), ("h4", "mantener 4 h"),
+    for scenario, text in (("guardrails", "dejar correr hasta el fin del bloque" if no_stop else "dejar correr hasta los límites automáticos"), ("h4", "mantener 4 h"),
                            ("h8", "mantener 8 h"), ("h24", "mantener 24 h")):
         s = counterfactual_summary(rows, scenario)
         if not s["n"]:
@@ -433,13 +439,14 @@ def counterfactual_sentence(rows):
         first, "; en los otros casos " + ", ".join(rest) if rest else "", n)
 
 
-def counterfactual_lines(rows, products):
+def counterfactual_lines(rows, products, cfg=None):
+    no_stop = cfg is not None and cfg["guardrails"]["stop_sigma_24h"] is None
     lines = ["## ¿Qué habría pasado si no cerraba?", "",
              "Para cada operación que cerró Qwen se recalcula, con el mismo simulador, costos y funding, qué habría ocurrido "
              "si la hubiera dejado abierta. **Diferencia** = lo que habría dado dejarla menos lo que dio cerrarla: un número "
              "positivo significa que cerrar costó dinero. «Qwen mejor / peor» cuenta las operaciones donde cerrar fue mejor o "
-             "peor que seguir.", "", counterfactual_sentence(rows), ""]
-    for scenario, title in SCENARIOS:
+             "peor que seguir.", "", counterfactual_sentence(rows, no_stop), ""]
+    for scenario, title in (SCENARIOS_V2 if no_stop else SCENARIOS):
         table = []
         for label, product, fold in _groups(products):
             s = counterfactual_summary(rows, scenario, product, fold)
@@ -456,7 +463,8 @@ def counterfactual_lines(rows, products):
     lines += ["_Notas: se usan solo velas cerradas. La opción a) no pasa del final del bloque (la operación se cierra al último "
               "precio, como en la práctica). Los horizontes fijos pueden pasar del fin del bloque usando las velas siguientes "
               "de la caché, pero solo si terminan antes de la fecha de reserva (holdout); si no, la operación no cuenta "
-              "(«n de total»). En todos los casos sigue activo el stop de la práctica. No se llamó al modelo._", ""]
+              "(«n de total»). {} No se llamó al modelo._".format(
+                  "Esta versión no tiene stop." if no_stop else "En todos los casos sigue activo el stop de la práctica."), ""]
     return lines
 
 
@@ -510,6 +518,7 @@ def reason_diversity(decisions):
     positions of the action question in both option orders."""
     reasons = {"Entrada": collections.Counter(), "Cierre de Qwen": collections.Counter()}
     letters = {"Entrada": collections.Counter(), "Cierre de Qwen": collections.Counter()}
+    letters2 = {"Entrada": collections.Counter(), "Cierre de Qwen": collections.Counter()}
     for d in decisions:
         if not d["reason"] or d["action"] not in ("LARGO", "CORTO", "CERRAR"):
             continue
@@ -517,10 +526,14 @@ def reason_diversity(decisions):
         reasons[kind][d["reason"]] += 1
         try:
             answer = json.loads(d["reason_json"]) if d.get("reason_json") else None
-            order = (answer or {}).get("orders", [{}])[0].get("order")
+            orders = (answer or {}).get("orders") or [{}]
+            order = orders[0].get("order")
+            second = orders[1].get("order") if len(orders) > 1 else None
         except (ValueError, AttributeError, IndexError):
-            order = None
+            order = second = None
         letters[kind][_letter(order, d["reason"]) or "?"] += 1
+        if second:
+            letters2[kind][_letter(second, d["reason"]) or "?"] += 1
     action_letters = collections.defaultdict(lambda: {"n": 0, "same_letter": 0, "same_option": 0,
                                                        "letters": [collections.Counter(), collections.Counter()]})
     for d in decisions:
@@ -538,14 +551,15 @@ def reason_diversity(decisions):
         row["same_option"] += int(picks[0][0] == picks[1][0])
         for i in (0, 1):
             row["letters"][i][picks[i][1] or "?"] += 1
-    return {"reasons": reasons, "letters": letters, "action": action_letters}
+    return {"reasons": reasons, "letters": letters, "letters2": letters2, "action": action_letters}
 
 
 def reason_diversity_lines(decisions):
     div = reason_diversity(decisions)
     lines = ["## ¿Elige motivos distintos o siempre el mismo?", "",
              "Si Qwen contesta casi siempre lo mismo (más del {} %), la pregunta del motivo no aporta información: se marca "
-             "«motivo degenerado». El motivo se pregunta en un solo orden, así que cada opción tiene siempre la misma letra."
+             "«motivo degenerado». Si el motivo se pregunta en un solo orden (v1) cada opción tiene siempre la misma letra; en la "
+             "v2 se pregunta en dos órdenes distintos y se promedian."
              .format(_es(DEGENERATE_SHARE * 100, 0)), ""]
     table, flags = [], []
     for kind in ("Entrada", "Cierre de Qwen"):
@@ -558,6 +572,8 @@ def reason_diversity_lines(decisions):
         share = top_n / total
         degenerate = share > DEGENERATE_SHARE and total >= MIN_DIVERSITY_N
         letter = div["letters"][kind].most_common(1)[0][0]
+        if div["letters2"][kind]:
+            letter = "{} y {} en los dos órdenes".format(letter, div["letters2"][kind].most_common(1)[0][0])
         spread = ", ".join("{} {}".format(r.replace("_", " "), n) for r, n in counter.most_common())
         table.append([kind, total, top.replace("_", " "), "{} (letra {})".format(_share(share), letter), spread,
                       "**motivo degenerado**" if degenerate else ("pocos datos" if total < MIN_DIVERSITY_N else "variado")])
@@ -692,15 +708,54 @@ def _points(r, sel, ov, coverage_text, cal_s):
     return points[:5]
 
 
-def build_report(db_path, cfg, cache_dir=None, history=None):
+def build_report(db_path, cfg, cache_dir=None, history=None, baseline=None):
     """``cache_dir``: the prefetch cache (default ``qt.DEFAULT_CACHE``), read-only, for the counterfactual sections."""
     data = load(db_path)
     if history is None:
         history = ReadOnlyHistory(cache_dir or qt.DEFAULT_CACHE, _holdout_of(data["meta"]))
-    return render(data, cfg, history)
+    other = None
+    if baseline is not None:
+        other = (load(baseline[0]), baseline[1])
+    return render(data, cfg, history, other)
 
 
-def render(data, cfg, history=None):
+def version_comparison_lines(data, cfg, other_data, other_cfg):
+    """v1 against this version on the blocks both practiced (same seed, so the same blocks). All trades of the practice
+    (entry threshold of the practice), before choosing any threshold: the fairest like-for-like."""
+    common = set(data["blocks"]) & set(other_data["blocks"])
+    lines = ["## Versión 1 contra versión {} (mismos bloques)".format(cfg.get("version", 2)), "",
+             "Solo los {} bloques que hicieron las dos versiones (misma semilla, mismo periodo). Todas las operaciones de la "
+             "práctica, sin elegir umbral. v1 tiene stop y límite de 24 h; v{} solo cierra Qwen (o el fin del bloque).".format(
+                 len(common), cfg.get("version", 2)), ""]
+    if not common:
+        return lines + ["Todavía no hay bloques en común.", ""]
+    days = sum((data["blocks"][b]["end_ms"] - data["blocks"][b]["start_ms"]) / qt.DAY_MS for b in common)
+    table = []
+    for label, source in (("v1", other_data), ("v{}".format(cfg.get("version", 2)), data)):
+        for fold, fold_label in ((None, "todo"), ("calibration", "calibración"), ("validation", "validación")):
+            trades = [t for t in source["trades"] if t["block_id"] in common and (fold is None or t["fold"] == fold)]
+            s = stats_row(trades, days)
+            if not s["n"]:
+                table.append(["{} · {}".format(label, fold_label), 0] + ["n/d"] * 7)
+                continue
+            c = s["closed"]
+            table.append(["{} · {}".format(label, fold_label), s["n"], _share(s["hit_rate"]), _pct_bp(s["mean_bp"], 2, True),
+                          _usd(s["total_bp"]), _hm(s["avg_hold_min"]), _share(c["qwen"]),
+                          _share(c["stop"] + c["tiempo"]), _share(c["fin_de_bloque"])])
+    lines += _table(["Versión · tramo", "Operaciones", "Acierto", "Promedio por operación", "Resultado total",
+                     "Duración media", "Cerró Qwen", "Cerró stop o 24 h", "Cerró el fin del bloque"], table) + [""]
+    a = [t for t in other_data["trades"] if t["block_id"] in common]
+    b = [t for t in data["trades"] if t["block_id"] in common]
+    if a and b:
+        ma, mb = statistics.fmean(t["net_bp"] for t in a), statistics.fmean(t["net_bp"] for t in b)
+        lines += ["En esos bloques la v{} {} en promedio {} por operación frente a {} de la v1 (diferencia {}). Con tan pocas "
+                  "operaciones es una pista, no una conclusión.".format(
+                      cfg.get("version", 2), "ganó" if mb > 0 else "perdió", _pct_bp(abs(mb)), _pct_bp(ma, 2, True),
+                      _pct_bp(mb - ma, 2, True)), ""]
+    return lines
+
+
+def render(data, cfg, history=None, other=None):
     rules = cfg["rules"]
     blocks, meta, trades = data["blocks"], data["meta"], data["trades"]
     products = cfg["products"]
@@ -724,6 +779,8 @@ def render(data, cfg, history=None):
                  qt.SCHEMA, cfg["prompt"]["name"], cfg["prompt"]["version"],
                  qt.stamp(meta["holdout_ms"]) if meta.get("holdout_ms") else "corte"), "", _verdict_line(r, rules), ""]
     lines += ["### En pocas palabras", ""] + ["- " + p for p in _points(r, sel, ov, coverage_text, None)] + [""]
+    if other is not None:
+        lines += version_comparison_lines(data, cfg, other[0], other[1])
     lines += ["## Qué revisamos", "",
               "Reglas fijadas antes de mirar resultados y aplicadas solo al tramo de validación (el 40 % más nuevo de los "
               "bloques). Para pasar hay que cumplir **todas**.", ""]
@@ -805,7 +862,7 @@ def render(data, cfg, history=None):
     lines += _table(["Cuándo", "Motivo", "Operaciones", "Acierto", "Promedio por operación", "Resultado total"], rr) \
         if rr else ["Sin operaciones."]
 
-    lines += [""] + counterfactual_lines(counterfactuals(dict(data, trades=chosen), cfg, history), products)
+    lines += [""] + counterfactual_lines(counterfactuals(dict(data, trades=chosen), cfg, history), products, cfg)
     lines += entry_quality_lines(entry_moves(dict(data, trades=chosen), history), products)
     lines += reason_diversity_lines(data["decisions"])
     lines += throughput_lines(data, cfg)
