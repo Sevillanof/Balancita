@@ -14,7 +14,8 @@ Nothing here is a strategy, an indicator or a financial rule. It only wires the 
   re-derived from source rows that the older checkpoint will read again; every event has a deterministic id, so a repeat is a
   ``duplicate_event`` for the runner and a ``duplicate`` for the evaluator, never a second effect;
 * funding has two separate channels that share nothing: ``fundpct`` rows feed the evaluator's percentile line (the signal's
-  input) and ``accrual`` rows reach the runner as ``funding`` events (the accounting of open positions).
+  input) and the capture's funding responses reach the runner, through the adapter, as ``funding`` events (the accounting of
+  open positions).
 
 No wall clock, no network, no process: the caller decides when to ``step``. ``FaultInjected`` exists only so the tests can
 kill the "process" at a named point.
@@ -41,7 +42,6 @@ AUDIT_SCHEMA = "balancita-paper-live-audit.v1"
 SESSION_FILE, CHECKPOINT_FILE = "session.json", "session-checkpoint.json"
 EVALUATOR_FILE, AUDIT_FILE, RUNNER_DIR = "evaluator.jsonl", "audit.jsonl", "runner"
 GENESIS = "0" * 64
-FUNDING_SOURCE = "synthetic-funding"
 HOUR_MS = 3_600_000
 FUNDING_RANK = 0                         # a funding event goes before a market event at the same instant (as in the replay)
 POINTS = ("after_poll", "before_handle", "input_logged", "after_evaluation", "after_runner", "after_audit", "after_runner_checkpoint",
@@ -143,13 +143,9 @@ class AuditJournal(object):
 
 # ------------------------------------------------------------------------------------------------ funding channels
 class FundingSource(object):
-    """The two separate funding channels of a synthetic source, each with its own table and cursor.
-
-    * ``synthetic_fundpct(product_id, start_ms, rate, arrival_ms)``: the hourly rates the evaluator's percentile line uses.
-    * ``synthetic_accrual(product_id, start_ms, end_ms, rate, arrival_ms)``: the funding periods the runner applies to open
-      positions through its existing accounting (``funding`` events).
-
-    They are never joined, never derived from each other and never share a cursor: changing one cannot change the other."""
+    """The signal channel of the source: ``synthetic_fundpct(product_id, start_ms, rate, arrival_ms)``, the hourly rates the
+    evaluator's percentile line uses. The accounting channel is ``ObservedFundingSource``; the two are never joined, never derived
+    from each other and never share a cursor."""
 
     def __init__(self, path):
         self.db = sqlite3.connect("file:{}?mode=ro".format(path), uri=True)
@@ -164,13 +160,7 @@ class FundingSource(object):
             "SELECT rowid AS rid, product_id, start_ms, rate, arrival_ms FROM synthetic_fundpct WHERE rowid>? ORDER BY rowid LIMIT ?",
             (after, limit))]
 
-    def accrual(self, after, limit=5000):
-        return [dict(r) for r in self.db.execute(
-            "SELECT rowid AS rid, product_id, start_ms, end_ms, rate, arrival_ms FROM synthetic_accrual WHERE rowid>? ORDER BY rowid LIMIT ?",
-            (after, limit))]
 
-
-SYNTHETIC_FUNDING = "synthetic"
 OBSERVED_FUNDING = "observed"
 
 
@@ -188,9 +178,6 @@ class ObservedFundingSource(FundingSource):
         if self.db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='synthetic_fundpct'").fetchone() is None:
             return []
         return FundingSource.fundpct(self, after, limit)
-
-    def accrual(self, after, limit=5000):
-        raise IntegrationError("observed_funding_has_no_synthetic_accrual", "the accounting channel is the capture's responses")
 
     def responses(self, after, limit=200):
         out = []
@@ -211,11 +198,6 @@ class ObservedFundingSource(FundingSource):
             return None
         body = json.loads(row["normalized_json"])
         return (Decimal(str(body["bid"])) + Decimal(str(body["ask"]))) / 2
-
-
-def accrual_event(row):
-    return make_event("funding", {"product_id": row["product_id"], "periods": [[row["start_ms"], row["end_ms"], row["rate"]]]},
-                      t_ms=row["arrival_ms"], source=FUNDING_SOURCE, stream="funding:" + row["product_id"])
 
 
 # ------------------------------------------------------------------------------------------------ the policy for stale sources
@@ -261,11 +243,11 @@ def _session_config(runner_config, max_quote_gap_ms, block_stale_entries):
 
 
 def _funding_source(path, funding_mode):
-    return ObservedFundingSource(path) if funding_mode == OBSERVED_FUNDING else FundingSource(path)
+    return ObservedFundingSource(path)
 
 
 def _check_funding_options(funding_mode, on_funding_divergence):
-    if funding_mode not in (SYNTHETIC_FUNDING, OBSERVED_FUNDING):
+    if funding_mode != OBSERVED_FUNDING:
         raise IntegrationError("config_incompatible", "funding_mode")
     if on_funding_divergence not in ("alert", "halt"):
         raise IntegrationError("config_incompatible", "on_funding_divergence")
@@ -281,7 +263,7 @@ class LiveSession(object):
         self.identity, self.max_quote_gap_ms = identity, int(max_quote_gap_ms)
         self.cursors = {"fundpct": 0, "accrual": 0}
         self.funding_mode, self.on_funding_divergence = funding_mode, on_funding_divergence
-        self.book = FundingBook() if funding_mode == OBSERVED_FUNDING else None       # what the adapter accepted (durable)
+        self.book = FundingBook()       # what the adapter accepted (durable)
         self.fault = None
         self.stopped = None                           # the runner's answer once the operator stopped the session (D-186-1)
         self.halted = None                            # why this instance stopped: set by a step that failed before its checkpoint
@@ -299,8 +281,7 @@ class LiveSession(object):
                 "runner_manifest_hash": first_runner_entry["data"]["manifest_hash"],
                 "runner_start_hash": first_runner_entry["hash"],
                 "funding_channels": {"fundpct": "synthetic_fundpct",
-                                     "accrual": "synthetic_accrual" if funding_mode == SYNTHETIC_FUNDING
-                                     else "paper_futures_funding_responses"}}
+                                     "accrual": "paper_futures_funding_responses"}}
         return dict(body, session_id=stable_hash(body)[:20])
 
     @classmethod
@@ -405,8 +386,7 @@ class LiveSession(object):
                       _funding_source(source_path, funding_mode), stored, max_quote_gap_ms=max_quote_gap_ms,
                       funding_mode=funding_mode, on_funding_divergence=on_funding_divergence)
         session.cursors = dict(checkpoint["cursors"])
-        if funding_mode == OBSERVED_FUNDING:
-            session.book = FundingBook.from_state(checkpoint["funding_book"])
+        session.book = FundingBook.from_state(checkpoint["funding_book"])
         # the previous quote of a product is the last one the runner received, so a hole that was open when the process died is
         # still seen when the quote that ends it is delivered again (journal time: the clock a source loss is measured in)
         session.last_quote = {product: max(runner.quote_t_ms.get(product, 0), runner.executor.last_quote_ms.get(product, 0))
@@ -465,14 +445,7 @@ class LiveSession(object):
                 break
             self.cursors["fundpct"] = row["rid"]
             items.append((row["arrival_ms"], FUNDING_RANK, "fundpct", row))
-        if self.funding_mode == OBSERVED_FUNDING:
-            items += self._observed_accrual(upto_ms)
-            return items
-        for row in self.funding.accrual(self.cursors["accrual"]):
-            if row["arrival_ms"] > upto_ms:
-                break
-            self.cursors["accrual"] = row["rid"]
-            items.append((row["arrival_ms"], FUNDING_RANK, "accrual", row))
+        items += self._observed_accrual(upto_ms)
         return items
 
     def _observed_accrual(self, upto_ms):
@@ -507,9 +480,7 @@ class LiveSession(object):
 
     def funding_divergence(self):
         """Differences between what the adapter accepted (``missing``, ``extra``, ``rate_differs``, as in ``compare_with_portfolio``)
-        and the funding the runner's portfolio holds as known. Empty lists mean they agree; ``{}`` outside the observed mode."""
-        if self.book is None:
-            return {}
+        and the funding the runner's portfolio holds as known. Empty lists mean they agree."""
         return compare_with_portfolio(self.book, self.runner.portfolio.funding)
 
     def _check_funding_book(self):
@@ -535,8 +506,6 @@ class LiveSession(object):
     def funding_report(self):
         """What a reader may say about the net result (#184): ``pnl_verified`` is False while any trade lacks complete funding,
         is disputed by a quarantined period, or the book and the portfolio disagree; it is never inferred from a missing hour."""
-        if self.book is None:
-            return {"mode": SYNTHETIC_FUNDING}
         portfolio = self.runner.portfolio
         diverged = self.funding_divergence()
         incomplete = sorted(t["trade_id"] for t in portfolio.trades if not t["net_complete"])
@@ -572,10 +541,6 @@ class LiveSession(object):
             item = self._not_before_runner_clock(item)
             self._open_holes(item["t_ms"])
             self._handle(item)
-            return
-        if kind == "accrual":                               # the accounting only: never the signal's input
-            self._open_holes(item["arrival_ms"])
-            self._handle(accrual_event(item))
             return
         event = item
         self._open_holes(event["t_ms"])
@@ -815,8 +780,7 @@ class LiveSession(object):
                 "evaluator": {"entries": len(self.evaluator.log.entries), "head": self.evaluator.log.head},
                 "audit": {"entries": len(self.audit.entries), "head": self.audit.head},
                 "cursors": dict(self.cursors), "ingestor": self.ingestor.checkpoint()}
-        if self.book is not None:
-            body["funding_book"] = self.book.state()
+        body["funding_book"] = self.book.state()
         text = json.dumps(dict(body, digest=stable_hash(body)), sort_keys=True)
         path = os.path.join(self.directory, CHECKPOINT_FILE)
         tmp = path + ".tmp"

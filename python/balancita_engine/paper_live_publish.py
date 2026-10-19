@@ -250,14 +250,14 @@ def _report_is_newer(report, beat):
 def funding_block(funding):
     """Where the funding of the session comes from and whether its net result may be called verified (``pnl_verified``), from the
     ``funding_report()`` the session itself produces (or the copy the final report holds). It decides nothing: it restates, and it
-    never trusts a ``pnl_verified: true`` that comes with a reason against it. ``source`` is ``synthetic`` (invented accrual: the result
-    is never verified), ``observed`` (the funding the capture stored, #184) or ``unknown`` (nothing was given: absent is not "fine")."""
+    never trusts a ``pnl_verified: true`` that comes with a reason against it. ``source`` is ``observed`` (the funding the capture
+    stored, #184) or ``unknown`` (nothing was given, or a mode that does not exist: absent is not "fine")."""
     if not isinstance(funding, dict) or "mode" not in funding:
         return {"source": "unknown", "pnl_verified": False, "reasons": ["funding_report_missing"], "incomplete_trades": None,
                 "disputed_trades": None, "quarantined_periods": None, "divergence_evidence": None}
     if funding["mode"] != "observed":
-        return {"source": "synthetic" if funding["mode"] == "synthetic" else "unknown", "pnl_verified": False,
-                "reasons": ["synthetic_funding" if funding["mode"] == "synthetic" else "funding_mode_unknown"], "incomplete_trades": None,
+        return {"source": "unknown", "pnl_verified": False,
+                "reasons": ["funding_mode_unknown"], "incomplete_trades": None,
                 "disputed_trades": None, "quarantined_periods": None, "divergence_evidence": None}
     reasons = list(funding.get("unverified_reasons") or [])
     incomplete, disputed = funding.get("incomplete_trades"), funding.get("disputed_trades")

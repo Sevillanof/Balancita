@@ -27,6 +27,7 @@ from balancita_engine.portfolio import PortfolioPolicy
 from balancita_engine.portfolio_watch import WatchPolicy
 
 import test_paper_runner_recovery as RR
+import live_world as LW
 from live_world import (BTC, ETH, FIRST_DECISION, HOUR, LAST_DECISION, LOAD_START, MIN, SEC, WORLD_END, World)
 from test_paper_live_ingest import Source
 
@@ -65,14 +66,14 @@ def journal_clock(directory):
 
 
 def new_session(world, directory, strategies, ingest_kw=INGEST_KW, max_quote_gap_ms=MAX_QUOTE_GAP_MS, products=(BTC,)):
-    return LI.LiveSession.create(directory, world.path, strategies, products, runner_config(), decide_from_ms=FIRST_DECISION, source_id="synthetic", funding_mode="synthetic",
+    return LI.LiveSession.create(directory, world.path, strategies, products, runner_config(), decide_from_ms=FIRST_DECISION, source_id="synthetic", funding_mode="observed",
                                  decide_until_ms=LAST_DECISION, ingest_kw=ingest_kw, max_quote_gap_ms=max_quote_gap_ms)
 
 
 def recover_session(world, directory, strategies, recovery_ms, ingest_kw=INGEST_KW, products=(BTC,), **kw):
     return LI.LiveSession.recover(directory, world.path, strategies, products, runner_config(), recovery_ms,
                                   decide_from_ms=FIRST_DECISION, decide_until_ms=LAST_DECISION, ingest_kw=ingest_kw,
-                                  **dict({"max_quote_gap_ms": MAX_QUOTE_GAP_MS, "source_id": "synthetic", "funding_mode": "synthetic"}, **kw))
+                                  **dict({"max_quote_gap_ms": MAX_QUOTE_GAP_MS, "source_id": "synthetic", "funding_mode": "observed"}, **kw))
 
 
 def record(session, now):
@@ -114,22 +115,19 @@ class TestAdapterAndEvidence(unittest.TestCase):
         self.addCleanup(shutil.rmtree, self.dir, True)
         self.path = os.path.join(self.dir, "capture.sqlite")
         self.src = Source(self.path)
-        self.src.db.executescript("""
-CREATE TABLE synthetic_fundpct (product_id TEXT NOT NULL, start_ms INTEGER NOT NULL, rate REAL NOT NULL, arrival_ms INTEGER NOT NULL);
-CREATE TABLE synthetic_accrual (product_id TEXT NOT NULL, start_ms INTEGER NOT NULL, end_ms INTEGER NOT NULL, rate TEXT NOT NULL,
-  arrival_ms INTEGER NOT NULL);""")
+        self.src.db.executescript(LW.FUNDING_TABLES)
         self.src.commit()
 
     def session(self, **kw):
         return LI.LiveSession.create(os.path.join(self.dir, "s"), self.path, self.strategies, (BTC,), runner_config(),
                                      decide_from_ms=FIRST_DECISION, decide_until_ms=LAST_DECISION, ingest_kw=INGEST_KW,
-                                     **dict({"source_id": "synthetic", "funding_mode": "synthetic"}, **kw))
+                                     **dict({"source_id": "synthetic", "funding_mode": "observed"}, **kw))
 
     def recover(self, **kw):
         return LI.LiveSession.recover(os.path.join(self.dir, "s"), self.path, self.strategies, (BTC,), runner_config(),
                                       journal_clock(os.path.join(self.dir, "s")), decide_from_ms=FIRST_DECISION,
                                       decide_until_ms=LAST_DECISION, ingest_kw=INGEST_KW,
-                                      **dict({"source_id": "synthetic", "funding_mode": "synthetic"}, **kw))
+                                      **dict({"source_id": "synthetic", "funding_mode": "observed"}, **kw))
 
     def candles(self, count, bad_at=None, bad_volume="not-a-number"):
         for i in range(count):
@@ -685,12 +683,11 @@ class TestSourceStaleInTheSessionWithTwoProducts(unittest.TestCase):
         """A session (so its real ``_deliver`` is used) whose runner is a fresh one fed with ``events`` first."""
         root = self.scratch()
         src = Source(os.path.join(root, "capture.sqlite"))
-        src.db.executescript("CREATE TABLE synthetic_fundpct (product_id TEXT, start_ms INTEGER, rate REAL, arrival_ms INTEGER);"
-                             "CREATE TABLE synthetic_accrual (product_id TEXT, start_ms INTEGER, end_ms INTEGER, rate TEXT, arrival_ms INTEGER);")
+        src.db.executescript(LW.FUNDING_TABLES)
         src.commit()
         strategies, _ = RS.load_frozen()
         session = LI.LiveSession.create(os.path.join(root, "s"), src.path, strategies, (BTC,), runner_config(),
-                                        decide_from_ms=FIRST_DECISION, source_id="synthetic", funding_mode="synthetic", decide_until_ms=LAST_DECISION, ingest_kw=INGEST_KW,
+                                        decide_from_ms=FIRST_DECISION, source_id="synthetic", funding_mode="observed", decide_until_ms=LAST_DECISION, ingest_kw=INGEST_KW,
                                         max_quote_gap_ms=MAX_QUOTE_GAP_MS)
         session.runner.close()
         session.runner = PaperRunner.create(os.path.join(root, "hand"), RR.cfg(), RR.strategies())

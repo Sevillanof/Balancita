@@ -77,10 +77,10 @@ class TestSessionStatus(unittest.TestCase):
     def test_the_report_of_the_run_that_just_ended_is_kept_when_its_time_ties_with_the_final_heartbeat(self):
         """A run writes its report and then the final heartbeat at the same observation time: they are the same run, nothing to discard."""
         report = {"ended_as": "STOPPED", "stop": {"signal": "SIGTERM"}, "session_id": "s", "config_digest": "d", "ended_at_observed_ms": 1_000,
-                  "clock": {"events": []}, "funding": {"mode": "synthetic"}}
+                  "clock": {"events": []}, "funding": {"mode": "observed"}}
         block = PUB.session_status(beat("STOPPED"), report=report)
         self.assertEqual((block["phase"], block["orderly_stop"], block["clock"]), ("STOPPED", {"signal": "SIGTERM"}, {"events": []}))
-        self.assertEqual(block["funding"]["source"], "synthetic")
+        self.assertEqual(block["funding"]["source"], "observed")
         stale = PUB.session_status(beat("STOPPED", observed_now_ms=1_001), report=report)          # a report older than the final heartbeat is not this run's
         self.assertIsNone(stale["orderly_stop"])
 
@@ -112,7 +112,6 @@ def observed(**over):
 
 class TestFundingBlock(unittest.TestCase):
     def test_where_the_funding_comes_from_is_always_said(self):
-        self.assertEqual(PUB.funding_block({"mode": "synthetic"})["source"], "synthetic")
         self.assertEqual(PUB.funding_block(observed())["source"], "observed")
         for nothing in (None, {}, "observed", {"counts": {}}):
             with self.subTest(nothing=nothing):
@@ -120,10 +119,10 @@ class TestFundingBlock(unittest.TestCase):
                 self.assertEqual((block["source"], block["pnl_verified"], block["reasons"]), ("unknown", False, ["funding_report_missing"]))
         self.assertEqual(PUB.funding_block({"mode": "real"})["source"], "unknown")
 
-    def test_a_synthetic_result_is_never_verified(self):
+    def test_a_funding_mode_that_does_not_exist_is_never_verified(self):
         block = PUB.funding_block({"mode": "synthetic"})
         self.assertFalse(block["pnl_verified"])
-        self.assertEqual(block["reasons"], ["synthetic_funding"])
+        self.assertEqual((block["source"], block["reasons"]), ("unknown", ["funding_mode_unknown"]))
 
     def test_only_a_complete_observed_report_is_verified(self):
         self.assertTrue(PUB.funding_block(observed())["pnl_verified"])
@@ -152,8 +151,8 @@ class TestFundingBlock(unittest.TestCase):
     def test_the_status_block_carries_it_from_the_argument_or_from_the_report(self):
         self.assertEqual(PUB.session_status(beat())["funding"]["source"], "unknown")
         self.assertEqual(PUB.session_status(beat(), funding=observed())["funding"]["source"], "observed")
-        report = {"ended_as": "STOPPED", "session_id": "s", "config_digest": "d", "ended_at_observed_ms": 2_000, "funding": {"mode": "synthetic"}}
-        self.assertEqual(PUB.session_status(beat(), report=report)["funding"]["source"], "synthetic")
+        report = {"ended_as": "STOPPED", "session_id": "s", "config_digest": "d", "ended_at_observed_ms": 2_000, "funding": {"mode": "observed"}}
+        self.assertEqual(PUB.session_status(beat(), report=report)["funding"]["source"], "observed")
         self.assertEqual(PUB.session_status(beat(), report=report, funding=observed(incomplete_trades=["t"]))["funding"]["reasons"],
                          ["trade_funding_incomplete"])                           # the live report of the session outranks the copy in the file
         gone = PUB.session_status(None)                                          # nothing readable: the funding is unknown too, not absent

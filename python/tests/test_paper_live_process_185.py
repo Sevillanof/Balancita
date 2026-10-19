@@ -52,9 +52,9 @@ class TestConfiguration(unittest.TestCase):
         self.assertNotEqual(LP.validate_config(config_dict(max_quote_gap_ms=20_000))["digest"], a["digest"])
 
     def test_the_sources_of_a_session_are_always_chosen_and_never_implied(self):
-        """#184: the synthetic accrual and the synthetic market source are fixtures, not defaults. A configuration without
-        ``funding_mode`` or without ``source_id`` is refused (both used to fall back to the synthetic one); both funding modes are
-        accepted when written, and the mode is part of the digest."""
+        """#184: the accounting source and the market source are chosen, not defaults. A configuration without ``funding_mode`` or
+        without ``source_id`` is refused (both used to fall back to a fixture); the only funding mode is ``observed``, and the former
+        ``synthetic`` one no longer exists."""
         for key in ("funding_mode", "source_id"):
             body = config_dict()
             del body[key]
@@ -62,8 +62,9 @@ class TestConfiguration(unittest.TestCase):
                 LP.validate_config(body)
             self.assertEqual(caught.exception.reason, "config_invalid")
             self.assertIn(key, str(caught.exception))
-        a, b = LP.validate_config(config_dict(funding_mode="synthetic")), LP.validate_config(config_dict(funding_mode="observed"))
-        self.assertNotEqual(a["digest"], b["digest"])
+        with self.assertRaises(LP.ProcessError) as caught:
+            LP.validate_config(config_dict(funding_mode="synthetic"))
+        self.assertEqual(caught.exception.reason, "config_invalid")
 
     def test_what_is_wrong_is_refused_with_a_reason_and_nothing_is_guessed(self):
         for over in ({"products": []}, {"products": ["BTC-EUR"]}, {"products": [BTC, BTC]}, {"decide_from_ms": "x"},

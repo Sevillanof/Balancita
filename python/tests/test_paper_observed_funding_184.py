@@ -169,8 +169,7 @@ class TestObservedFunding(unittest.TestCase):
         session = self.cache["observed"]["session"]
         self.assertIsInstance(session.funding, LI.ObservedFundingSource)
         self.assertEqual(session.identity["funding_channels"]["accrual"], "paper_futures_funding_responses")
-        with self.assertRaises(LI.IntegrationError):
-            session.funding.accrual(0)
+        self.assertFalse(hasattr(session.funding, "accrual"))
 
 
 class TestObservedFundingScenarios(unittest.TestCase):
@@ -428,12 +427,12 @@ class TestObservedFundingScenarios(unittest.TestCase):
         self.assertIsNotNone(session.funding.reference_price(BTC, last + 30 * 86_400_000))             # a month later: still the newest quote
         self.assertIsNone(session.funding.reference_price(BTC, 0))                                      # before any quote: none, never invented
 
-    def test_a_directory_made_with_the_observed_accounting_is_not_opened_as_a_synthetic_one(self):
+    def test_the_former_synthetic_accounting_no_longer_exists(self):
         world, directory, session = self.start()
         abandon(session)
         with self.assertRaises(LI.IntegrationError) as bad:
             self.open(world, directory, funding_mode="synthetic")
-        self.assertEqual(bad.exception.reason, "session_mismatch")
+        self.assertEqual(bad.exception.reason, "config_incompatible")
 
 
 if __name__ == "__main__":

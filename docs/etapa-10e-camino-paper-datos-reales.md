@@ -141,6 +141,14 @@ la muerte del proceso en cada frontera de la sesión durante esa cancelación (l
 Tercera entrega (19-oct): los plazos de la orden contra el límite de silencio (límite justo debajo, igual y justo encima del plazo, y muerte
 entre la pérdida y su vencimiento) pasaron a `test_paper_order_deadline_184.py`, con un hueco de 135 s de cotizaciones reales.
 
+Cuarta entrega (19-oct): se sacó el modo de funding sintético del motor (`funding_mode: synthetic`, las tablas `synthetic_accrual`
+y el devengo inventado). El único modo es `observed`: el devengo sale de las respuestas de funding de la captura. Un `funding_mode`
+`synthetic` ahora se rechaza al validar la configuración. Las pruebas viejas que corrían con ese modo (`live_world.py`, las de
+dos productos y las de contenido del reporte) pasaron a `observed` con las tablas de respuestas vacías: no tienen funding, y
+lo que dejan de cubrir es el devengo inventado de posiciones abiertas, que ya lo cubren las pruebas de funding observado sobre las
+20 respuestas reales. Siguen en pie, a propósito, la etiqueta `source_id: synthetic` y la marca `balancita_synthetic_fixture`: son
+el costado por el que se repite la muestra real sin fuente autorizada, y se van cuando haya sesión real autorizada.
+
 ### 7.2 Etapas
 
 El orden importa: el camino sintético sostiene hoy unas 1.000 pruebas y no se saca antes de que exista su reemplazo.

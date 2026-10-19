@@ -27,7 +27,7 @@ Dos tasas distintas para un mismo período **dentro de la misma respuesta** no s
 
 ## Fuente simulada fuera del camino operativo
 
-`paper_live_process`: `funding_mode` ya **no tiene valor por defecto**; es una clave obligatoria de la configuración (`synthetic` u `observed`). Una configuración sin ella se rechaza (`config_invalid`). Las fixtures siguen existiendo y se declaran `synthetic` de forma explícita; el modo `observed` lee las respuestas de la captura a través del adaptador. El modo sintético sigue informando `pnl_verified: false` (`synthetic_funding`).
+`paper_live_process`: `funding_mode` ya **no tiene valor por defecto**; es una clave obligatoria de la configuración (`synthetic` u `observed`). Una configuración sin ella se rechaza (`config_invalid`). Las fixtures siguen existiendo y se declaran `synthetic` de forma explícita; el modo `observed` lee las respuestas de la captura a través del adaptador. El modo sintético se sacó el 19-oct (Etapa 10, cuarta entrega de `etapa-10e`): `synthetic` ya no es un valor válido y solo queda `observed`.
 
 ## Límites declarados
 
