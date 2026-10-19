@@ -341,6 +341,8 @@ class LlmDecider:
         self.progress = None          # optional callable(decider), called every ``progress_every`` model calls
         self.progress_every = 200
         self._next_progress = self.progress_every
+        self.progress_every_s = None  # optional: also call ``progress`` when this many clock seconds passed without a report
+        self._last_progress = None
 
     def mean_call(self):
         """Wall seconds per call: with concurrent orders this is about half the latency of one call."""
@@ -435,8 +437,15 @@ class LlmDecider:
         return out
 
     def _tick(self):
-        if self.progress and self.calls >= self._next_progress:
+        if not self.progress:
+            return
+        now = self.clock()
+        if self._last_progress is None:
+            self._last_progress = now
+        late = self.progress_every_s is not None and now - self._last_progress >= self.progress_every_s
+        if self.calls >= self._next_progress or late:
             self._next_progress = (self.calls // self.progress_every + 1) * self.progress_every
+            self._last_progress = now
             self.progress(self)
 
     def _call(self, key, t_ms, step, variant, order, question, state_text):
@@ -1197,12 +1206,14 @@ def run_practice(history, db_path, provider, cfg, holdout_ms, *, max_minutes=55.
                                         int(left / d.mean_call()) if d.mean_call() else 0))
 
         decider.progress = progress
+        decider.progress_every_s = 20.0
         done = pdb.done_blocks()
         pending = [b for b in plan if b["block_id"] not in done]
         log("practice: {} bloques en el plan ({} ya hechos, {} pendientes), presupuesto {} min, hasta {}, modelo {}".format(
             len(plan), len(plan) - len(pending), len(pending), max_minutes, stamp(holdout_ms), served or model_ref))
         reason, finished_here, block_seconds = "done", 0, []
-        last_report = [0]
+        if pending:
+            log("practice: preguntando a Qwen… (Ctrl+C para cortar; se retoma donde quedó)")
         for block in pending:
             t0 = clock()
             calls0 = decider.calls
@@ -1476,6 +1487,10 @@ def main(argv=None):
         else:
             print("{} decisiones escritas en {}".format(export_dataset(args.db, args.out, cfg, args.cache_dir), args.out))
         return 0
+    except KeyboardInterrupt:
+        print("\ncortado con Ctrl+C: lo ya preguntado quedó guardado; volvé a lanzar el mismo comando para retomar "
+              "(compare-prompts y --check-determinism no guardan nada).", flush=True)
+        return 130
     except (TraderError, HistoryError, ValueError) as error:
         print("error: {}".format(error), file=sys.stderr)
         return 2

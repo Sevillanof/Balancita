@@ -84,7 +84,29 @@ def _ask_text(provider, cfg, template, text, asked):
     return answer["result"]["probabilities"]
 
 
-def check_determinism(db_path, cfg, provider, n, *, concurrency=2):
+class Ticker:
+    """Throttles a progress line: the first call always reports, then at most one every ``every`` clock seconds
+    (``force`` reports regardless). ``log`` must flush."""
+
+    def __init__(self, log, clock=time.monotonic, every=20.0):
+        self.log, self.clock, self.every, self.last = log, clock, every, None
+
+    def __call__(self, text, force=False):
+        now = self.clock()
+        if force or self.last is None or now - self.last >= self.every:
+            self.last = now
+            self.log(text)
+
+
+def _say(*args):
+    print(*args, flush=True)
+
+
+def _left(elapsed, done, total):
+    return elapsed / done * (total - done) / 60.0 if done else 0.0
+
+
+def check_determinism(db_path, cfg, provider, n, *, concurrency=2, log=_say, clock=time.monotonic):
     """Replays the option-order calls of ``n`` stored decisions (evenly spread) twice: one call after the other and with the
     orders of a question at the same time. Reports the largest probability difference to the stored call, between the two
     ways of asking, and how many decisions would change their final choice. The stored prompt hash is re-computed too: a
@@ -102,7 +124,11 @@ def check_determinism(db_path, cfg, provider, n, *, concurrency=2):
     out = {"decisions": len(picked), "calls": 0, "hash_mismatch": 0, "max_seq": 0.0, "max_conc": 0.0, "max_seq_vs_conc": 0.0,
            "mean_seq": 0.0, "flips_seq": 0, "flips_conc": 0}
     diffs_seq = []
-    for key in picked:
+    tick, t0 = Ticker(log, clock), clock()
+    log("determinismo: {} decisiones; preguntando a Qwen… (Ctrl+C para cortar; esto no guarda nada)".format(len(picked)))
+    for i, key in enumerate(picked):
+        tick("determinismo: {} de {} decisiones, {} llamadas, {:.1f} min, faltan ~{:.1f} min".format(
+            i, len(picked), out["calls"], (clock() - t0) / 60.0, _left(clock() - t0, i, len(picked))))
         d, rows = decisions[key], stored[key]
         if len(rows) < 2:
             continue
@@ -146,7 +172,7 @@ def determinism_text(r):
 # --------------------------------------------------------------------------- prompt A against prompt B
 
 
-def compare_prompts(old_db, new_cfg, provider, n, *, concurrency=2):
+def compare_prompts(old_db, new_cfg, provider, n, *, concurrency=2, log=_say, clock=time.monotonic):
     """Asks ``n`` stored decisions of ``old_db`` again under ``new_cfg``'s prompt (same state text, other layout) and compares.
     Flat and in-position decisions are sampled separately, evenly spread."""
     decisions = stored_decisions(old_db)
@@ -156,7 +182,11 @@ def compare_prompts(old_db, new_cfg, provider, n, *, concurrency=2):
     decider = qt.LlmDecider(provider, new_cfg, concurrency=concurrency)
     stats = {k: {"n": 0, "same": 0, "dp": [], "old": collections.Counter(), "new": collections.Counter(), "flips": collections.Counter()}
              for k in ("flat", "position")}
-    for d in chosen:
+    tick, t0 = Ticker(log, clock), clock()
+    log("comparar: {} decisiones; preguntando a Qwen… (Ctrl+C para cortar; esto no guarda nada)".format(len(chosen)))
+    for i, d in enumerate(chosen):
+        tick("comparar: {} de {} decisiones, {} llamadas, {:.1f} min, faltan ~{:.1f} min".format(
+            i, len(chosen), decider.calls, (clock() - t0) / 60.0, _left(clock() - t0, i, len(chosen))))
         question = _question(new_cfg, d["product"], d["kind"])
         answer = decider.ask(d["block_id"], d["t_ms"], "action", question, d["state_text"])
         old_probs = json.loads(d["probs_json"])
@@ -320,8 +350,8 @@ def estimate(decisions_variants, latency_s, concurrent):
     return calls, seconds / 60.0
 
 
-def run_probe(db_path, cfg, provider, *, sample=200, seed=None, max_minutes=55.0, clock=time.monotonic, log=print,
-              concurrency=None):
+def run_probe(db_path, cfg, provider, *, sample=200, seed=None, max_minutes=55.0, clock=time.monotonic, log=_say,
+              concurrency=None, progress_every_s=20.0):
     """Asks the sampled decisions again with one number changed at a time. Resumable (what is in ``probe_calls`` is not asked
     again) and budgeted. Returns ``{decisions, variants, calls, stop_reason}``."""
     if not provider.health():
@@ -347,8 +377,19 @@ def run_probe(db_path, cfg, provider, *, sample=200, seed=None, max_minutes=55.0
         log("sondas: {} decisiones, {} preguntas ({} llamadas); a {:.2f} s por llamada y {} unas {:.0f} min en total (presupuesto de esta "
             "tanda {} min)".format(len(chosen), total, calls, latency, "con los órdenes a la vez" if decider.concurrency > 1 else "una tras otra",
                                    minutes, max_minutes))
-        reason, done = "done", 0
+        reason, done, fresh = "done", 0, 0
+        tick = Ticker(log, clock, progress_every_s)
+
+        def report(force=False):
+            elapsed = clock() - started
+            left = elapsed / fresh * (len(chosen) - done) / 60.0 if fresh else minutes
+            tick("sondas: {} de {} decisiones, {} llamadas, {:.1f} min, faltan ~{:.1f} min".format(
+                done, len(chosen), decider.calls, elapsed / 60.0, left), force)
+
+        decider.progress, decider.progress_every_s = lambda _d: report(True), progress_every_s
+        log("preguntando a Qwen… (Ctrl+C para cortar; se retoma donde quedó)")
         for d, variants in plan:
+            calls0 = decider.calls
             try:
                 for name, level, text, old, new in variants:
                     step = "probe:{}:{}".format(name, level)
@@ -364,6 +405,8 @@ def run_probe(db_path, cfg, provider, *, sample=200, seed=None, max_minutes=55.0
             except qt.DecisionError:
                 continue
             done += 1
+            fresh += int(decider.calls > calls0)
+            report()
         log(qt.throughput_line(decider, provider, clock() - started, 0, 0))
         log("sondas terminadas ({}): {} de {} decisiones completas, {} llamadas nuevas".format(reason, done, len(chosen), decider.calls))
         return {"decisions": done, "total": len(chosen), "variants": total, "calls": decider.calls, "stop_reason": reason}

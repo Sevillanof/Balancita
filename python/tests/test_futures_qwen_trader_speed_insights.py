@@ -13,6 +13,7 @@ import sqlite3
 import tempfile
 import threading
 import unittest
+from unittest import mock
 
 import test_futures_qwen_trader as base
 from balancita_engine import futures_llm_decisions as llm
@@ -311,6 +312,20 @@ class ThroughputAndToolsTests(unittest.TestCase):
             def perf_summary(self):
                 return {"cache_share": 0.62}
         self.assertIn("62 % del prompt salió de la caché", qt.throughput_line(decider, P(), 10.0, 1, 10.0))
+
+    def test_determinism_and_compare_prompts_print_progress(self):
+        for fn in (lambda log, clock, prov: probe.check_determinism(self.db2, CFG2, prov, 10, log=log, clock=clock),
+                   lambda log, clock, prov: probe.compare_prompts(self.db2, CFG21, prov, 10, log=log, clock=clock)):
+            clock, lines = [0.0], []
+
+            class Tick(LockedProvider):
+                def complete(self, *a, **k):
+                    with self.lock:
+                        clock[0] += 8.0
+                    return super().complete(*a, **k)
+            fn(lines.append, lambda: clock[0], Tick(entries=base.hashed_policy))
+            self.assertIn("Ctrl+C", lines[0])
+            self.assertGreaterEqual(len([l for l in lines if " de " in l and "faltan ~" in l]), 2, lines)
 
     def test_check_determinism_is_zero_with_a_deterministic_server_and_sees_noise_and_wrong_versions(self):
         result = probe.check_determinism(self.db2, CFG2, LockedProvider(entries=base.hashed_policy), 10)
@@ -813,6 +828,48 @@ class ProbeTests(unittest.TestCase):
         again = LockedProvider(entries=self.mixed_policy)
         probe.run_probe(db_cut, small(CFG2), again, sample=20, log=lambda *a: None)
         self.assertEqual(again.calls, 0)
+
+    def ticking(self, clock, step=10.0):
+        class Tick(LockedProvider):
+            def complete(self, *a, **k):
+                with self.lock:
+                    clock[0] += step
+                return super().complete(*a, **k)
+        return Tick(entries=self.mixed_policy)
+
+    def test_the_probe_prints_a_line_before_the_first_request_and_progress_while_running(self):
+        clock, lines = [0.0], []
+        probe.run_probe(self.fresh("prog.sqlite"), small(CFG2), self.ticking(clock), sample=12, clock=lambda: clock[0], log=lines.append)
+        first = next(i for i, l in enumerate(lines) if l.startswith("preguntando a Qwen"))
+        self.assertIn("Ctrl+C", lines[first])
+        self.assertTrue(lines[0].startswith("sondas:") and first == 1)
+        progress = [l for l in lines if l.startswith("sondas: ") and " de 12 decisiones" in l]
+        self.assertGreaterEqual(len(progress), 3)
+        self.assertRegex(progress[-1], r"sondas: \d+ de 12 decisiones, \d+ llamadas, [\d.]+ min, faltan ~[\d.]+ min")
+        stamps = [float(re.search(r"([\d.]+) min, faltan", l).group(1)) for l in progress]
+        self.assertTrue(all(b - a <= 1.0 for a, b in zip(stamps, stamps[1:])))      # never more than ~60 s of clock apart
+
+    def test_ctrl_c_exits_cleanly_and_leaves_the_probe_resumable(self):
+        db = self.fresh("ctrlc.sqlite")
+        seen = {"n": 0}
+
+        class Interrupt(LockedProvider):
+            def complete(self, *a, **k):
+                seen["n"] += 1
+                if seen["n"] > 6:
+                    raise KeyboardInterrupt
+                return super().complete(*a, **k)
+        with self.assertRaises(KeyboardInterrupt):
+            probe.run_probe(db, small(CFG2), Interrupt(entries=self.mixed_policy), sample=10, log=lambda *a: None, concurrency=1)
+        stored = table(db, "SELECT COUNT(*) FROM probe_calls")[0][0]
+        self.assertGreater(stored, 0)
+        again = LockedProvider(entries=self.mixed_policy)
+        self.assertEqual(probe.run_probe(db, small(CFG2), again, sample=10, log=lambda *a: None)["stop_reason"], "done")
+        full = LockedProvider(entries=self.mixed_policy)
+        probe.run_probe(self.fresh("ctrlc-full.sqlite"), small(CFG2), full, sample=10, log=lambda *a: None)
+        self.assertEqual(again.calls + stored, full.calls)
+        with mock.patch.object(qt, "load_config", side_effect=KeyboardInterrupt):
+            self.assertEqual(qt.main(["probe"]), 130)
 
     def test_a_probe_database_from_another_seed_is_refused_and_a_dead_server_is_said(self):
         db = self.fresh("seed.sqlite")
