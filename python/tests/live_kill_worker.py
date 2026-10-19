@@ -9,12 +9,13 @@ import signal
 import sys
 import types
 
-import test_paper_live_circuit_184 as T
+import test_paper_live_integration as T
+from balancita_engine import replay_specs as RS
 
 
 def main(argv):
     directory, world_path, recovery_ms, point, occurrence, index, clock = argv
-    strategies = T.circuit_strategies()
+    strategies, _ = RS.load_frozen()
     world = types.SimpleNamespace(path=world_path)
     ingest_kw = {} if clock == "clock" else T.INGEST_KW
     session = T.recover_session(world, directory, strategies, int(recovery_ms), ingest_kw)

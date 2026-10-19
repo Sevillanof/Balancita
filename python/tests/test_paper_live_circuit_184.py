@@ -313,7 +313,7 @@ class ClockCircuit(Circuit):
         env = dict(os.environ, PYTHONPATH=os.pathsep.join((os.path.dirname(os.path.dirname(os.path.abspath(LI.__file__))),
                                                            os.path.dirname(os.path.abspath(__file__)))))
         done = subprocess.run([sys.executable, "-W", "ignore", os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                                                                           "live_kill_worker.py"),
+                                                                           "live_kill_circuit_worker.py"),
                                directory, world.path, str(journal_clock(directory)), point, str(occurrence), str(index),
                                "clock" if self.ingest_kw == {} else "plain"],
                               env=env, capture_output=True, text=True, timeout=600)
