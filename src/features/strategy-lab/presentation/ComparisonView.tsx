@@ -20,6 +20,7 @@ import {
 } from './StrategyStatusBadges.tsx'
 import { ForwardResult } from './ForwardResult.tsx'
 import { ForwardHealth } from './ForwardHealth.tsx'
+import { QwenCases } from './QwenCases.tsx'
 import './ComparisonView.css'
 
 const KIND_LABELS: Record<InventoryStrategy['kind'], string> = {
@@ -331,6 +332,10 @@ export default function ComparisonView({
       </div>
 
       <ForwardHealth health={inventory.forward_health} now={now} />
+      <QwenCases
+        cases={inventory.forward_health && inventory.forward_health.q_cases}
+        now={now}
+      />
 
       <h3 className="comparison__group">
         Activas · <span data-testid="running-count">{running.length}</span>

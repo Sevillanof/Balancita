@@ -595,6 +595,15 @@ class LlamaCppProviderTests(unittest.TestCase):
         self.server.health_status = 503
         self.assertFalse(self.provider.health())
 
+    def test_health_state_tells_a_loading_model_from_one_that_does_not_answer(self):
+        self.assertEqual(self.provider.health_state(), "ready")
+        self.server.health_status = 503
+        self.assertEqual(self.provider.health_state(), "loading")
+        self.server.health_status = 500
+        self.assertEqual(self.provider.health_state(), "down")
+        dead = q.LlamaCppProvider("http://127.0.0.1:9", timeout=1, health_timeout=1)
+        self.assertEqual(dead.health_state(), "down")
+
     def test_connection_refused_is_unavailable(self):
         dead = q.LlamaCppProvider("http://127.0.0.1:9", timeout=1, health_timeout=1)
         self.assertFalse(dead.health())
@@ -869,6 +878,16 @@ class ServiceTests(ServiceBase):
         down = [r for r in self.skips() if r["code"] == "model_down"]
         self.assertEqual(len(down), 1)  # the one fresh bucket, recorded once even though polled twice
         self.assertEqual(down[0]["reason"], "modelo local caído (llama-server no responde)")
+
+    def test_a_model_that_is_still_loading_is_not_reported_as_down(self):
+        self.provider.healthy = False
+        self.provider.loading = True
+        service = self.service()
+        self.assertEqual(service.poll(), 0)
+        self.assertEqual([r for r in self.skips() if r["code"] == "model_down"], [])
+        skip, = [r for r in self.skips() if r["code"] == "model_loading"]
+        self.assertEqual(skip["reason"], q.MODEL_LOADING_REASON)
+        self.assertIn("cargando", skip["reason"])
 
     def test_a_skipped_bucket_is_never_retried_after_recovery(self):
         self.provider.healthy = False

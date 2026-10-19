@@ -20,6 +20,12 @@ El inventario (`GET /api-strategies/inventory`, `docs/strategy-inventory-api.md`
   q_skips: { available, reason,
              windows: { "1h"|"24h"|"7d": {total, by_code: {model_down|state_error|calm_skip|stale_verdict: n}} },
              latest: [{product_id, bucket_start, question_id, code, reason, written_at}] },   // últimos 10
+  q_cases: { available, reason, model: null | {code: "not_started"|"llm_stopped"|"q_stopped", reason},
+             latest: [ {kind: "decision", product_id, bucket_start, question_id, question_version, chosen,
+                        probabilities: {opción: p}, confidence, probability_source, prompt_version, latency_ms,
+                        model_ref, written_at}
+                     | {kind: "skip"|"error", product_id, bucket_start, question_id, question_version,
+                        code, reason, written_at} ] },   // últimos 20 casos (decisiones, saltos y errores), el más nuevo primero
   strategies: [{ id, name, kind, spec_hash, operational, forward: {
       registered, start_ms, registered_at, min_trades, available, missing, problems: [{code, reason}],
       trades: null | {
@@ -43,6 +49,8 @@ El inventario (`GET /api-strategies/inventory`, `docs/strategy-inventory-api.md`
 - **Nunca un «desconocido» sin motivo.** Cada problema trae un código estable y un texto: `no_summary` (el forward no escribió su resumen), `not_measured` (activa pero sin resumen), `late`, `spec_changed` (el forward mide otro hash), `funding_<código>` (funding no usable en un producto, con el motivo de `funding_state`), `missing_candles`, `no_trades_yet`. Si una estrategia no se mide en `forward.sqlite` por diseño (C31, Kronos, carry, cerradas), `trades` es `null` y `forward.missing` dice dónde vive su resultado o por qué está apagada (C31: `apagada: <motivo>`, con `operational.since_ms` = fecha del bloque `off` de `config/qwen-exit.json`).
 - Funding por producto: el estado más reciente entre los resúmenes de las estrategias (`futures_funding_context.funding_state`: `usable`, `code`, `reason`).
 - Saltos de Q: conteos por código en 1 h, 24 h y 7 d y los 10 últimos con su motivo. Si la base o la tabla no existen, `available: false` con el motivo.
+
+- **Qué decide Qwen (`q_cases`)** (`futures_q_cases.py`, solo lectura de las tres tablas de la base de decisiones). Una decisión trae la opción elegida, la probabilidad de cada opción, la confianza, la fuente de probabilidades, la versión del prompt y la latencia; un salto o error trae su código y motivo (`model_down`, `model_loading`, `calm_skip`, `stale_verdict`, `state_error`, `no_letters`...). `model` distingue tres estados que antes se veían todos como «modelo local caído»: `not_started` (el lanzador no arrancó llama-server: sin binario, sin modelo GGUF o `DECISIONS_ENABLED=0`; el motivo viaja en `Q_NOT_STARTED_REASON`), `llm_stopped` y `q_stopped` (el supervisor, en `DEV_HEALTH_FILE`, los marca caídos o reiniciando). `model_loading` es el 503 de `/health` mientras llama-server carga el modelo.
 
 ## Cadencia
 

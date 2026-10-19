@@ -4,9 +4,31 @@ import { operationalLabel } from './strategy-labels.ts'
 /** Spanish wording of the skip codes of Q (`paper_futures_llm_skips`). */
 export const Q_SKIP_LABELS: Record<string, string> = {
   model_down: 'Modelo local caído',
+  model_loading: 'Modelo local cargando',
   state_error: 'Estado no disponible',
   calm_skip: 'Filtro de calma',
   stale_verdict: 'Veredicto viejo',
+}
+
+/** Spanish wording of the errors of Q (`paper_futures_llm_errors`): the model answered, nothing usable came out. */
+export const Q_ERROR_LABELS: Record<string, string> = {
+  no_letters: 'Sin letra de opción',
+  thinking_leak: 'El modelo se puso a razonar',
+  bad_json: 'Respuesta no válida',
+  malformed_response: 'Respuesta mal formada',
+}
+
+/** Where Q stands with its local model, when the launcher or the supervisor know it. */
+export const Q_MODEL_STATE_LABELS: Record<string, string> = {
+  not_started: 'Modelo local no iniciado',
+  llm_stopped: 'llama-server detenido',
+  q_stopped: 'Servicio de decisiones de Q detenido',
+}
+
+export const Q_OPTION_LABELS: Record<string, string> = {
+  buy: 'Comprar',
+  hold: 'Mantener',
+  sell: 'Vender',
 }
 
 export const SKIP_WINDOW_LABELS: Record<string, string> = {

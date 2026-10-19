@@ -718,6 +718,7 @@ class FakeProvider:
         self.entries = entries
         self.post_entries = post_entries
         self.healthy = healthy
+        self.loading = False  # an unhealthy fake that answers 503 "loading" instead of not answering
         self.model_ref = model_ref
         self.info = info
         self.fail_with = None
@@ -727,6 +728,9 @@ class FakeProvider:
 
     def health(self):
         return self.healthy
+
+    def health_state(self):
+        return "ready" if self.healthy else ("loading" if self.loading else "down")
 
     def identity(self):
         return self.info or {"model_ref": self.model_ref, "props": None}
@@ -803,6 +807,14 @@ class LlamaCppProvider:
         except ModelUnavailable:
             return False
         return status == 200
+
+    def health_state(self):
+        """``ready`` (200), ``loading`` (503: llama-server is up and still loading the model) or ``down``."""
+        try:
+            status, _ = self._request("GET", "/health", self.health_timeout)
+        except ModelUnavailable:
+            return "down"
+        return "ready" if status == 200 else ("loading" if status == 503 else "down")
 
     def props(self):
         try:
@@ -917,6 +929,8 @@ class LlamaCppProvider:
 
 
 MODEL_DOWN_REASON = "modelo local caído (llama-server no responde)"
+# llama-server answers /health with 503 while it loads the model: it is running, just not ready.
+MODEL_LOADING_REASON = "llama-server está cargando el modelo (aún no está listo): tramo sin preguntar"
 
 
 class DecisionStore:
@@ -1240,6 +1254,13 @@ class DecisionService:
         self._model_up = False
         self._identity = None
 
+    def _health_state(self):
+        """``ready``, ``loading`` or ``down``; a provider without ``health_state`` is ready or down."""
+        probe = getattr(self.provider, "health_state", None)
+        if probe is not None:
+            return probe()
+        return "ready" if self.provider.health() else "down"
+
     def _skip_all(self, items, code, reason):
         for product_id, bucket, _hash, question in items:
             self.store.append_skip(product_id, bucket, question, code, reason)
@@ -1353,9 +1374,13 @@ class DecisionService:
         work = self._work(self.clock())
         if not work:
             return 0
-        if not self.provider.health():
-            self._model_down("health check failed")
-            self._skip_all(work, "model_down", MODEL_DOWN_REASON)
+        state = self._health_state()
+        if state != "ready":
+            self._model_down("health check failed" if state == "down" else "model still loading")
+            if state == "loading":
+                self._skip_all(work, "model_loading", MODEL_LOADING_REASON)
+            else:
+                self._skip_all(work, "model_down", MODEL_DOWN_REASON)
             return 0
         if self._model_up is False:
             self.log("model available again")

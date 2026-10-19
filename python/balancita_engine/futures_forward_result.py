@@ -22,6 +22,7 @@ from decimal import Decimal
 
 from .futures_forward import LEGACY_NOTE, rebuild_hint
 from .futures_costs import exit_fill, fee_rate
+from .futures_q_cases import read_q_cases
 from .futures_strategy_reliability import FORWARD_SCHEMA
 
 RESULT_SCHEMA = "futures-forward-result.v1"
@@ -201,7 +202,7 @@ def read_forward(forward_db, summary_path, market_db, decisions_db, *, now_ms, n
         "summary_updated_ms": (summary or {}).get("updated_ms"), "summary_available": summary is not None,
         "min_trades": (summary or {}).get("min_forward_trades"),
         "strategies": strategies, "funding": dict(sorted(funding.items())),
-        "q_skips": read_q_skips(decisions_db, now_ms),
+        "q_skips": read_q_skips(decisions_db, now_ms), "q_cases": read_q_cases(decisions_db, now_ms),
     }
 
 

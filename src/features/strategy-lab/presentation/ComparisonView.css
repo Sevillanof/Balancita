@@ -304,3 +304,45 @@
   color: var(--mc-text-2);
   font-size: 12px;
 }
+
+.comparison__qcases,
+.comparison__qprobs {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.comparison__qcase {
+  display: grid;
+  gap: 4px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--mc-border);
+}
+
+.comparison__qprobs li {
+  display: grid;
+  grid-template-columns: minmax(60px, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+}
+
+.comparison__qbar {
+  display: block;
+  height: 6px;
+  border-radius: 3px;
+  background: linear-gradient(
+    to right,
+    var(--mc-text-2) var(--q-share),
+    var(--mc-border) var(--q-share)
+  );
+}
+
+.comparison__qbar.is-chosen {
+  background: linear-gradient(
+    to right,
+    var(--mc-text-1, currentColor) var(--q-share),
+    var(--mc-border) var(--q-share)
+  );
+}

@@ -11,6 +11,7 @@ import {
   llamaPort,
   loadDevEnv,
   planStartup,
+  qNotStartedReason,
   resolveLlamaModel,
   resolveLlamaServer,
   resolvePython,
@@ -1188,6 +1189,91 @@ describe('devChildSpecs model selection', () => {
       ['-m', '/p.gguf'],
     )
     assert.equal(specs({}), undefined)
+  })
+})
+
+describe('qNotStartedReason: why Q has no local model, said before Q ever asks', () => {
+  const python = { command: 'python3', prefixArgs: [] }
+  const llm = { command: 'llama-server' }
+  const model = () => '/found/Qwen3.5-4B-Q8_0.gguf'
+
+  it('is undefined when llm and q do start', () => {
+    assert.equal(
+      qNotStartedReason({ env: {}, python, llm, findModel: model }),
+      undefined,
+    )
+  })
+
+  it('names the missing model, LLAMA_MODEL_PATH and the GGUF search', () => {
+    const reason = qNotStartedReason({ env: {}, python, llm })
+    assert.match(reason, /^modelo local no iniciado/)
+    assert.match(reason, /LLAMA_MODEL_PATH/)
+    assert.match(reason, /GGUF/)
+    assert.ok(!reason.includes('\n'))
+  })
+
+  it('names the missing llama-server binary', () => {
+    const reason = qNotStartedReason({
+      env: {},
+      python,
+      llm: { message: 'llama-server was not found on PATH; ...' },
+      findModel: model,
+    })
+    assert.match(reason, /^modelo local no iniciado/)
+    assert.match(reason, /llama-server/)
+    assert.match(reason, /PATH/)
+    assert.doesNotMatch(reason, /LLAMA_MODEL_PATH/)
+  })
+
+  it('says DECISIONS_ENABLED=0 switched it off on purpose', () => {
+    const reason = qNotStartedReason({
+      env: { DECISIONS_ENABLED: '0' },
+      python,
+      llm: { message: 'LLM decisions are off (DECISIONS_ENABLED=0)' },
+      findModel: model,
+    })
+    assert.match(reason, /DECISIONS_ENABLED=0/)
+    assert.match(reason, /apagad/)
+  })
+
+  it('stays silent without Python: there is no strategies page to tell either', () => {
+    assert.equal(qNotStartedReason({ env: {}, python: null, llm }), undefined)
+  })
+
+  it('is handed to the strategy registry only when the model does not start', () => {
+    const registry = (options) =>
+      devChildSpecs({
+        root,
+        allowedFlags: noFlags,
+        python,
+        ...options,
+      }).find((spec) => spec.name === 'strategies')
+    const off = registry({ env: {}, llm })
+    assert.match(off.env.Q_NOT_STARTED_REASON, /LLAMA_MODEL_PATH/)
+    const on = registry({ env: {}, llm, findModel: model })
+    assert.equal(on.env.Q_NOT_STARTED_REASON, undefined)
+    // The user's own environment never injects a reason.
+    const spoofed = registry({
+      env: { Q_NOT_STARTED_REASON: 'x' },
+      llm,
+      findModel: model,
+    })
+    assert.equal(spoofed.env.Q_NOT_STARTED_REASON, undefined)
+  })
+
+  it('lets the registry read the supervisor health file to see a stopped llama-server', () => {
+    const registry = devChildSpecs({
+      root,
+      env: {},
+      allowedFlags: noFlags,
+      python,
+      llm,
+      findModel: model,
+    }).find((spec) => spec.name === 'strategies')
+    assert.equal(
+      registry.env.DEV_HEALTH_FILE,
+      `${root}/server/data/dev-live/dev-health.json`,
+    )
   })
 })
 
