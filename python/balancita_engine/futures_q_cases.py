@@ -64,7 +64,7 @@ def model_state(env):
             _exit_text(llm))}
     q = _health_process(env, "q")
     if q is not None and q.get("status") in ("down", "restarting"):
-        return {"code": "q_stopped", "reason": "el servicio de decisiones de Q se detuvo{}".format(_exit_text(q))}
+        return {"code": "q_stopped", "reason": "el servicio de decisiones de Qwen se detuvo{}".format(_exit_text(q))}
     return None
 
 

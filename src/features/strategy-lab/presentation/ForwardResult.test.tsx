@@ -1,4 +1,10 @@
-import { render, screen, within } from '@testing-library/react'
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  within,
+} from '@testing-library/react'
 import { describe, expect, it } from 'vitest'
 import { agoText, stateLine } from '../domain/forward-text.ts'
 import { exampleRow } from '../testing/inventory-fixture.ts'
@@ -6,6 +12,10 @@ import type {
   ForwardOpen,
   ForwardOpenPosition,
   ForwardHealth as Health,
+  QCase,
+  QCases,
+  QDecisionCase,
+  QNoDecisionCase,
   ForwardResult as Result,
 } from '../infrastructure/strategy-api.ts'
 import { ForwardHealth } from './ForwardHealth.tsx'
@@ -284,61 +294,239 @@ const health = (patch: Partial<Health> = {}): Health => ({
       checked_ms: NOW - 60_000,
     },
   },
-  q_skips: {
-    available: true,
-    reason: null,
-    windows: {
-      '1h': { total: 2, by_code: { model_down: 2 } },
-      '24h': { total: 3, by_code: { model_down: 2, calm_skip: 1 } },
-    },
-    latest: [
-      {
-        product_id: 'PF_XBTUSD',
-        bucket_start: 0,
-        question_id: 'q',
-        code: 'model_down',
-        reason: 'modelo local caído (llama-server no responde)',
-        written_at: NOW - 5 * 60_000,
-      },
-    ],
-  },
+  q_skips: { available: true, reason: null, windows: {}, latest: [] },
   ...patch,
 })
 
-describe('ForwardHealth (datos de ejemplo)', () => {
-  it('lists funding per product with the reason of the unusable ones, and Q skips by code', () => {
+const decision = (patch: Partial<QDecisionCase> = {}): QDecisionCase => ({
+  kind: 'decision',
+  product_id: 'PF_XBTUSD',
+  bucket_start: NOW - 10 * 60_000,
+  question_id: 'trade_action',
+  question_version: 3,
+  chosen: 'buy',
+  probabilities: { buy: 0.6, hold: 0.3, sell: 0.1 },
+  confidence: 0.6,
+  probability_source: 'raw',
+  prompt_version: 2,
+  latency_ms: 840,
+  model_ref: 'Qwen3-4B',
+  written_at: NOW - 5 * 60_000,
+  ...patch,
+})
+
+const none = (
+  code: string,
+  reason: string,
+  kind: 'skip' | 'error' = 'skip',
+  patch: Partial<QNoDecisionCase> = {},
+): QNoDecisionCase => ({
+  kind,
+  product_id: 'PF_ETHUSD',
+  bucket_start: NOW - 20 * 60_000,
+  question_id: 'trade_action',
+  question_version: 3,
+  code,
+  reason,
+  written_at: NOW - 2 * 60_000,
+  ...patch,
+})
+
+const cases = (latest: QCase[], patch: Partial<QCases> = {}): QCases => ({
+  available: true,
+  reason: null,
+  model: null,
+  latest,
+  ...patch,
+})
+
+const HISTORY = 'Históricos de Qwen'
+
+describe('ForwardHealth: un solo panel con el forward y lo que decide Qwen (datos de ejemplo)', () => {
+  it('lists funding per product with the reason of the unusable ones', () => {
     render(<ForwardHealth health={health()} now={NOW} />)
     const funding = within(screen.getByTestId('funding-list'))
     expect(funding.getByText(/PF_XBTUSD/)).toBeInTheDocument()
     expect(
       screen.getByText(/PF_ETHUSD: el funding llega con retraso/),
     ).toBeInTheDocument()
-    const counts = screen.getByTestId('skip-counts')
-    expect(counts).toHaveTextContent('Última hora2Modelo local caído 2')
-    expect(counts).toHaveTextContent('Modelo local caído 2 · Filtro de calma 1')
-    expect(screen.getByTestId('skip-latest')).toHaveTextContent(
-      'modelo local caído (llama-server no responde)',
+    expect(screen.getAllByTestId('forward-health')).toHaveLength(1)
+  })
+
+  it('shows only the latest decision in plain words, with the details kept out of the main view', () => {
+    const older = decision({
+      chosen: 'sell',
+      probabilities: { buy: 0.2, hold: 0.1, sell: 0.7 },
+      confidence: 0.7,
+      written_at: NOW - 65 * 60_000,
+    })
+    render(
+      <ForwardHealth
+        health={health({ q_cases: cases([decision(), older]) })}
+        now={NOW}
+      />,
+    )
+    const latest = screen.getByTestId('q-latest')
+    expect(latest).toHaveTextContent('Qwen decide: Comprar')
+    expect(latest).toHaveTextContent('confianza 60 %')
+    expect(latest).toHaveTextContent(
+      'Comprar 60 % · Mantener 30 % · Vender 10 %',
+    )
+    expect(latest).toHaveTextContent('trade_action v3 · 840 ms')
+    expect(latest).toHaveTextContent('hace 5 min')
+    expect(latest).not.toHaveTextContent('Vender 70 %')
+    expect(latest).not.toHaveTextContent('prompt')
+    expect(latest).not.toHaveTextContent('probabilidades raw')
+    expect(screen.queryByTestId('q-history')).toBeNull()
+  })
+
+  it('has one button that opens and closes the earlier decisions and reasons, newest first', () => {
+    const older = decision({
+      chosen: 'sell',
+      probabilities: { buy: 0.2, hold: 0.1, sell: 0.7 },
+      written_at: NOW - 65 * 60_000,
+    })
+    render(
+      <ForwardHealth
+        health={health({
+          q_cases: cases([
+            decision(),
+            none('calm_skip', 'tramo en calma', 'skip', {
+              written_at: NOW - 30 * 60_000,
+            }),
+            older,
+          ]),
+        })}
+        now={NOW}
+      />,
+    )
+    const button = screen.getByRole('button', { name: HISTORY })
+    expect(screen.getAllByRole('button')).toHaveLength(1)
+    expect(button).toHaveAttribute('aria-expanded', 'false')
+    fireEvent.click(button)
+    expect(button).toHaveAttribute('aria-expanded', 'true')
+    const rows = within(screen.getByTestId('q-history')).getAllByRole(
+      'listitem',
+    )
+    expect(rows).toHaveLength(2)
+    expect(rows[0]).toHaveTextContent(
+      'Qwen no decidió: mercado en calma, no se le preguntó',
+    )
+    expect(rows[0]).toHaveTextContent('tramo en calma')
+    expect(rows[1]).toHaveTextContent('Qwen decide: Vender')
+    expect(rows[1]).toHaveTextContent('prompt v2 · probabilidades raw')
+    fireEvent.click(button)
+    expect(screen.queryByTestId('q-history')).toBeNull()
+  })
+
+  it('says in one line why Qwen did not decide', () => {
+    render(
+      <ForwardHealth
+        health={health({
+          q_cases: cases([
+            none('model_down', 'modelo local caído (llama-server no responde)'),
+          ]),
+        })}
+        now={NOW}
+      />,
+    )
+    expect(screen.getByTestId('q-latest')).toHaveTextContent(
+      'Qwen no decidió: llama-server no responde',
+    )
+    fireEvent.click(screen.getByRole('button', { name: HISTORY }))
+    expect(screen.getByTestId('q-history')).toHaveTextContent(
+      'Aún no hay decisiones anteriores',
     )
   })
 
-  it('says why Q skips or the funding cannot be read', () => {
+  it('says the model was never started, loading or stopped, not just "caído"', () => {
+    const state = (code: 'not_started' | 'llm_stopped', reason: string) =>
+      render(
+        <ForwardHealth
+          health={health({
+            q_cases: cases([none('model_down', 'x')], {
+              model: { code, reason },
+            }),
+          })}
+          now={NOW}
+        />,
+      )
+    const first = state(
+      'not_started',
+      'modelo local no iniciado: falta LLAMA_MODEL_PATH y no se encontró ningún GGUF',
+    )
+    expect(screen.getByTestId('q-model-state')).toHaveTextContent(
+      'Qwen no decidió: modelo local no iniciado: falta LLAMA_MODEL_PATH',
+    )
+    // The stored skip repeats the headline: it goes to the history, not the main view.
+    expect(screen.getByTestId('q-latest')).not.toHaveTextContent(
+      'llama-server no responde',
+    )
+    first.unmount()
+    state('llm_stopped', 'llama-server se detuvo (salió con 1)')
+    expect(screen.getByTestId('q-model-state')).toHaveTextContent(
+      'llama-server se detuvo',
+    )
+    cleanup()
     render(
+      <ForwardHealth
+        health={health({
+          q_cases: cases([none('model_loading', 'cargando')]),
+        })}
+        now={NOW}
+      />,
+    )
+    expect(screen.getByTestId('q-latest')).toHaveTextContent(
+      'Qwen no decidió: modelo cargando',
+    )
+  })
+
+  it('never shows internal jargon in the panel', () => {
+    render(
+      <ForwardHealth
+        health={health({
+          q_cases: cases([
+            none('model_down', 'x'),
+            none('no_letters', 'y', 'error'),
+          ]),
+        })}
+        now={NOW}
+      />,
+    )
+    fireEvent.click(screen.getByRole('button', { name: HISTORY }))
+    const panel = screen.getByTestId('forward-health')
+    expect(panel).not.toHaveTextContent(/salto|skip/i)
+    expect(panel).not.toHaveTextContent('Salud del forward')
+    expect(panel).toHaveTextContent('Qwen no decidió: no eligió ninguna opción')
+  })
+
+  it('says why there is nothing to show or the registry is old', () => {
+    const { rerender } = render(
       <ForwardHealth
         health={health({
           funding: {},
           summary_available: false,
-          q_skips: {
+          q_cases: cases([], {
             available: false,
             reason: 'sin base de decisiones de Q',
-            windows: {},
-            latest: [],
-          },
+          }),
         })}
         now={NOW}
       />,
     )
     expect(screen.getByText(/Sin resumen del forward/)).toBeInTheDocument()
-    expect(screen.getByText('sin base de decisiones de Q')).toBeInTheDocument()
+    expect(screen.getByText(/sin base de decisiones de Q/)).toBeInTheDocument()
+    rerender(
+      <ForwardHealth health={health({ q_cases: cases([]) })} now={NOW} />,
+    )
+    expect(screen.getByTestId('q-latest')).toHaveTextContent(
+      'Qwen todavía no ha decidido ningún caso',
+    )
+    rerender(
+      <ForwardHealth health={health({ q_cases: undefined })} now={NOW} />,
+    )
+    expect(screen.getByTestId('q-latest')).toHaveTextContent('reinícialo')
+    expect(screen.queryByRole('button')).toBeNull()
   })
 
   it('explains a service with no forward reading', () => {

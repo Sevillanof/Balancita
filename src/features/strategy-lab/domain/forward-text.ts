@@ -1,40 +1,27 @@
 import type { ForwardResult } from '../infrastructure/strategy-api.ts'
 import { operationalLabel } from './strategy-labels.ts'
 
-/** Spanish wording of the skip codes of Q (`paper_futures_llm_skips`). */
+/** Why Qwen did not decide, as the end of "Qwen no decidió: ...". */
 export const Q_SKIP_LABELS: Record<string, string> = {
-  model_down: 'Modelo local caído',
-  model_loading: 'Modelo local cargando',
-  state_error: 'Estado no disponible',
-  calm_skip: 'Filtro de calma',
-  stale_verdict: 'Veredicto viejo',
+  model_down: 'llama-server no responde',
+  model_loading: 'modelo cargando',
+  state_error: 'estado de mercado no disponible',
+  calm_skip: 'mercado en calma, no se le preguntó',
+  stale_verdict: 'dato demasiado viejo',
 }
 
-/** Spanish wording of the errors of Q (`paper_futures_llm_errors`): the model answered, nothing usable came out. */
+/** The same when the model answered but nothing usable came out. */
 export const Q_ERROR_LABELS: Record<string, string> = {
-  no_letters: 'Sin letra de opción',
-  thinking_leak: 'El modelo se puso a razonar',
-  bad_json: 'Respuesta no válida',
-  malformed_response: 'Respuesta mal formada',
-}
-
-/** Where Q stands with its local model, when the launcher or the supervisor know it. */
-export const Q_MODEL_STATE_LABELS: Record<string, string> = {
-  not_started: 'Modelo local no iniciado',
-  llm_stopped: 'llama-server detenido',
-  q_stopped: 'Servicio de decisiones de Q detenido',
+  no_letters: 'no eligió ninguna opción',
+  thinking_leak: 'se puso a razonar en vez de elegir',
+  bad_json: 'respuesta no válida',
+  malformed_response: 'respuesta mal formada',
 }
 
 export const Q_OPTION_LABELS: Record<string, string> = {
   buy: 'Comprar',
   hold: 'Mantener',
   sell: 'Vender',
-}
-
-export const SKIP_WINDOW_LABELS: Record<string, string> = {
-  '1h': 'Última hora',
-  '24h': '24 horas',
-  '7d': '7 días',
 }
 
 function utcDay(ms: number) {
