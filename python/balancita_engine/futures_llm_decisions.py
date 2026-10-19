@@ -824,6 +824,21 @@ class LlamaCppProvider:
     def identity(self):
         return {"model_ref": self.model_ref, "props": self.props()}
 
+    def served_model(self):
+        """Basename of the model id that ``GET /v1/models`` reports (llama-server: the GGUF path), or None."""
+        try:
+            status, data = self._request("GET", "/v1/models", self.health_timeout)
+            body = self._json(data, "/v1/models") if status == 200 else None
+        except (ModelUnavailable, ModelResponseError):
+            return None
+        try:
+            ident = body["data"][0]["id"]
+        except (KeyError, IndexError, TypeError):
+            return None
+        if not isinstance(ident, str) or not ident.strip():
+            return None
+        return ident.replace("\\", "/").rstrip("/").rsplit("/", 1)[-1] or None
+
     def tokenize(self, text):
         status, data = self._request("POST", "/tokenize", self.health_timeout, {"content": text, "add_special": False})
         if status != 200:

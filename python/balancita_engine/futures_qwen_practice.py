@@ -511,6 +511,15 @@ def run_practice(signals_path, practice_path, provider, *, question=None, templa
         plan = plan[:max(0, limit - len(complete))]
     identity = provider.identity()
     model_ref = identity.get("model_ref") or "unknown"
+    ask_served = getattr(provider, "served_model", None)
+    served = ask_served() if callable(ask_served) else None  # what the server really loaded (one loopback GET)
+    if served:
+        with db:
+            known = db.execute("SELECT value FROM practice_meta WHERE key='served_models'").fetchone()
+            names = json.loads(known[0]) if known else []
+            if served not in names:
+                db.execute("INSERT OR REPLACE INTO practice_meta VALUES('served_models', ?)", (json.dumps(names + [served]),))
+        log("practice: modelo servido por llama-server: {}".format(served))
     props = json.dumps(identity.get("props"), default=str)
     budget = max_minutes * 60.0
     started = clock()

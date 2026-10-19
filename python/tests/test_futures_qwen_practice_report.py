@@ -186,6 +186,37 @@ class ReportTests(unittest.TestCase):
         self.assertIn("Qwen necesita configuración", text)
         self.assertIn("muestra insuficiente", text)
 
+    def served(self, practice, names):
+        import sqlite3
+        db = sqlite3.connect(practice)
+        db.execute("INSERT OR REPLACE INTO practice_meta VALUES('served_models', ?)", (json.dumps(names),))
+        db.commit()
+        db.close()
+
+    def test_report_prints_the_recorded_model_and_a_qwen3_cutoff_note(self):
+        practice = practice_with(self.signals, self.tmp.name, lambda s: (0.7, 0.7))
+        self.served(practice, ["Qwen3-4B-Q8_0.gguf"])
+        text = r.build_report(self.signals, practice)
+        self.assertIn("Modelo servido: Qwen3-4B-Q8_0.gguf", text)
+        self.assertNotIn("Qwen3.5", text)
+        self.assertNotIn("unsloth", text)
+        self.assertIn("fecha de lanzamiento del modelo", text)
+        self.assertNotIn("no es Qwen3", text)
+
+    def test_unrecorded_model_is_unknown_and_warns_about_the_cutoff(self):
+        practice = practice_with(self.signals, self.tmp.name, lambda s: (0.7, 0.7))
+        text = r.build_report(self.signals, practice)
+        self.assertIn("Modelo servido: desconocido (no registrado)", text)
+        self.assertNotIn("Modelo servido: fake", text)
+        self.assertIn("no es Qwen3", text)
+
+    def test_a_non_qwen3_model_warns(self):
+        practice = practice_with(self.signals, self.tmp.name, lambda s: (0.7, 0.7))
+        self.served(practice, ["Qwen3.5-4B-Q8_0.gguf"])
+        text = r.build_report(self.signals, practice)
+        self.assertIn("Modelo servido: Qwen3.5-4B-Q8_0.gguf", text)
+        self.assertIn("no es Qwen3", text)
+
     def test_report_cli_writes_the_file(self):
         practice = practice_with(self.signals, self.tmp.name, lambda s: (0.7, 0.7))
         out = os.path.join(self.tmp.name, "informe.md")

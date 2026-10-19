@@ -243,6 +243,23 @@ def choose_threshold(calibration, *, min_kept=0.3, min_n=10):
 # --------------------------------------------------------------------------- data
 
 
+MODEL_UNKNOWN = "desconocido (no registrado)"
+
+
+def is_qwen3(name):
+    """True for Qwen3 (not 3.5 or later) model names such as ``Qwen3-4B-Q8_0.gguf``."""
+    return re.search(r"qwen[-_ ]?3(?![.\d])", name.lower()) is not None
+
+
+def cutoff_note(served):
+    if served and all(is_qwen3(name) for name in served):
+        return ("Qwen3 se publicó el {}, que es la fecha de lanzamiento del modelo; no hay corte de conocimiento "
+                "oficial verificable, es una cota conservadora".format(QWEN3_RELEASE_DATE))
+    return ("Qwen3 se publicó el {}; no hay corte de conocimiento oficial verificable, es una cota conservadora: "
+            "el modelo registrado ({}) no es Qwen3, y si es posterior, ninguna señal es limpia con seguridad".format(
+                QWEN3_RELEASE_DATE, ", ".join(served) or MODEL_UNKNOWN))
+
+
 def load_practice(practice_path):
     """``{signal_id: {variant: p_approve}}`` plus the model identities and the question/prompt versions seen."""
     db = sqlite3.connect("file:{}?mode=ro".format(practice_path), uri=True)
@@ -250,6 +267,10 @@ def load_practice(practice_path):
         rows = db.execute("SELECT signal_id, variant, p_approve, model_ref, question_version, prompt_version, "
                           "latency_ms FROM decisions").fetchall()
         errors = db.execute("SELECT COUNT(*) FROM decision_errors").fetchone()[0]
+        try:
+            row = db.execute("SELECT value FROM practice_meta WHERE key='served_models'").fetchone()
+        except sqlite3.OperationalError:
+            row = None
     finally:
         db.close()
     probs = collections.defaultdict(dict)
@@ -262,6 +283,7 @@ def load_practice(practice_path):
         if latency is not None:
             seen["latency"].append(latency)
     seen["errors"] = errors
+    seen["served"] = json.loads(row[0]) if row else []
     return probs, seen
 
 
@@ -412,15 +434,13 @@ def build_report(signals_path, practice_path, cutoff_date=None):
             "(con las dos órdenes): {} ({} sin contar C28).".format(
                 signals_path, meta["build_id"], len(meta.get("products", [])), ", ".join(meta.get("products", [])), meta.get("from", "?"),
                 len(signals), len(practiced), len(pooled)),
-            "- Modelo: {}; pregunta `signal_filter` v{}; prompt v{}; {} llamadas con error sin respuesta; latencia media {} ms.".format(
-                ", ".join(sorted(m for m in seen["models"] if m)), ", ".join(map(str, sorted(seen["questions"]))),
+            "- Modelo servido: {}; pregunta `signal_filter` v{}; prompt v{}; {} llamadas con error sin respuesta; latencia media {} ms.".format(
+                ", ".join(seen["served"]) or MODEL_UNKNOWN, ", ".join(map(str, sorted(seen["questions"]))),
                 ", ".join(map(str, sorted(seen["prompts"]))), seen["errors"],
                 _fmt(sum(seen["latency"]) / len(seen["latency"]), 0) if seen["latency"] else "n/d"),
             "- Etiqueta principal: bp netos de la operación con las salidas propias de la estrategia (comisiones taker e "
             "impacto de `futures_costs`; funding solo donde Kraken lo publica, desde oct-2025). Acierto = neto > 0.",
-            "- Corte pre/post: {} (Qwen3 se publicó el {}; no hay corte de conocimiento oficial verificable, es una cota "
-            "conservadora: si el modelo es posterior (Qwen3.5 es de 2026), ninguna señal es limpia con seguridad).".format(
-                cutoff_text, QWEN3_RELEASE_DATE),
+            "- Corte pre/post: {} ({}).".format(cutoff_text, cutoff_note(seen["served"])),
             "- Pliegues por tiempo: calibración = 60 % más antiguo, validación = 40 % más reciente. El umbral de Qwen se "
             "elige solo en calibración. El prompt no se ajustó con estos datos; cambiarlo obliga a validar con señales nuevas "
             "(forward), no con éstas.", ""]

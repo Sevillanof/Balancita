@@ -395,6 +395,36 @@ class PracticeTests(unittest.TestCase):
         self.assertGreater(any_signal[0][3], 0.5)
         self.assertLess(any_signal[1][3], 0.5)
 
+    def test_the_served_model_is_recorded_once_from_v1_models(self):
+        clock = Clock()
+        provider = TickProvider(clock)
+        calls = []
+        provider.served_model = lambda: calls.append(1) or "Qwen3-4B-Q8_0.gguf"
+        self.run_practice(provider, clock, limit=2)
+        self.assertEqual(len(calls), 1)
+        db = sqlite3.connect(self.practice)
+        try:
+            stored = db.execute("SELECT value FROM practice_meta WHERE key='served_models'").fetchone()
+        finally:
+            db.close()
+        self.assertEqual(json.loads(stored[0]), ["Qwen3-4B-Q8_0.gguf"])
+
+    def test_llama_provider_served_model_is_the_basename_of_the_gguf_path(self):
+        provider = q.LlamaCppProvider("http://127.0.0.1:8080")
+        body = {"data": [{"id": "/Users/x/models/Qwen3-4B-Q8_0.gguf", "meta": {"ftype": "Q8_0"}}]}
+        seen = []
+
+        def request(method, path, timeout, payload=None):
+            seen.append((method, path))
+            return 200, json.dumps(body).encode()
+        provider._request = request
+        self.assertEqual(provider.served_model(), "Qwen3-4B-Q8_0.gguf")
+        self.assertEqual(seen, [("GET", "/v1/models")])
+        provider._request = lambda *a, **k: (500, b"{}")
+        self.assertIsNone(provider.served_model())
+        provider._request = lambda *a, **k: (200, b"not json")
+        self.assertIsNone(provider.served_model())
+
     def test_the_prompt_never_carries_the_outcome(self):
         clock = Clock()
         provider = TickProvider(clock)
