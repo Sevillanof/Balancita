@@ -58,3 +58,14 @@ PASA only if all hold: n >= 100 · mean net bp > 0 and the 95 % bootstrap CI low
 ## Next step
 
 Run `evaluate` for C25-C32 on the Mac (negative control on real data), note the verdicts here, then decide which versions deserve an exam.
+
+## UI en /estrategias (PR sobre #317)
+
+- Registro S (`python/balancita_engine/futures_strategy_gate_api.py`, enganchado en `futures_strategy_registry.py`), solo 127.0.0.1:
+  - `POST /api-strategies/strategies/<id>/gate` `{from?, products?, exam?}`: id en la lista blanca del registro, entradas validadas (fecha AAAA-MM-DD, productos fijados en `config/futures-products.json`, sin campos extra, `exam` sin `from`). 409 en español si ya hay una corrida `running` (con proceso vivo). 422 con el mensaje del gate si lo rechaza (examen ya rendido, hash distinto).
+  - `GET /api-strategies/strategies/<id>/gate/runs` (corridas, `exam` con fecha/veredicto, `running`), `GET /api-strategies/gate/runs/<n>`, `POST /api-strategies/gate/runs/<n>/cancel` (`strategy_gate.cancel_run`: archivo + SIGTERM), `GET /api-strategies/gate/runs/<n>/report.md` (`text/markdown`, `attachment`, nombre `<estrategia>-<tipo>-<fecha>-<n>.md`; la ruta se resuelve dentro de `data/strategy-gate/reports/`).
+  - `gate.sqlite` se abre solo lectura (`mode=ro`); si no existe, listas vacías. Una fila `running` cuyo pid ya no existe se informa como `failed`.
+- Lanzamiento: `subprocess.Popen([python, -m, balancita_engine.strategy_gate, --data-dir, ..., evaluate, ...], shell=False, start_new_session=True, stdin=DEVNULL, salida a data/strategy-gate/logs/launch-*.log)`; `python` = `BALANCITA_PYTHON` o el intérprete con el que dev.mjs arrancó S; `PYTHONPATH=python`. El hijo es líder de su propia sesión: sobrevive al pedido HTTP y a un reinicio de S; la UI lo encuentra por la base. S espera hasta 30 s a que aparezca la fila con el pid del hijo; si el hijo sale antes, devuelve su último mensaje (422); si no, `{pending: true}`.
+- Pantalla: `GatePanel` en el detalle de cada estrategia (botones «Probar estrategia» y «Examen final» con confirmación, barra de avance, Cancelar, veredicto, historial, intentos). Consulta cada 2 s solo mientras hay una corrida activa. Una sola corrida a la vez en toda la app, con aviso de cuál estrategia corre.
+- Pruebas: `python/tests/test_futures_strategy_gate_api.py` (spawn simulado) y `GatePanel.test.tsx`.
+- Límite conocido: el gate carga la especificación desde `config/strategies` (no desde el registro); una estrategia creada solo en el registro devuelve «estrategia desconocida» del gate.

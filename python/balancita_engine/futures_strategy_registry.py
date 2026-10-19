@@ -46,6 +46,7 @@ from .futures_strategy_inventory import build_inventory
 from .futures_strategy_plan import all_plans, load_freeze
 from .futures_strategy_reliability import load_reliability, reliability_for
 from .futures_purged import cscv_pbo
+from .futures_strategy_gate_api import GateApi, GateApiError
 from .futures_strategy_backtest import MIN_TRADES, load_verdict_rows, run_backtest
 from .futures_strategy_translate import TranslationError, default_provider, translate
 
@@ -498,7 +499,7 @@ class StrategyService:
 
     def __init__(self, registry, verdicts_db_path, products, provider_factory=None, replays=None,
                  market_db_path=None, config_dir=None, forward_db_path=None, forward_summary_path=None,
-                 decisions_db_path=None):
+                 decisions_db_path=None, gate_data_dir=None):
         self.config_dir = config_dir
         self.forward_db_path = forward_db_path
         self.forward_summary_path = forward_summary_path or os.environ.get("STRATEGY_FORWARD_PATH")
@@ -511,6 +512,7 @@ class StrategyService:
         self.products = products
         self._cache = {}
         self._results = {}
+        self.gate = GateApi(registry, data_dir=gate_data_dir)
 
     def _tick(self, product_id):
         if product_id not in self.products:
@@ -818,9 +820,41 @@ def make_handler(service):
                 return registry.delete(parts[1], body.get("confirm"))
             raise RegistryError("not_found", "no route", 404)
 
+        def _gate(self, method):
+            """Strategy gate routes; ``None`` when the path is not one of them, ``True`` once it answered itself."""
+            url = urlparse(self.path)
+            parts = [p for p in url.path.split("/") if p]
+            if parts[:1] == ["api-strategies"]:
+                parts = parts[1:]
+            gate = service.gate
+            if method == "GET" and len(parts) == 4 and parts[0] == "gate" and parts[1] == "runs" and parts[3] == "report.md":
+                name, data = gate.report(parts[2])
+                self.send_response(200)
+                self.send_header("Content-Type", "text/markdown; charset=utf-8")
+                self.send_header("Content-Disposition", 'attachment; filename="{}"'.format(name))
+                self.send_header("Content-Length", str(len(data)))
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                self.wfile.write(data)
+                return True
+            if method == "GET" and len(parts) == 3 and parts[:2] == ["gate", "runs"]:
+                return gate.run(parts[2])
+            if method == "POST" and len(parts) == 4 and parts[:2] == ["gate", "runs"] and parts[3] == "cancel":
+                return gate.cancel(parts[2])
+            if len(parts) == 3 and parts[0] == "strategies" and parts[2] == "gate" and method == "POST":
+                return gate.launch(parts[1], self._body())
+            if len(parts) == 4 and parts[0] == "strategies" and parts[2] == "gate" and parts[3] == "runs" and method == "GET":
+                return gate.runs(parts[1])
+            return None
+
         def _handle(self, method):
             try:
-                self._send(200, self._dispatch(method))
+                out = self._gate(method)
+                if out is True:
+                    return
+                self._send(200, out if out is not None else self._dispatch(method))
+            except GateApiError as error:
+                self._send(error.status, {"error": error.code, "detail": error.detail})
             except RegistryError as error:
                 self._send(error.status, dict({"error": error.code, "detail": error.detail}, **error.extra))
             except (ValueError, KeyError, TypeError) as error:
@@ -846,6 +880,7 @@ def main(argv=None):
     parser.add_argument("--forward-db", help="forward.sqlite (read-only): open positions and last cycle")
     parser.add_argument("--forward-summary", help="forward-reliability.json (default: $STRATEGY_FORWARD_PATH)")
     parser.add_argument("--decisions-db", help="Q's decisions DB (read-only): why Q skipped")
+    parser.add_argument("--gate-dir", help="strategy gate folder (default: data/strategy-gate or $STRATEGY_GATE_DIR)")
     parser.add_argument("--port", type=int, default=int(os.environ.get("STRATEGIES_PORT", DEFAULT_PORT)))
     args = parser.parse_args(argv)
     registry = StrategyRegistry(args.strategies_db)
@@ -861,7 +896,7 @@ def main(argv=None):
                              qwen_factory(os.path.join(directory, "qwen-cache.db")))
     service = StrategyService(registry, args.verdicts_db, products, replays=replays, market_db_path=args.market_db,
                               config_dir=args.config_dir, forward_db_path=args.forward_db,
-                              forward_summary_path=args.forward_summary, decisions_db_path=args.decisions_db)
+                              forward_summary_path=args.forward_summary, decisions_db_path=args.decisions_db, gate_data_dir=args.gate_dir)
     server = ThreadingHTTPServer(("127.0.0.1", args.port), make_handler(service))
     print("[strategies] registry {} on http://127.0.0.1:{}".format(args.strategies_db, args.port), flush=True)
     try:
