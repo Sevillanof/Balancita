@@ -132,6 +132,21 @@
   font-weight: 500;
 }
 
+.demo-shell__funding {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+}
+
+.demo-shell__funding-label {
+  color: var(--mc-text-2);
+  font-family: 'IBM Plex Mono', ui-monospace, monospace;
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+}
+
 .demo-shell__main {
   width: min(100% - 56px, 1800px);
   margin-inline: auto;

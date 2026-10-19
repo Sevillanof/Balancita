@@ -41,6 +41,7 @@ import {
   StrategyApiError,
   connectStrategyApi,
   type Backtest,
+  type ForwardHealth,
   type Gate,
   type PeriodDays,
   type Ranking,
@@ -89,6 +90,8 @@ type Props = {
   initialView?: StrategyView
   /** B2 activity reader for the detail view (tests inject it). */
   loadActivity?: LoadActivity
+  /** Told whenever the inventory loads: the funding per product for the header health area (`null`: no forward reading). */
+  onFunding?: (funding: ForwardHealth['funding'] | null) => void
 }
 
 type StrategyView = 'home' | 'lab' | 'detail'
@@ -161,6 +164,7 @@ export default function StrategyLab({
   loadKronos = defaultLoadKronos,
   initialView = 'home',
   loadActivity,
+  onFunding,
 }: Props) {
   const [view, setView] = useState<StrategyView>(initialView)
   // «Ver contador» de la tarjeta de Carry: lleva al contador de Carry dentro del laboratorio.
@@ -717,7 +721,14 @@ export default function StrategyLab({
           connectError={connectError}
           reload={reload}
           onOpen={openFromInventory}
-          onLoaded={setInventory}
+          onLoaded={(loaded) => {
+            setInventory(loaded)
+            onFunding?.(
+              loaded === null || loaded.forward_health === null
+                ? null
+                : loaded.forward_health.funding,
+            )
+          }}
           onNew={() => {
             setNotice(null)
             setError(null)

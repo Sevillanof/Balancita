@@ -300,6 +300,8 @@ def validate_prompt_config(config):
             value = template.get(field)
             if value is not None and not isinstance(value, str):
                 raise ValueError("prompt version {}: {} must be a string or null".format(key, field))
+        if not isinstance(template.get("state_last", False), bool):
+            raise ValueError("prompt version {}: state_last must be a boolean".format(key))
     default = config.get("default_version")
     if isinstance(default, bool) or not isinstance(default, int) or str(default) not in versions:
         raise ValueError("default_version must name one of the versions")
@@ -313,6 +315,8 @@ def load_prompt_config(path=None):
     templates = {}
     for key, template in config["versions"].items():
         templates[int(key)] = dict({field: template.get(field) for field in _TEMPLATE_TEXT_FIELDS}, version=int(key))
+        if template.get("state_last"):
+            templates[int(key)]["state_last"] = True
     return {
         "default_version": config["default_version"],
         "probability_source": config.get("probability_source", "auto"),
@@ -328,6 +332,8 @@ def default_template(path=None):
 def template_hash(template):
     """Hash of a template's full definition; pinned per version in the tests."""
     fields = {field: template.get(field) for field in _TEMPLATE_TEXT_FIELDS}
+    if template.get("state_last"):  # only when set: the pinned hashes of versions 1-3 stay as released
+        fields["state_last"] = True
     return text_hash(json.dumps(dict(fields, version=template["version"]), sort_keys=True, separators=(",", ":")))
 
 
@@ -348,17 +354,19 @@ def _letters_phrase(letters):
 
 
 def build_prompt(state_text, question, template=None):
-    """The user message: STATE first, QUESTION and the options, then the template's answer line."""
+    """The user message: STATE first, QUESTION and the options, then the template's answer line.
+
+    With ``state_last`` (version 4) the order is QUESTION, options, answer line and only then the STATE: everything
+    before it is the same text every minute, so llama-server reuses that cached prefix and only processes the state.
+    """
     template = template or LEGACY_TEMPLATE
-    lines = [
-        "STATE: " + sanitize_text(state_text),
-        "QUESTION: " + sanitize_text(question["instruction"]),
-    ]
+    state = "STATE: " + sanitize_text(state_text)
+    lines = ["QUESTION: " + sanitize_text(question["instruction"])]
     for letter, (option_id, description, _) in zip(LETTERS, question_options(question)):
         lines.append("{}) {}".format(letter, option_id) + ("" if description is None else " - " + sanitize_text(description)))
     if template.get("answer_line"):
         lines.append(template["answer_line"].format(letters=_letters_phrase(question_letters(question))))
-    return "\n".join(lines)
+    return "\n".join(lines + [state] if template.get("state_last") else [state] + lines)
 
 
 def grammar_for(letters):
@@ -718,6 +726,7 @@ class FakeProvider:
         self.entries = entries
         self.post_entries = post_entries
         self.healthy = healthy
+        self.loading = False  # an unhealthy fake that answers 503 "loading" instead of not answering
         self.model_ref = model_ref
         self.info = info
         self.fail_with = None
@@ -727,6 +736,9 @@ class FakeProvider:
 
     def health(self):
         return self.healthy
+
+    def health_state(self):
+        return "ready" if self.healthy else ("loading" if self.loading else "down")
 
     def identity(self):
         return self.info or {"model_ref": self.model_ref, "props": None}
@@ -803,6 +815,14 @@ class LlamaCppProvider:
         except ModelUnavailable:
             return False
         return status == 200
+
+    def health_state(self):
+        """``ready`` (200), ``loading`` (503: llama-server is up and still loading the model) or ``down``."""
+        try:
+            status, _ = self._request("GET", "/health", self.health_timeout)
+        except ModelUnavailable:
+            return "down"
+        return "ready" if status == 200 else ("loading" if status == 503 else "down")
 
     def props(self):
         try:
@@ -917,6 +937,8 @@ class LlamaCppProvider:
 
 
 MODEL_DOWN_REASON = "modelo local caído (llama-server no responde)"
+# llama-server answers /health with 503 while it loads the model: it is running, just not ready.
+MODEL_LOADING_REASON = "llama-server está cargando el modelo (aún no está listo): tramo sin preguntar"
 
 
 class DecisionStore:
@@ -1240,6 +1262,13 @@ class DecisionService:
         self._model_up = False
         self._identity = None
 
+    def _health_state(self):
+        """``ready``, ``loading`` or ``down``; a provider without ``health_state`` is ready or down."""
+        probe = getattr(self.provider, "health_state", None)
+        if probe is not None:
+            return probe()
+        return "ready" if self.provider.health() else "down"
+
     def _skip_all(self, items, code, reason):
         for product_id, bucket, _hash, question in items:
             self.store.append_skip(product_id, bucket, question, code, reason)
@@ -1353,9 +1382,13 @@ class DecisionService:
         work = self._work(self.clock())
         if not work:
             return 0
-        if not self.provider.health():
-            self._model_down("health check failed")
-            self._skip_all(work, "model_down", MODEL_DOWN_REASON)
+        state = self._health_state()
+        if state != "ready":
+            self._model_down("health check failed" if state == "down" else "model still loading")
+            if state == "loading":
+                self._skip_all(work, "model_loading", MODEL_LOADING_REASON)
+            else:
+                self._skip_all(work, "model_down", MODEL_DOWN_REASON)
             return 0
         if self._model_up is False:
             self.log("model available again")

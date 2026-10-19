@@ -11,6 +11,7 @@ import {
   llamaPort,
   loadDevEnv,
   planStartup,
+  qNotStartedReason,
   resolveLlamaModel,
   resolveLlamaServer,
   resolvePython,
@@ -675,6 +676,10 @@ describe('optional LLM decision children (llm and q)', () => {
       '8192',
       '-np',
       '2',
+      '-ngl',
+      '99',
+      '-fa',
+      'on',
       '--no-mmproj',
       '--no-webui',
     ])
@@ -736,6 +741,8 @@ describe('optional LLM decision children (llm and q)', () => {
       './data/dev-live/futures-verdicts.sqlite',
       '--decisions-db',
       './data/dev-live/futures-llm-decisions.sqlite',
+      '--prompt-version',
+      '4',
     ])
     assert.equal(q.env.PYTHONPATH, '/repo/python')
     assert.equal(q.env.KEEP, 'yes')
@@ -1188,6 +1195,155 @@ describe('devChildSpecs model selection', () => {
       ['-m', '/p.gguf'],
     )
     assert.equal(specs({}), undefined)
+  })
+})
+
+describe('llm child: GPU offload, flash attention and prompt reuse flags', () => {
+  const llmArgs = (env) =>
+    devChildSpecs({
+      root,
+      env,
+      allowedFlags: noFlags,
+      python: { command: 'python3', prefixArgs: [] },
+      llm: { command: 'llama-server' },
+      findModel: () => '/found/Qwen3.5-4B-Q8_0.gguf',
+    }).find((spec) => spec.name === 'llm').args
+  const valueOf = (args, flag) => args[args.indexOf(flag) + 1]
+
+  it('offloads every layer and turns flash attention on by default', () => {
+    const args = llmArgs({})
+    assert.equal(valueOf(args, '-ngl'), '99')
+    assert.equal(valueOf(args, '-fa'), 'on')
+  })
+
+  it('lets LLAMA_NGL and LLAMA_FLASH_ATTN (on, off, auto) override them', () => {
+    const args = llmArgs({ LLAMA_NGL: '33', LLAMA_FLASH_ATTN: 'auto' })
+    assert.equal(valueOf(args, '-ngl'), '33')
+    assert.equal(valueOf(args, '-fa'), 'auto')
+  })
+
+  it('ignores a flash attention value llama-server would not accept', () => {
+    assert.equal(valueOf(llmArgs({ LLAMA_FLASH_ATTN: 'yes' }), '-fa'), 'on')
+    assert.equal(valueOf(llmArgs({ LLAMA_NGL: 'many' }), '-ngl'), '99')
+  })
+
+  it('adds --cache-reuse only when asked: KV shifting is off by default and not every model supports it', () => {
+    assert.ok(!llmArgs({}).includes('--cache-reuse'))
+    assert.equal(
+      valueOf(llmArgs({ LLAMA_CACHE_REUSE: '256' }), '--cache-reuse'),
+      '256',
+    )
+  })
+
+  it('asks q for prompt version 4 (fixed prefix first, state last) unless Q_PROMPT_VERSION says otherwise', () => {
+    const qArgs = (env) =>
+      devChildSpecs({
+        root,
+        env,
+        allowedFlags: noFlags,
+        python: { command: 'python3', prefixArgs: [] },
+        llm: { command: 'llama-server' },
+        findModel: () => '/found/Qwen3.5-4B-Q8_0.gguf',
+      }).find((spec) => spec.name === 'q').args
+    const valueOf = (args, flag) => args[args.indexOf(flag) + 1]
+    assert.equal(valueOf(qArgs({}), '--prompt-version'), '4')
+    assert.equal(
+      valueOf(qArgs({ Q_PROMPT_VERSION: '2' }), '--prompt-version'),
+      '2',
+    )
+    assert.equal(
+      valueOf(qArgs({ Q_PROMPT_VERSION: 'x' }), '--prompt-version'),
+      '4',
+    )
+  })
+
+  it('does not switch prompt caching off', () => {
+    assert.ok(!llmArgs({}).includes('--no-cache-prompt'))
+  })
+})
+
+describe('qNotStartedReason: why Q has no local model, said before Q ever asks', () => {
+  const python = { command: 'python3', prefixArgs: [] }
+  const llm = { command: 'llama-server' }
+  const model = () => '/found/Qwen3.5-4B-Q8_0.gguf'
+
+  it('is undefined when llm and q do start', () => {
+    assert.equal(
+      qNotStartedReason({ env: {}, python, llm, findModel: model }),
+      undefined,
+    )
+  })
+
+  it('names the missing model, LLAMA_MODEL_PATH and the GGUF search', () => {
+    const reason = qNotStartedReason({ env: {}, python, llm })
+    assert.match(reason, /^modelo local no iniciado/)
+    assert.match(reason, /LLAMA_MODEL_PATH/)
+    assert.match(reason, /GGUF/)
+    assert.ok(!reason.includes('\n'))
+  })
+
+  it('names the missing llama-server binary', () => {
+    const reason = qNotStartedReason({
+      env: {},
+      python,
+      llm: { message: 'llama-server was not found on PATH; ...' },
+      findModel: model,
+    })
+    assert.match(reason, /^modelo local no iniciado/)
+    assert.match(reason, /llama-server/)
+    assert.match(reason, /PATH/)
+    assert.doesNotMatch(reason, /LLAMA_MODEL_PATH/)
+  })
+
+  it('says DECISIONS_ENABLED=0 switched it off on purpose', () => {
+    const reason = qNotStartedReason({
+      env: { DECISIONS_ENABLED: '0' },
+      python,
+      llm: { message: 'LLM decisions are off (DECISIONS_ENABLED=0)' },
+      findModel: model,
+    })
+    assert.match(reason, /DECISIONS_ENABLED=0/)
+    assert.match(reason, /apagad/)
+  })
+
+  it('stays silent without Python: there is no strategies page to tell either', () => {
+    assert.equal(qNotStartedReason({ env: {}, python: null, llm }), undefined)
+  })
+
+  it('is handed to the strategy registry only when the model does not start', () => {
+    const registry = (options) =>
+      devChildSpecs({
+        root,
+        allowedFlags: noFlags,
+        python,
+        ...options,
+      }).find((spec) => spec.name === 'strategies')
+    const off = registry({ env: {}, llm })
+    assert.match(off.env.Q_NOT_STARTED_REASON, /LLAMA_MODEL_PATH/)
+    const on = registry({ env: {}, llm, findModel: model })
+    assert.equal(on.env.Q_NOT_STARTED_REASON, undefined)
+    // The user's own environment never injects a reason.
+    const spoofed = registry({
+      env: { Q_NOT_STARTED_REASON: 'x' },
+      llm,
+      findModel: model,
+    })
+    assert.equal(spoofed.env.Q_NOT_STARTED_REASON, undefined)
+  })
+
+  it('lets the registry read the supervisor health file to see a stopped llama-server', () => {
+    const registry = devChildSpecs({
+      root,
+      env: {},
+      allowedFlags: noFlags,
+      python,
+      llm,
+      findModel: model,
+    }).find((spec) => spec.name === 'strategies')
+    assert.equal(
+      registry.env.DEV_HEALTH_FILE,
+      `${root}/server/data/dev-live/dev-health.json`,
+    )
   })
 })
 

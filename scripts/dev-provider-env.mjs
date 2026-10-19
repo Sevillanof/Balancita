@@ -132,6 +132,24 @@ function optionalFlag(flag, value) {
   return text ? [flag, text] : []
 }
 
+/** `LLAMA_NGL`: a layer count, `auto` or `all`; anything else keeps the default 99 (every layer). */
+function gpuLayers(value) {
+  const text = (value ?? '').trim()
+  return /^(\d{1,3}|auto|all)$/.test(text) ? text : '99'
+}
+
+/** `Q_PROMPT_VERSION`: a prompt version of `config/decision-prompts.json`; anything else keeps 4. */
+function qPromptVersion(value) {
+  const text = (value ?? '').trim()
+  return /^[1-9]\d{0,5}$/.test(text) ? text : '4'
+}
+
+/** `LLAMA_FLASH_ATTN`: `on`, `off` or `auto`; anything else keeps `on`. */
+function flashAttention(value) {
+  const text = (value ?? '').trim().toLowerCase()
+  return ['on', 'off', 'auto'].includes(text) ? text : 'on'
+}
+
 /** Port of the optional `llama-server` child (`LLAMA_PORT`, default 8088). */
 export function llamaPort(env) {
   const port = Number(env.LLAMA_PORT)
@@ -319,6 +337,27 @@ export function resolveLlamaServer({ env, run = defaultRun }) {
         'llama-server was not found on PATH; llm and q (LLM decisions) will not start. Install llama.cpp (brew install llama.cpp) or set DECISIONS_ENABLED=0 to silence this.',
     }
   return { command: 'llama-server' }
+}
+
+/**
+ * Why the local model (llm) and q are not started, in Spanish, or `undefined` when they start (or when there is no
+ * Python and so no strategies page to tell). The strategy registry shows it instead of the "modelo local caído" that
+ * only means "llama-server does not answer" for a model that was supposed to be running.
+ */
+export function qNotStartedReason({
+  env,
+  python,
+  llm,
+  findModel = () => undefined,
+}) {
+  if (!python?.command) return undefined
+  if ((env.DECISIONS_ENABLED ?? '').trim() === '0')
+    return 'modelo local no iniciado: decisiones apagadas a propósito (DECISIONS_ENABLED=0)'
+  if (!llm?.command)
+    return 'modelo local no iniciado: no se encontró llama-server en el PATH (instala llama.cpp, por ejemplo con brew install llama.cpp)'
+  if (!resolveLlamaModel({ env, findModel }).args)
+    return 'modelo local no iniciado: falta LLAMA_MODEL_PATH y no se encontró ningún GGUF de Qwen3.5-4B ni Qwen3-4B (no se descarga nada)'
+  return undefined
 }
 
 export const DEV_PORTS = { vite: 5173, live: 8789 }
@@ -560,6 +599,7 @@ export function devChildSpecs({
   const forwardPath = `${forwardDir}/forward-reliability.json`
   // Funding carry counter (no orders): its state and summary; the registry serves and toggles them.
   const carryDir = liveDb('carry')
+  const qNotStarted = qNotStartedReason({ env, python, llm, findModel })
   const llmOn =
     Boolean(python?.command && llm?.command) &&
     (env.DECISIONS_ENABLED ?? '').trim() !== '0' &&
@@ -680,6 +720,14 @@ export function devChildSpecs({
           '-np',
           (env.LLAMA_PARALLEL ?? '').trim() || '2',
           // Opt-in server flags for prompt reuse between option orders (see futures_qwen_prefill_probe.py).
+          // Every layer on the GPU and flash attention on (Metal on macOS): the prompt is what takes the time.
+          // `-ngl N|auto|all` and `-fa on|off|auto` are the llama.cpp server's current syntax.
+          '-ngl',
+          gpuLayers(env.LLAMA_NGL),
+          '-fa',
+          flashAttention(env.LLAMA_FLASH_ATTN),
+          // KV-shift reuse of a cached prefix: off in llama-server unless a chunk size is given.
+          ...optionalFlag('--cache-reuse', env.LLAMA_CACHE_REUSE),
           ...optionalFlag('-ub', env.LLAMA_UBATCH),
           ...optionalFlag('--ctx-checkpoints', env.LLAMA_CTX_CHECKPOINTS),
           '--no-mmproj',
@@ -701,6 +749,10 @@ export function devChildSpecs({
           verdictsDb,
           '--decisions-db',
           decisionsDb,
+          // Version 4 asks the same question with the fixed text first and the minute's state last, so
+          // llama-server reuses its cached prefix. The shared default (C31, news) stays as released.
+          '--prompt-version',
+          qPromptVersion(env.Q_PROMPT_VERSION),
         ],
         env: {
           ...env,
@@ -858,9 +910,18 @@ export function devChildSpecs({
           String(STRATEGIES_PORT),
         ],
         env: {
-          ...env,
+          // Only the launcher says why Q has no model: never the user's environment.
+          ...Object.fromEntries(
+            Object.entries(env).filter(
+              ([key]) => key !== 'Q_NOT_STARTED_REASON',
+            ),
+          ),
           STRATEGY_FORWARD_PATH: forwardPath,
           CARRY_DIR: carryDir,
+          // Q and the model: why they were not started (qNotStartedReason) and the supervisor's health file,
+          // so the strategies page tells "never started" from "started and stopped" from "does not answer".
+          ...(qNotStarted ? { Q_NOT_STARTED_REASON: qNotStarted } : {}),
+          DEV_HEALTH_FILE: `${serverCwd}/data/dev-live/dev-health.json`,
           PYTHONPATH: [`${root}/python`, env.PYTHONPATH]
             .filter(Boolean)
             .join(delimiter),

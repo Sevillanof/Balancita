@@ -286,7 +286,7 @@ def build_inventory(entries, specs, *, config_dir=None, carry=None, forward_resu
         "strategies": rows,
         "forward_health": None if forward_result is None else {
             key: forward_result[key] for key in ("generated_ms", "cadence_s", "late_after_s", "summary_updated_ms",
-                                                 "summary_available", "funding", "q_skips")},
+                                                 "summary_available", "funding", "q_skips", "q_cases")},
         "missing": list(MISSING),
     }
 

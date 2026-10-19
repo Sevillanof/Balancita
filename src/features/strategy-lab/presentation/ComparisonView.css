@@ -304,3 +304,45 @@
   color: var(--mc-text-2);
   font-size: 12px;
 }
+
+.comparison__funding,
+.comparison__qhistory {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.comparison__qwen {
+  display: grid;
+  gap: 2px;
+  padding-top: 8px;
+  border-top: 1px solid var(--mc-border);
+}
+
+.comparison__qwen > small,
+.comparison__qhistory li > small {
+  display: block;
+}
+
+.comparison__qbutton {
+  justify-self: start;
+  margin-top: 6px;
+  padding: 3px 8px;
+  border: 1px solid var(--mc-border-strong);
+  border-radius: var(--mc-radius);
+  background: transparent;
+  color: var(--mc-text-2);
+  font: inherit;
+  cursor: pointer;
+}
+
+.comparison__qhistory {
+  margin-top: 6px;
+}
+
+.comparison__qhistory li {
+  padding-top: 4px;
+  border-top: 1px solid var(--mc-border);
+}

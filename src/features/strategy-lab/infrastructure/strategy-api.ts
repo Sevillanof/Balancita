@@ -229,6 +229,51 @@ export type QSkips = {
   latest: QSkip[]
 }
 
+export type QCaseBase = {
+  product_id: string
+  bucket_start: number
+  question_id: string
+  question_version: number
+  written_at: number
+}
+
+/** What Q decided in one case: the probability of every option and the one chosen. */
+export type QDecisionCase = QCaseBase & {
+  kind: 'decision'
+  chosen: string
+  probabilities: Record<string, number>
+  confidence: number
+  probability_source: string
+  prompt_version: number
+  latency_ms: number
+  /** llama-server: time reading the prompt and time answering; null when it did not report them. */
+  prompt_ms?: number | null
+  predicted_ms?: number | null
+  model_ref: string
+}
+
+/** A case without decision: a skip (`model_down`, `calm_skip`...) or an error (`no_letters`...), with its reason. */
+export type QNoDecisionCase = QCaseBase & {
+  kind: 'skip' | 'error'
+  code: string
+  reason: string
+}
+
+export type QCase = QDecisionCase | QNoDecisionCase
+
+/** Why the local model cannot be asked, when the launcher or the supervisor know it. */
+export type QModelState = {
+  code: 'not_started' | 'llm_stopped' | 'q_stopped'
+  reason: string
+}
+
+export type QCases = {
+  available: boolean
+  reason: string | null
+  model: QModelState | null
+  latest: QCase[]
+}
+
 export type ForwardHealth = {
   generated_ms: number
   cadence_s: number
@@ -237,6 +282,8 @@ export type ForwardHealth = {
   summary_available: boolean
   funding: Record<string, FundingState>
   q_skips: QSkips
+  /** Absent in answers of a registry older than this field. */
+  q_cases?: QCases
 }
 
 export type InventoryStrategy = {
