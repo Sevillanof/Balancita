@@ -806,3 +806,52 @@ textarea.strategy-lab__json {
 .strategy-lab__carry-label {
   font-weight: 600;
 }
+
+.strategy-lab__movements {
+  grid-column: 1 / -1;
+  order: 99;
+}
+
+.strategy-lab__move-tabs {
+  display: inline-flex;
+  gap: 4px;
+}
+
+.strategy-lab__move-tabs [aria-selected='true'] {
+  font-weight: 700;
+  text-decoration: underline;
+}
+
+.strategy-lab__move-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin: 8px 0;
+  font-size: 13px;
+}
+
+.strategy-lab__move-scroll {
+  overflow-x: auto;
+}
+
+.strategy-lab__move-table td,
+.strategy-lab__move-table th {
+  white-space: nowrap;
+}
+
+.strategy-lab__move-table td:nth-last-child(2) {
+  white-space: normal;
+  min-width: 220px;
+}
+
+.strategy-lab__move-table tr.is-open {
+  background: rgb(80 140 255 / 14%);
+}
+
+.strategy-lab__move-pager {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  justify-content: center;
+  margin-top: 8px;
+}

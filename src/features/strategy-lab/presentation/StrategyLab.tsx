@@ -62,6 +62,7 @@ import {
   signedUsd,
 } from '../../../shared/finance/format.ts'
 import { QwenFocusHead, QwenSide } from './QwenPanels.tsx'
+import MovementsPanel from './MovementsPanel.tsx'
 import CarryPanel from './CarryPanel.tsx'
 import {
   JsonTab,
@@ -1225,6 +1226,8 @@ export default function StrategyLab({
                 )}
               </div>
             </section>
+
+            {focus && <MovementsPanel key={focus} initialSource={focus} />}
 
             {focus ? (
               <QwenSide product={modelProducts[focus]} model={focus} />
