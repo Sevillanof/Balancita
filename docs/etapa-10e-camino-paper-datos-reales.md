@@ -138,6 +138,9 @@ el límite) pasó a `test_paper_source_stale_184.py`, con huecos hechos quitando
 la muerte del proceso en cada frontera de la sesión durante esa cancelación (la cubren `test_paper_kill_session_186` en el diario y
 `TestRealProcessTermination` en las fronteras de la sesión).
 
+Tercera entrega (19-oct): los plazos de la orden contra el límite de silencio (límite justo debajo, igual y justo encima del plazo, y muerte
+entre la pérdida y su vencimiento) pasaron a `test_paper_order_deadline_184.py`, con un hueco de 135 s de cotizaciones reales.
+
 ### 7.2 Etapas
 
 El orden importa: el camino sintético sostiene hoy unas 1.000 pruebas y no se saca antes de que exista su reemplazo.
