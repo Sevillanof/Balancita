@@ -741,6 +741,8 @@ describe('optional LLM decision children (llm and q)', () => {
       './data/dev-live/futures-verdicts.sqlite',
       '--decisions-db',
       './data/dev-live/futures-llm-decisions.sqlite',
+      '--prompt-version',
+      '4',
     ])
     assert.equal(q.env.PYTHONPATH, '/repo/python')
     assert.equal(q.env.KEEP, 'yes')
@@ -1230,6 +1232,28 @@ describe('llm child: GPU offload, flash attention and prompt reuse flags', () =>
     assert.equal(
       valueOf(llmArgs({ LLAMA_CACHE_REUSE: '256' }), '--cache-reuse'),
       '256',
+    )
+  })
+
+  it('asks q for prompt version 4 (fixed prefix first, state last) unless Q_PROMPT_VERSION says otherwise', () => {
+    const qArgs = (env) =>
+      devChildSpecs({
+        root,
+        env,
+        allowedFlags: noFlags,
+        python: { command: 'python3', prefixArgs: [] },
+        llm: { command: 'llama-server' },
+        findModel: () => '/found/Qwen3.5-4B-Q8_0.gguf',
+      }).find((spec) => spec.name === 'q').args
+    const valueOf = (args, flag) => args[args.indexOf(flag) + 1]
+    assert.equal(valueOf(qArgs({}), '--prompt-version'), '4')
+    assert.equal(
+      valueOf(qArgs({ Q_PROMPT_VERSION: '2' }), '--prompt-version'),
+      '2',
+    )
+    assert.equal(
+      valueOf(qArgs({ Q_PROMPT_VERSION: 'x' }), '--prompt-version'),
+      '4',
     )
   })
 

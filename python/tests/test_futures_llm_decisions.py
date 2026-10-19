@@ -797,7 +797,7 @@ class ServiceTests(ServiceBase):
         self.assertEqual(json.loads(row["top_logprobs_json"])[0]["token"], "A")
         self.assertAlmostEqual(sum(json.loads(row["probabilities_json"]).values()), 1.0, places=9)
         self.assertEqual(row["prompt_hash"], q.prompt_hash(self.provider.prompts[0], q.default_template()))
-        self.assertEqual(row["prompt_version"], 4)
+        self.assertEqual(row["prompt_version"], 2)
         self.assertEqual(row["probability_source"], "raw_logprobs")
         self.assertGreaterEqual(row["latency_ms"], 0)
         self.assertIn("predicted_ms", json.loads(row["timings_json"]))
@@ -1162,10 +1162,10 @@ class PromptVersionTests(unittest.TestCase):
         self.config = q.load_prompt_config()
 
     def test_shipped_config_defaults(self):
-        self.assertEqual(self.config["default_version"], 4)
+        self.assertEqual(self.config["default_version"], 2)
         self.assertEqual(self.config["probability_source"], "auto")
         self.assertEqual(sorted(self.config["templates"]), [1, 2, 3, 4])
-        self.assertEqual(q.default_template()["version"], 4)
+        self.assertEqual(q.default_template()["version"], 2)
         self.assertEqual(q.default_template()["system"], SYSTEM_TEXT)
 
     def test_version_one_is_the_old_prompt(self):
@@ -1401,7 +1401,7 @@ class AutoSourceTests(ServiceBase):
         row = self.run_service()
         self.assertEqual(len(self.server.completions()), 1)
         self.assertEqual(row["probability_source"], "raw_logprobs")
-        self.assertEqual(row["prompt_version"], 4)
+        self.assertEqual(row["prompt_version"], 2)
 
     def test_auto_reasks_with_post_sampling_when_letters_are_missing(self):
         self.server.completion = self.no_letters
@@ -1525,7 +1525,7 @@ class ProbeSourcesTests(unittest.TestCase):
         self.assertRegex(text, r"raw_logprobs\s+none \(0/3\)")
         self.assertIn("service would use: post_sampling", text)
         self.assertIn("RESULT: ok", text)
-        self.assertIn("prompt v4", text)
+        self.assertIn("prompt v2", text)
 
     def test_both_sources_fine_uses_raw(self):
         self.server.post_completion = self.post

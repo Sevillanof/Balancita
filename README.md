@@ -135,23 +135,24 @@ Sin red, `capture` y la fuente Real avisan; `vite` y el resto siguen funcionando
 
 ### Configuración (`.env.local` o `.env` en la raíz; el entorno real gana)
 
-| Variable                | Por defecto   | Significado                                                                                                                              |
-| ----------------------- | ------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| `BALANCITA_PYTHON`      | autodetectado | Ejecutable de Python (sin _fallback_ si falla)                                                                                           |
-| `DECISIONS_ENABLED`     | activo        | `0` desactiva `llm` y `q`                                                                                                                |
-| `LLAMA_MODEL_PATH`      | -             | GGUF local; si falta se busca Qwen en las cachés habituales                                                                              |
-| `LLAMA_HF`              | -             | Referencia Hugging Face explícita (siempre `--offline`)                                                                                  |
-| `LLAMA_PORT`            | `8088`        | Puerto loopback                                                                                                                          |
-| `LLAMA_CTX`             | `8192`        | Contexto                                                                                                                                 |
-| `LLAMA_PARALLEL`        | `2`           | Slots paralelos                                                                                                                          |
-| `LLAMA_UBATCH`          | (servidor)    | Opcional, `-ub`. Con modelos híbridos (Qwen3.5) decide dónde se guarda el punto de reuso del prompt; ver `futures_qwen_prefill_probe.py` |
-| `LLAMA_CTX_CHECKPOINTS` | (servidor)    | Opcional, `--ctx-checkpoints`                                                                                                            |
-| `LLAMA_NGL`             | `99`          | `-ngl`: capas en la GPU (Metal en macOS); también `auto` o `all`                                                                         |
-| `LLAMA_FLASH_ATTN`      | `on`          | `-fa on\|off\|auto` (flash attention)                                                                                                    |
-| `LLAMA_CACHE_REUSE`     | (apagado)     | Opcional, `--cache-reuse N` (reuso por desplazamiento del KV; los modelos híbridos como Qwen3.5 pueden no admitirlo)                     |
-| `DECISIONS_PRODUCTS`    | `PF_XBTUSD`   | Productos que decide Q (separados por comas)                                                                                             |
-| `NEWS_ENABLED`          | activo        | `0` desactiva `news`                                                                                                                     |
-| `NEWS_EXTRA_RSS_FEEDS`  | -             | Feeds extra `id\|label\|https url\|license`                                                                                              |
+| Variable                | Por defecto   | Significado                                                                                                                                                            |
+| ----------------------- | ------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `BALANCITA_PYTHON`      | autodetectado | Ejecutable de Python (sin _fallback_ si falla)                                                                                                                         |
+| `DECISIONS_ENABLED`     | activo        | `0` desactiva `llm` y `q`                                                                                                                                              |
+| `LLAMA_MODEL_PATH`      | -             | GGUF local; si falta se busca Qwen en las cachés habituales                                                                                                            |
+| `LLAMA_HF`              | -             | Referencia Hugging Face explícita (siempre `--offline`)                                                                                                                |
+| `LLAMA_PORT`            | `8088`        | Puerto loopback                                                                                                                                                        |
+| `LLAMA_CTX`             | `8192`        | Contexto                                                                                                                                                               |
+| `LLAMA_PARALLEL`        | `2`           | Slots paralelos                                                                                                                                                        |
+| `LLAMA_UBATCH`          | (servidor)    | Opcional, `-ub`. Con modelos híbridos (Qwen3.5) decide dónde se guarda el punto de reuso del prompt; ver `futures_qwen_prefill_probe.py`                               |
+| `LLAMA_CTX_CHECKPOINTS` | (servidor)    | Opcional, `--ctx-checkpoints`                                                                                                                                          |
+| `Q_PROMPT_VERSION`      | `4`           | Versión del prompt de Q (`config/decision-prompts.json`): la 4 pone el texto fijo primero y el estado al final para reusar la caché del prompt; `2` vuelve al anterior |
+| `LLAMA_NGL`             | `99`          | `-ngl`: capas en la GPU (Metal en macOS); también `auto` o `all`                                                                                                       |
+| `LLAMA_FLASH_ATTN`      | `on`          | `-fa on\|off\|auto` (flash attention)                                                                                                                                  |
+| `LLAMA_CACHE_REUSE`     | (apagado)     | Opcional, `--cache-reuse N` (reuso por desplazamiento del KV; los modelos híbridos como Qwen3.5 pueden no admitirlo)                                                   |
+| `DECISIONS_PRODUCTS`    | `PF_XBTUSD`   | Productos que decide Q (separados por comas)                                                                                                                           |
+| `NEWS_ENABLED`          | activo        | `0` desactiva `news`                                                                                                                                                   |
+| `NEWS_EXTRA_RSS_FEEDS`  | -             | Feeds extra `id\|label\|https url\|license`                                                                                                                            |
 
 **El modelo corre 100 % offline**: `dev` nunca descarga nada, `llama-server` va con `--offline` en `127.0.0.1` y Q rechaza cualquier URL que no sea loopback. Las noticias nunca se envían a una API remota.
 

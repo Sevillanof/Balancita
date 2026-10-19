@@ -138,6 +138,12 @@ function gpuLayers(value) {
   return /^(\d{1,3}|auto|all)$/.test(text) ? text : '99'
 }
 
+/** `Q_PROMPT_VERSION`: a prompt version of `config/decision-prompts.json`; anything else keeps 4. */
+function qPromptVersion(value) {
+  const text = (value ?? '').trim()
+  return /^[1-9]\d{0,5}$/.test(text) ? text : '4'
+}
+
 /** `LLAMA_FLASH_ATTN`: `on`, `off` or `auto`; anything else keeps `on`. */
 function flashAttention(value) {
   const text = (value ?? '').trim().toLowerCase()
@@ -743,6 +749,10 @@ export function devChildSpecs({
           verdictsDb,
           '--decisions-db',
           decisionsDb,
+          // Version 4 asks the same question with the fixed text first and the minute's state last, so
+          // llama-server reuses its cached prefix. The shared default (C31, news) stays as released.
+          '--prompt-version',
+          qPromptVersion(env.Q_PROMPT_VERSION),
         ],
         env: {
           ...env,
