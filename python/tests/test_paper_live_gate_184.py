@@ -44,8 +44,22 @@ class TestRealSessionGate(Base):
     def grant(self, path, **over):
         return {REF: dict({"source_path": path, "directory": self.directory, "decide_from_ms": FIRST_DECISION, "decide_until_ms": LAST_DECISION}, **over)}
 
-    def test_no_session_is_authorized_in_the_code(self):
-        self.assertEqual(LP.AUTHORIZED_SESSIONS, {})        # adding one is a reviewed commit that names its BAL-DECISION and changes this line
+    def test_the_only_session_authorized_in_the_code_is_the_one_of_bal_decision_184_07(self):
+        """Adding another is a reviewed commit that names its BAL-DECISION and changes this test. The entry is the one the shipped
+        configuration names, with exactly its window, and its paths are absolute."""
+        self.assertEqual(sorted(LP.AUTHORIZED_SESSIONS), ["BAL-DECISION-184-07"])
+        grant = LP.AUTHORIZED_SESSIONS["BAL-DECISION-184-07"]
+        config = LP.load_config(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "config", "paper-session-btc-1.json"))
+        self.assertEqual(config["authorization_ref"], "BAL-DECISION-184-07")
+        self.assertEqual((config["decide_from_ms"], config["decide_until_ms"]), (grant["decide_from_ms"], grant["decide_until_ms"]))
+        self.assertEqual(grant["decide_until_ms"] - grant["decide_from_ms"], 24 * 3_600_000)
+        self.assertTrue(os.path.isabs(grant["source_path"]) and os.path.isabs(grant["directory"]))
+        self.assertEqual((config["source_id"], config["products"], config["funding_mode"]), (LP.REAL_SOURCE, ["PF_XBTUSD"], "observed"))
+        self.assertEqual((config["max_quote_gap_ms"], config["stale_stop"], config["evaluator_kw"]),
+                         (15_000, {"stop_quote_gap_ms": 25_000}, {"candle_tolerance_ms": LATE_CANDLE_TOLERANCE_MS}))
+        self.assertTrue(config["ingest_kw"]["causal_until_clock"])
+        self.assertTrue(config["clock_guard"]["max_forward_jump_ms"] > 0)
+        self.assertEqual(config["notional_per_trade_usd"], "100")
 
     def test_the_capture_passes_only_with_an_entry_that_matches_the_reference_the_file_and_the_first_decision(self):
         path = self.real_copy()
