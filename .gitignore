@@ -46,3 +46,4 @@ __pycache__/
 
 # Strategy gate (runs, reports, candle cache, locks)
 data/strategy-gate/
+data/qwen-trader/
