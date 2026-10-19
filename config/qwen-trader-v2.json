@@ -1,7 +1,7 @@
 {
   "schema": "balancita-qwen-trader.v1",
   "version": 2,
-  "note": "Qwen operador v2 (sin stop ni límite de 24 h: solo sale Qwen o el fin del bloque). Misma semilla, mismos bloques y mismo periodo que la v1 para comparar parejo; resultados en otra base (practice-v2.sqlite). v1 queda intacta en config/qwen-trader.json. Ver odd/tasks/qwen-trader.md.",
+  "note": "Qwen operador v2 (sin stop ni límite de 24 h: solo sale Qwen o el fin del bloque). Misma semilla, mismos bloques y mismo periodo que la v1 para comparar parejo; resultados en otra base (practice-v2.sqlite). v1 queda intacta en config/qwen-trader.json. Ver odd/tasks/qwen-trader.md. runtime (no entra en la identidad de la base): pide los dos órdenes a la vez y no pregunta el motivo de la entrada.",
   "products": [
     "PF_XBTUSD",
     "PF_ETHUSD"
@@ -191,5 +191,9 @@
     "random_draws": 1000,
     "bootstrap_draws": 2000
   },
-  "state_variant": 2
+  "state_variant": 2,
+  "runtime": {
+    "concurrent_orders": true,
+    "skip_entry_reason": true
+  }
 }

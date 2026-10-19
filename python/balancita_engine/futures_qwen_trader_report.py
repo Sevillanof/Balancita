@@ -16,6 +16,7 @@ import statistics
 
 from . import futures_qwen_trader as qt
 from .futures_costs import COST_MODEL_VERSION, entry_fill, round_trip_cost_bps
+from . import futures_qwen_trader_insights as insights
 from .futures_qwen_practice_report import bootstrap_ci
 from .strategy_gate import (
     FAIL, INCONCLUSIVE, PASS, _es, _factor, _mark, _pct_bp, _share, _stable_seed, _table, _usd, percentile_in,
@@ -43,7 +44,8 @@ def load(db_path):
         data["trades"] = [dict(r) for r in pdb.db.execute("SELECT * FROM trades ORDER BY exit_ms, entry_ms")]
         data["decisions"] = [dict(r) for r in pdb.db.execute(
             "SELECT block_id, seq, t_ms, kind, product, fold, model_action, p_action, action, override, reason, "
-            "orders_json, reason_json, outcome_json, net_bp_now, latency_ms, wake_json, prompt_version FROM decisions")]
+            "orders_json, reason_json, outcome_json, net_bp_now, latency_ms, wake_json, prompt_version, state_hash, state_text, "
+            "position_json, trade_no FROM decisions")]
         data["calls"] = dict(pdb.db.execute("SELECT COUNT(*) AS n, AVG(latency_ms) AS mean_ms FROM calls").fetchone())
         data["runs"] = [dict(r) for r in pdb.db.execute("SELECT * FROM runs ORDER BY id")]
         return data
@@ -708,7 +710,7 @@ def _points(r, sel, ov, coverage_text, cal_s):
     return points[:5]
 
 
-def build_report(db_path, cfg, cache_dir=None, history=None, baseline=None):
+def build_report(db_path, cfg, cache_dir=None, history=None, baseline=None, prompt_baseline=None):
     """``cache_dir``: the prefetch cache (default ``qt.DEFAULT_CACHE``), read-only, for the counterfactual sections."""
     data = load(db_path)
     if history is None:
@@ -716,7 +718,10 @@ def build_report(db_path, cfg, cache_dir=None, history=None, baseline=None):
     other = None
     if baseline is not None:
         other = (load(baseline[0]), baseline[1])
-    return render(data, cfg, history, other)
+    same_state = None
+    if prompt_baseline is not None:
+        same_state = (load(prompt_baseline[0]), prompt_baseline[1])
+    return render(data, cfg, history, other, same_state, db_path)
 
 
 def version_comparison_lines(data, cfg, other_data, other_cfg):
@@ -755,7 +760,7 @@ def version_comparison_lines(data, cfg, other_data, other_cfg):
     return lines
 
 
-def render(data, cfg, history=None, other=None):
+def render(data, cfg, history=None, other=None, same_state=None, db_path=None):
     rules = cfg["rules"]
     blocks, meta, trades = data["blocks"], data["meta"], data["trades"]
     products = cfg["products"]
@@ -779,8 +784,22 @@ def render(data, cfg, history=None, other=None):
                  qt.SCHEMA, cfg["prompt"]["name"], cfg["prompt"]["version"],
                  qt.stamp(meta["holdout_ms"]) if meta.get("holdout_ms") else "corte"), "", _verdict_line(r, rules), ""]
     lines += ["### En pocas palabras", ""] + ["- " + p for p in _points(r, sel, ov, coverage_text, None)] + [""]
+    xrows = insights.position_rows(data, cfg, history)
+    seed_i = meta.get("seed", cfg["practice"]["seed"])
+    extra = []
+    sides = insights.side_bias(data, products)
+    extra.append(insights.side_bias_sentence(sides))
+    ex4 = insights.exit_summary(xrows, "4h")
+    if ex4["n"]:
+        extra.append("Sus decisiones de salida (mantener o cerrar) fueron mejores que la alternativa en el {} de los casos a 4 h "
+                     "({} decisiones; ganancia media {}).".format(_share(ex4["better"]), ex4["n"], _pct_bp(ex4["mean"], 2, True)))
+    conf = insights.confidence_analysis(data, xrows, seed=seed_i)
+    extra.append(insights.confidence_conclusion(conf))
+    lines += ["- " + e for e in extra] + [""]
     if other is not None:
         lines += version_comparison_lines(data, cfg, other[0], other[1])
+    if same_state is not None:
+        lines += insights.prompt_comparison_lines(data, cfg, same_state[0], same_state[1])
     lines += ["## Qué revisamos", "",
               "Reglas fijadas antes de mirar resultados y aplicadas solo al tramo de validación (el 40 % más nuevo de los "
               "bloques). Para pasar hay que cumplir **todas**.", ""]
@@ -864,6 +883,12 @@ def render(data, cfg, history=None, other=None):
 
     lines += [""] + counterfactual_lines(counterfactuals(dict(data, trades=chosen), cfg, history), products, cfg)
     lines += entry_quality_lines(entry_moves(dict(data, trades=chosen), history), products)
+    lines += insights.side_bias_lines(data, products)
+    lines += insights.exit_lines(xrows)
+    lines += insights.confidence_lines(data, xrows, seed=seed_i, results=conf)
+    lines += insights.surrogate_lines(data)
+    if db_path:
+        lines += insights.probe_lines(db_path)
     lines += reason_diversity_lines(data["decisions"])
     lines += throughput_lines(data, cfg)
 
@@ -898,7 +923,7 @@ def render(data, cfg, history=None, other=None):
               "- **Stop**: pérdida máxima automática (1,5 veces la volatilidad diaria); Qwen no puede cambiarla.",
               "- **Factor de beneficio**: lo ganado en las operaciones buenas dividido por lo perdido en las malas.",
               "- **Caída máxima**: la mayor pérdida acumulada desde un pico hasta el punto más bajo siguiente.",
-              "- **Entradas al azar**: operar lo mismo (lado, duración, bloque) pero en momentos elegidos a la suerte.", ""]
+              "- **Entradas al azar**: operar lo mismo (lado, duración, bloque) pero en momentos elegidos a la suerte."] + insights.GLOSSARY + [""]
     served = ", ".join(meta.get("served_models", [])) or "n/d"
     runs = data["runs"]
     lines += ["## Detalles técnicos", "",

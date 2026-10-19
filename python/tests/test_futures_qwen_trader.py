@@ -1129,7 +1129,8 @@ class V2EngineTests(unittest.TestCase):
         def policy(prompt, letters):
             return [{"token": l, "logprob": -0.05 if re.search(r"^{}\) (LARGO)".format(l), prompt, re.M) or
                      (not re.search(r"LARGO|MANTENER", prompt) and l == "A") else -5.0} for l in letters]
-        for cfg, reason_prompts in ((CFG2, 2), (CFG, 1)):
+        asking = dict(CFG2, runtime=dict(CFG2["runtime"], skip_entry_reason=False))     # entry reason on (v2 default skips it)
+        for cfg, reason_prompts in ((asking, 2), (CFG, 1)):
             warm, nxt = warm_bars()
             provider = llm.FakeProvider(entries=policy)
             t = trader(qt.LlmDecider(provider, cfg), warm, cfg=cfg, threshold=0.5)

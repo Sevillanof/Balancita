@@ -48,7 +48,9 @@ import os
 import random
 import sqlite3
 import sys
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from decimal import Decimal
 
 from . import futures_llm_decisions as llm
@@ -63,10 +65,13 @@ DATASET_SCHEMA = "balancita-qwen-trader-dataset.v1"
 ROOT = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", ".."))
 CONFIG_PATH = os.path.join(ROOT, "config", "qwen-trader.json")
 CONFIG_PATH_V2 = os.path.join(ROOT, "config", "qwen-trader-v2.json")
+CONFIG_PATH_V21 = os.path.join(ROOT, "config", "qwen-trader-v2.1.json")
 GATE_CONFIG_PATH = os.path.join(ROOT, "config", "strategy-gate.json")
 DATA_DIR = os.path.join(ROOT, "data", "qwen-trader")
 DEFAULT_DB = os.path.join(DATA_DIR, "practice.sqlite")
 DEFAULT_DB_V2 = os.path.join(DATA_DIR, "practice-v2.sqlite")
+DEFAULT_DB_V21 = os.path.join(DATA_DIR, "practice-v2.1.sqlite")
+VERSIONS = ("1", "2", "2.1")
 DEFAULT_CACHE = os.path.join(DATA_DIR, "cache")
 DEFAULT_URL = "http://127.0.0.1:{}".format(llm.DEFAULT_LLAMA_PORT)
 
@@ -106,12 +111,16 @@ class DecisionError(Exception):
 
 
 def version_paths(version):
-    """``(config path, practice database)`` of a trader version. v1 stays exactly where it was; v2 has its own files."""
-    if int(version) == 1:
+    """``(config path, practice database)`` of a trader version. v1 stays exactly where it was; v2 and v2.1 have their own
+    files."""
+    version = str(version)
+    if version == "1":
         return CONFIG_PATH, DEFAULT_DB
-    if int(version) == 2:
+    if version == "2":
         return CONFIG_PATH_V2, DEFAULT_DB_V2
-    raise TraderError("versión desconocida: {!r} (1 o 2)".format(version))
+    if version == "2.1":
+        return CONFIG_PATH_V21, DEFAULT_DB_V21
+    raise TraderError("versión desconocida: {!r} (1, 2 o 2.1)".format(version))
 
 
 def load_config(path=None):
@@ -127,7 +136,8 @@ def load_config(path=None):
 
 def config_hash(cfg):
     """Identity of everything that shapes a decision. ``entry_threshold`` is an OUTPUT of the report, not an input."""
-    body = {k: v for k, v in cfg.items() if k not in ("entry_threshold", "note", "rules")}
+    # ``runtime`` (concurrency, skipping the entry reason) only changes speed / what is stored, never an action: not identity
+    body = {k: v for k, v in cfg.items() if k not in ("entry_threshold", "note", "rules", "runtime")}
     body["practice"] = {k: v for k, v in cfg["practice"].items() if k != "target_blocks"}   # how many blocks is not identity
     raw = json.dumps({"config": body, "state": STATE_VERSION, "costs": COST_MODEL_VERSION}, sort_keys=True)
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
@@ -148,8 +158,33 @@ def stamp(ms):
 
 def template_of(cfg):
     prompt = cfg["prompt"]
-    return {"version": prompt["version"], "system": prompt["system"], "answer_line": prompt["answer_line"],
-            "prefill": prompt["prefill"]}
+    out = {"version": prompt["version"], "system": prompt["system"], "answer_line": prompt["answer_line"],
+           "prefill": prompt["prefill"]}
+    if prompt.get("state_last"):
+        out["state_last"] = True          # v2.1: fixed text first, the variable STATE last (llama-server prefix cache)
+    return out
+
+
+def build_prompt(state_text, question, template):
+    """The user message. Default layout (v1, v2): STATE, QUESTION, options, answer line (``llm.build_prompt``). With
+    ``state_last`` (v2.1) the fixed part comes first and the STATE last, so everything before ``STATE:`` is the same text
+    on every wake of the same question and option order and llama-server serves it from its prompt cache."""
+    if not template.get("state_last"):
+        return llm.build_prompt(state_text, question, template)
+    lines = ["QUESTION: " + llm.sanitize_text(question["instruction"])]
+    for letter, (option_id, description, _) in zip(llm.LETTERS, llm.question_options(question)):
+        lines.append("{}) {}".format(letter, option_id) + ("" if description is None else " - " + llm.sanitize_text(description)))
+    if template.get("answer_line"):
+        lines.append(template["answer_line"].format(letters=llm._letters_phrase(llm.question_letters(question))))
+    lines.append("STATE: " + llm.sanitize_text(state_text))
+    return "\n".join(lines)
+
+
+def runtime_of(cfg):
+    """Speed options of a config (``runtime``): ``concurrent_orders``, ``skip_entry_reason``. Absent (v1): both off."""
+    runtime = cfg.get("runtime") or {}
+    return {"concurrent_orders": bool(runtime.get("concurrent_orders")),
+            "skip_entry_reason": bool(runtime.get("skip_entry_reason"))}
 
 
 def es(value, places=2, sign=False):
@@ -286,24 +321,36 @@ def _merge(question, answers):
 
 class LlmDecider:
     """Asks the local model. ``store`` (optional) caches every call by ``(key, t_ms, step, variant)``: a replay of a block
-    that was cut by the time budget costs no new call. ``deadline_s`` is a time budget in ``clock`` seconds."""
+    that was cut by the time budget costs no new call. ``deadline_s`` is a time budget in ``clock`` seconds.
 
-    def __init__(self, provider, cfg, *, store=None, clock=time.monotonic, deadline=None, model=None):
+    ``concurrency`` > 1 sends the option orders of one question at the same time (llama-server ``-np 2`` serves them in
+    parallel). Only the HTTP calls run in threads; results are handled, stored and merged in the fixed variant order by the
+    calling thread, so what is stored and decided is the same as asking them one after the other (up to the tiny logit
+    differences llama.cpp batching can introduce; see ``check_determinism``)."""
+
+    def __init__(self, provider, cfg, *, store=None, clock=time.monotonic, deadline=None, model=None, concurrency=None):
         self.provider, self.cfg, self.store, self.clock = provider, cfg, store, clock
         self.template = template_of(cfg)
         self.deadline = deadline
         self.model = model
+        self.concurrency = (2 if runtime_of(cfg)["concurrent_orders"] else 1) if concurrency is None else int(concurrency)
         self.calls = 0
-        self.spent = 0.0
+        self.spent = 0.0              # wall seconds spent waiting for the model (a concurrent pair counts once)
+        self.latency_sum = 0.0        # sum of the individual call latencies (what each call took)
         self.down = 0
         self.progress = None          # optional callable(decider), called every ``progress_every`` model calls
         self.progress_every = 200
+        self._next_progress = self.progress_every
 
     def mean_call(self):
+        """Wall seconds per call: with concurrent orders this is about half the latency of one call."""
         return self.spent / self.calls if self.calls else 0.0
 
-    def _guard(self):
-        if self.deadline is not None and self.clock() + self.mean_call() > self.deadline:
+    def mean_latency(self):
+        return self.latency_sum / self.calls if self.calls else 0.0
+
+    def _guard(self, count=1):
+        if self.deadline is not None and self.clock() + self.mean_call() * count > self.deadline:
             raise BudgetExhausted()
 
     def _orders(self, question, single=False):
@@ -316,34 +363,94 @@ class LlmDecider:
         ``single``: the written order only (the reason call). Raises ``DecisionError`` on an unusable answer."""
         orders = self._orders(question, single)
         cached = self.store.calls(key, t_ms, step) if self.store else {}
-        rows = []
-        for variant, order in enumerate(orders):
-            row = cached.get(variant)
-            if row is None:
-                row = self._call(key, t_ms, step, variant, order, question, state_text)
-            rows.append(row)
+        missing = [v for v in range(len(orders)) if v not in cached]
+        rows = dict(cached)
+        if self.concurrency > 1 and len(missing) > 1:
+            rows.update(self._call_many(key, t_ms, step, missing, orders, question, state_text))
+        else:
+            for variant in missing:
+                rows[variant] = self._call(key, t_ms, step, variant, orders[variant], question, state_text)
+        rows = [rows[v] for v in range(len(orders))]
         merged = _merge(question, rows)
         return dict(merged, orders=[{k: r[k] for k in ("order", "probabilities", "confidence", "source", "latency_ms",
                                                          "prompt_hash")} for r in rows],
                     latency_ms=sum(r["latency_ms"] for r in rows), state_hash=llm.text_hash(state_text)[:16])
 
-    def _call(self, key, t_ms, step, variant, order, question, state_text):
+    def _prompt(self, order, question, state_text):
         asked = llm.permuted(question, order)
-        text = llm.build_prompt(state_text, asked, self.template)
-        mode = self.cfg["prompt"]["probability_source"]
-        temperature = float(self.cfg["prompt"]["temperature"])
+        return asked, build_prompt(state_text, asked, self.template)
+
+    def _one_request(self, text, asked):
+        """The HTTP part only (runs in a worker thread): no shared state is touched."""
+        t0 = time.monotonic()
+        try:
+            answer = llm.ask_model(self.provider, text, llm.question_letters(asked), asked,
+                                   float(self.cfg["prompt"]["temperature"]), self.template,
+                                   self.cfg["prompt"]["probability_source"])
+            return answer, time.monotonic() - t0, None
+        except (llm.ModelUnavailable, llm.ModelResponseError) as error:
+            return None, time.monotonic() - t0, error
+
+    def _row(self, key, t_ms, step, variant, asked, text, answer, took, state_text):
+        result = answer["result"]
+        return {"key": key, "t_ms": t_ms, "step": step, "variant": variant,
+                "order": [o["id"] for o in asked["options"]], "probabilities": result["probabilities"],
+                "chosen": result["chosen"], "confidence": result["confidence"], "source": answer["source"],
+                "latency_ms": int(took * 1000), "prompt_hash": llm.prompt_hash(text, self.template),
+                "prompt_version": self.template["version"], "state_hash": llm.text_hash(state_text)[:16],
+                "model": self.model, "asked_at_ms": int(time.time() * 1000)}
+
+    def _call_many(self, key, t_ms, step, variants, orders, question, state_text):
+        """Several option orders of one question at once. Results are consumed in variant order; the first failure stops
+        the question exactly as the sequential path would (later variants are neither stored nor used)."""
+        self._guard(len(variants))
+        prepared = [(v,) + self._prompt(orders[v], question, state_text) for v in variants]
+        t0 = self.clock()
+        with ThreadPoolExecutor(max_workers=min(self.concurrency, len(prepared))) as pool:
+            futures = [pool.submit(self._one_request, text, asked) for _, asked, text in prepared]
+            results = [f.result() for f in futures]
+        wall = self.clock() - t0
+        out, counted = {}, 0
+        for (variant, asked, text), (answer, took, error) in zip(prepared, results):
+            if error is not None and isinstance(error, llm.ModelUnavailable):
+                self.down += 1
+                if self.down >= 3:
+                    raise ModelDown() from None
+                out[variant] = self._call(key, t_ms, step, variant, orders[variant], question, state_text)
+                continue
+            if error is not None:
+                if self.store:
+                    self.store.error(key, t_ms, step, variant, error.kind, str(error))
+                raise DecisionError(str(error)) from error
+            self.down = 0
+            counted += 1
+            self.latency_sum += took
+            row = self._row(key, t_ms, step, variant, asked, text, answer, took, state_text)
+            if self.store:
+                self.store.put_call(row)
+            out[variant] = row
+        self.calls += counted
+        self.spent += wall
+        self._tick()
+        return out
+
+    def _tick(self):
+        if self.progress and self.calls >= self._next_progress:
+            self._next_progress = (self.calls // self.progress_every + 1) * self.progress_every
+            self.progress(self)
+
+    def _call(self, key, t_ms, step, variant, order, question, state_text):
+        asked, text = self._prompt(order, question, state_text)
         for _ in range(3):
             self._guard()
             t0 = self.clock()
-            try:
-                answer = llm.ask_model(self.provider, text, llm.question_letters(asked), asked, temperature,
-                                       self.template, mode)
-            except llm.ModelUnavailable:
+            answer, took_real, error = self._one_request(text, asked)
+            if isinstance(error, llm.ModelUnavailable):
                 self.down += 1
                 if self.down >= 3:
                     raise ModelDown() from None
                 continue
-            except llm.ModelResponseError as error:
+            if error is not None:
                 if self.store:
                     self.store.error(key, t_ms, step, variant, error.kind, str(error))
                 raise DecisionError(str(error)) from error
@@ -351,17 +458,11 @@ class LlmDecider:
             self.down = 0
             self.calls += 1
             self.spent += took
-            result = answer["result"]
-            row = {"key": key, "t_ms": t_ms, "step": step, "variant": variant,
-                   "order": [o["id"] for o in asked["options"]], "probabilities": result["probabilities"],
-                   "chosen": result["chosen"], "confidence": result["confidence"], "source": answer["source"],
-                   "latency_ms": int(took * 1000), "prompt_hash": llm.prompt_hash(text, self.template),
-                   "prompt_version": self.template["version"], "state_hash": llm.text_hash(state_text)[:16],
-                   "model": self.model, "asked_at_ms": int(time.time() * 1000)}
+            self.latency_sum += took
+            row = self._row(key, t_ms, step, variant, asked, text, answer, took, state_text)
             if self.store:
                 self.store.put_call(row)
-            if self.progress and self.calls % self.progress_every == 0:
-                self.progress(self)
+            self._tick()
             return row
         raise ModelDown()
 
@@ -392,6 +493,7 @@ class Trader:
         self.last_call_ms = None
         self.trade_seq = 0
         self.hooks = [WAKE_HOOKS[name] for name in cfg["wake"].get("hooks", [])]
+        self.skip_entry_reason = runtime_of(cfg)["skip_entry_reason"]
 
     # ---- data
 
@@ -675,6 +777,12 @@ class Trader:
         if not wants_move:
             return [event]
         reason = None
+        if not in_position and self.skip_entry_reason:
+            # ``runtime.skip_entry_reason``: the entry reason is degenerate (95 % «tendencia»), so it is not asked at all
+            event.update(action=action, reason=None)
+            self._open(t_ms, "LONG" if action == "LARGO" else "SHORT", event["p_action"], None)
+            event["trade_no"] = self.position.trade_no
+            return [event]
         try:
             asked = self.decider.ask(self.key, t_ms, "reason", dict(
                 self.questions["reason"], instruction=self.questions["reason"]["instruction"].replace("{action}", action)),
@@ -989,6 +1097,24 @@ def _eta(seconds):
     return "{:.1f} min".format(seconds / 60.0)
 
 
+def throughput_line(decider, provider, elapsed_s, blocks, block_seconds):
+    """Measured speed of a batch: calls per second, wall seconds per call (a concurrent pair counts once), the latency of one
+    call, blocks per hour and, when the server reports it, the share of prompt tokens served from its cache."""
+    if not decider.calls:
+        return "rendimiento: ninguna llamada nueva en esta tanda"
+    text = "rendimiento: {} llamadas nuevas en {} ({:.2f} llamadas/s, {:.2f} s de reloj por llamada, latencia de una llamada " \
+           "{:.2f} s, órdenes {})".format(decider.calls, _eta(decider.spent), decider.calls / max(decider.spent, 1e-9),
+                                          decider.mean_call(), decider.mean_latency(),
+                                          "en paralelo" if decider.concurrency > 1 else "una tras otra")
+    if blocks and block_seconds > 0:
+        text += ", {:.1f} bloques por hora".format(blocks * 3600.0 / block_seconds)
+    summary = getattr(provider, "perf_summary", None)
+    share = summary().get("cache_share") if callable(summary) else None
+    if share is not None:
+        text += ", {:.0f} % del prompt salió de la caché del servidor".format(share * 100)
+    return text
+
+
 def run_block(history, cfg, block, provider_decider, *, entry_threshold, log=print):
     """Replays one block end to end. Returns ``(events, bars_in_block, closes, wakes)``; nothing is stored here."""
     practice = cfg["practice"]
@@ -1024,7 +1150,8 @@ def check_identity(pdb, cfg, plan_meta):
 
 
 def run_practice(history, db_path, provider, cfg, holdout_ms, *, max_minutes=55.0, seed=None, blocks=None,
-                 clock=time.monotonic, log=print, progress_calls=200, block_days=None, from_date=None):
+                 clock=time.monotonic, log=print, progress_calls=200, block_days=None, from_date=None, concurrent=None,
+                 skip_entry_reason=None):
     """Runs the practice blocks inside ``max_minutes``. Resumable: finished blocks are skipped, a block cut by the budget
     is replayed next time with every stored call answered from the DB (no new model call).
 
@@ -1034,6 +1161,10 @@ def run_practice(history, db_path, provider, cfg, holdout_ms, *, max_minutes=55.
         raise TraderError("llama-server no responde en {}: arrancalo con el modelo local y volvé a lanzar `practice`. "
                           "Este comando no descarga ningún modelo y solo habla con 127.0.0.1.".format(
                               getattr(provider, "base_url", "el puerto local")))
+    overrides = {k: v for k, v in (("concurrent_orders", concurrent), ("skip_entry_reason", skip_entry_reason))
+                 if v is not None}
+    if overrides:                                         # command-line override of the speed options (not identity)
+        cfg = dict(cfg, runtime=dict(cfg.get("runtime") or {}, **overrides))
     seed = cfg["practice"]["seed"] if seed is None else seed
     plan, fold_cut = block_plan(cfg, holdout_ms, seed=seed, blocks=blocks, block_days=block_days, from_date=from_date)
     pdb = PracticeDB(db_path)
@@ -1106,6 +1237,7 @@ def run_practice(history, db_path, provider, cfg, holdout_ms, *, max_minutes=55.
             pdb.set_meta("threshold_selection", select_threshold(trades, cfg))
         log("practice terminado ({}): {} llamadas nuevas, {} de {} bloques hechos en {}".format(
             reason, decider.calls, len(done), len(plan), _eta(clock() - started)))
+        log(throughput_line(decider, provider, clock() - started, finished_here, sum(block_seconds)))
         return {"stop_reason": reason, "blocks_done": len(done), "blocks_total": len(plan), "calls": decider.calls,
                 "mean_call_s": mean_call, "finished_here": finished_here}
     finally:
@@ -1213,10 +1345,11 @@ def _parser():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest="command", required=True)
 
-    def common(p, version_default="2", versions=("1", "2")):
+    def common(p, version_default="2", versions=VERSIONS):
         p.add_argument("--version", default=version_default, choices=versions,
                        help="trader version (default %(default)s): 1 = stop + 24 h limit, 2 = only Qwen (or the block end) "
-                            "closes; each has its own config and practice database")
+                            "closes, 2.1 = v2 with the fixed prompt text first (speed only); each has its own config and "
+                            "practice database")
         p.add_argument("--config", default=None, help="default: the config of the version")
         p.add_argument("--db", default=None, help="practice database (default: practice.sqlite for v1, practice-v2.sqlite "
                                                   "for v2, in data/qwen-trader)")
@@ -1233,10 +1366,29 @@ def _parser():
     pr.add_argument("--blocks", type=int, default=None, help="blocks in the plan (default config practice.target_blocks)")
     pr.add_argument("--seed", type=int, default=None)
     pr.add_argument("--offline", action="store_true", help="use only the local cache: no Kraken request at all")
+    pr.add_argument("--sequential", action="store_true", help="ask the two option orders one after the other (default: at the "
+                    "same time when the config says so; llama-server needs -np 2)")
+    pr.add_argument("--ask-entry-reason", action="store_true", help="also ask the (degenerate) reason of an entry")
+    pr.add_argument("--check-determinism", type=int, default=None, metavar="N", help="do not run blocks: replay N stored calls, "
+                    "one by one and with both orders at once, and print the largest probability difference")
+    cp = sub.add_parser("compare-prompts", help="same stored decisions of --from-version asked again with the prompt of --version")
+    common(cp, "2.1")
+    cp.add_argument("--from-version", default="2", choices=VERSIONS)
+    cp.add_argument("--n", type=int, default=200, help="decisions to ask again (half without position, half in position)")
+    cp.add_argument("--llama-url", default=None)
+    cp.add_argument("--out", default=os.path.join(DATA_DIR, "comparacion-prompts.md"))
+    pb = sub.add_parser("probe", help="perturbation probes: ask stored decisions again changing one number at a time")
+    common(pb)
+    pb.add_argument("--sample", type=int, default=200, help="stored decisions to probe (seeded, stratified)")
+    pb.add_argument("--seed", type=int, default=None)
+    pb.add_argument("--max-minutes", type=float, default=55.0)
+    pb.add_argument("--llama-url", default=None)
+    pb.add_argument("--sequential", action="store_true")
     rp = sub.add_parser("report", help="Spanish markdown report (no model)")
-    common(rp, "all", ("1", "2", "all"))
+    common(rp, "all", VERSIONS + ("all",))
     rp.add_argument("--out", default=os.path.join(DATA_DIR, "informe.md"), help="report of v1")
     rp.add_argument("--out-v2", default=os.path.join(DATA_DIR, "informe-v2.md"), help="report of v2 (with v1 vs v2)")
+    rp.add_argument("--out-v21", default=os.path.join(DATA_DIR, "informe-v2.1.md"), help="report of v2.1 (with v2 vs v2.1)")
     ex = sub.add_parser("export", help="learning data: one JSON line per decision")
     common(ex)
     ex.add_argument("--out", default=os.path.join(DATA_DIR, "dataset.jsonl"))
@@ -1246,13 +1398,29 @@ def _parser():
 def main(argv=None):
     args = _parser().parse_args(argv)
     try:
-        if args.command != "report":
+        if args.command not in ("report",):
             config_path, default_db = version_paths(args.version)
             args.config, args.db = args.config or config_path, args.db or default_db
             print("Qwen operador: versión {} (config {}, base {})".format(args.version, args.config, args.db))
         cfg = load_config(args.config) if args.command != "report" else None
         holdout_ms = load_holdout_ms()
-        if args.command in ("prefetch", "practice"):
+        if args.command == "compare-prompts":
+            from .futures_qwen_trader_probe import compare_lines, compare_prompts
+            provider = _provider(args.llama_url)
+            if not provider.health():
+                raise TraderError("llama-server no responde en {}".format(provider.base_url))
+            old_db = version_paths(args.from_version)[1]
+            text = compare_lines(compare_prompts(old_db, cfg, provider, args.n), "v" + args.from_version, "v" + args.version)
+            os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
+            with open(args.out, "w", encoding="utf-8") as handle:
+                handle.write(text)
+            print(text)
+            print("escrito en {}".format(args.out))
+        elif args.command == "probe":
+            from .futures_qwen_trader_probe import run_probe
+            run_probe(args.db, cfg, _provider(args.llama_url), sample=args.sample, seed=args.seed, max_minutes=args.max_minutes,
+                      concurrency=1 if args.sequential else None)
+        elif args.command in ("prefetch", "practice"):
             history = History(args.cache_dir, holdout_ms, offline=getattr(args, "offline", False))
             plan, _ = block_plan(cfg, holdout_ms, seed=args.seed, blocks=args.blocks)
             if args.command == "prefetch" or not history.offline:
@@ -1264,19 +1432,29 @@ def main(argv=None):
                     print("candles {}: {} a {}".format(product, stamp(lo), stamp(hi)))
                     history.prefetch(product, date_ms(cfg["practice"]["from"]) - cfg["practice"]["warmup_days"] * DAY_MS,
                                      hi)
-            if args.command == "practice":
+            if args.command == "practice" and args.check_determinism is not None:
+                from .futures_qwen_trader_probe import check_determinism, determinism_text
+                provider = _provider(args.llama_url)
+                if not provider.health():
+                    raise TraderError("llama-server no responde en {}".format(provider.base_url))
+                print(determinism_text(check_determinism(args.db, cfg, provider, args.check_determinism)))
+            elif args.command == "practice":
                 provider = _provider(args.llama_url)
                 run_practice(history, args.db, provider, cfg, holdout_ms, max_minutes=args.max_minutes, seed=args.seed,
-                             blocks=args.blocks)
+                             blocks=args.blocks, concurrent=False if args.sequential else None,
+                             skip_entry_reason=False if args.ask_entry_reason else None)
         elif args.command == "report":
             from .futures_qwen_trader_report import build_report
-            wanted = ("1", "2") if args.version == "all" else (args.version,)
+            wanted = VERSIONS if args.version == "all" else (args.version,)
             paths = {v: version_paths(v) for v in wanted}
             if args.db and len(wanted) == 1:
                 paths[wanted[0]] = (paths[wanted[0]][0], args.db)
-            base = None
-            if "1" in wanted and "2" in wanted and os.path.exists(paths["1"][1]) and os.path.exists(paths["2"][1]):
-                base = (paths["1"][1], load_config(paths["1"][0]))
+            base, same_state = None, None
+            exists = lambda v: os.path.exists(version_paths(v)[1] if v not in paths else paths[v][1])
+            if "2" in wanted and exists("1") and exists("2"):
+                base = (version_paths("1")[1], load_config(version_paths("1")[0]))
+            if "2.1" in wanted and exists("2") and exists("2.1"):
+                same_state = (version_paths("2")[1], load_config(version_paths("2")[0]))
             written = 0
             for v in wanted:
                 config_path, db = paths[v]
@@ -1286,8 +1464,8 @@ def main(argv=None):
                         continue
                     raise TraderError("no existe la base de la versión {}: {}".format(v, db))
                 text = build_report(db, load_config(args.config or config_path), args.cache_dir,
-                                    baseline=base if v == "2" else None)
-                out = args.out if v == "1" else args.out_v2
+                                    baseline=base if v == "2" else None, prompt_baseline=same_state if v == "2.1" else None)
+                out = {"1": args.out, "2": args.out_v2, "2.1": args.out_v21}[v]
                 os.makedirs(os.path.dirname(os.path.abspath(out)), exist_ok=True)
                 with open(out, "w", encoding="utf-8") as handle:
                     handle.write(text)
