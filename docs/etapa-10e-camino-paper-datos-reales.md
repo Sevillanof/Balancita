@@ -101,8 +101,8 @@ configuración `config/paper-session-btc-1.json`: solo `PF_XBTUSD`, cartera simu
 entradas a los 15 s, parada a los 25 s, tolerancia de velas de 15 s y `clock_guard.max_forward_jump_ms` de 30 s (hipótesis de las Issues, no un valor
 medido). Sigue sin existir ninguna ruta para órdenes reales ni credenciales. Cualquier otra fuente, carpeta o ventana vuelve a ser `real_session_not_authorized`.
 
-Cómo se corre (en la Mac, con `main` al día, sin tocar la captura ni `pnpm dev`; hay que arrancar entre las 13:50Z y las 14:00Z, porque la última vela de calentamiento
-no puede estar a más de 10 minutos de la primera decisión):
+Cómo se corre (en la Mac, con `main` al día, sin tocar la captura ni `pnpm dev`; hay que correr el preflight entre 1 min 10 s después de la hora de inicio menos 10 min y la hora de inicio: la última vela de calentamiento
+no puede estar a más de 10 minutos de la primera decisión, y la vela de un minuto llega a la base unos 3 s después de cerrar; el preflight informa por separado la cantidad de velas, `warmup_<producto>`, y su frescura, `warmup_fresh_<producto>`):
 
 ```
 PYTHONPATH=python python3 -m balancita_engine.paper_live_process preflight --config config/paper-session-btc-1.json \

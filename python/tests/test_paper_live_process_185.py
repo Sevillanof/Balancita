@@ -89,7 +89,7 @@ class TestPreflightAndStart(Base):
         config = LP.validate_config(config_dict())
         report = LP.preflight(config, self.directory, self.world.path, strategies=self.cache["strategies"])
         self.assertTrue(report["ok"], report)
-        self.assertEqual({c["name"] for c in report["checks"]} >= {"real_session_authorized", "disk_free", "source_readable", "warmup_" + BTC}, True)
+        self.assertEqual({c["name"] for c in report["checks"]} >= {"real_session_authorized", "disk_free", "source_readable", "warmup_" + BTC, "warmup_fresh_" + BTC}, True)
         self.assertFalse(os.path.exists(self.directory))
 
     def test_a_source_without_the_warmup_is_refused_before_anything_is_created(self):
@@ -101,6 +101,11 @@ class TestPreflightAndStart(Base):
             self.supervisor(Clock(), decide_from_ms=T0 + HOUR).start()
         self.assertEqual(caught.exception.reason, "preflight_failed")
         self.assertFalse(os.path.exists(self.directory))
+
+    def test_enough_candles_that_are_not_fresh_fail_only_the_freshness_check(self):
+        config = LP.validate_config(config_dict(decide_from_ms=T0 + 10 * HOUR, warmup_minutes=1))
+        report = LP.preflight(config, self.directory, self.world.path, strategies=self.cache["strategies"])
+        self.assertEqual([c["name"] for c in report["checks"] if not c["ok"]], ["warmup_fresh_" + BTC])
 
     def test_a_real_source_is_not_authorized_and_nothing_is_written(self):
         with self.assertRaises(LP.ProcessError) as caught:
