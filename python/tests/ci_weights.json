@@ -135,5 +135,6 @@
   "test_replay_9a": 25,
   "test_replay_9a_audit": 64,
   "test_replay_9a_isolation": 1,
-  "test_signal_continuity": 30
+  "test_signal_continuity": 30,
+  "test_strategy_gate": 140
 }

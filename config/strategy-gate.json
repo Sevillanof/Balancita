@@ -1,0 +1,23 @@
+{
+  "schema": "balancita-strategy-gate.v1",
+  "version": 1,
+  "holdout_from": "2026-04-19",
+  "holdout_note": "Fecha de corte fija (unos 6 meses). La práctica nunca lee velas, señales ni resultados desde esta fecha; solo el examen final las evalúa, una vez por versión.",
+  "default_from": "2025-01-01",
+  "default_products": ["PF_XBTUSD", "PF_ETHUSD", "PF_SOLUSD"],
+  "practice_folds": 5,
+  "exam_folds": 3,
+  "random_draws": 1000,
+  "bootstrap_draws": 2000,
+  "seed": 20261019,
+  "neighbors": {"enabled": true, "pct": 0.2, "max_params": 6},
+  "rules": {
+    "min_trades": 100,
+    "ci_level": 0.95,
+    "min_percentile_vs_random": 95,
+    "min_deflated_probability": 0.95,
+    "min_positive_fold_share": 0.6,
+    "min_positive_product_share": 0.5,
+    "cost_stress_multiplier": 1.5
+  }
+}
