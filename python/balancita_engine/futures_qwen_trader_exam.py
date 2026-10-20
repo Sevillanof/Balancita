@@ -235,11 +235,18 @@ def day_bootstrap(rows, values, draws, seed):
 
 
 def random_percentile(rows, horizon, draws, seed, observed):
-    """Share (0-100) of random-side draws on the SAME photos that Qwen's mean beat."""
+    """Share (0-100) of random draws that Qwen's mean beat. A draw keeps Qwen's sides but flips ALL of a day's sides or none
+    (one coin per day): a model that repeats the same side all day is then compared with luck at the same granularity, not with
+    a fresh coin per photo (which would be too easy to beat)."""
     if not rows:
         return None
     rng = random.Random(seed)
-    below = sum(1 for _ in range(draws) if mean([net(r, rng.choice((1, -1)), horizon) for r in rows]) < observed)
+    days = sorted({r["t_ms"] // DAY_MS for r in rows})
+    below = 0
+    for _ in range(draws):
+        flip = {d: rng.choice((1, -1)) for d in days}
+        if mean([net(r, flip[r["t_ms"] // DAY_MS] * side_of(r), horizon) for r in rows]) < observed:
+            below += 1
     return 100.0 * below / draws
 
 
@@ -390,6 +397,6 @@ def build_exam_report(db_path, cfg):
                   horizons, qt.es(r["threshold"], 2), cfg["exam"]["seed"]),
               "- Neto = lado × movimiento − costo de ida y vuelta del producto. No incluye funding (pocos pb en 24 h).",
               "- Las fotos del mismo día se solapan: el intervalo se calcula remuestreando días completos ({} sorteos). "
-              "El azar da el lado al azar a las mismas fotos ({} sorteos).".format(rules["random_draws"], rules["random_draws"]),
+              "El azar conserva los lados de Qwen y los da vuelta o no, un sorteo por día ({} sorteos).".format(rules["random_draws"], rules["random_draws"]),
               "- Veredicto: PASA si se cumplen todas las reglas; INCONCLUSO si solo faltan entradas; NO PASA en otro caso.", ""]
     return "\n".join(lines)
