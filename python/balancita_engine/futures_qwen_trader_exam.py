@@ -129,8 +129,12 @@ def run_exam(history, db_path, provider, cfg, holdout_ms, *, max_minutes=55.0, c
             _store_photos(pdb, chosen)
             log("examen: {} fotos posibles, {} elegidas al azar repartidas en el tiempo".format(len(photos), len(chosen)))
         total = pdb.db.execute("SELECT COUNT(*) FROM exam_snapshots").fetchone()[0]
-        pending = pdb.db.execute("SELECT * FROM exam_snapshots WHERE snap_id NOT IN (SELECT snap_id FROM exam_answers) "
-                                 "ORDER BY ord").fetchall()
+        # still to ask: photos without an answer, and photos answered before the mirror was asked for every photo (the real
+        # answers stay as they are, in ``calls``; a mirror that already failed with a model error is not retried)
+        pending = pdb.db.execute(
+            "SELECT s.*, a.real_action, a.real_p FROM exam_snapshots s LEFT JOIN exam_answers a USING(snap_id) "
+            "WHERE a.snap_id IS NULL OR (a.real_action IS NOT NULL AND a.mirror_action IS NULL AND NOT EXISTS ("
+            "SELECT 1 FROM call_errors e WHERE e.block_id = s.snap_id AND e.step = 'mirror')) ORDER BY s.ord").fetchall()
         identity = provider.identity()
         served_fn = getattr(provider, "served_model", None)
         served = served_fn() if callable(served_fn) else None
@@ -139,20 +143,20 @@ def run_exam(history, db_path, provider, cfg, holdout_ms, *, max_minutes=55.0, c
         decider = qt.LlmDecider(provider, cfg, store=pdb, clock=clock, deadline=clock() + max_minutes * 60.0,
                                 model=served or identity.get("model_ref") or "unknown")
         questions = {}
-        started, reason, answered = clock(), "done", total - len(pending)
-        log("examen: {} fotos, {} ya contestadas, presupuesto {} min, modelo {}".format(total, answered, max_minutes,
-                                                                                         served or identity.get("model_ref")))
+        started, reason, handled = clock(), "done", 0
+        log("examen: {} fotos, {} por preguntar, presupuesto {} min, modelo {}".format(
+            total, len(pending), max_minutes, served or identity.get("model_ref")))
         for row in pending:
             question = questions.setdefault(row["product"], qt.questions_for(cfg, row["product"])["flat"])
-            real_action = real_p = mirror_action = mirror_p = None
+            real_action, real_p, mirror_action, mirror_p = row["real_action"], row["real_p"], None, None
             try:
-                real = decider.ask(row["snap_id"], row["t_ms"], "action", question, row["state_text"])
-                real_action, real_p = real["chosen"], real["probabilities"][real["chosen"]]
-                if real_action in ("LARGO", "CORTO"):
-                    mirror = decider.ask(row["snap_id"], row["t_ms"], "mirror", question, row["mirror_text"])
-                    mirror_action, mirror_p = mirror["chosen"], mirror["probabilities"][mirror["chosen"]]
+                if real_action is None:
+                    real = decider.ask(row["snap_id"], row["t_ms"], "action", question, row["state_text"])
+                    real_action, real_p = real["chosen"], real["probabilities"][real["chosen"]]
+                mirror = decider.ask(row["snap_id"], row["t_ms"], "mirror", question, row["mirror_text"])
+                mirror_action, mirror_p = mirror["chosen"], mirror["probabilities"][mirror["chosen"]]
             except qt.DecisionError:
-                pass                                   # stored as unanswered (None): counted in the report, never retried
+                pass                                   # kept as it is (None): counted in the report, never retried
             except qt.BudgetExhausted:
                 reason = "budget"
                 break
@@ -163,13 +167,15 @@ def run_exam(history, db_path, provider, cfg, holdout_ms, *, max_minutes=55.0, c
             with pdb.db:
                 pdb.db.execute("INSERT OR REPLACE INTO exam_answers VALUES(?,?,?,?,?,?)", (
                     row["snap_id"], real_action, real_p, mirror_action, mirror_p, int(time.time() * 1000)))
-            answered += 1
-            if answered % 50 == 0:
-                log("progreso: {} de {} fotos, {} llamadas nuevas, {:.2f} s por llamada, {} transcurridos".format(
-                    answered, total, decider.calls, decider.mean_call(), qt._eta(clock() - started)))
+            handled += 1
+            if handled % 50 == 0:
+                log("progreso: {} de {} fotos pendientes, {} llamadas nuevas, {:.2f} s por llamada, {} transcurridos".format(
+                    handled, len(pending), decider.calls, decider.mean_call(), qt._eta(clock() - started)))
+        answered = pdb.db.execute("SELECT COUNT(*) FROM exam_answers").fetchone()[0]
         log("examen terminado ({}): {} de {} fotos contestadas, {} llamadas nuevas en {}".format(
             reason, answered, total, decider.calls, qt._eta(clock() - started)))
-        return {"stop_reason": reason, "answered": answered, "total": total, "calls": decider.calls}
+        return {"stop_reason": reason, "answered": answered, "total": total, "calls": decider.calls,
+                "remaining": len(pending) - handled}
     finally:
         pdb.close()
 
@@ -181,9 +187,10 @@ def load_answers(db_path):
     pdb = qt.PracticeDB(db_path, readonly=True)
     try:
         sums = {}
-        for r in pdb.db.execute("SELECT block_id, probs_json FROM calls WHERE step='action' AND block_id LIKE 'exam:%'"):
+        for r in pdb.db.execute("SELECT block_id, step, probs_json FROM calls WHERE step IN ('action', 'mirror') "
+                                "AND block_id LIKE 'exam:%'"):
             probs = json.loads(r["probs_json"])
-            acc = sums.setdefault(r["block_id"], [0.0, 0.0, 0])
+            acc = sums.setdefault((r["block_id"], r["step"]), [0.0, 0.0, 0])
             acc[0], acc[1], acc[2] = acc[0] + probs.get("LARGO", 0.0), acc[1] + probs.get("CORTO", 0.0), acc[2] + 1
         leans = {k: (v[0] / v[2], v[1] / v[2]) for k, v in sums.items()}     # mean over the option orders, as _merge does
         rows = pdb.db.execute("SELECT s.*, a.real_action, a.real_p, a.mirror_action, a.mirror_p FROM exam_snapshots s "
@@ -192,11 +199,26 @@ def load_answers(db_path):
         for r in rows:
             d = dict(r)
             d["moves"] = json.loads(d.pop("moves_json"))
-            d["p_largo"], d["p_corto"] = leans.get(d["snap_id"], (None, None))
+            d["p_largo"], d["p_corto"] = leans.get((d["snap_id"], "action"), (None, None))
+            d["p_largo_m"], d["p_corto_m"] = leans.get((d["snap_id"], "mirror"), (None, None))
+            d.update(split_lean(d))
             out.append(d)
         return out, pdb.meta()
     finally:
         pdb.close()
+
+
+def split_lean(row):
+    """``lean`` = p(LARGO) - p(CORTO) on the real numbers, ``lean_m`` the same on the mirrored ones. The part that flips sign
+    in the mirror is what comes from the numbers (``lean_num``); the part that does not is the model's habit (``habit``)."""
+    keys = ("lean", "lean_m", "lean_num", "habit")
+    if None in (row["p_largo"], row["p_corto"]):
+        return dict.fromkeys(keys)
+    lean = row["p_largo"] - row["p_corto"]
+    if None in (row["p_largo_m"], row["p_corto_m"]):
+        return dict(dict.fromkeys(keys), lean=lean)
+    lean_m = row["p_largo_m"] - row["p_corto_m"]
+    return {"lean": lean, "lean_m": lean_m, "lean_num": (lean - lean_m) / 2, "habit": (lean + lean_m) / 2}
 
 
 def net(row, side, horizon):
@@ -241,18 +263,19 @@ def day_bootstrap(rows, values, draws, seed):
     return means[int(0.025 * draws)], means[min(draws - 1, int(0.975 * draws))]
 
 
-def random_percentile(rows, horizon, draws, seed, observed):
+def random_percentile(rows, horizon, draws, seed, observed, side=None):
     """Share (0-100) of random draws that Qwen's mean beat. A draw keeps Qwen's sides but flips ALL of a day's sides or none
     (one coin per day): a model that repeats the same side all day is then compared with luck at the same granularity, not with
     a fresh coin per photo (which would be too easy to beat)."""
     if not rows:
         return None
+    side = side or side_of
     rng = random.Random(seed)
     days = sorted({r["t_ms"] // DAY_MS for r in rows})
     below = 0
     for _ in range(draws):
         flip = {d: rng.choice((1, -1)) for d in days}
-        if mean([net(r, flip[r["t_ms"] // DAY_MS] * side_of(r), horizon) for r in rows]) < observed:
+        if mean([net(r, flip[r["t_ms"] // DAY_MS] * side(r), horizon) for r in rows]) < observed:
             below += 1
     return 100.0 * below / draws
 
@@ -327,13 +350,212 @@ def lean_bands(rows, key):
     return [sum(1 for v in values if lo <= v < hi) for lo, hi in BANDS], max(values, default=None), len(values)
 
 
-def build_exam_report(db_path, cfg):
-    rows, meta = load_answers(db_path)
-    if not rows:
-        return "# Qwen operador v3: examen con fotos del pasado\n\nTodavía no hay fotos contestadas (ejecutá `exam`).\n"
-    r, rules, horizons = analyse(rows, meta, cfg), cfg["exam_rules"], cfg["exam"]["horizons_min"]
+ICONS = {PASS: "✅ PASA", FAIL: "❌ NO PASA", INCONCLUSIVE: "⚠️ INCONCLUSO"}
+
+
+# --------------------------------------------------------------------------- the lean exam
+
+
+def sign(value):
+    return (value > 0) - (value < 0)
+
+
+def _ranks(values):
+    order = sorted(range(len(values)), key=values.__getitem__)
+    out, i = [0.0] * len(values), 0
+    while i < len(order):
+        j = i
+        while j + 1 < len(order) and values[order[j + 1]] == values[order[i]]:
+            j += 1
+        for k in range(i, j + 1):
+            out[order[k]] = (i + j) / 2 + 1
+        i = j + 1
+    return out
+
+
+def spearman(xs, ys):
+    """Rank correlation (ties share the mean rank); ``None`` when it is not defined."""
+    if len(xs) < 3:
+        return None
+    rx, ry = _ranks(xs), _ranks(ys)
+    mx, my = mean(rx), mean(ry)
+    sxx, syy = math.fsum((a - mx) ** 2 for a in rx), math.fsum((b - my) ** 2 for b in ry)
+    if sxx == 0 or syy == 0:
+        return None
+    return math.fsum((a - mx) * (b - my) for a, b in zip(rx, ry)) / math.sqrt(sxx * syy)
+
+
+def day_bootstrap_stat(rows, stat, draws, seed):
+    """95 % interval of ``stat(rows)`` resampling whole days."""
+    days = {}
+    for row in rows:
+        days.setdefault(row["t_ms"] // DAY_MS, []).append(row)
+    groups = list(days.values())
+    if not groups:
+        return None, None
+    rng = random.Random(seed)
+    values = []
+    for _ in range(draws):
+        value = stat([r for g in (rng.choice(groups) for _ in groups) for r in g])
+        if value is not None:
+            values.append(value)
+    values.sort()
+    if not values:
+        return None, None
+    return values[int(0.025 * len(values))], values[min(len(values) - 1, int(0.975 * len(values)))]
+
+
+def lean_block(rows, key, h, cfg):
+    """What the lean ``key`` (``lean_num`` or ``lean``) says about the move over ``h`` minutes, after costs."""
+    rules = cfg["exam_rules"]
+    lr, draws, seed = rules["inclinacion"], rules["random_draws"], cfg["exam"]["seed"]
+    move = lambda r: r["moves"][str(h)]
+    out = {"n": len(rows), "spearman": spearman([r[key] for r in rows], [move(r) for r in rows])}
+    out["sp_ci"] = day_bootstrap_stat(rows, lambda p: spearman([r[key] for r in p], [move(r) for r in p]), draws, seed)
+    k = max(1, int(len(rows) * lr["extreme_share"]))
+    ordered = sorted(rows, key=lambda r: r[key])
+    bottom, top = ordered[:k], ordered[-k:]
+    top_ids = {r["snap_id"] for r in top}
+    side = lambda r: 1 if r["snap_id"] in top_ids else -1           # long on the top fifth, short on the bottom fifth
+    extremes = bottom + top
+    out["top_move"], out["bottom_move"] = mean([move(r) for r in top]), mean([move(r) for r in bottom])
+    out["ext_net"] = mean([net(r, side(r), h) for r in extremes])
+    out["ext_ci"] = day_bootstrap_stat(extremes, lambda p: mean([net(r, side(r), h) for r in p]), draws, seed)
+    out["ext_pct"] = random_percentile(extremes, h, draws, seed, out["ext_net"], side)
+    strong = [r for r in rows if abs(r[key]) >= lr["sign_min_abs"] and move(r) != 0]
+    out["hit"], out["hit_n"] = mean([1.0 if sign(r[key]) == sign(move(r)) else 0.0 for r in strong]), len(strong)
+    traded = [r for r in rows if r[key] != 0]
+    sg = lambda r: sign(r[key])
+    out["all_net"] = mean([net(r, sg(r), h) for r in traded])
+    out["all_ci"] = day_bootstrap_stat(traded, lambda p: mean([net(r, sg(r), h) for r in p]), draws, seed)
+    out["all_pct"] = random_percentile(traded, h, draws, seed, out["all_net"], sg) if traded else None
+    out["always_long"], out["always_short"] = mean([net(r, 1, h) for r in traded]), mean([net(r, -1, h) for r in traded])
+    return out
+
+
+def analyse_lean(rows, cfg):
+    """The main verdict: does the lean that comes from the numbers anticipate the move? Decided on one horizon only."""
+    exam, lr = cfg["exam"], cfg["exam_rules"]["inclinacion"]
+    mirrored = [r for r in rows if r.get("lean_num") is not None]
+    out = {"n": len(mirrored), "horizons": {}}
+    if not mirrored:
+        out.update(verdict=INCONCLUSIVE, checks=[], habit=None)
+        return out
+    for h in exam["horizons_min"]:
+        out["horizons"][h] = {key: lean_block(mirrored, key, h, cfg) for key in ("lean_num", "lean")}
+    habit = [r["habit"] for r in mirrored]
+    ordered = sorted(habit)
+    both = [r for r in mirrored if r["lean"] != 0 and r["lean_m"] != 0]
+    out["habit"] = {"mean": mean(habit), "median": ordered[len(ordered) // 2],
+                    "coherent": mean([1.0 if sign(r["lean_m"]) == -sign(r["lean"]) else 0.0 for r in both]), "n": len(both)}
+    d = out["horizons"][lr["decide_horizon_min"]]["lean_num"]
+    pct = cfg["exam_rules"]["inclinacion"]["min_percentile_vs_random"]
+    out["checks"] = [
+        {"id": "photos", "ok": len(mirrored) >= lr["min_photos"], "value": len(mirrored)},
+        {"id": "extremes", "ok": d["ext_ci"][0] is not None and d["ext_ci"][0] > 0, "value": (d["ext_net"], d["ext_ci"])},
+        {"id": "random", "ok": d["ext_pct"] is not None and d["ext_pct"] >= pct, "value": d["ext_pct"]},
+        {"id": "spearman", "ok": d["sp_ci"][0] is not None and d["sp_ci"][0] > 0, "value": (d["spearman"], d["sp_ci"])}]
+    out["verdict"] = INCONCLUSIVE if not out["checks"][0]["ok"] else (PASS if all(c["ok"] for c in out["checks"]) else FAIL)
+    return out
+
+
+def _ci(pair):
+    return "{} a {}".format(_bp(pair[0]), _bp(pair[1]))
+
+
+def _rho(value):
+    return "n/d" if value is None else qt.es(value, 2, True)
+
+
+def _rho_ci(pair):
+    return "n/d" if pair[0] is None else "{} a {}".format(qt.es(pair[0], 2, True), qt.es(pair[1], 2, True))
+
+
+def _pctile(value):
+    return "n/d" if value is None else "{} %".format(qt.es(value, 0))
+
+
+def lean_lines(rows, cfg):
+    a, rules = analyse_lean(rows, cfg), cfg["exam_rules"]
+    lr, horizons = rules["inclinacion"], cfg["exam"]["horizons_min"]
+    h0 = lr["decide_horizon_min"]
+    meaning = {
+        PASS: "Las fotos hacia las que Qwen más se inclina, mirando solo lo que viene de los números, ganaron después de "
+              "costos y le ganaron al azar. Vale la pena seguir con Qwen operador.",
+        FAIL: "La inclinación de Qwen no anticipa el movimiento del precio lo suficiente. Con estos datos y este modelo no "
+              "se justifica seguir afinándolo como operador.",
+        INCONCLUSIVE: "Hay menos de {} fotos con la respuesta del espejo, no alcanza para decidir. Hace falta contestar "
+                      "más fotos.".format(lr["min_photos"])}
+    lines = ["## {}".format(ICONS[a["verdict"]]), "", meaning[a["verdict"]], "", "## En pocas palabras", ""]
+    if not a["horizons"]:
+        return lines + ["- Todavía no hay fotos con la respuesta del espejo. Corré `exam` para completarlas.", ""], a
+    d = a["horizons"][h0]["lean_num"]
+    lines.append("- Se usaron **{}** fotos del pasado con la respuesta real y la del espejo. En cada una, la **inclinación** es "
+                 "cuánto más probable le pareció largo que corto.".format(a["n"]))
+    lines.append("- A {} la inclinación que viene de los números se parece al movimiento del precio con una correlación de "
+                 "**{}** (rango {}). Cero es «no se parecen»; mucho más de cero sería señal.".format(
+                     _h(h0), _rho(d["spearman"]), _rho_ci(d["sp_ci"])))
+    lines.append("- En el quinto de fotos más inclinado a largo el precio se movió {} y en el más inclinado a corto {}. "
+                 "Operar a favor de la inclinación en esos extremos rindió **{}** por operación después de costos "
+                 "(rango {}).".format(_bp(d["top_move"]), _bp(d["bottom_move"]), _bp(d["ext_net"]), _ci(d["ext_ci"])))
+    if a["habit"]:
+        lines.append("- El **hábito** promedio fue {} (positivo: tiende a largo aunque cambien los números). El espejo "
+                     "cambió de lado en el {} de las fotos.".format(_rho(a["habit"]["mean"]), _pct(a["habit"]["coherent"])))
+    lines += ["", "## Qué revisamos", "",
+              "Cada foto es un momento en que el operador habría preguntado de verdad, tomado de velas guardadas anteriores "
+              "al corte de prueba final (el holdout, que no se toca). A Qwen se le preguntó con los números reales y otra vez "
+              "con los signos dados vuelta (el espejo). De sus probabilidades sale la inclinación (largo menos corto). Lo que "
+              "cambia de signo en el espejo viene de los números; lo que no cambia es su hábito. Después se miró si esa "
+              "inclinación anticipa lo que hizo el precio a las {}, sin esperar a que Qwen «decida entrar», y se descontó el "
+              "costo de entrar y salir.".format(" y a las ".join(_h(x) for x in horizons)), "",
+              "### Reglas fijadas de antemano (deciden a las {})".format(_h(h0)), ""]
+    texts = {
+        "photos": "**Fotos suficientes**: {} de las {} mínimas con la respuesta del espejo.",
+        "extremes": "**Los extremos ganan después de costos**: operar a favor de la inclinación en el quinto más inclinado "
+                    "de cada lado rinde más que cero, con todo el rango de confianza del 95 % por encima de cero.",
+        "random": "**Mejor que el azar**: esos extremos superan al {} % de los sorteos que dan vuelta al azar los lados de "
+                  "cada día entero.",
+        "spearman": "**La inclinación acompaña al precio**: la correlación es mayor que cero con todo el rango de confianza "
+                    "por encima de cero."}
+    for c in a["checks"]:
+        text = texts[c["id"]].format(c["value"], lr["min_photos"]) if c["id"] == "photos" else \
+            texts[c["id"]].format(qt.es(lr["min_percentile_vs_random"], 0))
+        lines.append("- {} {}".format("✅" if c["ok"] else "❌", text))
+    lines.append("- A {} se informa, pero no decide.".format(" y a las ".join(_h(x) for x in horizons if x != h0)))
+    for h in horizons:
+        lines += ["", "## Resultados a {}".format(_h(h)), "", "Puntos básicos (1 pb = 0,01 %), después de costos.", "",
+                  "| Medida | Solo lo que viene de los números | Cruda (sin espejo) |", "|---|---|---|"]
+        n, c = a["horizons"][h]["lean_num"], a["horizons"][h]["lean"]
+        for label, fn in (
+                ("Correlación con el movimiento", lambda x: _rho(x["spearman"])),
+                ("Rango de confianza del 95 % (por día)", lambda x: _rho_ci(x["sp_ci"])),
+                ("Movimiento del quinto más inclinado a largo", lambda x: _bp(x["top_move"])),
+                ("Movimiento del quinto más inclinado a corto", lambda x: _bp(x["bottom_move"])),
+                ("Neto operando esos extremos", lambda x: _bp(x["ext_net"])),
+                ("Rango de confianza del 95 %", lambda x: _ci(x["ext_ci"])),
+                ("Mejor que el % de sorteos al azar", lambda x: _pctile(x["ext_pct"])),
+                ("Acierto de signo (inclinación ≥ {})".format(qt.es(lr["sign_min_abs"], 2)),
+                 lambda x: "{} ({} fotos)".format(_pct(x["hit"]), x["hit_n"])),
+                ("Neto operando el lado de la inclinación en todas las fotos", lambda x: _bp(x["all_net"])),
+                ("Rango de confianza del 95 %", lambda x: _ci(x["all_ci"])),
+                ("Mejor que el % de sorteos al azar", lambda x: _pctile(x["all_pct"])),
+                ("Siempre largo en esas mismas fotos", lambda x: _bp(x["always_long"])),
+                ("Siempre corto en esas mismas fotos", lambda x: _bp(x["always_short"]))):
+            lines.append("| {} | {} | {} |".format(label, fn(n), fn(c)))
+    if a["habit"]:
+        hb = a["habit"]
+        lines += ["", "Hábito (lo que no cambia con el espejo): promedio {}, mediana {}. En el {} de las fotos ({} con ambas "
+                  "respuestas) el espejo invirtió el lado.".format(_rho(hb["mean"]), _rho(hb["median"]), _pct(hb["coherent"]),
+                                                                    hb["n"])]
+    lines.append("")
+    return lines, a
+
+
+def entries_lines(rows, cfg):
+    """First version of the exam (the entries Qwen would have made), as a section of the report."""
+    r, rules, horizons = analyse(rows, {}, cfg), cfg["exam_rules"], cfg["exam"]["horizons_min"]
     g, total = r["groups"], r["n"]
-    short = {"PASA": "## ✅ PASA", "NO PASA": "## ❌ NO PASA", "INCONCLUSO": "## ⚠️ INCONCLUSO"}
+    short = ICONS
     meaning = {
         PASS: "Qwen acertó más que el azar después de costos con las entradas que dejó pasar el espejo. Puede pasar a "
               "operar en bloques.",
@@ -341,8 +563,8 @@ def build_exam_report(db_path, cfg):
               "operar en bloques: si no acierta acá, no va a acertar operando.",
         INCONCLUSIVE: "Pasaron muy pocas entradas el espejo (menos de {}) para decidir. Si no hubo ninguna, no se midió "
                       "nada: no es que haya fallado, es que falta evidencia.".format(rules["min_operations"])}
-    lines = ["# Qwen operador v3: examen con fotos del pasado", "", short[r["verdict"]], "", meaning[r["verdict"]], "",
-             "## En pocas palabras", ""]
+    lines = ["## Por entradas (primera versión del examen)", "",
+             "**Veredicto por entradas: {}.** {}".format(short[r["verdict"]], meaning[r["verdict"]]), ""]
     first = r["horizons"][horizons[0]]
     last = r["horizons"][horizons[-1]]
     lines.append("- Se le mostraron **{}** fotos del mercado del pasado (sin posición abierta) y se comparó cada respuesta con lo "
@@ -357,13 +579,13 @@ def build_exam_report(db_path, cfg):
     if not g["pasa"] + g["espejo"] + g["umbral"]:
         lines.append("- Qwen dijo ESPERAR en todas las fotos, así que no hubo ninguna entrada que medir. Mirá más abajo qué tan "
                      "cerca estuvo de entrar.")
-    lines += ["", "## Qué revisamos", "",
+    lines += ["", "### Qué se miró por entradas", "",
               "Cada foto es un momento en que el operador habría preguntado de verdad (cada hora cerrada, movimiento fuerte o "
               "funding raro), tomado de velas guardadas anteriores al corte de prueba final (el holdout, que no se toca). "
               "Se le preguntó a Qwen con los números reales y, si dijo LARGO o CORTO, otra vez con los signos dados vuelta. "
               "Solo cuenta como entrada si dijo una cosa con los números reales y la contraria con el espejo. Después se miró "
               "qué hizo el precio a las {} y se descontó el costo de entrar y salir.".format(
-                  " y a las ".join(_h(h) for h in horizons)), "", "### Reglas fijadas de antemano", ""]
+                  " y a las ".join(_h(h) for h in horizons)), "", "#### Reglas por entradas, fijadas de antemano", ""]
     names = {"positive": "**Gana después de costos**: todo el rango de confianza del 95 % por encima de cero",
              "random": "**Mejor que el azar**: supera al {} % de los sorteos con el lado al azar en las mismas fotos".format(
                  qt.es(rules["min_percentile_vs_random"], 0)),
@@ -374,7 +596,7 @@ def build_exam_report(db_path, cfg):
             lines.append("- {} **Entradas suficientes**: {} de las {} mínimas.".format(mark, c["value"], rules["min_operations"]))
         else:
             lines.append("- {} {} (a {}).".format(mark, names[c["id"]], _h(c["h"])))
-    lines += ["", "## Resultados", "", "Resultado neto promedio por entrada, en puntos básicos (1 pb = 0,01 %), después de costos.",
+    lines += ["", "### Resultados por entradas", "", "Resultado neto promedio por entrada, en puntos básicos (1 pb = 0,01 %), después de costos.",
               "", "| Qué | Fotos | " + " | ".join("Neto a {} | Acierto a {}".format(_h(h), _h(h)) for h in horizons) + " |",
               "|---|---|" + "---|---|" * len(horizons)]
 
@@ -392,7 +614,7 @@ def build_exam_report(db_path, cfg):
     lines.append("| Dijo ESPERAR (acierto = ningún lado ganaba) | {} | {} |".format(
         r["horizons"][horizons[0]]["ESPERAR"]["n"],
         " | ".join("n/d | " + _pct(r["horizons"][h]["ESPERAR"]["hit"]) for h in horizons)))
-    lines += ["", "### Qué tan cerca estuvo de entrar", "",
+    lines += ["", "#### Qué tan cerca estuvo de entrar", "",
               "Probabilidad que Qwen le dio a cada lado en cada foto (promedio de las dos órdenes de opciones). Para entrar "
               "hace falta {} o más y ser la opción más probable.".format(qt.es(r["threshold"], 2)), "",
               "| Lado | Menos de 0,20 | 0,20 a 0,35 | 0,35 a 0,50 | 0,50 o más | Máximo |", "|---|---|---|---|---|---|"]
@@ -409,22 +631,40 @@ def build_exam_report(db_path, cfg):
     lines.append("| Siempre largo en esas fotos | " + " | ".join(_bp(r["horizons"][h]["always_long"]) for h in horizons) + " |")
     lines.append("| Siempre corto en esas fotos | " + " | ".join(_bp(r["horizons"][h]["always_short"]) for h in horizons) + " |")
     lines += ["", "Fotos por resultado de la pregunta: pasó el espejo {}, bloqueada por el espejo {}, bajo el umbral {}, esperar {}, "
-              "sin respuesta {}.".format(g["pasa"], g["espejo"], g["umbral"], g["espera"], g["sin_respuesta"]), "",
-              "## Glosario", "",
+              "sin respuesta {}.".format(g["pasa"], g["espejo"], g["umbral"], g["espera"], g["sin_respuesta"]), ""]
+    return lines
+
+
+def build_exam_report(db_path, cfg):
+    rows, meta = load_answers(db_path)
+    if not rows:
+        return "# Qwen operador v3: examen con fotos del pasado\n\nTodavía no hay fotos contestadas (ejecutá `exam`).\n"
+    rules, horizons = cfg["exam_rules"], cfg["exam"]["horizons_min"]
+    lean, _ = lean_lines(rows, cfg)
+    lines = ["# Qwen operador v3: examen con fotos del pasado", ""] + lean + entries_lines(rows, cfg)
+    lines += ["## Glosario", "",
               "- **Foto**: un momento del pasado con el estado del mercado tal como lo vería el operador.",
               "- **Espejo**: la misma foto con los signos dados vuelta (lo que subió, bajó; máximos y mínimos cambiados; funding "
-              "con signo opuesto). Si Qwen dice LARGO en las dos versiones, no está leyendo los números.",
+              "con signo opuesto).",
+              "- **Inclinación**: probabilidad de largo menos probabilidad de corto. Positiva: se inclina a largo.",
+              "- **Hábito**: la parte de la inclinación que no cambia con el espejo, es decir, lo que Qwen diría aunque los "
+              "números estuvieran al revés. Lo que sí cambia viene de los números.",
+              "- **Correlación (Spearman)**: de -1 a 1; mide si las fotos con más inclinación a largo son también las que "
+              "más subieron. Cero: no se parecen.",
+              "- **Quinto más inclinado**: el 20 % de las fotos con la inclinación más alta (o más baja).",
               "- **pb (punto básico)**: 0,01 %. El costo de entrar y salir es de unos 10 pb.",
-              "- **Acierto**: la entrada ganó algo después de costos.",
               "- **Holdout**: tramo final de datos que se guarda sin tocar para una prueba final.", "",
               "## Detalle técnico", "",
               "- Base: `exam-v3.sqlite`; configuración `config/qwen-trader-v3.json` (hash {}...); modelo(s): {}.".format(
                   str(meta.get("config_hash"))[:12], ", ".join(meta.get("served_models", [])) or "n/d"),
               "- Período de las fotos: {} a {}; horizontes {} min; umbral de entrada {}; semilla {}.".format(
                   qt.stamp(min(x["t_ms"] for x in rows)), qt.stamp(max(x["t_ms"] for x in rows)),
-                  horizons, qt.es(r["threshold"], 2), cfg["exam"]["seed"]),
+                  horizons, qt.es(cfg["practice_entry_threshold"], 2), cfg["exam"]["seed"]),
               "- Neto = lado × movimiento − costo de ida y vuelta del producto. No incluye funding (pocos pb en 24 h).",
-              "- Las fotos del mismo día se solapan: el intervalo se calcula remuestreando días completos ({} sorteos). "
-              "El azar conserva los lados de Qwen y los da vuelta o no, un sorteo por día ({} sorteos).".format(rules["random_draws"], rules["random_draws"]),
-              "- Veredicto: PASA si se cumplen todas las reglas; INCONCLUSO si no hubo ninguna entrada o si solo faltan entradas; NO PASA en otro caso.", ""]
+              "- Las fotos del mismo día se solapan: los intervalos se calculan remuestreando días completos ({} sorteos). "
+              "El azar conserva los lados y los da vuelta o no, un sorteo por día ({} sorteos).".format(
+                  rules["random_draws"], rules["random_draws"]),
+              "- Veredicto principal: PASA si se cumplen todas las reglas de inclinación; INCONCLUSO si hay menos de {} fotos "
+              "con espejo; NO PASA en otro caso. El de entradas: PASA si se cumplen todas; INCONCLUSO si no hubo entradas o "
+              "solo faltan entradas; NO PASA en otro caso.".format(rules["inclinacion"]["min_photos"]), ""]
     return "\n".join(lines)

@@ -160,7 +160,7 @@ class ExamTests(unittest.TestCase):
         self.assertEqual((result["stop_reason"], result["answered"], result["total"]), ("done", 30, 30))
         self.assertTrue(all(to <= HOLDOUT for _, _, to in history.requests))
         rows = [r[1:] for r in self.answers(self.db)]
-        self.assertTrue(all((m is not None) == (a in ("LARGO", "CORTO")) for a, m in rows))
+        self.assertTrue(all(a is not None and m is not None for a, m in rows))       # the mirror is asked for every photo
         self.assertGreater(len({a for a, _ in rows}), 1)
 
     def answers(self, path):
@@ -182,6 +182,32 @@ class ExamTests(unittest.TestCase):
         self.assertEqual(resumed, self.answers(self.db))
         again, provider, _ = self.go()
         self.assertEqual((again["calls"], provider.calls), (0, 0))
+
+    def test_a_database_from_the_first_exam_only_gets_the_missing_mirrors(self):
+        self.go()
+        full = self.answers(self.db)
+        con = sqlite3.connect(self.db)
+        with con:
+            con.execute("UPDATE exam_answers SET mirror_action=NULL, mirror_p=NULL")
+            con.execute("DELETE FROM calls WHERE step='mirror'")
+        real_before = con.execute("SELECT COUNT(*) FROM calls WHERE step='action'").fetchone()[0]
+        con.close()
+        result, provider, _ = self.go()
+        self.assertEqual(result["stop_reason"], "done")
+        self.assertEqual(self.answers(self.db), full)
+        con = sqlite3.connect(self.db)
+        self.assertEqual(con.execute("SELECT COUNT(*) FROM calls WHERE step='action'").fetchone()[0], real_before)
+        con.close()
+        self.assertEqual(provider.calls, 60)                       # 30 photos x 2 option orders, the mirror only
+
+    def test_lean_is_split_into_numbers_and_habit(self):
+        r = {"p_largo": 0.6, "p_corto": 0.2, "p_largo_m": 0.5, "p_corto_m": 0.3}
+        got = ex.split_lean(r)
+        self.assertAlmostEqual(got["lean"], 0.4)
+        self.assertAlmostEqual(got["lean_m"], 0.2)
+        self.assertAlmostEqual(got["lean_num"], 0.1)
+        self.assertAlmostEqual(got["habit"], 0.3)
+        self.assertIsNone(ex.split_lean(dict(r, p_largo_m=None))["lean_num"])
 
     def test_a_database_of_another_config_is_refused(self):
         self.go()
@@ -252,6 +278,50 @@ class VerdictTests(unittest.TestCase):
         self.assertEqual(ex.classify(row("LARGO", "CORTO", 0, p=0.3), t), "umbral")
         self.assertEqual(ex.classify(row("ESPERAR", None, 0), t), "espera")
         self.assertEqual(ex.classify(row(None, None, 0), t), "sin_respuesta")
+
+
+def lean_row(i, x, move):
+    probs = {"p_largo": 0.5 + x / 2, "p_corto": 0.5 - x / 2, "p_largo_m": 0.5 - x / 2, "p_corto_m": 0.5 + x / 2}
+    r = dict(snap_id="s{}".format(i), t_ms=(i % 60) * ex.DAY_MS + i, moves={"240": move, "1440": move}, cost_bp=10.0,
+             real_action="ESPERAR", real_p=0.9, mirror_action="ESPERAR", mirror_p=0.9, **probs)
+    r.update(ex.split_lean(r))
+    return r
+
+
+class LeanVerdictTests(unittest.TestCase):
+    def cfg(self):
+        cfg = copy.deepcopy(CFG3)
+        cfg["exam_rules"]["random_draws"] = 200
+        return cfg
+
+    def photos(self, n, informative):
+        rows = []
+        for i in range(n):
+            x = ((i * 37) % 201 - 100) / 100.0                  # spread over -1..1
+            noise = ((i * 7919) % 41 - 20)
+            rows.append(lean_row(i, x, x * 200 + noise if informative else ((i * 104729) % 401 - 200)))
+        return rows
+
+    def test_a_lean_that_anticipates_the_move_passes(self):
+        a = ex.analyse_lean(self.photos(600, True), self.cfg())
+        self.assertEqual(a["verdict"], ex.PASS)
+        self.assertGreater(a["horizons"][240]["lean_num"]["spearman"], 0.9)
+
+    def test_a_lean_unrelated_to_the_move_does_not_pass(self):
+        self.assertEqual(ex.analyse_lean(self.photos(600, False), self.cfg())["verdict"], ex.FAIL)
+
+    def test_few_mirrored_photos_are_inconclusive_and_a_pure_habit_has_no_numbers_lean(self):
+        self.assertEqual(ex.analyse_lean(self.photos(100, True), self.cfg())["verdict"], ex.INCONCLUSIVE)
+        habit = [lean_row(i, 0.0, 50) for i in range(10)]
+        for r in habit:
+            r.update(p_largo=0.8, p_corto=0.1, p_largo_m=0.8, p_corto_m=0.1)
+            r.update(ex.split_lean(r))
+        self.assertTrue(all(abs(r["lean_num"]) < 1e-12 and r["habit"] > 0.6 for r in habit))
+
+    def test_spearman_and_ties(self):
+        self.assertAlmostEqual(ex.spearman([1, 2, 3, 4], [10, 20, 30, 40]), 1.0)
+        self.assertAlmostEqual(ex.spearman([1, 2, 3, 4], [4, 3, 2, 1]), -1.0)
+        self.assertIsNone(ex.spearman([1, 1, 1], [1, 2, 3]))
 
 
 if __name__ == "__main__":
