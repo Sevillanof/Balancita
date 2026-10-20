@@ -180,12 +180,19 @@ def run_exam(history, db_path, provider, cfg, holdout_ms, *, max_minutes=55.0, c
 def load_answers(db_path):
     pdb = qt.PracticeDB(db_path, readonly=True)
     try:
+        sums = {}
+        for r in pdb.db.execute("SELECT block_id, probs_json FROM calls WHERE step='action' AND block_id LIKE 'exam:%'"):
+            probs = json.loads(r["probs_json"])
+            acc = sums.setdefault(r["block_id"], [0.0, 0.0, 0])
+            acc[0], acc[1], acc[2] = acc[0] + probs.get("LARGO", 0.0), acc[1] + probs.get("CORTO", 0.0), acc[2] + 1
+        leans = {k: (v[0] / v[2], v[1] / v[2]) for k, v in sums.items()}     # mean over the option orders, as _merge does
         rows = pdb.db.execute("SELECT s.*, a.real_action, a.real_p, a.mirror_action, a.mirror_p FROM exam_snapshots s "
                               "JOIN exam_answers a USING(snap_id) ORDER BY s.ord").fetchall()
         out = []
         for r in rows:
             d = dict(r)
             d["moves"] = json.loads(d.pop("moves_json"))
+            d["p_largo"], d["p_corto"] = leans.get(d["snap_id"], (None, None))
             out.append(d)
         return out, pdb.meta()
     finally:
@@ -290,7 +297,9 @@ def analyse(rows, meta, cfg):
                    {"id": "always_long", "h": h, "ok": better, "value": (i["pasa"]["mean"], i["always_long"])}]
     others_ok = all(c["ok"] for c in checks if c["id"] != "n_operations")
     out["checks"] = checks
-    out["verdict"] = PASS if all(c["ok"] for c in checks) else (INCONCLUSIVE if others_ok and not checks[0]["ok"] else FAIL)
+    # no entry at all: nothing was measured, so nothing failed (INCONCLUSO, not NO PASA)
+    inconclusive = not groups["pasa"] or (others_ok and not checks[0]["ok"])
+    out["verdict"] = PASS if all(c["ok"] for c in checks) else (INCONCLUSIVE if inconclusive else FAIL)
     return out
 
 
@@ -309,6 +318,15 @@ def _h(minutes):
     return "{} h".format(minutes // 60)
 
 
+BANDS = ((0.0, 0.2), (0.2, 0.35), (0.35, 0.5), (0.5, 1.01))
+
+
+def lean_bands(rows, key):
+    """``([photos per band of p], max p, photos with a stored p)`` of ``key`` (``p_largo`` / ``p_corto``)."""
+    values = [r[key] for r in rows if r.get(key) is not None]
+    return [sum(1 for v in values if lo <= v < hi) for lo, hi in BANDS], max(values, default=None), len(values)
+
+
 def build_exam_report(db_path, cfg):
     rows, meta = load_answers(db_path)
     if not rows:
@@ -321,8 +339,8 @@ def build_exam_report(db_path, cfg):
               "operar en bloques.",
         FAIL: "Con las entradas que dejó pasar el espejo, Qwen no acierta más que el azar después de costos. No pasa a "
               "operar en bloques: si no acierta acá, no va a acertar operando.",
-        INCONCLUSIVE: "Pasaron muy pocas entradas el espejo (menos de {}) para decidir, pero nada falló. Hace falta "
-                      "contestar más fotos.".format(rules["min_operations"])}
+        INCONCLUSIVE: "Pasaron muy pocas entradas el espejo (menos de {}) para decidir. Si no hubo ninguna, no se midió "
+                      "nada: no es que haya fallado, es que falta evidencia.".format(rules["min_operations"])}
     lines = ["# Qwen operador v3: examen con fotos del pasado", "", short[r["verdict"]], "", meaning[r["verdict"]], "",
              "## En pocas palabras", ""]
     first = r["horizons"][horizons[0]]
@@ -336,6 +354,9 @@ def build_exam_report(db_path, cfg):
                  "(siempre largo en esas mismas fotos: {} y {}).".format(
                      _bp(first["pasa"]["mean"]), _h(horizons[0]), _bp(last["pasa"]["mean"]), _h(horizons[-1]),
                      _bp(first["always_long"]), _bp(last["always_long"])))
+    if not g["pasa"] + g["espejo"] + g["umbral"]:
+        lines.append("- Qwen dijo ESPERAR en todas las fotos, así que no hubo ninguna entrada que medir. Mirá más abajo qué tan "
+                     "cerca estuvo de entrar.")
     lines += ["", "## Qué revisamos", "",
               "Cada foto es un momento en que el operador habría preguntado de verdad (cada hora cerrada, movimiento fuerte o "
               "funding raro), tomado de velas guardadas anteriores al corte de prueba final (el holdout, que no se toca). "
@@ -371,6 +392,13 @@ def build_exam_report(db_path, cfg):
     lines.append("| Dijo ESPERAR (acierto = ningún lado ganaba) | {} | {} |".format(
         r["horizons"][horizons[0]]["ESPERAR"]["n"],
         " | ".join("n/d | " + _pct(r["horizons"][h]["ESPERAR"]["hit"]) for h in horizons)))
+    lines += ["", "### Qué tan cerca estuvo de entrar", "",
+              "Probabilidad que Qwen le dio a cada lado en cada foto (promedio de las dos órdenes de opciones). Para entrar "
+              "hace falta {} o más y ser la opción más probable.".format(qt.es(r["threshold"], 2)), "",
+              "| Lado | Menos de 0,20 | 0,20 a 0,35 | 0,35 a 0,50 | 0,50 o más | Máximo |", "|---|---|---|---|---|---|"]
+    for label, key in (("LARGO", "p_largo"), ("CORTO", "p_corto")):
+        counts, top, known = lean_bands(rows, key)
+        lines.append("| {} | {} | {} |".format(label, " | ".join(str(c) for c in counts), "n/d" if top is None else qt.es(top, 2)))
     lines += ["", "| Comparación (entradas que pasaron el espejo) | " + " | ".join("A {}".format(_h(h)) for h in horizons) + " |",
               "|---|" + "---|" * len(horizons)]
     lines.append("| Rango de confianza del 95 % (por día) | " + " | ".join(
@@ -398,5 +426,5 @@ def build_exam_report(db_path, cfg):
               "- Neto = lado × movimiento − costo de ida y vuelta del producto. No incluye funding (pocos pb en 24 h).",
               "- Las fotos del mismo día se solapan: el intervalo se calcula remuestreando días completos ({} sorteos). "
               "El azar conserva los lados de Qwen y los da vuelta o no, un sorteo por día ({} sorteos).".format(rules["random_draws"], rules["random_draws"]),
-              "- Veredicto: PASA si se cumplen todas las reglas; INCONCLUSO si solo faltan entradas; NO PASA en otro caso.", ""]
+              "- Veredicto: PASA si se cumplen todas las reglas; INCONCLUSO si no hubo ninguna entrada o si solo faltan entradas; NO PASA en otro caso.", ""]
     return "\n".join(lines)

@@ -198,6 +198,20 @@ class ExamTests(unittest.TestCase):
                 self.assertIn(part, text)
         self.assertLess(text.index("## Glosario"), text.index("## Detalle técnico"))
 
+    def test_an_exam_where_qwen_never_enters_is_inconclusive_and_shows_how_close_it_got(self):
+        def wait(prompt, letters):
+            options = dict(re.findall(r"^([A-Z])\) (\w+)", prompt, re.M))
+            return [{"token": l, "logprob": -0.1 if options[l] == "ESPERAR" else -2.0 - (options[l] == "CORTO")} for l in letters]
+        ex.run_exam(MemHistory(), self.db, ClockedProvider([0.0], entries=wait), cfg3(), HOLDOUT, max_minutes=500,
+                    clock=lambda: 0.0, log=lambda *a: None)
+        text = ex.build_exam_report(self.db, cfg3())
+        self.assertIn("## ⚠️ INCONCLUSO", text)
+        self.assertIn("### Qué tan cerca estuvo de entrar", text)
+        rows, _ = ex.load_answers(self.db)
+        counts, top, known = ex.lean_bands(rows, "p_largo")
+        self.assertEqual((sum(counts), known), (30, 30))
+        self.assertLess(top, 0.5)
+
     def test_empty_exam_does_not_crash(self):
         pdb = qt.PracticeDB(self.db)
         pdb.db.executescript(ex._EXAM_SQL)
@@ -223,6 +237,9 @@ class VerdictTests(unittest.TestCase):
     def test_entries_that_lose_after_costs_fail(self):
         rows = [row("LARGO", "CORTO", -3 - i % 4, t=i) for i in range(150)] + [row("CORTO", "LARGO", 4 + i % 3, t=i) for i in range(150)]
         self.assertEqual(self.judge(rows)["verdict"], ex.FAIL)
+
+    def test_no_entry_at_all_is_inconclusive_not_a_failure(self):
+        self.assertEqual(self.judge([row("ESPERAR", None, 50, t=i) for i in range(50)])["verdict"], ex.INCONCLUSIVE)
 
     def test_few_good_entries_are_inconclusive(self):
         rows = [row("CORTO", "LARGO", -60 - i % 7, t=i) for i in range(20)] + [row("LARGO", "CORTO", 55 + i % 5, t=i) for i in range(20)]
