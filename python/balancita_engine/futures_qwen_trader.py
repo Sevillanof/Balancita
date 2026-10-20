@@ -66,12 +66,15 @@ ROOT = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", ".."))
 CONFIG_PATH = os.path.join(ROOT, "config", "qwen-trader.json")
 CONFIG_PATH_V2 = os.path.join(ROOT, "config", "qwen-trader-v2.json")
 CONFIG_PATH_V21 = os.path.join(ROOT, "config", "qwen-trader-v2.1.json")
+CONFIG_PATH_V3 = os.path.join(ROOT, "config", "qwen-trader-v3.json")
 GATE_CONFIG_PATH = os.path.join(ROOT, "config", "strategy-gate.json")
 DATA_DIR = os.path.join(ROOT, "data", "qwen-trader")
 DEFAULT_DB = os.path.join(DATA_DIR, "practice.sqlite")
 DEFAULT_DB_V2 = os.path.join(DATA_DIR, "practice-v2.sqlite")
 DEFAULT_DB_V21 = os.path.join(DATA_DIR, "practice-v2.1.sqlite")
-VERSIONS = ("1", "2", "2.1")
+DEFAULT_DB_V3 = os.path.join(DATA_DIR, "practice-v3.sqlite")
+DEFAULT_EXAM_DB_V3 = os.path.join(DATA_DIR, "exam-v3.sqlite")
+VERSIONS = ("1", "2", "2.1", "3")
 DEFAULT_CACHE = os.path.join(DATA_DIR, "cache")
 DEFAULT_URL = "http://127.0.0.1:{}".format(llm.DEFAULT_LLAMA_PORT)
 
@@ -111,8 +114,8 @@ class DecisionError(Exception):
 
 
 def version_paths(version):
-    """``(config path, practice database)`` of a trader version. v1 stays exactly where it was; v2 and v2.1 have their own
-    files."""
+    """``(config path, practice database)`` of a trader version. v1 stays exactly where it was; v2, v2.1 and v3 have their
+    own files."""
     version = str(version)
     if version == "1":
         return CONFIG_PATH, DEFAULT_DB
@@ -120,7 +123,9 @@ def version_paths(version):
         return CONFIG_PATH_V2, DEFAULT_DB_V2
     if version == "2.1":
         return CONFIG_PATH_V21, DEFAULT_DB_V21
-    raise TraderError("versión desconocida: {!r} (1, 2 o 2.1)".format(version))
+    if version == "3":
+        return CONFIG_PATH_V3, DEFAULT_DB_V3
+    raise TraderError("versión desconocida: {!r} (1, 2, 2.1 o 3)".format(version))
 
 
 def load_config(path=None):
@@ -136,8 +141,9 @@ def load_config(path=None):
 
 def config_hash(cfg):
     """Identity of everything that shapes a decision. ``entry_threshold`` is an OUTPUT of the report, not an input."""
-    # ``runtime`` (concurrency, skipping the entry reason) only changes speed / what is stored, never an action: not identity
-    body = {k: v for k, v in cfg.items() if k not in ("entry_threshold", "note", "rules", "runtime")}
+    # ``runtime`` (concurrency, skipping the entry reason) only changes speed / what is stored, never an action: not identity.
+    # ``exam`` (v3) only shapes the ``exam`` command, which has its own identity (``futures_qwen_trader_exam``)
+    body = {k: v for k, v in cfg.items() if k not in ("entry_threshold", "note", "rules", "runtime", "exam")}
     body["practice"] = {k: v for k, v in cfg["practice"].items() if k != "target_blocks"}   # how many blocks is not identity
     raw = json.dumps({"config": body, "state": STATE_VERSION, "costs": COST_MODEL_VERSION}, sort_keys=True)
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
@@ -317,6 +323,11 @@ def _merge(question, answers):
     tied = [i for i in ids if abs(probs[i] - best) <= 1e-12]
     chosen = next((i for i in SAFE_FIRST if i in tied), tied[0])
     return {"probabilities": probs, "chosen": chosen, "confidence": confidence}
+
+
+def mirror_passes(action, mirror_action):
+    """The mirror test: LARGO on the real numbers needs CORTO on the mirrored ones, and the other way round."""
+    return (action, mirror_action) in (("LARGO", "CORTO"), ("CORTO", "LARGO"))
 
 
 class LlmDecider:
@@ -586,15 +597,20 @@ class Trader:
 
     # ---- state text
 
-    def state_text(self, t_ms, reasons):
+    def state_text(self, t_ms, reasons, mirror=False):
+        """The STATE shown to Qwen. ``mirror`` (v3, flat only): the same market with the signs turned over (what went up went
+        down; highs and lows swapped; funding with the opposite sign). Volatility, volume and costs do not change."""
+        if mirror and self.position is not None:
+            raise ValueError("el espejo solo se pregunta sin posición")
         c, last = self.c, self.c[-1]
+        sg = -1.0 if mirror else 1.0
         sigma5 = self._sigma5()
         lines = ["Mercado (velas cerradas; sin fechas ni precios absolutos). Despertaste por: {}.".format(
             ", ".join(reasons))]
         rets, zs = [], []
         for name, bars in (("1h", H1), ("4h", H4), ("24h", H24), ("7d", D7)):
-            ret = last / c[-1 - bars] - 1
-            z = self._logret(bars) / (sigma5 * math.sqrt(bars)) if sigma5 > 0 else 0.0
+            ret = sg * (last / c[-1 - bars] - 1)
+            z = sg * self._logret(bars) / (sigma5 * math.sqrt(bars)) if sigma5 > 0 else 0.0
             rets.append("{} {} %".format(name, es(ret * 100, 2, True)))
             zs.append("{} {}".format(name, es(z, 1, True)))
         lines.append("Retornos: " + " | ".join(rets))
@@ -603,14 +619,17 @@ class Trader:
         sigma24 = sigma5 * math.sqrt(H24)
         lc7 = self.lc[-(D7 + 1):]
         sigma7 = _std([b - a for a, b in zip(lc7, lc7[1:])]) * math.sqrt(H24)
-        move15 = self._logret(3)
+        move15 = sg * self._logret(3)
         lines.append("Volatilidad diaria: ultimas 24h {} % | ultimos 7d {} %. Movimiento de los ultimos 15 min {} % "
                      "(lo normal es +-{} %)".format(es(sigma24 * 100), es(sigma7 * 100), es(move15 * 100, 2, True),
                                                     es(sigma5 * math.sqrt(3) * 100)))
         hi24, lo24, hi7, lo7 = max(self.h[-H24:]), min(self.l[-H24:]), max(self.h[-D7:]), min(self.l[-D7:])
+        d_hi24, d_lo24, d_hi7, d_lo7 = (last / hi24 - 1) * 100, (last / lo24 - 1) * 100, (last / hi7 - 1) * 100, \
+            (last / lo7 - 1) * 100
+        if mirror:
+            d_hi24, d_lo24, d_hi7, d_lo7 = -d_lo24, -d_hi24, -d_lo7, -d_hi7
         lines.append("Distancia al maximo / minimo de 24h: {} % / {} % | de 7d: {} % / {} %".format(
-            es((last / hi24 - 1) * 100, 1, True), es((last / lo24 - 1) * 100, 1, True),
-            es((last / hi7 - 1) * 100, 1, True), es((last / lo7 - 1) * 100, 1, True)))
+            es(d_hi24, 1, True), es(d_lo24, 1, True), es(d_hi7, 1, True), es(d_lo7, 1, True)))
         v1h, v24, v7 = math.fsum(self.v[-H1:]), math.fsum(self.v[-H24:]), math.fsum(self.v[-D7:])
         rel1 = v1h / (v24 / 24) if v24 > 0 else 0.0
         rel24 = v24 / (v7 / 7) if v7 > 0 else 0.0
@@ -621,9 +640,12 @@ class Trader:
             lines.append("Funding: n/d")
         else:
             pct = self.funding.percentile(t_ms)
+            rate = sg * latest[1]
+            if mirror and pct is not None:
+                pct = 100.0 - pct
             lines.append("Funding: ultima tasa por hora {} % ({}){}".format(
-                es(latest[1] * 100, 4, True), "los largos pagan" if latest[1] > 0 else
-                "los cortos pagan" if latest[1] < 0 else "nadie paga",
+                es(rate * 100, 4, True), "los largos pagan" if rate > 0 else
+                "los cortos pagan" if rate < 0 else "nadie paga",
                 "" if pct is None else ", percentil {} de los ultimos 30 dias".format(int(round(pct)))))
         lines.append("Costo de entrar y salir: ~{} % del tamaño".format(
             es(float(round_trip_cost_bps(self.product)) / 100.0, 2)))
@@ -755,6 +777,21 @@ class Trader:
             stop_pct=stop_pct, max_hold_ms=None if guard["max_hold_min"] is None else guard["max_hold_min"] * MINUTE_MS, entry_p=probability, entry_reason=reason,
             trade_no=self.trade_seq, mfe_bp=0.0, mae_bp=0.0)
 
+    def _passes_mirror(self, t_ms, reasons, action, event):
+        """v3 mirror test: the same question about the mirrored STATE must give the opposite side. Anything else (the same
+        side, or waiting) means the answer did not come from the numbers: no entry, ``override`` = ``espejo``."""
+        try:
+            mirror = self.decider.ask(self.key, t_ms, "mirror", self.questions["flat"],
+                                      self.state_text(t_ms, reasons, mirror=True))
+        except DecisionError:
+            event["override"] = "espejo_sin_respuesta"
+            return False
+        event.update(mirror_action=mirror["chosen"], mirror_p=mirror["probabilities"][mirror["chosen"]])
+        if not mirror_passes(action, mirror["chosen"]):
+            event["override"] = "espejo"
+            return False
+        return True
+
     def _decide(self, t_ms, reasons):
         self.last_call_ms = t_ms
         in_position = self.position is not None
@@ -770,7 +807,8 @@ class Trader:
         event = {"type": "decision", "kind": kind, "t_ms": t_ms, "wake": list(reasons), "state_text": state,
                  "state_hash": llm.text_hash(state)[:16], "position": snapshot, "net_bp_now": net_now,
                  "threshold": None if in_position else self.threshold, "answer": None, "model_action": None,
-                 "p_action": None, "action": "MANTENER" if in_position else "ESPERAR", "override": None,
+                 "p_action": None, "mirror_action": None, "mirror_p": None,
+                 "action": "MANTENER" if in_position else "ESPERAR", "override": None,
                  "reason": None, "reason_answer": None, "trade_no": self.position.trade_no if in_position else None}
         try:
             answer = self.decider.ask(self.key, t_ms, "action", question, state)
@@ -783,6 +821,8 @@ class Trader:
         if wants_move and not in_position and event["p_action"] < self.threshold:
             event["override"] = "bajo_umbral"
             wants_move = False
+        if wants_move and not in_position and self.cfg.get("mirror"):
+            wants_move = self._passes_mirror(t_ms, reasons, action, event)
         if not wants_move:
             return [event]
         reason = None
@@ -1359,8 +1399,8 @@ def _parser():
     def common(p, version_default="2", versions=VERSIONS):
         p.add_argument("--version", default=version_default, choices=versions,
                        help="trader version (default %(default)s): 1 = stop + 24 h limit, 2 = only Qwen (or the block end) "
-                            "closes, 2.1 = v2 with the fixed prompt text first (speed only); each has its own config and "
-                            "practice database")
+                            "closes, 2.1 = v2 with the fixed prompt text first (speed only), 3 = 2.1 plus the mirror test; "
+                            "each has its own config and practice database")
         p.add_argument("--config", default=None, help="default: the config of the version")
         p.add_argument("--db", default=None, help="practice database (default: practice.sqlite for v1, practice-v2.sqlite "
                                                   "for v2, in data/qwen-trader)")
@@ -1395,11 +1435,23 @@ def _parser():
     pb.add_argument("--max-minutes", type=float, default=55.0)
     pb.add_argument("--llama-url", default=None)
     pb.add_argument("--sequential", action="store_true")
+    ee = sub.add_parser("exam", help="v3: ask Qwen about thousands of past photos of the market (needs llama-server)")
+    common(ee, "3", ("3",))
+    ee.add_argument("--exam-db", default=DEFAULT_EXAM_DB_V3, help="exam database (default %(default)s)")
+    ee.add_argument("--max-minutes", type=float, default=55.0)
+    ee.add_argument("--llama-url", default=None)
+    ee.add_argument("--offline", action="store_true", help="use only the local cache: no Kraken request at all")
+    ee.add_argument("--sequential", action="store_true")
+    er = sub.add_parser("exam-report", help="v3: Spanish markdown report of the exam (no model)")
+    common(er, "3", ("3",))
+    er.add_argument("--exam-db", default=DEFAULT_EXAM_DB_V3)
+    er.add_argument("--out", default=os.path.join(DATA_DIR, "informe-examen-v3.md"))
     rp = sub.add_parser("report", help="Spanish markdown report (no model)")
     common(rp, "all", VERSIONS + ("all",))
     rp.add_argument("--out", default=os.path.join(DATA_DIR, "informe.md"), help="report of v1")
     rp.add_argument("--out-v2", default=os.path.join(DATA_DIR, "informe-v2.md"), help="report of v2 (with v1 vs v2)")
     rp.add_argument("--out-v21", default=os.path.join(DATA_DIR, "informe-v2.1.md"), help="report of v2.1 (with v2 vs v2.1)")
+    rp.add_argument("--out-v3", default=os.path.join(DATA_DIR, "informe-v3.md"), help="report of v3 (practice with the mirror)")
     ex = sub.add_parser("export", help="learning data: one JSON line per decision")
     common(ex)
     ex.add_argument("--out", default=os.path.join(DATA_DIR, "dataset.jsonl"))
@@ -1431,6 +1483,24 @@ def main(argv=None):
             from .futures_qwen_trader_probe import run_probe
             run_probe(args.db, cfg, _provider(args.llama_url), sample=args.sample, seed=args.seed, max_minutes=args.max_minutes,
                       concurrency=1 if args.sequential else None)
+        elif args.command == "exam-report":
+            from .futures_qwen_trader_exam import build_exam_report
+            text = build_exam_report(args.exam_db, cfg)
+            os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
+            with open(args.out, "w", encoding="utf-8") as handle:
+                handle.write(text)
+            print("informe del examen escrito en {}".format(args.out))
+        elif args.command == "exam":
+            from .futures_qwen_trader_exam import run_exam
+            history = History(args.cache_dir, holdout_ms, offline=args.offline)
+            if not history.offline:
+                for product in cfg["exam"]["products"]:
+                    print("candles {}: {} a {}".format(product, cfg["practice"]["from"], stamp(holdout_ms)))
+                    history.prefetch(product, date_ms(cfg["practice"]["from"]) - cfg["practice"]["warmup_days"] * DAY_MS,
+                                     holdout_ms)
+            if args.sequential:
+                cfg = dict(cfg, runtime=dict(cfg.get("runtime") or {}, concurrent_orders=False))
+            run_exam(history, args.exam_db, _provider(args.llama_url), cfg, holdout_ms, max_minutes=args.max_minutes)
         elif args.command in ("prefetch", "practice"):
             history = History(args.cache_dir, holdout_ms, offline=getattr(args, "offline", False))
             plan, _ = block_plan(cfg, holdout_ms, seed=args.seed, blocks=args.blocks)
@@ -1476,7 +1546,7 @@ def main(argv=None):
                     raise TraderError("no existe la base de la versión {}: {}".format(v, db))
                 text = build_report(db, load_config(args.config or config_path), args.cache_dir,
                                     baseline=base if v == "2" else None, prompt_baseline=same_state if v == "2.1" else None)
-                out = {"1": args.out, "2": args.out_v2, "2.1": args.out_v21}[v]
+                out = {"1": args.out, "2": args.out_v2, "2.1": args.out_v21, "3": args.out_v3}[v]
                 os.makedirs(os.path.dirname(os.path.abspath(out)), exist_ok=True)
                 with open(out, "w", encoding="utf-8") as handle:
                     handle.write(text)
