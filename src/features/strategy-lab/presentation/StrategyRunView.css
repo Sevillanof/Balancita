@@ -18,6 +18,7 @@
 }
 
 .runview__title {
+  display: block;
   margin: 0;
   color: var(--mc-text);
   font-size: 22px;

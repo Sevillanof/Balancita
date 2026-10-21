@@ -286,9 +286,9 @@ export default function StrategyRunView({
     >
       <header className="runview__head">
         <div>
-          <h3 className="runview__title">
+          <p className="runview__title">
             {strategyName} <small>v{version}</small>
-          </h3>
+          </p>
           <p className="runview__sub">
             {lastRun
               ? `Última prueba · ${runName(lastRun)}`
