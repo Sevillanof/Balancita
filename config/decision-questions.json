@@ -1,6 +1,6 @@
 {
   "version": "decision-questions.v1",
-  "note": "Question catalog for LLM decisions (process Q). Callers use ids only. Changing any text of a question requires bumping its version, because a rewritten question is a different question and its calibration no longer applies; python/tests/test_futures_llm_decisions.py pins a hash per id@version. Each question declares the STATE fields it needs (names from the registry STATE_FIELDS in futures_llm_decisions.py); adding a question, any number of options or any of the three types (choice, bool, score) needs no code change. Questions with \"scope\": \"news\" are asked by the news process N (python/balancita_engine/futures_news.py) about one news item, whose sanitized headline and summary are the STATE; they have no state_fields and Q never asks them (Q loads only the default \"verdict\" scope). The same id/version rules and pins apply (python/tests/test_futures_news.py).",
+  "note": "Question catalog for LLM decisions (process Q). Callers use ids only. Changing any text of a question requires bumping its version, because a rewritten question is a different question and its calibration no longer applies; python/tests/test_futures_llm_decisions.py pins a hash per id@version. Each question declares the STATE fields it needs (names from the registry STATE_FIELDS in futures_llm_decisions.py); adding a question, any number of options or any of the three types (choice, bool, score) needs no code change. Questions with \"scope\": \"signal\" (signal_filter) are asked only by the Qwen practice batch (python/balancita_engine/futures_qwen_practice.py), one per historical strategy signal, never by Q. Questions with \"scope\": \"news\" are asked by the news process N (python/balancita_engine/futures_news.py) about one news item, whose sanitized headline and summary are the STATE; they have no state_fields and Q never asks them (Q loads only the default \"verdict\" scope). The same id/version rules and pins apply (python/tests/test_futures_news.py).",
   "questions": [
     {
       "id": "direction_1h",
@@ -91,6 +91,35 @@
         "volume_rel",
         "position",
         "exit_lessons"
+      ]
+    },
+    {
+      "id": "signal_filter",
+      "version": 1,
+      "scope": "signal",
+      "type": "choice",
+      "order_debias": "cyclic",
+      "instruction": "The trading strategy described in signal has just produced a buy or sell signal; its side (LONG opens a buy, SHORT opens a sell), its stop and target distances (in ATR units and in basis points) and its maximum holding time are in signal. Using only the normalized market state and the strategy description in signal, should this particular signal be approved so the trade is opened, or rejected so the strategy skips it?",
+      "options": [
+        {
+          "id": "approve",
+          "description": "let the strategy open the trade it proposes"
+        },
+        {
+          "id": "reject",
+          "description": "skip this signal and open no trade"
+        }
+      ],
+      "state_fields": [
+        "signal",
+        "regime",
+        "returns_bp",
+        "dist_atr",
+        "rsi14",
+        "bollinger_pos",
+        "donchian_pos",
+        "atr_bp",
+        "volume_rel"
       ]
     },
     {
