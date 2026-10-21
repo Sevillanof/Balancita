@@ -1,7 +1,7 @@
 """Strategy gate: an automatic, fixed test that judges a strategy with rules declared BEFORE looking at results.
 
 ``python -m balancita_engine.strategy_gate evaluate --strategy c29-momentum-perp-v1 [--from 2025-01-01]
-[--products PF_XBTUSD,...] [--exam]``  ·  ``runs [--strategy ID]``  ·  ``cancel --run N``
+[--products PF_XBTUSD,...] [--exam [--examen-contaminado]]``  ·  ``runs [--strategy ID]``  ·  ``cancel --run N``
 
 What it does
     Rebuilds the trades of the strategy over Kraken's official candles with the strategy's OWN code (the same
@@ -13,7 +13,8 @@ What it does
     every other rule passes) · mean net bp > 0 with the 95 % bootstrap interval's lower
     bound > 0 · percentile >= 95 against 1000 random-entry draws (same count, side mix, product and holding time) ·
     deflated Sharpe probability >= 0.95 with the number of ATTEMPTS on the strategy family as trials · positive in
-    >= 60 % of the time folds and in >= half of the products · still positive with costs x 1.5.
+    >= 60 % of the time folds and in >= half of the products · still positive with costs x 1.5 · funding known in
+    >= 95 % of the trades (only this one failing: INCONCLUSO, never PASA; Kraken's public funding starts 2025-10-15).
 
 Data split (the point of the gate)
     ``holdout_from`` (config, 2026-04-19, about the last 6 months) separates two worlds.
@@ -25,7 +26,9 @@ Data split (the point of the gate)
     * EXAM (``--exam``): evaluates ONLY ``[holdout_from, now)`` (candles before the cut only warm indicators up). It is
       allowed ONCE per ``version_key`` = ``<strategy_id>:<sha256 of the whole spec>`` (the registry's own digest: id and
       version number, rules, params, indicators). A second exam of the same version is refused; the same id with other
-      content is refused too (bump the version, ``-v2``). The lock is taken right before the first outcome is
+      content is refused too (bump the version, ``-v2``). Also ONCE per family and window: a successor version cannot
+      re-take a reserve its family already examined (deleted versions included, via an anonymous tombstone) unless
+      ``--examen-contaminado``, which marks the run and can never give PASA. The lock is taken right before the first outcome is
       computed, after every download: a cancelled or failed exam consumes it only from that point on.
 
 Single writer: each ``evaluate`` process is the only writer of ``gate.sqlite`` while it runs; workers (processes)
@@ -79,6 +82,7 @@ PASS, FAIL, INCONCLUSIVE = "PASA", "NO PASA", "INCONCLUSO"
 PHASES = {"signals": "generando señales", "simulating": "simulando", "random": "sorteos al azar", "report": "informe"}
 # Overall percent at the start of each phase (the last one ends at 100).
 PHASE_START = {"signals": 0.0, "simulating": 60.0, "random": 80.0, "report": 96.0}
+FUNDING_NOTE = ("Kraken solo publica funding desde el 15-oct-2025; antes de esa fecha el resultado sería optimista")
 DOWNLOAD_SHARE = 10.0        # percent of the "generando señales" phase spent downloading candles
 
 
@@ -223,6 +227,11 @@ CREATE TABLE IF NOT EXISTS exam_tombstones(
   spec_hash TEXT PRIMARY KEY, exam_date TEXT NOT NULL, verdict TEXT NOT NULL);
 -- Anonymous: practice attempts of deleted strategies, per sha256(family name). Added to the live count of the family.
 CREATE TABLE IF NOT EXISTS attempt_counts(family_hash TEXT PRIMARY KEY, n INTEGER NOT NULL);
+-- Anonymous: which window (holdout_from) a family already examined, per sha256(family name). Survives `purge` so that
+-- deleting a version does not free the window for its successors. Written together with exam_tombstones.
+CREATE TABLE IF NOT EXISTS exam_window_tombstones(
+  family_hash TEXT NOT NULL, holdout_from TEXT NOT NULL, spec_hash TEXT NOT NULL, exam_date TEXT NOT NULL,
+  verdict TEXT NOT NULL, PRIMARY KEY(family_hash, holdout_from, spec_hash));
 """
 
 
@@ -255,8 +264,36 @@ def list_runs(db_path, strategy_id=None):
         db.close()
 
 
-def check_exam_allowed(db, spec, cfg):
-    """Raises ``GateError`` (Spanish) unless this version may still take its final exam."""
+def family_exam_on_window(db, spec, cfg):
+    """An exam of ANOTHER version of the same family over the same window (``holdout_from``), or ``None``.
+
+    Looks in ``exam_locks`` (live versions) and in the anonymous window tombstones (deleted ones). Returns
+    ``{"version", "verdict", "holdout_from"}``; ``version`` is the strategy id, or ``None`` for a deleted version.
+    """
+    holdout = (cfg or {}).get("holdout_from")
+    if not holdout:
+        return None
+    family = family_of(spec["id"])
+    for lock in db.execute("SELECT strategy_id, verdict, status FROM exam_locks WHERE holdout_from=? ORDER BY locked_at",
+                           (holdout,)).fetchall():
+        if lock["strategy_id"] != spec["id"] and family_of(lock["strategy_id"]) == family:
+            return {"version": lock["strategy_id"], "holdout_from": holdout,
+                    "verdict": lock["verdict"] or "sin veredicto ({})".format(lock["status"])}
+    tomb = db.execute("SELECT verdict FROM exam_window_tombstones WHERE family_hash=? AND holdout_from=? "
+                      "AND spec_hash!=? ORDER BY exam_date LIMIT 1", (family_hash(family), holdout,
+                                                                      spec_hash(spec))).fetchone()
+    if tomb is not None:
+        return {"version": None, "holdout_from": holdout, "verdict": tomb["verdict"]}
+    return None
+
+
+def check_exam_allowed(db, spec, cfg, allow_contaminated=False):
+    """Raises ``GateError`` (Spanish) unless this version may still take its final exam.
+
+    Besides the version's own lock, a family may examine a given reserve (``holdout_from``) only once: a successor
+    version is not an independent exam of the same reserve (it was tuned after seeing the first verdict). With
+    ``allow_contaminated`` the family check is skipped (the caller marks the run as contaminated).
+    """
     key, digest = version_key_of(spec)
     tomb = db.execute("SELECT * FROM exam_tombstones WHERE spec_hash=?", (digest,)).fetchone()
     if tomb is not None:
@@ -278,6 +315,13 @@ def check_exam_allowed(db, spec, cfg):
         raise GateError("El contenido de {id} cambió desde que se evaluó antes (hash {old}; ahora {new}) pero la versión "
                         "es la misma. Las versiones son inmutables: subí la versión (por ejemplo -v2) y rendí el examen "
                         "de la nueva.".format(id=spec["id"], old=other["code_hash"][:12], new=digest[:12]))
+    if not allow_contaminated:
+        used = family_exam_on_window(db, spec, cfg)
+        if used is not None:
+            raise GateError("La familia {fam} ya rindió su examen sobre esta reserva (desde {desde}, versión {ver}, "
+                            "veredicto {veredicto}). Una versión sucesora no es un examen independiente de la misma "
+                            "reserva.".format(fam=family_of(spec["id"]), desde=used["holdout_from"],
+                                              ver=used["version"] or "ya borrada", veredicto=used["verdict"]))
     return key, digest
 
 
@@ -531,6 +575,7 @@ def judge(trades, series, cfg, *, kind, start_ms, end_ms, attempts, products, se
                     "p95": _quantile(srt, 0.95), "mean": statistics.fmean(means), "skipped": skipped,
                     "observed_ex_funding": observed_ex}
     dsr = deflated_probability(values, attempts) if n >= 3 else None
+    funding_share = (sum(1 for t in ordered if t["funding_status"] == "complete") / n) if n else None
     funding_status = collections.Counter(t["funding_status"] for t in ordered)
     sens = None
     if neighbors:
@@ -572,21 +617,46 @@ def judge(trades, series, cfg, *, kind, start_ms, end_ms, attempts, products, se
              len(products) > 0 and positive_products >= rules["min_positive_product_share"] * len(products) - 1e-9),
         rule("cost_stress", "Sigue positiva con costes x{}".format(mult), stress_mean, 0,
              stress_mean is not None and stress_mean > 0),
+        rule("funding_complete", "Funding conocido en >= {:.0f}% de las operaciones".format(
+            rules["min_funding_complete_share"] * 100), funding_share, rules["min_funding_complete_share"],
+             funding_share is not None and funding_share >= rules["min_funding_complete_share"] - 1e-9),
     ]
+    # Evidence rules (enough trades, known funding) can only make the verdict INCONCLUSIVE; a failed performance rule
+    # is a NO PASA. Missing evidence never becomes a PASA.
+    evidence = ("n_trades", "funding_complete")
     few_trades = n < rules["min_trades"]
-    others_ok = all(c["ok"] for c in checks if c["id"] != "n_trades")
-    note = None
-    if few_trades and others_ok:
-        verdict = INCONCLUSIVE          # too little data and nothing else failed: we cannot tell
-    elif few_trades:
-        verdict, note = FAIL, "(pocas operaciones)"   # too little data AND another rule failed: it does not pass
+    performance_ok = all(c["ok"] for c in checks if c["id"] not in evidence)
+    note, reasons = None, []
+    if few_trades:
+        reasons.append("few_trades")
+    if not _rule_by_id({"rules": checks})["funding_complete"]["ok"]:
+        reasons.append("funding")
+    if not performance_ok:
+        verdict = FAIL                  # a performance rule failed: it does not pass
+        if few_trades:
+            note = "(pocas operaciones)"
+    elif reasons:
+        verdict = INCONCLUSIVE          # nothing else failed but the evidence is incomplete: we cannot tell
     else:
-        verdict = PASS if all(c["ok"] for c in checks) else FAIL
-    return {"verdict": verdict, "verdict_note": note, "rules": checks, "overall": overall, "ci": ci, "folds": folds, "edges": edges,
+        verdict = PASS
+    return {"verdict": verdict, "verdict_note": note, "inconclusive_reasons": reasons if verdict == INCONCLUSIVE else [],
+            "rules": checks, "overall": overall, "ci": ci, "folds": folds, "edges": edges,
             "per_product": per_product, "per_side": per_side, "baseline": baseline, "percentile": percentile,
             "deflated": dsr, "attempts": attempts, "stress_mean_bp": stress_mean, "stress_multiplier": mult,
-            "funding_status": dict(funding_status), "sensitivity": sens, "trial_sharpe_sd": TRIAL_SHARPE_SD,
+            "funding_status": dict(funding_status), "funding_share": funding_share, "sensitivity": sens, "trial_sharpe_sd": TRIAL_SHARPE_SD,
             "sharpe_per_trade": sharpe_per_trade(values)}
+
+
+def apply_contamination(result):
+    """A contaminated exam (the family already used this reserve) can never PASS: PASA becomes INCONCLUSO."""
+    result["contaminated"] = True
+    if result["verdict"] == PASS:
+        result["verdict"] = INCONCLUSIVE
+        result["inconclusive_reasons"] = ["contaminated"]
+        result["verdict_note"] = "reutilización contaminada"
+    elif result["verdict"] == INCONCLUSIVE:
+        result["inconclusive_reasons"] = list(result.get("inconclusive_reasons") or []) + ["contaminated"]
+    return result
 
 
 # --------------------------------------------------------------------------- report (Spanish Markdown)
@@ -676,12 +746,20 @@ def _checklist(r, cfg):
                   "_Un buen resultado no debe venir de un solo mes afortunado._".format(
                       v["value"]["positive"], v["value"]["total"], _es(rules["min_positive_fold_share"] * 100, 0))))
     v = c["positive_products"]
-    items.append((v["ok"], "**Funciona en varios productos**: ganó en {} de {} producto{} (se pide al menos el {} %)."
-                  .format(v["value"]["positive"], v["value"]["total"], "" if v["value"]["total"] == 1 else "s", _es(rules["min_positive_product_share"] * 100, 0))))
+    items.append((v["ok"], "**Funciona en varios productos**: ganó en {}/{} productos (se pide al menos el {} %){}."
+                  .format(v["value"]["positive"], v["value"]["total"], _es(rules["min_positive_product_share"] * 100, 0),
+                          " (un solo producto: no es robustez multi-activo)" if v["value"]["total"] == 1 else "")))
     v = c["cost_stress"]
     items.append((v["ok"], "**Aguanta costos más altos**: con comisiones y deslizamiento x{} el promedio sería {} por "
                   "operación. _Debe seguir siendo positivo._".format(_es(r["stress_multiplier"], 1),
                                                                       _pct_bp(v["value"], 2, True))))
+    v = c["funding_complete"]
+    text = ("**Funding conocido**: {} de las operaciones tienen el funding completo (se pide al menos el {} %). _Sin "
+            "funding conocido el resultado es optimista._".format(_share(v["value"]),
+                                                                  _es(rules["min_funding_complete_share"] * 100, 0)))
+    if not v["ok"]:
+        text += " " + FUNDING_NOTE + "."
+    items.append((v["ok"], text))
     return items
 
 
@@ -703,8 +781,14 @@ def _summary_points(r, cfg):
             points.append("Le fue peor que entrar al azar (peor que el {} % de los sorteos).".format(_es(100 - pc, 0)))
     f = c["positive_folds"]["value"]
     pp = c["positive_products"]["value"]
-    points.append("Ganó en {} de {} periodos de tiempo y en {} de {} producto{}.".format(
-        f["positive"], f["total"], pp["positive"], pp["total"], "" if pp["total"] == 1 else "s"))
+    points.append("Ganó en {} de {} periodos de tiempo y en {}/{} productos{}.".format(
+        f["positive"], f["total"], pp["positive"], pp["total"],
+        " (un solo producto: no es robustez multi-activo)" if pp["total"] == 1 else ""))
+    fc = c["funding_complete"]
+    funding_point = None
+    if not fc["ok"]:
+        funding_point = ("Solo {} de las operaciones tienen el funding conocido: sin funding el resultado es optimista. "
+                         "{}.".format(_share(fc["value"]), FUNDING_NOTE))
     if r["stress_mean_bp"] is not None:
         points.append("Con costos {} % más altos el promedio sería {} por operación ({}).".format(
             _es((r["stress_multiplier"] - 1) * 100, 0), _pct_bp(r["stress_mean_bp"], 2, True),
@@ -712,6 +796,8 @@ def _summary_points(r, cfg):
     if ov["n"] < rules["min_trades"]:
         points.append("Hizo solo {} operaciones y se piden al menos {}: es poco para sacar conclusiones firmes.".format(
             ov["n"], rules["min_trades"]))
+    if funding_point:
+        return points[:4] + [funding_point]
     return points[:5]
 
 
@@ -720,8 +806,21 @@ def _verdict_line(r, cfg):
     if v == PASS:
         return "## ✅ PASA\n\nCumplió todas las reglas que se fijaron de antemano."
     if v == INCONCLUSIVE:
-        return ("## ⚠️ INCONCLUSO\n\nHay muy pocas operaciones (menos de {}) para decidir, pero ninguna otra regla "
-                "falló. Hace falta más historia o más productos.".format(rules["min_trades"]))
+        reasons = r.get("inconclusive_reasons") or []
+        parts = []
+        if "contaminated" in reasons:
+            parts.append("La reserva ya fue usada por esta familia de estrategias: el examen no es evidencia "
+                         "independiente y por eso nunca puede dar PASA.")
+        if "few_trades" in reasons:
+            parts.append("Hay muy pocas operaciones (menos de {}) para decidir.".format(rules["min_trades"]))
+        if "funding" in reasons:
+            parts.append("Falta el funding de muchas operaciones (se pide al menos el {} %). {}.".format(
+                _es(rules["min_funding_complete_share"] * 100, 0), FUNDING_NOTE))
+        if not parts:
+            parts.append("Hay muy pocas operaciones (menos de {}) para decidir.".format(rules["min_trades"]))
+        tail = "Ninguna otra regla falló." if "contaminated" not in reasons else "Ninguna regla de resultado falló."
+        return "## ⚠️ INCONCLUSO\n\n{} {} Hace falta más historia, más productos o un periodo con funding.".format(
+            " ".join(parts), tail)
     extra = " (pocas operaciones)" if r.get("verdict_note") else ""
     failed = [c for c in r["rules"] if not c["ok"]]
     return "## ❌ NO PASA{}\n\nNo cumplió {} de {} reglas.{}".format(
@@ -744,6 +843,9 @@ def build_report(meta, result, cfg, extra_notes=()):
     warnings = [n for n in extra_notes if n.startswith("Atención")]
     for note in warnings:
         lines += ["> ⚠️ " + note, ""]
+    if meta.get("contaminated"):
+        lines += ["> ⚠️ **REUTILIZACIÓN CONTAMINADA: esta reserva ya fue usada por la familia; no es evidencia "
+                  "independiente.**", ""]
     if exam:
         lines += ["> Este examen consumió el único intento de esta versión.", ""]
     lines += ["### En pocas palabras", ""] + ["- " + p for p in _summary_points(r, cfg)] + [""]
@@ -823,6 +925,9 @@ def build_report(meta, result, cfg, extra_notes=()):
               "- **Sharpe desinflado**: el Sharpe (ganancia en relación con su irregularidad) corregido por la cantidad "
               "de variantes probadas; mide si el resultado podría ser solo suerte de tanto probar.",
               "- **Intervalo de confianza**: el rango donde, con un 95 % de seguridad, está el verdadero promedio.",
+              "- **Funding**: lo que se paga o cobra por mantener una posición abierta. Si no se conoce, el resultado "
+              "es optimista; por eso se exige conocerlo en casi todas las operaciones. Kraken solo publica el historial "
+              "de funding desde el 15-oct-2025.",
               "- **Entradas al azar**: operar la misma cantidad de veces, pero en momentos elegidos a la suerte; es la "
               "vara mínima que una estrategia debe superar.", ""]
     lines += ["## Detalles técnicos", ""]
@@ -960,12 +1065,14 @@ def _run_tasks(runner, jobs_list, workers, base, span):
 def evaluate(strategy_id, *, kind="practice", from_date=None, products=None, cfg=None, data_dir=None, spec=None,
              specs_dir=None, provider=None, trade_source=None, jobs=None, neighbors=True, json_progress=False,
              on_progress=None, now_ms=None, install_signals=False, stream=None, registry_db=None,
-             kronos_dir=None, qwen_exit_dir=None, research_ledger=None):
+             kronos_dir=None, qwen_exit_dir=None, research_ledger=None, allow_contaminated=False):
     """Runs the gate for one strategy. Returns ``{"run_id", "verdict", "report_path", "status"}``.
 
     ``spec`` / ``provider`` / ``trade_source`` / ``cfg`` are for tests (a spec outside the shipped directory, synthetic
     candles, a "cheating" trade source). ``research_ledger``: the lab's trial ledger (read-only); by default the repo's
-    ``data/research-vectorbt/ledger.sqlite`` when ``data_dir`` is the default one, otherwise none. Raises ``GateError`` for refusals (nothing is written for an exam refusal).
+    ``data/research-vectorbt/ledger.sqlite`` when ``data_dir`` is the default one, otherwise none.
+    ``allow_contaminated``: lets an exam run although the family already examined this reserve; the run is marked
+    (``params.contaminated``), the report warns and the verdict can never be PASA. Raises ``GateError`` for refusals (nothing is written for an exam refusal).
     """
     cfg = cfg or load_config()
     if research_ledger is None and data_dir is None:
@@ -1002,10 +1109,13 @@ def evaluate(strategy_id, *, kind="practice", from_date=None, products=None, cfg
     provider = provider or KrakenProvider(os.path.join(data_dir, "cache"))
     db = open_db(os.path.join(data_dir, DB_NAME))
     try:
-        key, digest = (check_exam_allowed(db, spec, cfg) if kind == "exam" else version_key_of(spec))
+        key, digest = (check_exam_allowed(db, spec, cfg, allow_contaminated) if kind == "exam" else version_key_of(spec))
         family = family_of(strategy_id)
+        contaminated = bool(kind == "exam" and allow_contaminated and family_exam_on_window(db, spec, cfg) is not None)
         params = {"from": _stamp(start_ms), "to": _stamp(end_ms), "products": names, "holdout_from": cfg["holdout_from"],
                   "config_hash": config_hash(cfg), "neighbors": bool(neighbors), "cost_model": COST_MODEL_VERSION}
+        if contaminated:
+            params["contaminated"] = True
         with db:
             cur = db.execute(
                 "INSERT INTO runs(strategy_id,family,version_key,code_hash,params,kind,status,progress,phase,started_at,"
@@ -1030,7 +1140,7 @@ def evaluate(strategy_id, *, kind="practice", from_date=None, products=None, cfg
         meta = {"run_id": run_id, "strategy_id": strategy_id, "family": family, "version_key": key, "kind": kind,
                 "start_ms": start_ms, "end_ms": end_ms, "products": names, "config_hash": config_hash(cfg),
                 "name": spec.get("name") or strategy_id,
-                "gate_attempts": gate_attempts, "lab_variants": lab_variants}
+                "gate_attempts": gate_attempts, "lab_variants": lab_variants, "contaminated": contaminated}
         started = time.time()
         try:
             outcome = _execute(runner, db, spec, cfg, meta, product_list, provider, trade_source, jobs, neighbors,
@@ -1091,7 +1201,7 @@ def _execute(runner, db, spec, cfg, meta, product_list, provider, trade_source, 
                                                               cfg["holdout_from"], run_id, _now_ms()))
                 db.execute("UPDATE runs SET holdout_read=1 WHERE id=?", (run_id,))
         except sqlite3.IntegrityError:
-            check_exam_allowed(db, spec, cfg)
+            check_exam_allowed(db, spec, cfg, True)
             raise GateError("El examen final de esta versión ya se rindió.")
     runner.update(DOWNLOAD_SHARE, force=True, detail="calculando operaciones")
     span = PHASE_START["simulating"] - DOWNLOAD_SHARE
@@ -1128,6 +1238,8 @@ def _execute(runner, db, spec, cfg, meta, product_list, provider, trade_source, 
     result = judge(trades, series, cfg, kind=kind, start_ms=start_ms, end_ms=end_ms, attempts=attempts, products=names,
                    seed=cfg["seed"], neighbors=sens,
                    progress=lambda f: runner.update(PHASE_START["random"] + (PHASE_START["report"] - PHASE_START["random"]) * f))
+    if meta.get("contaminated"):
+        apply_contamination(result)
     # --- report
     runner.set_phase("report", "escribiendo el informe")
     meta["open_at_end"] = open_at_end
@@ -1177,7 +1289,8 @@ def purge_strategy(strategy_id, data_dir=None, keep_tombstone=None):
                     continue
                 raise GateError("Hay una prueba en curso de esta estrategia: cancelala antes de borrarla.")
             runs = db.execute("SELECT id, report_path FROM runs WHERE strategy_id=?", (strategy_id,)).fetchall()
-            locks = db.execute("SELECT code_hash, locked_at, status, verdict FROM exam_locks WHERE strategy_id=?",
+            locks = db.execute("SELECT code_hash, locked_at, status, verdict, holdout_from FROM exam_locks "
+                               "WHERE strategy_id=?",
                                (strategy_id,)).fetchall()
             with db:
                 if keep_tombstone:
@@ -1186,6 +1299,9 @@ def purge_strategy(strategy_id, data_dir=None, keep_tombstone=None):
                         counts["tombstones"] += db.execute(
                             "INSERT OR IGNORE INTO exam_tombstones VALUES(?,?,?)",
                             (lock["code_hash"], _stamp(lock["locked_at"]), label)).rowcount
+                        db.execute("INSERT OR IGNORE INTO exam_window_tombstones VALUES(?,?,?,?,?)",
+                                   (family_hash(family_of(strategy_id)), lock["holdout_from"], lock["code_hash"],
+                                    _stamp(lock["locked_at"]), label))
                 if strategy_purge.KEEP_ATTEMPT_COUNTER:
                     for family, n in db.execute("SELECT family, COUNT(*) FROM attempts WHERE strategy_id=? GROUP BY family",
                                                 (strategy_id,)).fetchall():
@@ -1253,6 +1369,9 @@ def _parser():
     e.add_argument("--from", dest="from_date", help="YYYY-MM-DD (solo práctica; por defecto el de la configuración)")
     e.add_argument("--products", help="PF_XBTUSD,PF_ETHUSD,... (por defecto los de la configuración)")
     e.add_argument("--exam", action="store_true", help="examen final: solo datos desde la fecha de corte; una vez por versión")
+    e.add_argument("--examen-contaminado", action="store_true", dest="allow_contaminated",
+                   help="solo con --exam: rinde el examen aunque la familia ya haya usado esta reserva; queda marcado "
+                        "como contaminado y nunca puede dar PASA")
     e.add_argument("--json-progress", action="store_true", help="una línea JSON por avance en la salida estándar")
     e.add_argument("--sin-vecinos", action="store_true", help="omite la sensibilidad a parámetros vecinos (más rápido)")
     e.add_argument("--jobs", type=int, help="procesos de cálculo (por defecto min(CPU, 8))")
@@ -1288,7 +1407,8 @@ def main(argv=None):
         out = evaluate(args.strategy, kind="exam" if args.exam else "practice", from_date=args.from_date,
                        products=args.products, data_dir=args.data_dir, specs_dir=args.specs_dir, registry_db=args.registry_db, kronos_dir=args.kronos_dir,
                        qwen_exit_dir=args.qwen_exit_dir, jobs=args.jobs, research_ledger=args.research_ledger,
-                       neighbors=not args.sin_vecinos, json_progress=args.json_progress, install_signals=True)
+                       neighbors=not args.sin_vecinos, json_progress=args.json_progress, install_signals=True,
+                       allow_contaminated=args.allow_contaminated)
     except (GateError, HistoryError, ValueError) as error:
         print(str(error), file=sys.stderr)
         return 2
