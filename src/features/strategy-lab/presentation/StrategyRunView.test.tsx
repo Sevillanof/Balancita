@@ -235,6 +235,19 @@ describe('StrategyRunView', () => {
     expect(screen.getAllByText('—', { selector: 'strong' })).toHaveLength(4)
   })
 
+  it('says so plainly when the gate does not know the strategy', async () => {
+    const gate = gateWith(overview([]))
+    vi.mocked(gate.overview).mockRejectedValue(
+      new Error('No existe la estrategia indicada.'),
+    )
+    renderView(gate, visualWith())
+    expect(await screen.findByTestId('run-empty')).toHaveTextContent(
+      'Esta estrategia no tiene pruebas guardadas.',
+    )
+    expect(screen.queryByRole('alert')).toBeNull()
+    expect(screen.queryByText(/Cargando/)).toBeNull()
+  })
+
   it('says there are no tests when the strategy has none', async () => {
     renderView(gateWith(overview([])), visualWith())
     expect(await screen.findByTestId('run-empty')).toHaveTextContent(
