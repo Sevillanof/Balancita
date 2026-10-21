@@ -315,6 +315,7 @@ class LiveSession(object):
         self.last_quote = {}                          # product -> time of the previous quote this process saw
         self.stats = {"steps": 0, "events": 0, "duplicates": 0, "rejected_by_runner": 0, "audit_new": 0, "clock_events": 0}
         evaluator.fault = lambda point: self._fault(point)
+        runner.defer_before_ms = evaluator.decide_from_ms       # warm-up events (no orders, no positions) skip the per-entry fsync
 
     # ---- construction ----------------------------------------------------------------------------------------
     @staticmethod
@@ -823,6 +824,7 @@ class LiveSession(object):
             raise IntegrationError("session_halted", self.halted)
         try:
             self.evaluator.flush()                  # the checkpoint is never ahead of the evaluator's log: warm-up entries wait for this
+            self.runner.journal.sync()              # ... nor of the runner's journal (the runner syncs again in its own checkpoint)
             return self._write_checkpoint()
         except Exception as error:               # noqa: BLE001 - a simulated death is a BaseException and is not caught here
             self.halted = repr(error)
@@ -901,7 +903,7 @@ class LiveSession(object):
 
     def close(self):
         self.evaluator.flush()
-        self.runner.close()
+        self.runner.close()                         # syncs the journal before releasing the lock
         self.reader.close()
         self.funding.close()
 

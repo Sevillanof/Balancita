@@ -79,6 +79,7 @@ class FileRunnerJournal(object):
 
     def __init__(self, path, entries=None, tail_discarded=0):
         self.path, self.entries, self.head, self.tail_discarded = path, [], GENESIS, tail_discarded
+        self._handle = None                         # open only between a non-durable add and the next sync
         for entry in entries or ():
             self.entries.append(entry)
             self.head = entry["hash"]
@@ -124,24 +125,38 @@ class FileRunnerJournal(object):
                 os.fsync(handle.fileno())
         return cls(path, entries, torn)
 
-    def add(self, t_ms, kind, data):
+    def add(self, t_ms, kind, data, durable=True):
+        """Appends one entry. ``durable=False`` writes and flushes it on one open handle without ``fsync``: the runner does it only
+        for warm-up events (no order, no position). The next durable ``add`` or ``sync`` makes it durable (same file, same handle)."""
         body = {"seq": len(self.entries) + 1, "t_ms": int(t_ms), "kind": kind, "data": SC._plain(data), "prev": self.head}
         body["hash"] = stable_hash(body)
         line = (json.dumps(body, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8")
         hit("before_journal", kind)
-        with open(self.path, "ab") as handle:
-            if due("mid_journal", kind):
-                handle.write(line[: len(line) // 2])      # a torn write, as a power cut leaves it
-                handle.flush()
-                os.fsync(handle.fileno())
-                raise SC.SimulatedCrash("mid_journal")
-            handle.write(line)
+        if self._handle is None:
+            self._handle = open(self.path, "ab")
+        handle = self._handle
+        if due("mid_journal", kind):
+            handle.write(line[: len(line) // 2])      # a torn write, as a power cut leaves it
             handle.flush()
-            os.fsync(handle.fileno())
+            self.sync()
+            raise SC.SimulatedCrash("mid_journal")
+        handle.write(line)
+        handle.flush()
+        if durable:
+            self.sync()                               # one fsync also covers every deferred entry before this one
         self.entries.append(body)
         self.head = body["hash"]
         hit("after_journal", kind)
         return body
+
+    def sync(self):
+        """``fsync`` everything appended so far and release the handle (nothing to do when nothing is waiting)."""
+        handle, self._handle = self._handle, None
+        if handle is not None:
+            try:
+                os.fsync(handle.fileno())
+            finally:
+                handle.close()
 
 
 # ------------------------------------------------------------------------------------------------ the checkpoint

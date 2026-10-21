@@ -14,7 +14,8 @@ from balancita_engine import paper_live_ingest as ING
 from balancita_engine import paper_live_integration as LI
 from balancita_engine import signal_continuity as SC
 
-from real_session import DECIDE_FROM, INGEST_KW, STEP, Base, abandon, new_session, record, recover_session, strategies
+from real_session import (DECIDE_FROM, INGEST_KW, STEP, Base, abandon, new_session, record, recover_session,
+                          strategies)
 from real_world import BTC, HOUR, MIN, T0, RealWorld
 from test_paper_live_ingest import Source
 
@@ -128,10 +129,7 @@ class FastStart(Base):
         self.assertEqual(revived.ingestor.seeded, {})
 
 
-class TestWarmupLog(Base):
-    """A crash in the middle of the warm-up, with the candle inputs written but not yet fsynced: the log keeps only whole lines, and the
-    recovery loses no candle and repeats none."""
-
+class WarmupHelpers(object):
     def drain(self, session, world):
         """Steps at the first decision until everything the source holds has been read, then three steps of the clock."""
         for _ in range(300):
@@ -151,6 +149,11 @@ class TestWarmupLog(Base):
 
     def buckets_in_log(self, session):
         return [e["data"]["candle"]["bucket_start"] for e in session.evaluator.log.entries if e["kind"] == "candle"]
+
+
+class TestWarmupLog(WarmupHelpers, Base):
+    """A crash in the middle of the warm-up, with the candle inputs written but not yet fsynced: the log keeps only whole lines, and the
+    recovery loses no candle and repeats none."""
 
     def crash(self, world, cut_bytes):
         """The process dies at the 40th warm-up candle it logs, a few steps (and checkpoints) after the start; ``cut_bytes`` > 0: the last
@@ -235,6 +238,174 @@ class TestInputLogSync(unittest.TestCase):
             evaluator.feed_candle(BTC, dict(candle, bucket_start=T0 + 200 * MIN), T0 + 201 * MIN + 1)
             self.assertEqual(len(calls), created + 3)                                  # from here one fsync per entry
             self.assertEqual(LE.InputLog.open(evaluator.log.path).head, evaluator.log.head)
+
+
+class TestRunnerJournalSync(WarmupHelpers, Base):
+    """The runner's journal on the same terms as the evaluator's log: warm-up events (before the first decision, no order, no position) share
+    one fsync; from the first decision on there is one per entry; a crash in the middle of a warm-up batch recovers the same journal."""
+
+    JOURNAL = os.path.join(LI.RUNNER_DIR, "journal.jsonl")
+
+    def journal_path(self, directory):
+        from balancita_engine.paper_runner_store import JOURNAL_FILE
+        return os.path.join(directory, LI.RUNNER_DIR, JOURNAL_FILE)
+
+    def fsyncs(self):
+        from balancita_engine import paper_runner_store as RS
+        calls = []
+        real = RS.os.fsync
+        RS.os.fsync = lambda fd: (calls.append(fd), real(fd))[1]
+        self.addCleanup(setattr, RS.os, "fsync", real)
+        return calls
+
+    def test_warmup_entries_share_one_fsync_and_a_decision_entry_syncs_what_came_before_it(self):
+        from balancita_engine import paper_runner_store as RS
+        with tempfile.TemporaryDirectory() as root:
+            calls = self.fsyncs()
+            journal = RS.FileRunnerJournal.create(os.path.join(root, "j.jsonl"))
+            for k in range(50):
+                journal.add(T0 + k, "event_accepted", {"n": k}, durable=False)
+            self.assertEqual(len(calls), 0)
+            with open(journal.path, "rb") as handle:
+                self.assertEqual(len(handle.read().splitlines()), 50)                  # every line is already in the file
+            journal.sync()
+            self.assertEqual(len(calls), 1)
+            journal.sync()
+            self.assertEqual(len(calls), 1)                                            # nothing waiting
+            for k in range(50, 80):
+                journal.add(T0 + k, "event_accepted", {"n": k}, durable=False)
+            journal.add(T0 + 80, "event_accepted", {"n": 80})                          # a durable entry carries the 30 before it
+            self.assertEqual(len(calls), 2)
+            journal.add(T0 + 81, "event_accepted", {"n": 81})
+            self.assertEqual(len(calls), 3)                                            # durable by default: one fsync per entry
+            self.assertEqual(RS.FileRunnerJournal.load(journal.path).head, journal.head)
+
+    def test_a_session_syncs_the_runner_journal_once_in_the_warmup_and_per_entry_from_the_first_decision(self):
+        world = session_world(self)
+        session = new_session(world, os.path.join(self.root, "s"), strategies(self.buckets))
+        self.addCleanup(abandon, session)
+        calls = self.fsyncs()
+        journal = session.runner.journal
+        added, durable_adds = [], []
+        original = journal.add
+
+        def spy(t_ms, kind, data, durable=True):
+            added.append((t_ms, kind))
+            durable_adds.append(durable)
+            return original(t_ms, kind, data, durable=durable)
+        journal.add = spy
+        for _ in range(300):
+            if not session.step(DECIDE_FROM - MIN)["more_to_read"]:
+                break
+        warm = [(t, k) for (t, k) in added]
+        self.assertGreater(len(warm), 100)
+        self.assertTrue(all(t < DECIDE_FROM for t, _ in warm))
+        self.assertFalse(any(durable_adds))                                            # no entry waited for its own fsync
+        # the runner's fsyncs: checkpoint writes (tmp + dir, two sessions' files) plus one per step for the journal, never one per entry
+        self.assertLess(len(calls), len(warm) // 4)
+        before = len(calls)
+        count = len(added)
+        world.release_until(DECIDE_FROM + 2 * STEP)
+        session.step(DECIDE_FROM + 2 * STEP)
+        late = added[count:]
+        self.assertTrue(any(t >= DECIDE_FROM for t, _ in late))
+        flags = durable_adds[count:]
+        self.assertTrue(all(flag for (t, _), flag in zip(late, flags) if t >= DECIDE_FROM))   # from the first decision, durable again
+        self.assertGreaterEqual(len(calls) - before, sum(1 for (t, _), f in zip(late, flags) if f))
+
+    def test_deferring_the_warmup_journal_changes_no_financial_result_and_no_journal_byte(self):
+        out = {}
+        for name, defer in (("deferred", True), ("per_entry", False)):
+            world = session_world(self)
+            session = new_session(world, os.path.join(self.root, name), strategies(self.buckets))
+            self.addCleanup(abandon, session)
+            if not defer:
+                session.runner.defer_before_ms = None
+            records = []
+            for index in range(STEPS):
+                now = DECIDE_FROM + index * STEP
+                world.release_until(now)
+                session.step(now)
+                records.append(record(session, now))
+            out[name] = (records, session.digests(), session.runner.journal.head, session.runner.journal.entries[-1]["seq"])
+            with open(self.journal_path(session.directory), "rb") as handle:
+                out[name] += (handle.read(),)
+        self.assertEqual(out["deferred"], out["per_entry"])
+        self.assertTrue(out["deferred"][0][-1]["accounting_orders"] or out["deferred"][1]["orders"])        # the comparison holds an order
+
+    def test_no_entry_is_deferred_while_an_order_is_pending_or_a_position_is_open(self):
+        world = session_world(self)
+        session = new_session(world, os.path.join(self.root, "s"), strategies(self.buckets))
+        self.addCleanup(abandon, session)
+        runner = session.runner
+        self.assertTrue(runner._deferrable(DECIDE_FROM - 1, "event_accepted"))
+        self.assertFalse(runner._deferrable(DECIDE_FROM, "event_accepted"))            # decide_from itself is not warm-up
+        self.assertFalse(runner._deferrable(DECIDE_FROM - 1, "decision"))              # only event entries
+        runner.executor.pending["x"] = {}
+        self.assertFalse(runner._deferrable(DECIDE_FROM - 1, "event_accepted"))
+        del runner.executor.pending["x"]
+        runner.portfolio.positions["P"] = object()
+        self.assertFalse(runner._deferrable(DECIDE_FROM - 1, "event_rejected"))
+        del runner.portfolio.positions["P"]
+
+    def crash(self, world, cut):
+        """The process dies at the 150th event of the warm-up, after some steps and checkpoints. ``cut`` bytes are then taken off the end of the
+        runner journal (a power cut that lost the last deferred bytes); ``cut`` may take whole lines."""
+        directory = os.path.join(self.root, "crashed")
+        session = new_session(world, directory, strategies(self.buckets))
+        seen = {"n": 0}
+
+        def fault(name, info=None):
+            if name == "before_handle":
+                seen["n"] += 1
+                if seen["n"] == 150:
+                    raise LI.FaultInjected(name)
+        session.fault = fault
+        with self.assertRaises(LI.FaultInjected):
+            for _ in range(300):
+                session.step(DECIDE_FROM)
+        abandon(session)
+        path = self.journal_path(directory)
+        with open(path, "rb") as handle:
+            data = handle.read()
+        if cut:
+            with open(path, "wb") as handle:
+                handle.write(data[:-cut])
+        return directory, len(data.splitlines())
+
+    def check_recovery(self, cut):
+        from balancita_engine.paper_runner_store import FileRunnerJournal
+        reference = self.continuous()
+        world = session_world(self)
+        directory, written = self.crash(world, cut)
+        kept = FileRunnerJournal.load(self.journal_path(directory))
+        self.assertLessEqual(len(kept.entries), written)
+        self.assertEqual([e["hash"] for e in kept.entries], [e["hash"] for e in reference.runner.journal.entries[:len(kept.entries)]])
+        kept_clock = max(e["t_ms"] for e in kept.entries if e["kind"] == "event_accepted")
+        revived = recover_session(world, directory, strategies(self.buckets), kept_clock)     # restart at the last event the journal kept
+        self.addCleanup(abandon, revived)
+        self.drain(revived, world)
+        events = [e["data"]["event"]["event_id"] for e in revived.runner.journal.entries if e["kind"] == "event_accepted"]
+        wanted = [e["data"]["event"]["event_id"] for e in reference.runner.journal.entries if e["kind"] == "event_accepted"]
+        self.assertEqual(len(events), len(set(events)))                                # none twice
+        self.assertEqual(sorted(events), sorted(wanted))                               # none lost
+        now = DECIDE_FROM + 3 * STEP
+        self.assertEqual(record(revived, now), record(reference, now))
+        with open(self.journal_path(directory), "rb") as handle:
+            self.assertEqual(len(handle.read().splitlines()), len(revived.runner.journal.entries))   # the file holds exactly the entries in memory
+        from balancita_engine.paper_runner import RunnerJournal
+        self.assertIsNone(RunnerJournal.verify(revived.runner.journal.entries))
+
+    def test_a_crash_in_the_middle_of_a_warmup_batch_recovers_the_same_journal(self):
+        self.check_recovery(0)
+
+    def test_a_crash_that_cut_the_last_line_of_the_batch_recovers_the_same_journal(self):
+        self.check_recovery(25)
+
+    def test_a_crash_that_lost_whole_deferred_lines_recovers_without_loss_or_repeats(self):
+        self.check_recovery(1)                  # the last newline is gone: a torn last line
+        self.root = tempfile.mkdtemp(dir=self.root)
+        self.check_recovery(6000)               # several whole lines of the deferred batch are gone: the replay brings them back
 
 
 class TestReaderBounds(unittest.TestCase):
