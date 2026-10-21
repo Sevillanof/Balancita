@@ -44,6 +44,7 @@ import {
 } from './StrategyStatusBadges.tsx'
 import './StrategyDetailView.css'
 import GatePanel from './GatePanel.tsx'
+import StrategyRunView from './StrategyRunView.tsx'
 
 const NA = 'No disponible'
 
@@ -1077,6 +1078,12 @@ export default function StrategyDetailView({
           detail={`${detail.message}. Se muestran solo los datos del inventario.`}
         />
       )}
+
+      <StrategyRunView
+        strategyId={row.id}
+        strategyName={row.name}
+        version={row.version}
+      />
 
       <div className="detail__grid">
         <div className="detail__col">
