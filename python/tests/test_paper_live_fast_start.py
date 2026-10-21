@@ -263,7 +263,9 @@ class TestReaderBounds(unittest.TestCase):
             self.assertEqual(seeded["candle"], reader.db.execute(
                 "SELECT MIN(rowid) FROM paper_futures_official_candles WHERE product_id=? AND bucket_start>=?", (BTC, 8 * MIN)).fetchone()[0] - 1)
             self.assertEqual(reader.seed_cursors((BTC,), None, None), {"ticker": None, "candle": None})
-            self.assertEqual(reader.seed_cursors((BTC,), 10 ** 12, 10 ** 12), {"ticker": None, "candle": None})      # nothing that late: start at 0
+            late = reader.seed_cursors((BTC,), 10 ** 12, 10 ** 12)       # nothing that late exists yet (a start before the first quotes): the end of the table, not 0
+            top = reader.max_rowids()
+            self.assertEqual(late, {"ticker": top["ticker"], "candle": top["candle"]})
             self.assertEqual(reader.seed_cursors((), 300_000, None)["ticker"], None)                                   # no product, no index to ask
             reader.close()
 

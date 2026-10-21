@@ -109,7 +109,9 @@ class SourceReader(object):
     def seed_cursors(self, products, ticker_not_before_ms=None, candle_not_before_ms=None):
         """The cursor (one rowid below the first row that can matter) that skips what lies before the bounds, found through the capture's
         own indexes instead of by reading past it: tickers ``(product_id, received_at, seq)``, candles their primary key. ``None`` for a
-        table with no bound, no row at or after it or (tickers) no product to ask for; the caller then starts at 0 as always. The
+        table with no bound or (tickers) no product to ask for; the caller then starts at 0 as always. A table with a bound but no row at
+        or after it (a session started before its first quotes exist) starts at its highest rowid: all it holds is older than the bound,
+        and reading it again at every step would scan it whole (42 s a step on the real capture, 21-oct). The
         lowest rowid over the products is taken, so no row of theirs at or after the bound lies below the cursor (rows of other
         products or feeds that sit in between are read past, as before)."""
         out = {"ticker": None, "candle": None}
@@ -118,7 +120,7 @@ class SourceReader(object):
                 firsts = [self.db.execute("SELECT MIN(rowid) FROM paper_futures_market_events WHERE product_id=? AND received_at>=?",
                                           (product, int(ticker_not_before_ms))).fetchone()[0] for product in products]
                 firsts = [rid for rid in firsts if rid is not None]
-                out["ticker"] = min(firsts) - 1 if firsts else None
+                out["ticker"] = min(firsts) - 1 if firsts else self._top_rowid("paper_futures_market_events")
             if candle_not_before_ms is not None:
                 firsts = ([self.db.execute("SELECT MIN(rowid) FROM paper_futures_official_candles WHERE product_id=? AND interval_ms=? "
                                            "AND bucket_start>=?", (product, ONE_MINUTE_MS, int(candle_not_before_ms))).fetchone()[0]
@@ -126,10 +128,14 @@ class SourceReader(object):
                           [self.db.execute("SELECT MIN(rowid) FROM paper_futures_official_candles WHERE interval_ms=? AND bucket_start>=?",
                                            (ONE_MINUTE_MS, int(candle_not_before_ms))).fetchone()[0]])
                 firsts = [rid for rid in firsts if rid is not None]
-                out["candle"] = min(firsts) - 1 if firsts else None
+                out["candle"] = min(firsts) - 1 if firsts else self._top_rowid("paper_futures_official_candles")
         except sqlite3.OperationalError:
             return {"ticker": None, "candle": None}
         return out
+
+    def _top_rowid(self, table):
+        top = self.db.execute("SELECT MAX(rowid) FROM " + table).fetchone()[0]
+        return top if top is not None else None
 
     def identity(self, name, rowid):
         """What the row at ``rowid`` is (its event id, candle key or gap id), or ``None`` when no row has that rowid."""
