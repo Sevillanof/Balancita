@@ -1,4 +1,4 @@
-import { act, render, screen, within } from '@testing-library/react'
+import { act, fireEvent, render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { OPERATIONAL_LABELS } from '../domain/strategy-labels.ts'
@@ -62,11 +62,20 @@ function renderView(
   return { onOpen, onNew }
 }
 
+const pick = (id: string) =>
+  fireEvent.click(
+    document.querySelector(`li[data-id="${id}"] button`) as HTMLElement,
+  )
+const cardOf = () =>
+  document.querySelector('[data-testid="experiment-card"]') as HTMLElement
+
 describe('ComparisonView (datos de ejemplo)', () => {
   it('keeps one separate book per experiment and no consolidated figure', async () => {
     renderView()
-    await screen.findAllByTestId('experiment-card')
-    expect(screen.getAllByTestId('experiment-card')).toHaveLength(5)
+    await screen.findAllByTestId('strategy-list-item')
+    expect(screen.getAllByTestId('strategy-list-item')).toHaveLength(5)
+    // One detail at a time, beside the list.
+    expect(screen.getAllByTestId('experiment-card')).toHaveLength(1)
     expect(screen.getByRole('note')).toHaveTextContent('no se suman')
     expect(screen.getByRole('note')).toHaveTextContent(
       'No hay cartera consolidada',
@@ -78,43 +87,41 @@ describe('ComparisonView (datos de ejemplo)', () => {
 
   it('says why there is no forward result and never declares profitability', async () => {
     renderView()
-    await screen.findAllByTestId('experiment-card')
-    for (const card of screen.getAllByTestId('experiment-card'))
-      expect(card).toHaveTextContent('el servicio no tiene configurada')
+    await screen.findAllByTestId('strategy-list-item')
+    for (const id of ['x1', 'x4', 'x6']) {
+      pick(id)
+      expect(cardOf()).toHaveTextContent('el servicio no tiene configurada')
+    }
     expect(document.body.textContent).not.toMatch(/B5/)
     expect(document.body.textContent).not.toMatch(/rentable/i)
   })
 
   it('uses the shared status badges and keeps carry unverified', async () => {
     renderView()
-    await screen.findAllByTestId('experiment-card')
-    const card = (id: string) =>
-      document.querySelector(`[data-id="${id}"]`) as HTMLElement
-    expect(within(card('x1')).getByTestId('research-badge')).toHaveTextContent(
+    await screen.findAllByTestId('strategy-list-item')
+    const item = (id: string) =>
+      document.querySelector(`li[data-id="${id}"]`) as HTMLElement
+    pick('x1')
+    expect(within(cardOf()).getByTestId('research-badge')).toHaveTextContent(
       'Candidata, no fiable',
     )
     expect(
-      within(card('x1')).getByTestId('operational-badge'),
+      within(item('x1')).getByTestId('operational-badge'),
     ).toHaveTextContent(OPERATIONAL_LABELS.active)
     expect(
-      within(card('x4')).getByTestId('operational-badge'),
+      within(item('x4')).getByTestId('operational-badge'),
     ).toHaveTextContent('Estado no verificado')
     expect(
-      within(card('x6')).getByTestId('operational-badge'),
+      within(item('x6')).getByTestId('operational-badge'),
     ).toHaveTextContent('Estado no verificado')
-    expect(card('x6')).toHaveTextContent('Nota del registro de ejemplo')
+    pick('x6')
+    expect(cardOf()).toHaveTextContent('Nota del registro de ejemplo')
   })
 
-  it('keeps retired and turned-off strategies in a collapsed section with reason', async () => {
+  it('lists retired and turned-off strategies with reason and lets you open them', async () => {
     renderView()
-    await screen.findAllByTestId('experiment-card')
-    const section = screen.getByTestId('retired')
-    expect(section).not.toHaveAttribute('open')
+    await screen.findAllByTestId('strategy-list-item')
     expect(screen.getByTestId('stopped-count')).toHaveTextContent('1')
-    // Retired ones are not cards of their own.
-    expect(
-      document.querySelector('[data-testid="experiment-card"][data-id="x5"]'),
-    ).toBeNull()
     const retired = within(screen.getByTestId('retired-row'))
     expect(retired.getByText('X5 Cerrada')).toBeInTheDocument()
     expect(retired.getByTestId('operational-badge')).toHaveTextContent(
@@ -123,10 +130,13 @@ describe('ComparisonView (datos de ejemplo)', () => {
     expect(screen.getByTestId('retired-row')).toHaveTextContent(
       'Motivo: se cerró con el motor viejo D',
     )
+    pick('x5')
+    expect(cardOf()).toHaveAttribute('data-id', 'x5')
   })
 
   it('opens the detail of a strategy and offers a new one', async () => {
     const { onOpen, onNew } = renderView()
+    await screen.findAllByTestId('strategy-list-item')
     await userEvent.click(
       await screen.findByRole('button', { name: 'Detalle de X1 Candidata' }),
     )
@@ -146,8 +156,9 @@ describe('ComparisonView (datos de ejemplo)', () => {
         decisions: 30,
       }),
     )
-    await screen.findAllByTestId('experiment-card')
-    const card = document.querySelector('[data-id="x4"]') as HTMLElement
+    await screen.findAllByTestId('strategy-list-item')
+    pick('x4')
+    const card = cardOf()
     expect(
       await within(card).findByTestId('kronos-verified'),
     ).toHaveTextContent('Actividad reciente registrada')
@@ -188,7 +199,8 @@ describe('ComparisonView (datos de ejemplo)', () => {
         .mockImplementation(() => new Promise(() => {}))
       renderView(vi.fn(), vi.fn(), loader)
       await act(async () => {})
-      const card = () => document.querySelector('[data-id="x4"]') as HTMLElement
+      pick('x4')
+      const card = cardOf
       expect(within(card()).getByTestId('kronos-verified')).toBeTruthy()
       await act(async () => {
         vi.advanceTimersByTime(100 * 60_000)
@@ -210,7 +222,8 @@ describe('ComparisonView (datos de ejemplo)', () => {
         .mockImplementation(() => Promise.reject(new Error('down')))
       renderView(vi.fn(), vi.fn(), loader)
       await act(async () => {})
-      const card = () => document.querySelector('[data-id="x4"]') as HTMLElement
+      pick('x4')
+      const card = cardOf
       expect(within(card()).getByTestId('kronos-verified')).toBeTruthy()
       await act(async () => {
         vi.advanceTimersByTime(6 * 60_000)
@@ -223,8 +236,9 @@ describe('ComparisonView (datos de ejemplo)', () => {
   it('names the Kronos button for what it opens', async () => {
     const onOpen = vi.fn()
     renderView(onOpen)
-    await screen.findAllByTestId('experiment-card')
-    const card = document.querySelector('[data-id="x4"]') as HTMLElement
+    await screen.findAllByTestId('strategy-list-item')
+    pick('x4')
+    const card = cardOf()
     const button = within(card).getByRole('button', {
       name: 'Abrir Kronos en el Laboratorio',
     })
@@ -235,8 +249,9 @@ describe('ComparisonView (datos de ejemplo)', () => {
 
   it('keeps Kronos «Estado no verificado» when the activity is not verified', async () => {
     renderView()
-    await screen.findAllByTestId('experiment-card')
-    const card = document.querySelector('[data-id="x4"]') as HTMLElement
+    await screen.findAllByTestId('strategy-list-item')
+    pick('x4')
+    const card = cardOf()
     expect(within(card).queryByTestId('kronos-verified')).toBeNull()
     expect(within(card).getByTestId('kronos-activity')).toHaveTextContent(
       'Estado no verificado',
@@ -246,7 +261,7 @@ describe('ComparisonView (datos de ejemplo)', () => {
 
   it('shows the unit only where the result is computed that way and adds no arms', async () => {
     renderView()
-    await screen.findAllByTestId('experiment-card')
+    await screen.findAllByTestId('strategy-list-item')
     const rows = screen.getAllByRole('row').slice(1)
     const x1 = rows.find((r) => r.textContent?.includes('X1 Candidata'))!
     const x4 = rows.find((r) => r.textContent?.includes('X4 Modelo'))!

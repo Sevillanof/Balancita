@@ -996,7 +996,8 @@ type Props = {
   api: StrategyApi
   row: InventoryStrategy
   inventory: Inventory
-  onBack: () => void
+  /** Absent when the detail sits beside the list of the Estrategias page. */
+  onBack?: () => void
   onOpenLab: () => void
   loadActivity?: LoadActivity
 }
@@ -1034,10 +1035,14 @@ export default function StrategyDetailView({
     >
       <header className="detail__head">
         <div className="detail__crumbs">
-          <button type="button" onClick={onBack}>
-            Estrategias
-          </button>
-          <span aria-hidden="true">/</span>
+          {onBack && (
+            <>
+              <button type="button" onClick={onBack}>
+                Estrategias
+              </button>
+              <span aria-hidden="true">/</span>
+            </>
+          )}
           <h2>{row.name}</h2>
           <small>v{row.version}</small>
         </div>

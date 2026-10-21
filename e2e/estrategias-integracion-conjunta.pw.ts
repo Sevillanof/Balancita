@@ -205,8 +205,12 @@ test('Terminal -> strategies page -> Carry -> C29 detail -> Kronos, one route', 
         status: response.status(),
       })
   })
-  const cards = page.getByTestId('experiment-card')
-  const kronos = page.locator('[data-id="kronos-small-1h-h4-v1"]')
+  const cards = page.getByTestId('strategy-list-item')
+  const showKronos = () =>
+    page.locator('li[data-id="kronos-small-1h-h4-v1"] button').click()
+  const kronos = page.locator(
+    '[data-testid="experiment-card"][data-id="kronos-small-1h-h4-v1"]',
+  )
 
   // 1. Terminal -> Estrategias opens on the strategies page, no tabs.
   await page.goto('/terminal')
@@ -219,6 +223,10 @@ test('Terminal -> strategies page -> Carry -> C29 detail -> Kronos, one route', 
   await shot(page, '1-estrategias')
 
   // 2. «Ver contador de Carry»: Laboratory, focus on the Carry panel, back.
+  await page
+    .getByRole('button', { name: /^Ver .*Carry/ })
+    .first()
+    .click()
   await page.getByRole('button', { name: /Ver contador de/ }).click()
   await expect(page.getByRole('heading', { name: 'Laboratorio' })).toBeVisible()
   const carryPanel = page.getByRole('region', { name: 'Carry de funding' })
@@ -230,7 +238,7 @@ test('Terminal -> strategies page -> Carry -> C29 detail -> Kronos, one route', 
   await expect(cards).toHaveCount(4)
 
   // 3. C29 detail: 237 days, three evidence kinds apart, Terminal = general.
-  await page.getByRole('button', { name: /Detalle de C29/ }).click()
+  await page.getByRole('button', { name: /^Ver C29/ }).click()
   const detail = page.getByTestId('strategy-detail')
   await expect(detail.getByRole('heading', { name: /^C29/ })).toBeVisible()
   const performance = detail.getByTestId('module-performance')
@@ -260,9 +268,8 @@ test('Terminal -> strategies page -> Carry -> C29 detail -> Kronos, one route', 
   await expect(cards).toHaveCount(4)
 
   // 4. Detail again, back through the breadcrumb, then the comparison.
-  await page.getByRole('button', { name: /Detalle de C29/ }).click()
+  await page.getByRole('button', { name: /^Ver C29/ }).click()
   await expect(detail).toBeVisible()
-  await detail.getByRole('button', { name: 'Estrategias' }).click()
   await expect(cards).toHaveCount(4)
   await expect(
     page.getByRole('heading', { name: 'Un libro paper por estrategia' }),
@@ -277,6 +284,7 @@ test('Terminal -> strategies page -> Carry -> C29 detail -> Kronos, one route', 
   await expect(unitRow(/Kronos/)).not.toContainText('pb por operación')
 
   // 5. Kronos without verifiable gateway evidence: «Estado no verificado».
+  await page.locator('li[data-id="kronos-small-1h-h4-v1"] button').click()
   await expect(kronos.getByTestId('kronos-activity')).toContainText(
     'Estado no verificado',
   )
@@ -295,6 +303,7 @@ test('Terminal -> strategies page -> Carry -> C29 detail -> Kronos, one route', 
   }
   await kronosRoutes(page, fresh, synthScores(now - 600_000))
   await page.reload()
+  await showKronos()
   await expect(kronos.getByTestId('kronos-verified')).toHaveText(
     'Actividad reciente registrada',
   )
@@ -308,6 +317,8 @@ test('Terminal -> strategies page -> Carry -> C29 detail -> Kronos, one route', 
   const unverified = async (system: unknown, scores: unknown) => {
     await kronosRoutes(page, system, scores)
     await page.reload()
+    await showKronos()
+    await showKronos()
     await expect(kronos.getByTestId('kronos-activity')).toContainText(
       'Estado no verificado',
     )
@@ -328,6 +339,7 @@ test('Terminal -> strategies page -> Carry -> C29 detail -> Kronos, one route', 
   // the earlier Carry request does NOT pull the focus back to the Carry panel.
   await kronosRoutes(page, fresh, synthScores(now - 600_000))
   await page.reload()
+  await showKronos()
   await expect(kronos.getByTestId('kronos-verified')).toBeVisible()
   await kronos
     .getByRole('button', { name: 'Abrir Kronos en el Laboratorio' })
@@ -365,12 +377,16 @@ test('a served Carry request does not pull the focus back when the Laboratory is
       failed.push(`${response.status()} ${url.pathname}`)
   })
   await page.goto('/estrategias')
-  await expect(page.getByTestId('experiment-card')).toHaveCount(4)
+  await expect(page.getByTestId('strategy-list-item')).toHaveCount(4)
+  await page
+    .getByRole('button', { name: /^Ver .*Carry/ })
+    .first()
+    .click()
   await page.getByRole('button', { name: /Ver contador de/ }).click()
   await expect(page.getByTestId('carry-destino')).toBeFocused()
   await page.getByRole('button', { name: '← Estrategias' }).click()
+  await page.locator('li[data-id="kronos-small-1h-h4-v1"] button').click()
   await page
-    .locator('[data-id="kronos-small-1h-h4-v1"]')
     .getByRole('button', { name: 'Abrir Kronos en el Laboratorio' })
     .click()
   await expect(

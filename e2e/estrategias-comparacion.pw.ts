@@ -125,31 +125,35 @@ test('the strategies page shows one separate book per strategy from the real reg
   ).toBeVisible()
   // One page: the app navigation and the page gain no tabs.
   await expect(page.getByRole('tablist')).toHaveCount(0)
-  const cards = page.getByTestId('experiment-card')
+  const cards = page.getByTestId('strategy-list-item')
   await expect(cards).toHaveCount(4)
   await expect(page.getByTestId('running-count')).toHaveText('4')
   await expect(page.getByTestId('stopped-count')).toHaveText('6')
   await expect(page.getByRole('note')).toContainText('no se suman')
 
-  const card = (id: string) => page.locator(`[data-id="${id}"]`)
+  const item = (id: string) => page.locator(`li[data-id="${id}"]`)
+  const pick = (id: string) => item(id).getByRole('button').click()
+  const pane = page.getByTestId('strategy-pane')
   // The same badges as the inventory, on both axes.
+  await pick('c30-momentum-12h-perp-v1')
+  await expect(pane.getByTestId('research-badge')).toHaveText(
+    'Candidata, no fiable',
+  )
   await expect(
-    card('c30-momentum-12h-perp-v1').getByTestId('research-badge'),
-  ).toHaveText('Candidata, no fiable')
-  await expect(
-    card('c30-momentum-12h-perp-v1').getByTestId('operational-badge'),
+    item('c30-momentum-12h-perp-v1').getByTestId('operational-badge'),
   ).toHaveText(OPERATIONAL_LABELS.draft)
   // Kronos has no source for its state; Carry keeps the registry's state.
   await expect(
-    card('kronos-small-1h-h4-v1').getByTestId('operational-badge'),
+    item('kronos-small-1h-h4-v1').getByTestId('operational-badge'),
   ).toHaveText('Estado no verificado')
   await expect(
-    card('carry-funding-c-v1').getByTestId('operational-badge'),
+    item('carry-funding-c-v1').getByTestId('operational-badge'),
   ).toHaveText('Estado no verificado')
   // The gateway is off in this spec: Kronos stays unverified, never inferred.
-  await expect(
-    card('kronos-small-1h-h4-v1').getByTestId('kronos-activity'),
-  ).toContainText('Estado no verificado')
+  await pick('kronos-small-1h-h4-v1')
+  await expect(pane.getByTestId('kronos-activity')).toContainText(
+    'Estado no verificado',
+  )
   await expect(page.getByText('Actividad reciente registrada')).toHaveCount(0)
   await expect(page.getByText(/Brazo/i)).toHaveCount(0)
   // Unit per experiment: only where the result is a net bp-per-trade figure.
@@ -158,36 +162,45 @@ test('the strategies page shows one separate book per strategy from the real reg
     page.getByRole('row').filter({ hasText: name })
   await expect(unitRow(/Kronos/)).toContainText('No disponible')
   await expect(unitRow(/Kronos/)).not.toContainText('pb por operación')
-  await expect(card('carry-funding-c-v1')).not.toContainText('descartad')
-  // Closed and turned-off strategies are not cards: they are in the
-  // collapsed «Retiradas y apagadas» section.
+  await pick('carry-funding-c-v1')
+  await expect(pane).not.toContainText('descartad')
+  // Closed and turned-off strategies sit in their own group of the list.
   await expect(
     cards.and(page.locator('[data-id="c25-pullback-perp-v1"]')),
   ).toHaveCount(0)
   await expect(
-    page.getByTestId('retired').locator('[data-id="c25-pullback-perp-v1"]'),
+    page
+      .getByTestId('retired-row')
+      .and(page.locator('[data-id="c25-pullback-perp-v1"]')),
   ).toHaveCount(1)
-  // No forward result without a source: each card says why (the registry here
-  // runs without --forward-db / --forward-summary), no terminal buttons, no sums.
-  // Experiments that are off, closed or not forward-measured by design say so.
-  for (const text of await cards.allTextContents()) {
-    expect(text).toContain('Forward paper')
-    expect(text).not.toContain('cerradas')
+  // No forward result without a source: each strategy says why (the registry
+  // here runs without --forward-db / --forward-summary), no terminal buttons,
+  // no sums.
+  for (const id of [
+    'c30-momentum-12h-perp-v1',
+    'kronos-small-1h-h4-v1',
+    'carry-funding-c-v1',
+  ]) {
+    await pick(id)
+    const forward = pane.getByTestId('forward-result')
+    await expect(forward).toContainText('Forward paper')
+    await expect(forward).not.toContainText('cerradas')
   }
-  await expect(card('c30-momentum-12h-perp-v1')).toContainText(
+  await pick('c30-momentum-12h-perp-v1')
+  await expect(pane).toContainText(
     'el servicio no tiene configurada la lectura del forward',
   )
   await expect(page.getByTestId('forward-progress')).toHaveCount(0)
   await expect(page.getByText('Abrir en Terminal')).toHaveCount(0)
-  await expect(page.getByText(/rentable/i)).toHaveCount(0)
+  // The detail may say «no alcanzan para llamarla rentable»; nothing declares it so.
+  await expect(page.getByText(/es rentable|resultó rentable/i)).toHaveCount(0)
   await shot(page, '1-comparacion')
 
-  // Detail opens from the card; back to the page keeps working.
-  await page.getByRole('button', { name: /Detalle de C29/ }).click()
+  // The detail opens beside the list; the list stays.
+  await page.getByRole('button', { name: /^Ver C29/ }).click()
   await expect(
     page.getByRole('heading', { name: /^C29/ }).first(),
   ).toBeVisible()
-  await page.getByRole('button', { name: 'Estrategias' }).click()
   await expect(cards).toHaveCount(4)
 
   mkdirSync(SHOTS, { recursive: true })
@@ -201,7 +214,7 @@ test('the strategies page shows one separate book per strategy from the real reg
   const inventoryCalls = log.filter((entry) =>
     entry.url.startsWith('/api-strategies/inventory'),
   )
-  expect(inventoryCalls.length).toBeGreaterThan(1)
+  expect(inventoryCalls.length).toBeGreaterThan(0)
   expect(inventoryCalls.every((entry) => entry.status === 200)).toBe(true)
 })
 
@@ -280,7 +293,12 @@ test('Kronos shows «Actividad reciente registrada» only with a fresh summary a
     }),
   )
   await page.goto('/estrategias')
-  const kronos = page.locator('[data-id="kronos-small-1h-h4-v1"]')
+  const showKronos = () =>
+    page.locator('li[data-id="kronos-small-1h-h4-v1"] button').click()
+  await showKronos()
+  const kronos = page.locator(
+    '[data-testid="experiment-card"][data-id="kronos-small-1h-h4-v1"]',
+  )
   await expect(kronos.getByTestId('kronos-verified')).toHaveText(
     'Actividad reciente registrada',
   )
@@ -308,6 +326,7 @@ test('Kronos shows «Actividad reciente registrada» only with a fresh summary a
     route.fulfill({ json: { status: 'ok', products: [] } }),
   )
   await page.reload()
+  await showKronos()
   await expect(kronos.getByTestId('kronos-activity')).toContainText(
     'Estado no verificado',
   )

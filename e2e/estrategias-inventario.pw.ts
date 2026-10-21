@@ -231,41 +231,41 @@ test('Estrategias opens on the comparison and every interaction answers', async 
   ).toBeVisible()
   // One page: no tabs, no separate inventory.
   await expect(page.getByRole('tablist')).toHaveCount(0)
-  const cards = page.getByTestId('experiment-card')
+  const cards = page.getByTestId('strategy-list-item')
   await expect(cards).toHaveCount(4)
   const retiredRows = page.getByTestId('retired-row')
   await expect(retiredRows).toHaveCount(6)
   // Same words for both axes; C30 is the only candidate, never "reliable".
-  const c30 = page.locator('[data-id="c30-momentum-12h-perp-v1"]')
-  await expect(c30.getByTestId('research-badge')).toHaveText(
-    'Candidata, no fiable',
-  )
+  const c30 = page.locator('li[data-id="c30-momentum-12h-perp-v1"]')
   await expect(c30.getByTestId('operational-badge')).toHaveText('Borrador')
+  await c30.getByRole('button').click()
+  await expect(
+    page.getByTestId('strategy-detail').getByTestId('research-badge'),
+  ).toHaveText('Candidata, no fiable')
   await expect(
     page
-      .locator('[data-id="kronos-small-1h-h4-v1"]')
+      .locator('li[data-id="kronos-small-1h-h4-v1"]')
       .getByTestId('operational-badge'),
   ).toHaveText('Estado no verificado')
   await expect(page.getByText('Activa en paper')).toHaveCount(0)
   await expect(page.getByText('Con evidencia de ventaja')).toHaveCount(0)
   await shot(page, '1-estrategias')
 
-  // Retired and turned-off strategies: collapsed, each with reason and date.
-  const retired = page.getByTestId('retired')
-  await expect(retired).not.toHaveAttribute('open', '')
-  await retired.getByText('Retiradas y apagadas').click()
-  await expect(retired).toHaveAttribute('open', '')
+  // Retired and turned-off strategies: always in the list, each with reason and date.
+  await expect(page.getByTestId('retired')).toContainText(
+    'Retiradas y apagadas',
+  )
   await expect(
-    page.locator('[data-id^="c25"]').getByTestId('operational-badge'),
+    page.locator('li[data-id^="c25"]').getByTestId('operational-badge'),
   ).toHaveText('Retirada')
-  await expect(page.locator('[data-id^="c25"]')).toContainText(
+  await expect(page.locator('li[data-id^="c25"]')).toContainText(
     'se cerró con el motor viejo D: sin ventaja tras costes',
   )
-  await expect(page.locator('[data-id^="c25"]')).not.toContainText(
+  await expect(page.locator('li[data-id^="c25"]')).not.toContainText(
     'closed_with_engine_d',
   )
   // C31 is off by owner decision (2026-10-18): the badge says so and shows why.
-  const c31 = page.locator('[data-id^="c31"]')
+  const c31 = page.locator('li[data-id^="c31"]')
   await expect(c31.getByTestId('operational-badge')).toHaveText('Apagada')
   await expect(c31.getByTestId('operational-badge')).toHaveAttribute(
     'title',
@@ -275,7 +275,7 @@ test('Estrategias opens on the comparison and every interaction answers', async 
   await expect(c31).not.toContainText('Para reactivarla')
   expect((await c31.innerText()).match(/2026-10-18/g)).toHaveLength(1)
   // C32 was retired by the owner: closed, with its own reason and date.
-  const c32 = page.locator('[data-id^="c32"]')
+  const c32 = page.locator('li[data-id^="c32"]')
   await expect(c32.getByTestId('operational-badge')).toHaveAttribute(
     'title',
     /^Retirada desde 2026-10-18 · motivo: Retirada \(18-oct\): ya no se usa/,
@@ -284,7 +284,7 @@ test('Estrategias opens on the comparison and every interaction answers', async 
   await shot(page, '2-retiradas')
 
   // Detail opens the C29 detail view; the laboratory stays one click away.
-  await page.getByRole('button', { name: /Detalle de C29/ }).click()
+  await page.getByRole('button', { name: /^Ver C29/ }).click()
   await expect(page.getByTestId('strategy-detail')).toBeVisible()
   await page.getByRole('button', { name: 'Abrir en Laboratorio' }).click()
   await expect(
@@ -299,6 +299,10 @@ test('Estrategias opens on the comparison and every interaction answers', async 
   await expect(cards).toHaveCount(4)
 
   // «Ver contador» of the Carry card opens the real counter and returns.
+  await page
+    .getByRole('button', { name: /^Ver .*Carry/ })
+    .first()
+    .click()
   await page.getByRole('button', { name: /Ver contador de/ }).click()
   await expect(page.getByRole('heading', { name: 'Laboratorio' })).toBeVisible()
   const carryPanel = page.getByRole('region', { name: 'Carry de funding' })
@@ -342,8 +346,9 @@ test('the forward result of C30 renders live and recovered apart, with progress'
   page,
 }) => {
   await page.goto('/estrategias')
+  await page.locator(`li[data-id="${C30}"]`).getByRole('button').click()
   const forward = page
-    .locator(`[data-id="${C30}"]`)
+    .getByTestId('strategy-pane')
     .getByTestId('forward-result')
   await expect(forward).toBeVisible()
   await expect(forward.getByTestId('forward-state')).toContainText('Borrador')
@@ -360,10 +365,12 @@ test('the forward result of C30 renders live and recovered apart, with progress'
   )
   await expect(forward.getByText('Atrasado')).toHaveCount(0)
   // A strategy the summary does not list shows the reason, not a number.
+  await page
+    .locator('li[data-id="c29-momentum-perp-v1"]')
+    .getByRole('button')
+    .click()
   await expect(
-    page
-      .locator('[data-id="c29-momentum-perp-v1"]')
-      .getByTestId('forward-result'),
+    page.getByTestId('strategy-pane').getByTestId('forward-result'),
   ).toContainText('sin resumen del forward')
 })
 
@@ -379,19 +386,18 @@ test('navigation: Terminal <-> Estrategias <-> detail, no new tabs', async ({
   await expect(
     page.getByRole('heading', { name: 'Un libro paper por estrategia' }),
   ).toBeVisible()
-  await expect(page.getByTestId('experiment-card')).toHaveCount(4)
+  await expect(page.getByTestId('strategy-list-item')).toHaveCount(4)
   // No tabs: Estrategias is one page.
   await expect(page.getByRole('tablist')).toHaveCount(0)
   // Strategies page -> detail of C29 -> back through the breadcrumb.
-  await page.getByRole('button', { name: /Detalle de C29/ }).click()
+  await page.getByRole('button', { name: /^Ver C29/ }).click()
   const detail = page.getByTestId('strategy-detail')
   await expect(detail).toBeVisible()
   await expect(detail.getByRole('heading', { name: /^C29/ })).toBeVisible()
-  await detail.getByRole('button', { name: 'Estrategias' }).click()
-  await expect(page.getByTestId('experiment-card')).toHaveCount(4)
+  await expect(page.getByTestId('strategy-list-item')).toHaveCount(4)
   // The detail is generic: other rules strategies open the same view, with
   // their own figures and without C29's.
-  await page.getByRole('button', { name: /Detalle de C30/ }).click()
+  await page.getByRole('button', { name: /^Ver C30/ }).click()
   await expect(detail.getByRole('heading', { name: /^C30/ })).toBeVisible()
   await expect(detail.getByTestId('module-performance')).toBeVisible()
   await expect(detail.getByTestId('module-config')).not.toContainText(
@@ -401,8 +407,7 @@ test('navigation: Terminal <-> Estrategias <-> detail, no new tabs', async ({
     'Fuera de muestra (OOS)',
   )
   // Detail of C29 -> general Terminal (no C29 selection) -> back.
-  await detail.getByRole('button', { name: 'Estrategias' }).click()
-  await page.getByRole('button', { name: /Detalle de C29/ }).click()
+  await page.getByRole('button', { name: /^Ver C29/ }).click()
   await expect(detail.getByRole('heading', { name: /^C29/ })).toBeVisible()
   await expect(detail.getByText('Ver en Terminal')).toHaveCount(0)
   const toTerminal = detail.getByRole('link', { name: /Abrir la Terminal/ })
@@ -415,19 +420,19 @@ test('navigation: Terminal <-> Estrategias <-> detail, no new tabs', async ({
   await expect(page.getByTestId('strategy-detail')).toHaveCount(0)
   await page.goBack()
   await expect(page).toHaveURL(/\/estrategias$/)
-  await expect(page.getByTestId('experiment-card')).toHaveCount(4)
-  await page.getByRole('button', { name: /Detalle de C30/ }).click()
+  await expect(page.getByTestId('strategy-list-item')).toHaveCount(4)
+  await page.getByRole('button', { name: /^Ver C30/ }).click()
   // Detail -> laboratory (explicit action) -> back to the strategies page.
   await detail.getByRole('button', { name: 'Abrir en Laboratorio' }).click()
   await expect(page.getByRole('heading', { name: 'Laboratorio' })).toBeVisible()
   await page.getByRole('button', { name: '← Estrategias' }).click()
-  await expect(page.getByTestId('experiment-card')).toHaveCount(4)
+  await expect(page.getByTestId('strategy-list-item')).toHaveCount(4)
   // Estrategias -> Terminal -> back: opens on the strategies page again.
   await page.getByRole('link', { name: 'Terminal', exact: true }).click()
   await expect(page).toHaveURL(/\/terminal$/)
   await page.goBack()
   await expect(page).toHaveURL(/\/estrategias$/)
-  await expect(page.getByTestId('experiment-card')).toHaveCount(4)
+  await expect(page.getByTestId('strategy-list-item')).toHaveCount(4)
 })
 
 test('Detalle C29 shows the real registry figures, B2 operations and no invented data', async ({
@@ -462,7 +467,7 @@ test('Detalle C29 shows the real registry figures, B2 operations and no invented
   const c29 = reliability.strategies['c29-momentum-perp-v1']!
 
   await page.goto('/estrategias')
-  await page.getByRole('button', { name: /Detalle de C29/ }).click()
+  await page.getByRole('button', { name: /^Ver C29/ }).click()
   const detail = page.getByTestId('strategy-detail')
   await expect(detail).toBeVisible()
   await expect(
@@ -521,8 +526,7 @@ test('Detalle C29 shows the real registry figures, B2 operations and no invented
   await shot(page, 'detalle-c29', DETAIL_SHOTS, false)
   await shot(page, 'detalle-c29-completo', DETAIL_SHOTS)
   // Back to the strategies page through the breadcrumb.
-  await detail.getByRole('button', { name: 'Estrategias' }).click()
-  await expect(page.getByTestId('experiment-card')).toHaveCount(4)
+  await expect(page.getByTestId('strategy-list-item')).toHaveCount(4)
 
   writeFileSync(
     join(DETAIL_SHOTS, 'solicitudes.json'),

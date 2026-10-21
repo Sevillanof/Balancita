@@ -288,10 +288,7 @@ test('Terminal on the real gateway: every interaction answers without 404', asyn
   await page.keyboard.press('Escape')
   await expect(page.getByText('Registro de estrategias ·')).toBeVisible()
   await page.getByRole('button', { name: '← Estrategias' }).click()
-  await page
-    .getByRole('button', { name: /Detalle de/ })
-    .first()
-    .click()
+  await page.getByRole('button', { name: /^Ver / }).first().click()
   await expect(page.getByTestId('strategy-detail')).toBeVisible()
   await page.getByRole('link', { name: 'Terminal', exact: true }).click()
   await expect(page.getByTestId('activity-panel')).toBeVisible()
