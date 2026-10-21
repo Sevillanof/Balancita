@@ -96,7 +96,7 @@ Ninguna sesión paper arranca sin la aprobación escrita de Fran.
 **Hecho (5c, 19-oct-2026): BAL-DECISION-184-07.** Fran escribió en el chat del proyecto, el 19-oct 08:24Z: «Autorizo la sesión paper en vivo con Bitcoin».
 Con ese mensaje el commit abre `WALL_CLOCK_GATE` y agrega la única entrada de `AUTHORIZED_SESSIONS`: la captura viva de la Mac
 (`/Users/franco.sevillano/balancita-data.noindex/dev-live/futures-market.sqlite`, solo lectura), la carpeta nueva
-`/Users/franco.sevillano/balancita-data.noindex/paper-session-btc-1` y la ventana de decisiones del 19-oct 14:00Z al 20-oct 14:00Z (24 h), con la
+`/Users/franco.sevillano/balancita-data.noindex/paper-session-btc-1` y la ventana de decisiones del 21-oct 10:00Z al 11:00Z (1 h; la primera ventana, 19-oct 14:00Z a 20-oct 14:00Z, nunca empezó porque la captura estaba parada desde las 12:50Z, y Fran pidió el 21-oct no hacer corridas de un día entero), con la
 configuración `config/paper-session-btc-1.json`: solo `PF_XBTUSD`, cartera simulada de 1000 USD, 100 USD por operación, funding observado, bloqueo de
 entradas a los 15 s, parada a los 25 s, tolerancia de velas de 15 s y `clock_guard.max_forward_jump_ms` de 30 s (hipótesis de las Issues, no un valor
 medido). Sigue sin existir ninguna ruta para órdenes reales ni credenciales. Cualquier otra fuente, carpeta o ventana vuelve a ser `real_session_not_authorized`.
