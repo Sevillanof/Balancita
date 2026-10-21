@@ -89,20 +89,25 @@ Los umbrales salen de las cadencias reales del código; ninguno es un número «
 
 ### Pares esperados (estrategia × producto)
 
-El forward actualiza, en cada ciclo, cada estrategia medida × cada producto de su lista. El gateway reconstruye esa lista con las
-mismas entradas que `futures_forward.effective_registration`, y **no** supone que todas las estrategias o productos estén
-habilitados:
+El forward actualiza, en cada ciclo, cada estrategia medida × cada producto de su lista. Desde la decisión del propietario del
+2026-10-19 **todo empieza en borrador** y solo mide lo que el usuario activó. El gateway reconstruye la lista con la misma regla que
+`futures_forward.effective_registration` y **no** supone que todas las estrategias o productos estén habilitados:
 
-1. Estrategias del archivo `config/forward-strategies.json`, **salvo** las que el registro (`strategy_events`: versión activa, o la
-   versión más nueva con su propio estado) tiene en un estado distinto de `active`. Una estrategia solo del archivo necesita su
-   especificación en `config/strategies/`; si no la tiene el forward la omite y se informa en `limitations`.
-2. Más toda estrategia que el registro tiene `active`.
-3. Productos: los que itera el forward (`FUTURES_PRODUCTS`, si no la lista fijada en `config/futures-products.json`), tomados
+1. Estrategias que el registro (`strategy_events`: versión activa, o la versión más nueva con su propio estado) tiene `active`.
+   Nada más cuenta: `config/forward-strategies.json` ya no enciende estrategias (solo aporta el `start_ms`, nunca anterior a la
+   activación), de modo que una estrategia del archivo en borrador no se espera. Con todo en borrador no se espera ningún par y la
+   cobertura dice «Ninguna estrategia debe estar actualizándose».
+2. Productos: los que itera el forward (`FUTURES_PRODUCTS`, si no la lista fijada en `config/futures-products.json`), tomados
    del mismo entorno que el gateway. El runner no tiene filtro de productos por estrategia.
 
-Si alguna de esas entradas no se puede leer (registro, archivo de registro, carpeta de specs, lista de productos), el conjunto no
-se puede determinar y las comprobaciones `forward_cycle` y `forward_coverage` son `unknown` aunque haya filas frescas. Una estrategia
-activada hace menos de 90 min según el registro y todavía sin fila es `warning` (`awaiting_first_cycle`), no un error. Las filas de
+Si alguna de esas entradas no se puede leer (registro, archivo de registro, lista de productos), el conjunto no
+se puede determinar y las comprobaciones `forward_cycle` y `forward_coverage` son `unknown` aunque haya filas frescas.
+
+**Activación y primer ciclo.** El forward mira el registro cada 60 s (`--registry-poll-seconds`) y, si apareció una estrategia (o
+versión) activa nueva, corre un ciclo enseguida sin esperar la hora. Un par esperado que todavía no tiene fila, con el proceso
+forward vivo (`running`, `restarting` o sin información del supervisor), es `warning` con motivo `awaiting_first_cycle` y el texto
+«pendiente: esperando el primer ciclo» (no un error) hasta que pasan **un ciclo completo más la espera de vela** (60 min + 5 min
+desde la activación). Pasado ese plazo, o si el proceso está caído (`down`), sigue siendo `error`. Las filas de
 `forward_status` de pares que ya no se esperan (estrategia apagada) no se usan para juzgar actividad y se cuentan en
 `rows_not_expected`.
 

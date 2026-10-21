@@ -1,7 +1,9 @@
 """Issue #185: clock guard of the paper process (regression and jump stop in order). The market is the real one; the clock is simulated."""
 
+import json
 import os
 import unittest
+from unittest import mock
 
 from balancita_engine import paper_live_process as LP
 from real_session import DECIDE_FROM, STEP, Base, config_dict
@@ -63,10 +65,10 @@ class TestAuthorizationRef(unittest.TestCase):
                                   env=dict(os.environ, PYTHONPATH=os.path.dirname(here) + os.pathsep + here), capture_output=True, text=True)
             return done.returncode, done.stderr, os.path.exists(os.path.join(root, "d"))
 
-    def test_it_does_not_accept_the_wall_clock(self):
-        code, err, created = self.run_cli({}, "--wall-clock")                  # a synthetic source: only the clock is at stake
+    def test_it_does_not_take_the_wall_clock_together_with_a_simulated_one(self):
+        code, err, created = self.run_cli({}, "--wall-clock")                  # the gate is open since BAL-DECISION-184-07; the two clocks exclude each other
         self.assertEqual(code, LP.EXIT_REFUSED)
-        self.assertIn("wall_clock_not_authorized", err)
+        self.assertIn("exclude each other", err)
         self.assertFalse(created)
 
     def test_it_does_not_open_the_real_source_gate(self):
@@ -97,10 +99,20 @@ class TestWallClockIsOffButReady(Base):
             for number, handler in saved.items():
                 signal.signal(number, handler)
 
-    def test_the_gate_is_a_constant_of_the_code_and_it_is_off(self):
-        self.assertIs(LP.WALL_CLOCK_GATE, False)
+    def test_the_gate_is_a_constant_of_the_code_and_it_is_on_only_for_bal_decision_184_07(self):
+        self.assertIs(LP.WALL_CLOCK_GATE, True)
+        self.assertEqual(sorted(LP.AUTHORIZED_SESSIONS), ["BAL-DECISION-184-07"])      # the gate opens the clock, not a source: nothing else is authorized
         self.assertNotIn("wall_clock_gate", LP.DEFAULTS)
         self.assertNotIn("wall_clock", LP.OPTIONAL)                         # no configuration key can open it
+
+    def test_with_the_gate_closed_the_command_line_refuses_the_wall_clock(self):
+        config = os.path.join(self.root, "closed-config.json")
+        with open(config, "w", encoding="utf-8") as handle:
+            json.dump(config_dict(clock_guard=GUARD), handle)
+        with mock.patch.object(LP, "WALL_CLOCK_GATE", False), mock.patch.object(LP, "SYNTHETIC_CLI", True):
+            code = LP.main(["run", "--config", config, "--directory", self.directory, "--source", self.world.path, "--wall-clock", "--max-steps", "1"])
+        self.assertEqual(code, LP.EXIT_REFUSED)
+        self.assertFalse(os.path.exists(self.directory))
 
     def test_a_wall_clock_without_a_guard_is_refused_even_with_the_gate_open(self):
         with self.assertRaises(LP.ProcessError) as caught:

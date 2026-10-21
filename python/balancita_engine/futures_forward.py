@@ -144,30 +144,39 @@ def load_registration(path=None):
 
 
 def effective_registration(db_path, registration, specs, candidates, now_ms):
-    """What to measure now: the registered file plus every strategy switched on in the registry.
+    """What to measure now: only strategies the registry has ACTIVE.
 
-    ``candidates`` is ``futures_strategy_registry.forward_candidates`` (``None``: no registry, the file alone).
-    C25-C28 trade in D's own books and are never measured here. A strategy of the registered file keeps its
-    ``start_ms`` and runs unless the registry says it is not active. Any other active strategy starts when it
-    was activated (a shipped one nobody ever switched on: the first time this runner saw it, written down once
-    and never moved). A strategy that is switched off or deleted adds no more trades; its history stays.
+    Owner decision (2026-10-19): everything starts as a draft and nothing runs in the real paper until the user
+    activates it. ``config/forward-strategies.json`` therefore no longer switches a strategy on: an entry there only
+    supplies ``start_ms`` (never earlier than the activation) and counts if, and only if, the registry has that
+    strategy active. ``candidates`` is ``futures_strategy_registry.forward_candidates``; with ``None`` (no registry
+    to read) NOTHING is measured by the runner's ``main`` (it never calls this without a registry); a caller that
+    really has no registry gets the file alone, as before.
+    A strategy of the file measures from ``max(start_ms, activation)``; any other active strategy starts when it was
+    activated (a shipped one with no activation time: the first time this runner saw it, written down once and never
+    moved). A strategy that is switched off or deleted adds no more trades; its history stays until the user deletes it (ADR 0001, amendment 2026-10-19).
     Returns ``(registration, specs)``; the inputs are not modified.
     """
-    registered = dict(registration["strategies"])
+    file_entries = dict(registration["strategies"])
+    registered = {}
     specs = dict(specs)
     if candidates is None:
         return registration, specs
-    for strategy_id in list(registered):
-        if strategy_id in candidates and candidates[strategy_id]["state"] != "active":
-            del registered[strategy_id]
     db = sqlite3.connect(db_path)
     try:
         db.executescript(_FIRST_SEEN_SCHEMA)
         for strategy_id, info in candidates.items():
-            if info["state"] != "active" or strategy_id in registered:
+            if info["state"] != "active":
                 continue
             spec = info["spec"]
-            start = info["active_since_ms"] or 0
+            since = info["active_since_ms"] or 0
+            if strategy_id in file_entries:
+                entry = dict(file_entries[strategy_id])
+                entry["start_ms"] = max(entry["start_ms"], since)
+                registered[strategy_id] = entry
+                specs[strategy_id] = spec
+                continue
+            start = since
             if start <= 0:
                 digest = spec_hash(spec)
                 with db:
@@ -181,6 +190,14 @@ def effective_registration(db_path, registration, specs, candidates, now_ms):
     finally:
         db.close()
     return dict(registration, strategies=registered), specs
+
+
+def registry_activations(candidates):
+    """``{(strategy_id, version, active_since_ms)}`` of what the registry has active: the cheap wake-up signature."""
+    if not candidates:
+        return set()
+    return {(sid, info["version"], info["active_since_ms"]) for sid, info in candidates.items()
+            if info["state"] == "active"}
 
 
 def candle_coverage(ones, fives, start_ms, end_ms):
@@ -489,6 +506,10 @@ def main(argv=None):
                         help="keep the current forward.sqlite aside and recompute every trade from the candles "
                              "now on disk (after a hole was filled)")
     parser.add_argument("--loop-seconds", type=float, default=0, help="repeat every N seconds (0: once)")
+    parser.add_argument("--registry-poll-seconds", type=float, default=60,
+                        help="how often to look at the registry for newly active strategies and delete requests "
+                             "between full cycles (a newly active strategy gets a cycle at once)")
+    parser.add_argument("--purge-dir", help="delete requests folder (default: <strategies db folder>/purge)")
     args = parser.parse_args(argv)
     os.makedirs(args.out, exist_ok=True)
     if args.rebuild:
@@ -498,26 +519,113 @@ def main(argv=None):
     specs = load_specs(args.specs_dir)
     registration = load_registration(args.registration)
     products = resolve_products()
-    base_specs, base_registration = specs, registration
+    purge_dir = args.purge_dir or (os.path.join(os.path.dirname(os.path.abspath(args.strategies_db)), "purge")
+                                   if args.strategies_db else None)
+    loop = ForwardLoop(args.market_db, args.out, specs, registration, products, strategies_db=args.strategies_db,
+                       purge_dir=purge_dir, loop_seconds=args.loop_seconds, poll_seconds=args.registry_poll_seconds)
+    loop.step(time.time())
+    if not args.loop_seconds:
+        return
     while True:
-        db_path = os.path.join(args.out, "forward.sqlite")
-        if args.strategies_db:
+        time.sleep(min(args.registry_poll_seconds, args.loop_seconds))
+        loop.step(time.time())
+
+
+class ForwardLoop:
+    """One forward process: a full cycle every ``loop_seconds`` and, between them, a cheap look at the registry.
+
+    Every ``poll_seconds`` it (1) consumes delete requests for its own rows (``strategy_purge``) and (2) reads the
+    registry's states. A strategy that became active (or a new active version) wakes a cycle at once instead of
+    waiting for the hour. Everything stays in this one process, the single writer of ``forward.sqlite``.
+    """
+
+    def __init__(self, market_db, out_dir, specs, registration, products, *, strategies_db=None, purge_dir=None,
+                 loop_seconds=0, poll_seconds=60, cycle=None):
+        self.market_db, self.out_dir, self.products = market_db, out_dir, products
+        self.base_specs, self.base_registration = specs, registration
+        self.strategies_db, self.purge_dir = strategies_db, purge_dir
+        self.loop_seconds, self.poll_seconds = loop_seconds, poll_seconds
+        self.next_full = 0.0
+        self.known_active = None
+        self.cycle = cycle or self._cycle
+        self.cycles = []
+
+    def step(self, now_s):
+        """Consumes purges, checks the registry and runs a cycle if one is due or a strategy was just activated.
+
+        Returns the reason of the cycle it ran (``"full"``, ``"activation"``) or ``None``.
+        """
+        if self.purge_dir:
+            consume_purges(self.out_dir, self.purge_dir)
+        candidates = None
+        if self.strategies_db:
             from .futures_strategy_registry import forward_candidates
+            candidates = forward_candidates(self.strategies_db)
+        active = registry_activations(candidates)
+        woken = self.known_active is not None and bool(active - self.known_active)
+        due = now_s >= self.next_full
+        self.known_active = active
+        if not (due or woken):
+            return None
+        reason = "full" if due else "activation"
+        self.cycle(candidates)
+        self.cycles.append(reason)
+        if due:
+            self.next_full = now_s + (self.loop_seconds or 0)
+        return reason
+
+    def _cycle(self, candidates):
+        db_path = os.path.join(self.out_dir, "forward.sqlite")
+        registration, specs = self.base_registration, self.base_specs
+        if self.strategies_db:
+            # With a registry nothing runs unless the registry has it active (even when it cannot be read).
             registration, specs = effective_registration(
-                db_path, base_registration, base_specs, forward_candidates(args.strategies_db),
+                db_path, self.base_registration, self.base_specs, candidates if candidates is not None else {},
                 int(time.time() * 1000))
-        added = run_forward(args.market_db, db_path, specs, registration, products)
-        body = write_summary(os.path.join(args.out, "forward.sqlite"), specs, registration,
-                             os.path.join(args.out, "forward-reliability.json"))
+        added = run_forward(self.market_db, db_path, specs, registration, self.products)
+        body = write_summary(db_path, specs, registration, os.path.join(self.out_dir, "forward-reliability.json"))
         for strategy_id, entry in body["strategies"].items():
             print("{} forward trades={} (live {}, recovered {}, unclassified {}) open={} +{} missing 1m={} diverged={} legacy={}".format(
                 strategy_id, entry["summary"]["trades"], entry["live_trades"], entry["recovered_trades"], entry["unclassified_trades"],
-            entry["open_positions"],
+                entry["open_positions"],
                 sum(n for (s, _), n in added.items() if s == strategy_id), entry["missing_candles_1m"],
                 entry["diverged_trades"], entry["legacy_diverged_trades"]), flush=True)
-        if not args.loop_seconds:
-            return
-        time.sleep(args.loop_seconds)
+
+
+def consume_purges(out_dir, purge_dir):
+    """Deletes this process's rows of every strategy a delete request names, then acknowledges (own file only).
+
+    Tables: every ``forward_*`` table keyed by strategy. The append-only trade ledgers (``forward_trade`` and its
+    funding reconciliation) are kept unless ``strategy_purge.PURGE_PAPER_LEDGER`` (ADR 0001). The summary JSON drops
+    the strategy at once. Returns the list of purge ids answered.
+    """
+    from . import strategy_purge
+    from .futures_strategy_lifecycle import FORWARD_LEDGER, FORWARD_TARGETS
+
+    answered = []
+    for request in strategy_purge.pending_for(purge_dir, "forward"):
+        strategy_id = request["strategy_id"]
+        db_path = os.path.join(out_dir, "forward.sqlite")
+        deleted = {}
+        if os.path.exists(db_path):
+            db = sqlite3.connect(db_path, timeout=30)
+            try:
+                deleted = strategy_purge.delete_rows(db, FORWARD_TARGETS, strategy_id, ledger_tables=FORWARD_LEDGER)
+            finally:
+                db.close()
+        summary = os.path.join(out_dir, "forward-reliability.json")
+        if os.path.exists(summary):
+            with open(summary, encoding="utf-8") as handle:
+                body = json.load(handle)
+            if body.get("strategies", {}).pop(strategy_id, None) is not None:
+                temporary = summary + ".partial"
+                with open(temporary, "w", encoding="utf-8") as handle:
+                    json.dump(body, handle, indent=2, sort_keys=True)
+                    handle.write("\n")
+                os.replace(temporary, summary)
+        strategy_purge.acknowledge(purge_dir, request["purge_id"], "forward", deleted)
+        answered.append(request["purge_id"])
+    return answered
 
 
 if __name__ == "__main__":

@@ -196,6 +196,28 @@ class ReplayJobs:
     def _path(self, run_id):
         return os.path.join(self.directory, run_id + ".sqlite")
 
+    def purge_strategy(self, strategy_id):
+        """Deletes the strategy's rows from every finished replay DB (S writes them, so S may delete from them)."""
+        counts = {}
+        running = {job["id"] for job in self._jobs.values() if job["status"] == "running"}
+        for name in sorted(os.listdir(self.directory)):
+            if not name.endswith(".sqlite") or name[:-7] in running:
+                continue
+            db = sqlite3.connect(os.path.join(self.directory, name), timeout=5)
+            try:
+                with db:
+                    for table in ("replay_summary", "replay_trade", "replay_decision"):
+                        try:
+                            n = db.execute("DELETE FROM {} WHERE strategy_id=?".format(table), (strategy_id,)).rowcount
+                        except sqlite3.OperationalError:
+                            continue
+                        counts[table] = counts.get(table, 0) + n
+            except sqlite3.OperationalError:
+                continue
+            finally:
+                db.close()
+        return counts
+
     @staticmethod
     def _public(job):
         return {k: job[k] for k in ("id", "status", "product_id", "start_ms", "end_ms", "qwen", "error")}

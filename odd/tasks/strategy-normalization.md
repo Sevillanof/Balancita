@@ -30,6 +30,6 @@ Un plan explícito por estrategia (`futures_strategy_plan.py`): señal (`rules` 
 
 ## Pedido de Fran (2026-10-11, tarde): activa = opera, borrar y un solo ecosistema
 
-- **NS-07 (hecho)**: "Activar" opera en paper (seguimiento forward desde la activación), "Desactivar" y "Borrar" (doble confirmación y escribir el id) desde la pestaña Versiones; borrar oculta y conserva el historial.
+- **NS-07 (hecho)**: "Activar" opera en paper (seguimiento forward desde la activación), "Desactivar" y "Borrar" (doble confirmación y escribir el id) desde la pestaña Versiones; borrar oculta y conserva el historial (reemplazado el 2026-10-19: borrar elimina todo; ver `strategy-lifecycle.md`).
 - Qwen y Kronos van aparte de las estrategias de reglas (modelos, no specs).
 - **NS-08 (hecho, pedido de Fran 2026-10-11)**: el motor viejo D (`paper`) se retira de `pnpm dev`; C25-C28 se borran del registro al arrancar (`config/strategy-closed.json`) porque no tienen ventaja tras costes; toda estrategia nueva corre en el seguimiento forward. NS-05 queda sin objeto. Siguen vivos los veredictos (C), que alimentan a Qwen. El ADR 0001 aún describe los libros de D: solo se enmienda si Fran lo pide.

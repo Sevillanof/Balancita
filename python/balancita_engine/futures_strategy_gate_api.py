@@ -18,6 +18,7 @@ import time
 
 from .futures_products import load_pinned_products
 from .futures_spec_strategy import spec_hash
+from . import strategy_gate_models
 
 DB_NAME = "gate.sqlite"
 ROOT = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", ".."))
@@ -62,8 +63,10 @@ def popen_detached(args, env, cwd, log_path):
 
 
 class GateApi:
-    def __init__(self, registry, data_dir=None, python=None, spawn=None, wait_s=SPAWN_WAIT_S, products=None):
+    def __init__(self, registry, data_dir=None, python=None, spawn=None, wait_s=SPAWN_WAIT_S, products=None,
+                 kronos_dir=None, qwen_exit_dir=None):
         self.registry = registry
+        self.kronos_dir, self.qwen_exit_dir = kronos_dir, qwen_exit_dir
         self.data_dir = os.path.abspath(data_dir or os.environ.get("STRATEGY_GATE_DIR") or DEFAULT_DATA_DIR)
         self.python = python or default_python()
         self.spawn = spawn or popen_detached
@@ -123,6 +126,8 @@ class GateApi:
         return {pid for pid, _ in load_pinned_products()}
 
     def _check_strategy(self, strategy_id):
+        if strategy_gate_models.is_model(strategy_id):  # Qwen and Kronos are judged by their recorded trades
+            return
         if (not isinstance(strategy_id, str) or self.registry._version_row(strategy_id, None) is None
                 or self.registry._deleted(strategy_id)):
             raise GateApiError("not_found", "No existe la estrategia indicada.", 404)
@@ -166,6 +171,10 @@ class GateApi:
         registry_db = getattr(self.registry, "path", None)
         if isinstance(registry_db, str) and registry_db:
             args += ["--registry-db", os.path.abspath(registry_db)]
+        if strategy_gate_models.is_model(strategy_id):
+            for flag, folder in (("--kronos-dir", self.kronos_dir), ("--qwen-exit-dir", self.qwen_exit_dir)):
+                if folder:
+                    args += [flag, os.path.abspath(folder)]
         if start:
             args += ["--from", start]
         if products:
@@ -209,12 +218,67 @@ class GateApi:
         return lines[-1] if lines and len(lines[-1]) < 600 else (
             "La prueba no pudo empezar. Revisá el registro en data/strategy-gate/logs.")
 
-    def runs(self, strategy_id):
+    def _current_hash(self, strategy_id, version=None):
+        try:
+            if strategy_gate_models.is_model(strategy_id):
+                return spec_hash(strategy_gate_models.model_spec(strategy_id))
+            return spec_hash(self.registry.version(strategy_id, version)["spec"])
+        except Exception:  # noqa: BLE001 - unknown version or unreadable descriptor: nothing can be said
+            return None
+
+    def runs(self, strategy_id, version=None):
+        """Runs, the exam and whether THIS version (``version``, else the newest) already passed.
+
+        ``passed`` is true when a finished practice run of exactly this content (same ``code_hash``) says PASA, or
+        its exam does; the front uses it to warn before activating a version that did not pass.
+        """
         self._check_strategy(strategy_id)
         rows = self._query("SELECT * FROM runs WHERE strategy_id=? ORDER BY id DESC LIMIT 200", (strategy_id,))
         lock = self._query("SELECT * FROM exam_locks WHERE strategy_id=?", (strategy_id,))
-        return {"runs": [self._public(row) for row in rows], "exam": self._exam(strategy_id, lock[0] if lock else None),
-                "running": self._running_public()}
+        digest = self._current_hash(strategy_id, version)
+        practice = [r for r in rows if r["kind"] == "practice" and r["status"] == "done"
+                    and digest is not None and r["code_hash"] == digest]
+        passed_practice = bool(practice) and practice[0]["verdict"] == "PASA"
+        passed_exam = (bool(lock) and digest is not None and lock[0]["code_hash"] == digest
+                       and lock[0]["verdict"] == "PASA")
+        return {"runs": [dict(self._public(row), same_version=digest is not None and row["code_hash"] == digest)
+                         for row in rows],
+                "exam": self._exam(strategy_id, lock[0] if lock else None),
+                "running": self._running_public(),
+                "passed": {"practice": passed_practice, "exam": passed_exam, "any": passed_practice or passed_exam}}
+
+    def purge(self, strategy_id, wait_s=60.0):
+        """Asks a gate process to delete everything it holds about ``strategy_id`` (it is the DB's single writer)."""
+        running = [r for r in self._query("SELECT * FROM runs WHERE strategy_id=? AND status='running'", (strategy_id,))
+                   if _alive(r.get("pid"))]
+        if running:
+            raise GateApiError("busy", "Hay una prueba en curso de esta estrategia: cancelala antes de borrarla.", 409)
+        if not os.path.isdir(self.data_dir):
+            return {"skipped": True}
+        self.run_module(["balancita_engine.strategy_gate", "--data-dir", self.data_dir, "purge", "--strategy",
+                         strategy_id], "purge", wait_s)
+        return {"skipped": False}
+
+    def run_module(self, module_args, label, wait_s=60.0):
+        """Runs ``python -m <module_args>`` as a detached child, waits for it, raises GateApiError if it fails."""
+        args = [self.python, "-m"] + list(module_args)
+        env = dict(os.environ)
+        env["PYTHONPATH"] = os.pathsep.join(p for p in (os.path.join(ROOT, "python"), env.get("PYTHONPATH")) if p)
+        os.makedirs(self.data_dir, exist_ok=True)
+        log_path = os.path.join(self.data_dir, "logs", "{}-{}.log".format(label, int(time.time() * 1000)))
+        child = self.spawn(args, env, ROOT, log_path)
+        deadline = time.time() + wait_s
+        while child.poll() is None:
+            if time.time() >= deadline:
+                raise GateApiError("purge_pending", "El borrado de {} sigue en curso.".format(label), 504)
+            time.sleep(0.05)
+        text = self._refusal(log_path)
+        try:
+            os.remove(log_path)
+        except OSError:
+            pass
+        if child.returncode not in (0, None):
+            raise GateApiError("purge_failed", text, 500)
 
     def _running_public(self):
         row = self._running()

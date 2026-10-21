@@ -476,6 +476,79 @@ class AttemptsTests(Base):
         counts = dict(self.db().execute("SELECT family, COUNT(*) FROM attempts GROUP BY family").fetchall())
         self.assertEqual(counts, {"c25-pullback-perp": 3, "c26-reversion-perp": 1})
 
+    def _ledger(self, variants):
+        path = os.path.join(self.dir, "lab", "ledger.sqlite")
+        os.makedirs(os.path.dirname(path))
+        conn = sqlite3.connect(path)
+        conn.execute("CREATE TABLE trials(id INTEGER PRIMARY KEY AUTOINCREMENT, family TEXT, variant_key TEXT)")
+        for key in variants:
+            conn.execute("INSERT INTO trials(family,variant_key) VALUES(?,?)", ("c25-pullback-perp", key))
+        conn.execute("INSERT INTO trials(family,variant_key) VALUES('c25-pullback-perp','a')")  # repeated run
+        conn.execute("INSERT INTO trials(family,variant_key) VALUES('other-family','z')")
+        conn.commit()
+        conn.close()
+        return path
+
+    def test_lab_variants_add_to_the_attempts_and_the_ledger_is_never_written(self):
+        path = self._ledger(["a", "b", "c"])
+        with open(path, "rb") as handle:
+            before = (os.stat(path).st_mtime_ns, handle.read())
+        out = run("c25-pullback-perp-v1", self.dir, research_ledger=path)
+        self.assertEqual(out["result"]["attempts"], 1 + 3)
+        with open(out["report_path"], encoding="utf-8") as handle:
+            self.assertIn("Intentos: 1 (de la compuerta) + 3 (variantes del laboratorio)", handle.read())
+        with open(path, "rb") as handle:
+            self.assertEqual((os.stat(path).st_mtime_ns, handle.read()), before)
+
+    def test_without_ledger_file_the_lab_adds_zero(self):
+        missing = os.path.join(self.dir, "nope", "ledger.sqlite")
+        out = run("c25-pullback-perp-v1", self.dir, research_ledger=missing)
+        self.assertEqual(out["result"]["attempts"], 1)
+        self.assertFalse(os.path.exists(missing))
+        self.assertEqual(g.research_trials("c25-pullback-perp", None), 0)
+
+    def _assert_gate_untouched(self):
+        # The refusal comes before any write: gate.sqlite is absent or holds no run, attempt or exam lock.
+        path = os.path.join(self.dir, g.DB_NAME)
+        if not os.path.exists(path):
+            return
+        db = self.db()
+        for table in ("runs", "attempts", "exam_locks"):
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM " + table).fetchone()[0], 0, table)
+
+    def test_a_garbage_ledger_file_refuses_before_writing_anything(self):
+        path = os.path.join(self.dir, "ledger.sqlite")
+        with open(path, "wb") as handle:
+            handle.write(os.urandom(4096))
+        with self.assertRaises(g.GateError) as caught:
+            run("c25-pullback-perp-v1", self.dir, research_ledger=path)
+        self.assertIn("no se puede leer", str(caught.exception))
+        self._assert_gate_untouched()
+
+    def test_a_ledger_without_the_trials_table_refuses(self):
+        path = os.path.join(self.dir, "ledger.sqlite")
+        conn = sqlite3.connect(path)
+        conn.execute("CREATE TABLE other(x)")
+        conn.commit()
+        conn.close()
+        with self.assertRaises(g.GateError) as caught:
+            run("c25-pullback-perp-v1", self.dir, research_ledger=path)
+        self.assertIn("no se puede leer", str(caught.exception))
+        self._assert_gate_untouched()
+
+    def test_an_exam_with_an_unreadable_ledger_does_not_consume_the_lock(self):
+        path = os.path.join(self.dir, "ledger.sqlite")
+        with open(path, "wb") as handle:
+            handle.write(os.urandom(4096))
+        sid = "lab-cheat-v1"
+        spec = dict(SPECS["c25-pullback-perp-v1"], id=sid)
+        with self.assertRaises(g.GateError):
+            run(sid, self.dir, kind="exam", spec=spec, trade_source=cheating_source, research_ledger=path)
+        self._assert_gate_untouched()
+        os.remove(path)  # fixed: the same version can still sit its exam
+        out = run(sid, self.dir, kind="exam", spec=spec, trade_source=cheating_source, research_ledger=path)
+        self.assertEqual(out["status"], "done")
+
     def test_exam_is_not_an_attempt(self):
         run("lab-cheat-v1", self.dir, kind="exam", spec=dict(SPECS["c25-pullback-perp-v1"], id="lab-cheat-v1"),
             trade_source=cheating_source)
