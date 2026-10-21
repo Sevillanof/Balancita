@@ -97,6 +97,7 @@ def measure(args, directory):
                                         source_id="medir-arranque", ingest_kw=ingest_kw, max_quote_gap_ms=LP.DEFAULTS["max_quote_gap_ms"],
                                         evaluator_kw={"candle_tolerance_ms": LATE_CANDLE_TOLERANCE_MS}, funding_mode=LI.OBSERVED_FUNDING)
         out["phases"]["create_session"] = time.perf_counter() - started
+        print("progress create_session {:.1f}s".format(out["phases"]["create_session"]), file=sys.stderr, flush=True)
         try:
             ing, reader = session.ingestor, session.reader
             for name in ("tickers", "candles", "gaps"):
@@ -117,12 +118,16 @@ def measure(args, directory):
             ing._seed()                                    # idempotent: the first read finds it done
             out["phases"]["seed_cursors"] = time.perf_counter() - before
             out["seeded_cursors"] = dict(ing.seeded)
+            print("progress seed_cursors {:.1f}s {}".format(out["phases"]["seed_cursors"], out["seeded_cursors"]), file=sys.stderr, flush=True)
             steps, began, delivered = 0, time.perf_counter(), -1
             while steps < args.max_steps:                  # until the source has nothing more for this clock (or the session is past the warm-up)
                 state = session.step(decide_from)
                 steps += 1
                 progressed = session.stats["events"] != delivered
                 delivered = session.stats["events"]
+                if steps <= 3 or steps % 10 == 0:
+                    print("progress step {} t={:.1f}s events={} fsyncs={} phase={}".format(
+                        steps, time.perf_counter() - began, delivered, fsyncs["calls"], LP.phase_of(session)), file=sys.stderr, flush=True)
                 if not state["more_to_read"] and (not progressed or LP.phase_of(session) != LP.WARMUP):
                     break
             out["phases"]["steps_total"] = time.perf_counter() - began
