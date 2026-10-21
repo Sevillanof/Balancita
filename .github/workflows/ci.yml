@@ -112,7 +112,10 @@ jobs:
             echo "Group $GROUP has no modules on this branch; nothing to run."
             echo "Ran 0 tests" > run.log
           else
-            python -m unittest $(cat units.txt) 2>&1 | tee run.log
+            # 3 side-by-side unittest processes on the 4-vCPU runner (most of
+            # these tests wait on timers and child processes).
+            python scripts/ci_python_run.py 3 2>&1 | tee run.log
+            [ "${PIPESTATUS[0]}" = 0 ]
           fi
       - name: Check that unittest ran exactly the tests loaded
         shell: bash
