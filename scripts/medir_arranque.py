@@ -138,6 +138,9 @@ def measure(args, directory):
             out["calls"] = dict(sorted(clock.calls.items()))
             out["events_to_runner"] = dict(sorted(kinds.items()))
             out["evaluator_candles"] = session.evaluator.stats["candles"]
+            out["evaluator_stats"] = dict(session.evaluator.stats)
+            out["evaluator_gaps"] = {"count": len(session.evaluator.gaps), "last": session.evaluator.gaps[-1] if session.evaluator.gaps else None}
+            out["evaluator_state"] = {p: {"last_one": st["last_one"], "suppress_until": st["suppress_until"]} for p, st in session.evaluator.state.items()}
             out["evaluator_log_entries"] = len(session.evaluator.log.entries)
             out["cursors"] = dict(ing.cursor)
             checkpoint = os.path.join(directory, LI.CHECKPOINT_FILE)
@@ -176,7 +179,7 @@ def main(argv=None):
             shutil.rmtree(directory, True)
     for key in ("phases", "seconds", "calls", "rows_read", "events_to_runner", "fsyncs"):
         print("{:18} {}".format(key, json.dumps(result[key], sort_keys=True)))
-    for key in ("steps", "phase_at_end", "seeded_cursors", "cursors", "evaluator_candles", "evaluator_log_entries", "runner_journal_entries", "checkpoint_bytes"):
+    for key in ("steps", "phase_at_end", "seeded_cursors", "cursors", "evaluator_candles", "evaluator_stats", "evaluator_gaps", "evaluator_state", "evaluator_log_entries", "runner_journal_entries", "checkpoint_bytes"):
         print("{:18} {}".format(key, result[key]))
     print(json.dumps(result, sort_keys=True))
     return 0
