@@ -182,6 +182,64 @@ class JudgeTests(unittest.TestCase):
         text = g.build_report(META, result, CFG)
         self.assertIn("## ❌ NO PASA (pocas operaciones)", text)
 
+    def with_funding(self, trades, complete_share):
+        cut = int(len(trades) * complete_share)
+        for i, t in enumerate(trades):
+            t["funding_status"] = "complete" if i < cut else "unknown"
+        return trades
+
+    def test_unknown_funding_alone_makes_a_winner_inconclusive_never_pasa(self):
+        result = self.judge(self.with_funding(self.trades(400, 25), 0.0))
+        self.assertEqual(result["verdict"], "INCONCLUSO")
+        self.assertEqual([c["id"] for c in result["rules"] if not c["ok"]], ["funding_complete"])
+        self.assertEqual(result["funding_share"], 0.0)
+        text = g.build_report(META, result, CFG)
+        self.assertIn("## ⚠️ INCONCLUSO", text)
+        self.assertIn("Funding conocido", text)
+        self.assertIn("0 %", text)
+        self.assertIn("Kraken solo publica funding desde el 15-oct-2025; antes de esa fecha el resultado sería optimista",
+                      text.split("## Qué revisamos")[0])
+        self.assertIn("sin funding el resultado es optimista", text.split("## Qué revisamos")[0])
+
+    def test_funding_share_threshold_is_inclusive(self):
+        self.assertEqual(self.judge(self.with_funding(self.trades(400, 25), 0.96))["verdict"], "PASA")
+        self.assertEqual(self.judge(self.with_funding(self.trades(400, 25), 0.90))["verdict"], "INCONCLUSO")
+
+    def test_unknown_funding_and_another_failed_rule_is_no_pasa(self):
+        result = self.judge(self.with_funding(self.trades(400, -4), 0.0))
+        self.assertEqual(result["verdict"], "NO PASA")
+        self.assertIn("funding_complete", [c["id"] for c in result["rules"] if not c["ok"]])
+
+    def test_complete_funding_changes_nothing(self):
+        result = self.judge(self.trades(400, 25))
+        self.assertEqual(result["verdict"], "PASA")
+        self.assertEqual(result["funding_share"], 1.0)
+        self.assertIn("rules", g.build_report(META, result, CFG))
+
+    def test_config_declares_funding_rule_and_default_from_inside_funding_history(self):
+        cfg = g.load_config()
+        self.assertEqual(cfg["rules"]["min_funding_complete_share"], 0.95)
+        self.assertEqual(cfg["default_from"], "2025-10-16")
+        self.assertEqual(cfg["holdout_from"], "2026-04-19")
+
+    def test_single_product_is_labelled_not_multi_asset(self):
+        text = g.build_report(META, self.judge(self.trades(400, 25)), CFG)
+        self.assertIn("ganó en 1/1 productos", text)
+        self.assertIn("(un solo producto: no es robustez multi-activo)", text)
+
+    def test_several_products_show_k_over_n_without_the_note(self):
+        trades = self.trades(400, 25)
+        for i, t in enumerate(trades):
+            t["product"] = "BTC" if i % 2 else "ETH"
+        series = self.series()
+        series["ETH"] = series["BTC"]
+        end = max(t["exit_ms"] for t in trades) + 1
+        result = g.judge(trades, series, CFG, kind="practice", start_ms=0, end_ms=end, attempts=1,
+                         products=["BTC", "ETH"], seed=5)
+        text = g.build_report(META, result, CFG)
+        self.assertIn("ganó en 2/2 productos", text)
+        self.assertNotIn("un solo producto", text)
+
     def test_enough_trades_never_carry_the_few_trades_note(self):
         self.assertIsNone(self.judge(self.trades(400, -4))["verdict_note"])
 
@@ -407,12 +465,14 @@ class ExamLockTests(Base):
         self.assertIn("Para volver a rendirlo, creá una versión nueva.", message)
         self.assertEqual(len(g.list_runs(os.path.join(self.dir, g.DB_NAME))), 1)
 
-    def test_a_new_version_can_sit_its_own_exam(self):
+    def test_another_family_can_sit_its_own_exam_on_the_same_window(self):
         self.cheat(1, kind="exam")
-        out = self.cheat(2, kind="exam")
+        sid = "lab-else-v1"
+        out = run(sid, self.dir, spec=dict(SPECS["c25-pullback-perp-v1"], id=sid), trade_source=cheating_source,
+                  kind="exam")
         self.assertEqual(out["status"], "done")
         rows = self.db().execute("SELECT strategy_id FROM exam_locks ORDER BY strategy_id").fetchall()
-        self.assertEqual([r[0] for r in rows], ["lab-cheat-v1", "lab-cheat-v2"])
+        self.assertEqual([r[0] for r in rows], ["lab-cheat-v1", "lab-else-v1"])
 
     def test_changed_content_with_the_same_id_is_refused_after_an_exam(self):
         self.cheat(1, kind="exam")
@@ -461,6 +521,71 @@ class ExamLockTests(Base):
         out = self.cheat(1, kind="exam", on_progress=cancel)
         self.assertEqual(out["status"], "cancelled")
         self.assertEqual(self.db().execute("SELECT COUNT(*) FROM exam_locks").fetchone()[0], 0)
+
+
+class FamilyExamTests(Base):
+    """Same reserve, same family, another version: refused (also after a purge), unless explicitly contaminated."""
+
+    def cheat(self, version=1, **kwargs):
+        sid = "lab-cheat-v{}".format(version)
+        return run(sid, self.dir, spec=dict(SPECS["c25-pullback-perp-v1"], id=sid), trade_source=cheating_source,
+                   **kwargs)
+
+    def test_successor_of_the_same_family_is_refused_before_any_write(self):
+        self.cheat(1, kind="exam")
+        before = len(g.list_runs(os.path.join(self.dir, g.DB_NAME)))
+        with self.assertRaises(g.GateError) as caught:
+            self.cheat(2, kind="exam")
+        message = str(caught.exception)
+        self.assertIn("La familia lab-cheat ya rindió su examen sobre esta reserva (desde 2025-01-21, versión "
+                      "lab-cheat-v1, veredicto ", message)
+        self.assertIn("Una versión sucesora no es un examen independiente de la misma reserva.", message)
+        self.assertEqual(len(g.list_runs(os.path.join(self.dir, g.DB_NAME))), before)
+        self.assertEqual(self.db().execute("SELECT COUNT(*) FROM exam_locks").fetchone()[0], 1)
+
+    def test_another_family_is_unaffected(self):
+        self.cheat(1, kind="exam")
+        out = run("lab-other-v1", self.dir, spec=dict(SPECS["c25-pullback-perp-v1"], id="lab-other-v1"),
+                  trade_source=cheating_source, kind="exam")
+        self.assertEqual(out["status"], "done")
+        self.assertEqual(out["verdict"], "PASA")
+
+    def test_explicit_contaminated_exam_runs_warns_and_never_passes(self):
+        self.cheat(1, kind="exam")
+        out = self.cheat(2, kind="exam", allow_contaminated=True)
+        self.assertEqual(out["status"], "done")
+        self.assertEqual(out["verdict"], "INCONCLUSO")   # the cheating source would PASS
+        self.assertEqual(out["result"]["overall"]["n"] > 100, True)
+        self.assertTrue(all(c["ok"] for c in out["result"]["rules"]))
+        text = open(out["report_path"], encoding="utf-8").read()
+        self.assertIn("REUTILIZACIÓN CONTAMINADA: esta reserva ya fue usada por la familia; no es evidencia independiente",
+                      text)
+        self.assertLess(text.index("REUTILIZACIÓN CONTAMINADA"), text.index("### En pocas palabras"))
+        self.assertIn("nunca puede dar PASA", text)
+        params = json.loads(self.db().execute("SELECT params FROM runs WHERE id=?", (out["run_id"],)).fetchone()[0])
+        self.assertTrue(params["contaminated"])
+
+    def test_allow_contaminated_on_a_clean_family_is_not_marked(self):
+        out = self.cheat(1, kind="exam", allow_contaminated=True)
+        self.assertEqual(out["verdict"], "PASA")
+        params = json.loads(self.db().execute("SELECT params FROM runs").fetchone()[0])
+        self.assertNotIn("contaminated", params)
+
+    def test_deleting_the_first_version_does_not_free_the_window(self):
+        self.cheat(1, kind="exam")
+        g.purge_strategy("lab-cheat-v1", self.dir)
+        self.assertEqual(self.db().execute("SELECT COUNT(*) FROM exam_locks").fetchone()[0], 0)
+        with self.assertRaises(g.GateError) as caught:
+            self.cheat(2, kind="exam")
+        self.assertIn("La familia lab-cheat ya rindió su examen sobre esta reserva (desde 2025-01-21, versión ya borrada",
+                      str(caught.exception))
+        dump = "\n".join(self.db().iterdump())
+        self.assertNotIn("lab-cheat", dump)
+        self.assertEqual(self.cheat(2, kind="exam", allow_contaminated=True)["verdict"], "INCONCLUSO")
+
+    def test_cli_option_is_wired(self):
+        args = g._parser().parse_args(["evaluate", "--strategy", "x-v1", "--exam", "--examen-contaminado"])
+        self.assertTrue(args.allow_contaminated)
 
 
 class AttemptsTests(Base):
