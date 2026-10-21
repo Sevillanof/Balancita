@@ -249,9 +249,9 @@ class LateWorld(RealWorld):
 _real_candle_event = ING._candle_event
 
 
-def naive_candle_event(row):
+def naive_candle_event(row, history_until_ms=None):
     """What the ingestor would do if it ignored ``known_at``: the candle enters at the close of its own minute."""
-    return _real_candle_event(dict(row, known_at=0))
+    return _real_candle_event(dict(row, known_at=0), history_until_ms)
 
 
 def instants():

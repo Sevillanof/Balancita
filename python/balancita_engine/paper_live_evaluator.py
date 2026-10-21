@@ -77,10 +77,15 @@ def _valid_candle(candle):
 
 
 class InputLog(object):
-    """Append-only, hash-chained, ``fsync`` per entry. A last line that is not complete is a crash: it is dropped and counted."""
+    """Append-only, hash-chained, ``fsync`` per entry. A last line that is not complete is a crash: it is dropped and counted.
+
+    An entry may be appended ``durable=False`` (written and flushed to the file, one open handle, no ``fsync``): the evaluator does it for
+    warm-up candles, which can make no cycle. ``sync`` makes them durable with one ``fsync``; the session calls it before every checkpoint,
+    and any durable append syncs what came before it on the same handle, so no checkpoint or decision input is ever ahead of the disk."""
 
     def __init__(self, path):
         self.path, self.head, self.entries, self.tail_discarded = path, GENESIS, [], 0
+        self._handle = None                         # open only between a non-durable append and the next sync
 
     @classmethod
     def create(cls, path, header):
@@ -117,16 +122,27 @@ class InputLog(object):
             raise EvaluatorError("log_header", path)
         return log
 
-    def append(self, kind, data):
+    def append(self, kind, data, durable=True):
         body = {"seq": len(self.entries) + 1, "kind": kind, "data": data, "prev": self.head}
         entry = dict(body, hash=stable_hash(body))
-        with open(self.path, "a", encoding="utf-8") as handle:
-            handle.write(json.dumps(entry, sort_keys=True) + "\n")
-            handle.flush()
-            os.fsync(handle.fileno())
+        if self._handle is None:
+            self._handle = open(self.path, "a", encoding="utf-8")
+        self._handle.write(json.dumps(entry, sort_keys=True) + "\n")
+        self._handle.flush()
+        if durable:
+            self.sync()
         self.entries.append(entry)
         self.head = entry["hash"]
         return entry
+
+    def sync(self):
+        """``fsync`` everything appended so far and release the handle (nothing to do when nothing is waiting)."""
+        handle, self._handle = self._handle, None
+        if handle is not None:
+            try:
+                os.fsync(handle.fileno())
+            finally:
+                handle.close()
 
 
 class LiveEvaluator(object):
@@ -221,7 +237,9 @@ class LiveEvaluator(object):
             self.rejected.append({"product_id": product, "bucket_start": bucket, "reason": "arrival_before_close"})
             return {"cycle": None, "duplicate": False, "rejected": "arrival_before_close"}
         if bucket > self.state[product]["last_one"]:                      # a repeat is not logged twice
-            self.log.append("candle", {"product_id": product, "arrival_ms": int(arrival_ms), "candle": candle})
+            # a candle that closes before the first decision can make no cycle (``_apply_candle``): its entry waits for the next ``flush``
+            self.log.append("candle", {"product_id": product, "arrival_ms": int(arrival_ms), "candle": candle},
+                            durable=bucket + ONE_MINUTE_MS >= self.decide_from_ms)
             if self.fault is not None:
                 self.fault("input_logged")
         else:
@@ -231,6 +249,10 @@ class LiveEvaluator(object):
                 self.log.append("conflict", data)
                 self.conflicts.append(data)
         return self._apply_candle(product, candle, arrival_ms)
+
+    def flush(self):
+        """Makes every warm-up input durable (one ``fsync``): called before the checkpoint that says they were taken."""
+        self.log.sync()
 
     def feed_funding(self, product, start_ms, rate, arrival_ms):
         """One funding hour (``rate`` is Kraken's relative hourly rate, as text or number)."""

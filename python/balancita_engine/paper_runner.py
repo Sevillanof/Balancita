@@ -224,12 +224,15 @@ class RunnerJournal:
             self.entries.append(entry)
             self.head = entry["hash"]
 
-    def add(self, t_ms, kind, data):
+    def add(self, t_ms, kind, data, durable=True):
         body = {"seq": len(self.entries) + 1, "t_ms": int(t_ms), "kind": kind, "data": SC._plain(data), "prev": self.head}
         body["hash"] = stable_hash(body)
         self.entries.append(body)
         self.head = body["hash"]
         return body
+
+    def sync(self):
+        """Nothing is waiting in memory."""
 
     @staticmethod
     def verify(entries):
@@ -269,6 +272,7 @@ class PaperRunner(object):
         self.directory = directory
         self.lock = None
         self.closed = False         # a durable runner that released its lock never writes again
+        self.defer_before_ms = None  # set by the session: events before this time may be journaled without a per-entry fsync (see ``_deferrable``)
         self.portfolio = Portfolio(config.portfolio, funding=config.funding_map(), stop_policy=config.stop_policy)
         if config.execution_mode not in EXECUTION_MODES:
             raise RunnerError("invalid_execution_mode", repr(config.execution_mode))
@@ -316,7 +320,7 @@ class PaperRunner(object):
         """Write-ahead: the entry is in the journal before any effect of it exists."""
         self._guard_open()
         try:
-            entry = self.journal.add(t_ms, kind, data)
+            entry = self.journal.add(t_ms, kind, data, durable=not self._deferrable(t_ms, kind))
         except OSError as error:
             # the disk refused the entry: memory is now behind the file, so nothing may go on from this instance. Never
             # retry the same fsync: after an EIO the kernel may have dropped the dirty pages and a second fsync can report
@@ -325,6 +329,12 @@ class PaperRunner(object):
         self._apply(entry)
         hit("after_apply", kind)
         return entry
+
+    def _deferrable(self, t_ms, kind):
+        """True only for an event entry before ``defer_before_ms`` (the session's first decision) while no order is pending and no
+        position is open: nothing financial can depend on it, and the next durable entry, ``checkpoint`` or ``close`` syncs it."""
+        return (self.defer_before_ms is not None and kind in ("event_accepted", "event_rejected") and int(t_ms) < self.defer_before_ms
+                and not self.executor.pending and not self.portfolio.positions)
 
     def _refuse(self, reason, detail=""):
         self.status = REFUSED
@@ -1141,8 +1151,11 @@ class PaperRunner(object):
         Idempotent. A durable instance is disabled for writing for good (another process may now own the directory);
         reading (``report``, digests) still works. An in-memory runner has no lock and is not affected."""
         if self.lock is not None:
-            self.closed = True
-            self.lock.release()
+            try:
+                self.journal.sync()
+            finally:
+                self.closed = True
+                self.lock.release()
             self.lock = None
 
     # ---- checkpoint ------------------------------------------------------------------------------------------
@@ -1151,6 +1164,7 @@ class PaperRunner(object):
         self._guard_open()
         if self.directory is None:
             raise RunnerError("no_directory", "this runner is not durable")
+        self.journal.sync()                  # the checkpoint is never ahead of the journal file
         entries = self.journal.entries
         body = {"upto_seq": len(entries), "journal_hash": self.journal.head, "journal_start_hash": entries[0]["hash"],
                 "manifest_hash": entries[0]["data"]["manifest_hash"], "engine_behavior_id": engine_behavior_id(), "build_identity": build_identity()["digest"],

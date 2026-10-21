@@ -4,11 +4,11 @@
   "source_id": "kraken-capture",
   "funding_mode": "observed",
   "authorization_ref": "BAL-DECISION-184-07",
-  "decide_from_ms": 1792584000000,
-  "decide_until_ms": 1792587600000,
+  "decide_from_ms": 1792591200000,
+  "decide_until_ms": 1792594800000,
   "max_quote_gap_ms": 15000,
   "stale_stop": { "stop_quote_gap_ms": 25000 },
   "evaluator_kw": { "candle_tolerance_ms": 15000 },
-  "ingest_kw": { "causal_until_clock": true },
+  "ingest_kw": { "causal_until_clock": true, "bounded_start": true },
   "clock_guard": { "max_forward_jump_ms": 30000 }
 }
