@@ -1,0 +1,14 @@
+{
+  "schema": "balancita-paper-live-process-config.v1",
+  "products": ["PF_XBTUSD"],
+  "source_id": "kraken-capture",
+  "funding_mode": "observed",
+  "authorization_ref": "BAL-DECISION-184-07",
+  "decide_from_ms": 1792578600000,
+  "decide_until_ms": 1792582200000,
+  "max_quote_gap_ms": 15000,
+  "stale_stop": { "stop_quote_gap_ms": 25000 },
+  "evaluator_kw": { "candle_tolerance_ms": 15000 },
+  "ingest_kw": { "causal_until_clock": true },
+  "clock_guard": { "max_forward_jump_ms": 30000 }
+}

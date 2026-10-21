@@ -51,6 +51,7 @@ import sqlite3
 import statistics
 import sys
 import time
+import urllib.parse
 from decimal import Decimal
 
 from .futures_costs import COST_MODEL_VERSION, fee_rate, side_impact_bps, stop_exit_bps
@@ -62,12 +63,16 @@ from .futures_qwen_practice_report import bootstrap_ci, metrics
 from .futures_simulator import DEFAULT_PERIODS, Book, frames, merge_periods
 from .futures_spec_strategy import DEFAULT_SPEC_DIR, declared_indicators, load_specs, spec_hash, validate_spec
 from .futures_strategy_reliability import TRIAL_SHARPE_SD, deflated_probability
+from . import strategy_gate_models as strategy_models
+from . import strategy_purge
 
 SCHEMA = "balancita-strategy-gate.v1"
 ROOT = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", ".."))
 CONFIG_PATH = os.path.join(ROOT, "config", "strategy-gate.json")
 DATA_DIR = os.path.join(ROOT, "data", "strategy-gate")
 DB_NAME = "gate.sqlite"
+# Trial ledger of the VectorBT lab (research/vectorbt/trial_ledger.py). The gate only READS it: one writer, the lab.
+DEFAULT_RESEARCH_LEDGER = os.path.join(ROOT, "data", "research-vectorbt", "ledger.sqlite")
 CHUNK_FRAMES = 4000          # candles between two progress / cancellation checks inside a worker
 NOTIONAL_USD = 100.0
 PASS, FAIL, INCONCLUSIVE = "PASA", "NO PASA", "INCONCLUSO"
@@ -100,9 +105,43 @@ def config_hash(cfg):
     return hashlib.sha256(json.dumps(cfg, sort_keys=True).encode("utf-8")).hexdigest()
 
 
+def family_hash(family):
+    return hashlib.sha256(family.encode("utf-8")).hexdigest()
+
+
+def attempts_of(db, family):
+    """Practice attempts of the family: the live rows plus those carried over from deleted strategies (anonymous)."""
+    live = db.execute("SELECT COUNT(*) FROM attempts WHERE family=?", (family,)).fetchone()[0]
+    carried = db.execute("SELECT n FROM attempt_counts WHERE family_hash=?", (family_hash(family),)).fetchone()
+    return live + (carried[0] if carried else 0)
+
+
 def family_of(strategy_id):
     """The strategy family: the id without its version suffix (``c29-momentum-perp-v1`` -> ``c29-momentum-perp``)."""
     return re.sub(r"-v\d+$", "", strategy_id)
+
+
+def research_trials(family, ledger_path):
+    """Distinct hypotheses (``variant_key``) the lab tried on ``family``.
+
+    0 without a path or when the file does not exist. A file that EXISTS but cannot be read (corrupt, no ``trials``
+    table, permissions) raises ``GateError``: silently returning 0 would undercount attempts. Read-only
+    (``mode=ro``, stdlib only): the gate never writes into the lab's ledger.
+    """
+    if not ledger_path or not os.path.isfile(ledger_path):
+        return 0
+    try:
+        conn = sqlite3.connect("file:{}?mode=ro".format(urllib.parse.quote(os.path.abspath(ledger_path))), uri=True,
+                               timeout=5)
+        try:
+            return int(conn.execute("SELECT COUNT(DISTINCT variant_key) FROM trials WHERE family=?",
+                                    (family,)).fetchone()[0])
+        finally:
+            conn.close()
+    except sqlite3.Error as exc:
+        raise GateError("El registro de intentos del laboratorio existe pero no se puede leer ({}): {}. La compuerta "
+                        "no corre hasta arreglarlo, para no contar intentos de menos."
+                        .format(ledger_path, exc)) from exc
 
 
 def version_key_of(spec):
@@ -178,6 +217,12 @@ CREATE TABLE IF NOT EXISTS attempts(
   id INTEGER PRIMARY KEY AUTOINCREMENT, family TEXT NOT NULL, strategy_id TEXT NOT NULL, version_key TEXT NOT NULL,
   run_id INTEGER NOT NULL, at INTEGER NOT NULL);
 CREATE INDEX IF NOT EXISTS attempts_family ON attempts(family);
+-- Anonymous: only the digest of an exam that was taken, when and how it ended. No id, name or parameters.
+-- Written by `purge` (strategy_purge.KEEP_EXAM_TOMBSTONE); a deleted-and-recreated identical version stays locked.
+CREATE TABLE IF NOT EXISTS exam_tombstones(
+  spec_hash TEXT PRIMARY KEY, exam_date TEXT NOT NULL, verdict TEXT NOT NULL);
+-- Anonymous: practice attempts of deleted strategies, per sha256(family name). Added to the live count of the family.
+CREATE TABLE IF NOT EXISTS attempt_counts(family_hash TEXT PRIMARY KEY, n INTEGER NOT NULL);
 """
 
 
@@ -213,6 +258,10 @@ def list_runs(db_path, strategy_id=None):
 def check_exam_allowed(db, spec, cfg):
     """Raises ``GateError`` (Spanish) unless this version may still take its final exam."""
     key, digest = version_key_of(spec)
+    tomb = db.execute("SELECT * FROM exam_tombstones WHERE spec_hash=?", (digest,)).fetchone()
+    if tomb is not None:
+        raise GateError("El examen final de esta versión ya se rindió el {}: {}. Para volver a rendirlo, creá una "
+                        "versión nueva.".format(tomb["exam_date"], tomb["verdict"]))
     lock = db.execute("SELECT * FROM exam_locks WHERE strategy_id=?", (spec["id"],)).fetchone()
     if lock is not None:
         if lock["code_hash"] == digest:
@@ -782,7 +831,8 @@ def build_report(meta, result, cfg, extra_notes=()):
               "- Ventana evaluada: {} a {} (exclusivo); fecha de corte (holdout): {}".format(
                   _stamp(meta["start_ms"]), _stamp(meta["end_ms"]), cfg["holdout_from"]),
               "- Productos: {}".format(", ".join(meta["products"])),
-              "- Intentos: {} (corridas de práctica sobre la familia `{}`)".format(r["attempts"], meta["family"]),
+              "- Intentos: {} (de la compuerta) + {} (variantes del laboratorio) = {} sobre la familia `{}`".format(
+                  meta.get("gate_attempts", r["attempts"]), meta.get("lab_variants", 0), r["attempts"], meta["family"]),
               "- Modelo de costos: {} · configuración `{}` (sha {})".format(COST_MODEL_VERSION, SCHEMA, meta["config_hash"][:12]),
               "- Funding de las operaciones: {}.".format(
                   ", ".join("{} {}".format(k, v) for k, v in sorted(r["funding_status"].items())) or "n/d"),
@@ -909,16 +959,22 @@ def _run_tasks(runner, jobs_list, workers, base, span):
 
 def evaluate(strategy_id, *, kind="practice", from_date=None, products=None, cfg=None, data_dir=None, spec=None,
              specs_dir=None, provider=None, trade_source=None, jobs=None, neighbors=True, json_progress=False,
-             on_progress=None, now_ms=None, install_signals=False, stream=None, registry_db=None):
+             on_progress=None, now_ms=None, install_signals=False, stream=None, registry_db=None,
+             kronos_dir=None, qwen_exit_dir=None, research_ledger=None):
     """Runs the gate for one strategy. Returns ``{"run_id", "verdict", "report_path", "status"}``.
 
     ``spec`` / ``provider`` / ``trade_source`` / ``cfg`` are for tests (a spec outside the shipped directory, synthetic
-    candles, a "cheating" trade source). Raises ``GateError`` for refusals (nothing is written for an exam refusal).
+    candles, a "cheating" trade source). ``research_ledger``: the lab's trial ledger (read-only); by default the repo's
+    ``data/research-vectorbt/ledger.sqlite`` when ``data_dir`` is the default one, otherwise none. Raises ``GateError`` for refusals (nothing is written for an exam refusal).
     """
     cfg = cfg or load_config()
+    if research_ledger is None and data_dir is None:
+        research_ledger = DEFAULT_RESEARCH_LEDGER
     data_dir = data_dir or DATA_DIR
     if kind not in ("practice", "exam"):
         raise GateError("tipo desconocido: {}".format(kind))
+    if spec is None and strategy_models.is_model(strategy_id):
+        spec, trade_source = strategy_models.model_subject(strategy_id, kronos_dir, qwen_exit_dir)
     if spec is None:
         spec = find_spec(strategy_id, specs_dir, registry_db)
     if spec["id"] != strategy_id:
@@ -939,6 +995,9 @@ def evaluate(strategy_id, *, kind="practice", from_date=None, products=None, cfg
     product_list = resolve_products(",".join(products) if isinstance(products, (list, tuple)) else
                                     (products or ",".join(cfg["default_products"])))
     names = [p for p, _ in product_list]
+    # Read the lab ledger BEFORE touching gate.sqlite: an unreadable ledger raises here, so it leaves no orphan
+    # 'running' run, no attempt and no consumed exam lock.
+    lab_variants = research_trials(family_of(strategy_id), research_ledger)
     os.makedirs(data_dir, exist_ok=True)
     provider = provider or KrakenProvider(os.path.join(data_dir, "cache"))
     db = open_db(os.path.join(data_dir, DB_NAME))
@@ -957,7 +1016,8 @@ def evaluate(strategy_id, *, kind="practice", from_date=None, products=None, cfg
             if kind == "practice":
                 db.execute("INSERT INTO attempts(family,strategy_id,version_key,run_id,at) VALUES(?,?,?,?,?)",
                            (family, strategy_id, key, run_id, _now_ms()))
-        attempts = db.execute("SELECT COUNT(*) FROM attempts WHERE family=?", (family,)).fetchone()[0]
+        gate_attempts = attempts_of(db, family)
+        attempts = gate_attempts + lab_variants
         with db:
             db.execute("UPDATE runs SET attempts=? WHERE id=?", (attempts, run_id))
         runner = Runner(db, run_id, data_dir, json_progress=json_progress, on_progress=on_progress, stream=stream)
@@ -969,7 +1029,8 @@ def evaluate(strategy_id, *, kind="practice", from_date=None, products=None, cfg
                 previous[sig] = signal.signal(sig, stop)
         meta = {"run_id": run_id, "strategy_id": strategy_id, "family": family, "version_key": key, "kind": kind,
                 "start_ms": start_ms, "end_ms": end_ms, "products": names, "config_hash": config_hash(cfg),
-                "name": spec.get("name") or strategy_id}
+                "name": spec.get("name") or strategy_id,
+                "gate_attempts": gate_attempts, "lab_variants": lab_variants}
         started = time.time()
         try:
             outcome = _execute(runner, db, spec, cfg, meta, product_list, provider, trade_source, jobs, neighbors,
@@ -1072,6 +1133,8 @@ def _execute(runner, db, spec, cfg, meta, product_list, provider, trade_source, 
     meta["open_at_end"] = open_at_end
     meta["seconds"] = time.time() - runner.started
     notes = []
+    if getattr(trade_source, "note", None):
+        notes.append(trade_source.note)
     if not any(funding.values()):
         notes.append("Atención: no se pudo leer el historial de funding de Kraken; los costos de funding no están incluidos.")
     report = build_report(meta, result, cfg, notes)
@@ -1090,6 +1153,75 @@ def _execute(runner, db, spec, cfg, meta, product_list, provider, trade_source, 
 
 
 # --------------------------------------------------------------------------- CLI
+
+
+def purge_strategy(strategy_id, data_dir=None, keep_tombstone=None):
+    """Deletes everything the gate holds about ``strategy_id`` (the gate is the single writer of ``gate.sqlite``).
+
+    Runs, attempts, exam locks, reports, cancel flags and launch logs that mention it. The one exception is the
+    anonymous exam tombstone (``strategy_purge.KEEP_EXAM_TOMBSTONE``): ``spec_hash``, date and verdict of each
+    exam taken, nothing that names the strategy. Refuses while a run of it is still alive.
+    Returns the counts of what was removed.
+    """
+    data_dir = data_dir or DATA_DIR
+    keep_tombstone = strategy_purge.KEEP_EXAM_TOMBSTONE if keep_tombstone is None else keep_tombstone
+    counts = {"runs": 0, "attempts": 0, "exam_locks": 0, "reports": 0, "logs": 0, "cancel_flags": 0, "tombstones": 0}
+    path = os.path.join(data_dir, DB_NAME)
+    if os.path.exists(path):
+        db = open_db(path)
+        try:
+            for row in db.execute("SELECT id, pid FROM runs WHERE strategy_id=? AND status='running'", (strategy_id,)):
+                try:
+                    os.kill(row["pid"], 0)
+                except (OSError, TypeError):
+                    continue
+                raise GateError("Hay una prueba en curso de esta estrategia: cancelala antes de borrarla.")
+            runs = db.execute("SELECT id, report_path FROM runs WHERE strategy_id=?", (strategy_id,)).fetchall()
+            locks = db.execute("SELECT code_hash, locked_at, status, verdict FROM exam_locks WHERE strategy_id=?",
+                               (strategy_id,)).fetchall()
+            with db:
+                if keep_tombstone:
+                    for lock in locks:
+                        label = lock["verdict"] or "sin veredicto ({})".format(lock["status"])
+                        counts["tombstones"] += db.execute(
+                            "INSERT OR IGNORE INTO exam_tombstones VALUES(?,?,?)",
+                            (lock["code_hash"], _stamp(lock["locked_at"]), label)).rowcount
+                if strategy_purge.KEEP_ATTEMPT_COUNTER:
+                    for family, n in db.execute("SELECT family, COUNT(*) FROM attempts WHERE strategy_id=? GROUP BY family",
+                                                (strategy_id,)).fetchall():
+                        db.execute("INSERT INTO attempt_counts VALUES(?,?) ON CONFLICT(family_hash) DO UPDATE SET n=n+?",
+                                   (family_hash(family), n, n))
+                counts["attempts"] = db.execute("DELETE FROM attempts WHERE strategy_id=?", (strategy_id,)).rowcount
+                counts["exam_locks"] = db.execute("DELETE FROM exam_locks WHERE strategy_id=?", (strategy_id,)).rowcount
+                counts["runs"] = db.execute("DELETE FROM runs WHERE strategy_id=?", (strategy_id,)).rowcount
+            for row in runs:
+                for candidate, key in ((os.path.join(data_dir, "reports", "{}.md".format(row["id"])), "reports"),
+                                       (os.path.join(data_dir, "cancel", str(row["id"])), "cancel_flags")):
+                    if os.path.isfile(candidate):
+                        os.remove(candidate)
+                        counts[key] += 1
+                recorded = row["report_path"]
+                if recorded and os.path.isfile(recorded) and os.path.realpath(recorded).startswith(
+                        os.path.realpath(os.path.join(data_dir, "reports")) + os.sep):
+                    os.remove(recorded)
+                    counts["reports"] += 1
+            db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        finally:
+            db.close()
+    logs = os.path.join(data_dir, "logs")
+    if os.path.isdir(logs):
+        needle = strategy_id.encode("utf-8")
+        for name in os.listdir(logs):
+            full = os.path.join(logs, name)
+            try:
+                with open(full, "rb") as handle:
+                    found = needle in handle.read()
+                if found:
+                    os.remove(full)
+                    counts["logs"] += 1
+            except OSError:
+                continue
+    return counts
 
 
 def cancel_run(run_id, data_dir=None):
@@ -1125,10 +1257,15 @@ def _parser():
     e.add_argument("--sin-vecinos", action="store_true", help="omite la sensibilidad a parámetros vecinos (más rápido)")
     e.add_argument("--jobs", type=int, help="procesos de cálculo (por defecto min(CPU, 8))")
     e.add_argument("--specs-dir", default=DEFAULT_SPEC_DIR)
+    e.add_argument("--kronos-dir", help="carpeta con kronos.sqlite (para juzgar a Kronos por sus operaciones guardadas)")
+    e.add_argument("--qwen-exit-dir", help="carpeta con qwen-exit.sqlite (para juzgar a Qwen por sus operaciones guardadas)")
+    e.add_argument("--research-ledger", help="registro de intentos del laboratorio VectorBT (solo lectura)")
     e.add_argument("--registry-db", help="futures-strategies.sqlite del registro S (solo lectura): también se juzgan "
                                          "las estrategias creadas allí")
     r = sub.add_parser("runs", help="lista las corridas anteriores (una línea JSON por corrida)")
     r.add_argument("--strategy")
+    q = sub.add_parser("purge", help="borra todo lo del gate sobre una estrategia (deja solo la lápida anónima del examen)")
+    q.add_argument("--strategy", required=True)
     c = sub.add_parser("cancel", help="pide cancelar una corrida en curso")
     c.add_argument("--run", type=int, required=True)
     return parser
@@ -1141,12 +1278,16 @@ def main(argv=None):
             for row in list_runs(os.path.join(args.data_dir, DB_NAME), args.strategy):
                 print(json.dumps(row, ensure_ascii=False, sort_keys=True))
             return 0
+        if args.command == "purge":
+            print(json.dumps(purge_strategy(args.strategy, args.data_dir), sort_keys=True))
+            return 0
         if args.command == "cancel":
             cancel_run(args.run, args.data_dir)
             print("cancelación pedida para la corrida {}".format(args.run))
             return 0
         out = evaluate(args.strategy, kind="exam" if args.exam else "practice", from_date=args.from_date,
-                       products=args.products, data_dir=args.data_dir, specs_dir=args.specs_dir, registry_db=args.registry_db, jobs=args.jobs,
+                       products=args.products, data_dir=args.data_dir, specs_dir=args.specs_dir, registry_db=args.registry_db, kronos_dir=args.kronos_dir,
+                       qwen_exit_dir=args.qwen_exit_dir, jobs=args.jobs, research_ledger=args.research_ledger,
                        neighbors=not args.sin_vecinos, json_progress=args.json_progress, install_signals=True)
     except (GateError, HistoryError, ValueError) as error:
         print(str(error), file=sys.stderr)

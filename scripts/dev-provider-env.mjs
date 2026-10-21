@@ -558,6 +558,10 @@ export function devChildSpecs({
   // C31: Qwen decides when its open positions close (own DB and summary; needs the local model).
   const qwenExitDir = liveDb('qwen-exit')
   const forwardPath = `${forwardDir}/forward-reliability.json`
+  const kronosSummary =
+    (env.KRONOS_SUMMARY_PATH ?? '').trim() ||
+    `${serverCwd}/data/kronos/kronos-summary.json`
+  const kronosDir = kronosSummary.slice(0, kronosSummary.lastIndexOf('/'))
   // Funding carry counter (no orders): its state and summary; the registry serves and toggles them.
   const carryDir = liveDb('carry')
   const llmOn =
@@ -788,8 +792,9 @@ export function devChildSpecs({
         },
       },
       {
-        // Forward paper book of the strategies registered in config/forward-strategies.json (market DB
-        // read-only -> its own forward DB and summary, sole writer of both). Runs every hour.
+        // Forward paper book of the strategies the user ACTIVATED in the registry (everything starts as a draft;
+        // market DB read-only -> its own forward DB and summary, sole writer of both). Full cycle every hour; every
+        // 60 s it also looks at the registry (a newly active strategy gets a cycle at once) and at delete requests.
         name: 'forward',
         command: python.command,
         cwd: serverCwd,
@@ -805,6 +810,8 @@ export function devChildSpecs({
           strategiesDb,
           '--loop-seconds',
           '3600',
+          '--registry-poll-seconds',
+          '60',
         ],
         env: {
           ...env,
@@ -854,6 +861,14 @@ export function devChildSpecs({
           `${forwardDir}/forward.sqlite`,
           '--decisions-db',
           decisionsDb,
+          // The gate judges Qwen (C31) and Kronos by the trades they saved (read-only).
+          // D's history DB: rewritten (chain intact) if a deleted strategy has rows in it.
+          '--account-db',
+          accountDb,
+          '--kronos-dir',
+          kronosDir,
+          '--qwen-exit-dir',
+          qwenExitDir,
           '--port',
           String(STRATEGIES_PORT),
         ],

@@ -79,15 +79,18 @@ describe('no real orders (server)', () => {
       /(?<!searchParams)\.(?:post|put|patch|delete)\(\s*['"`/]/,
       /method:\s*['"](?:POST|PUT|PATCH|DELETE)/i,
     ]
-    // the one write there is: the carry on/off switch of the local strategies API (a flag, not an order)
+    // the only writes there are, both to the local strategies API and neither an order: the carry on/off switch
+    // (a flag) and the strategy gate client (start/cancel a backtest run, which touches no market)
     const writers = files.filter((file) => {
       const text = readFileSync(file, 'utf8')
       return verbs.some((verb) => verb.test(text))
     })
-    expect(writers.map((file) => relative(frontendSrc, file))).toEqual([
+    expect(writers.map((file) => relative(frontendSrc, file)).sort()).toEqual([
       join('features', 'strategy-lab', 'infrastructure', 'carry-api.ts'),
+      join('features', 'strategy-lab', 'infrastructure', 'gate-api.ts'),
     ])
-    expect(readFileSync(writers[0], 'utf8')).not.toMatch(/kraken/i)
+    for (const writer of writers)
+      expect(readFileSync(writer, 'utf8')).not.toMatch(/kraken/i)
     const gateway = readFileSync(
       join(serverSrc, 'features', 'live-gateway', 'gateway.ts'),
       'utf8',

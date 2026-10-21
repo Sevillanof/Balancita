@@ -15,7 +15,7 @@ Ninguna sesión paper arranca sin la aprobación escrita de Fran.
 - `paper_live_process.preflight` rechaza todo lo que no sea la fuente sintética con dos chequeos: `real_session_gate`
   (`source_id == "synthetic"`) y `synthetic_marker` (la tabla `balancita_synthetic_fixture`). Después de #262/#263/#265 la fuente
   ya es obligatoria y no hay sonda ni modo mock; con #266 tampoco hay valores por defecto en la sesión.
-- El reloj real está detrás de `WALL_CLOCK_GATE = False`; la línea de comandos solo corre con reloj simulado (`--clock-from-ms`).
+- El reloj real se abrió el 19-oct con BAL-DECISION-184-07 (`WALL_CLOCK_GATE = True`, 3.4) y solo sirve para la sesión de esa entrada; sin `--wall-clock` la línea de comandos corre con reloj simulado (`--clock-from-ms`).
 - Los archivos `paper_*.py` no importan red, pero el proceso sí la carga: `paper_live_process` arrastra `urllib.request`,
   `http.client`, `socket` y `ssl` a través de `futures_llm_decisions.py` (Qwen, que no se toca). Por eso la prueba de órdenes
   reales no puede mirar nombres de archivo (3.2). Las credenciales de Kraken no se leen en ningún módulo `paper_*`.
@@ -92,6 +92,28 @@ Ninguna sesión paper arranca sin la aprobación escrita de Fran.
 
 - `WALL_CLOCK_GATE` solo se abre con un commit revisado que nombre la autorización (`BAL-DECISION`) de Fran. No se abre en 5a ni 5b.
 - Un ensayo sobre la captura guardada con reloj simulado es una sesión (3.1): necesita la palabra de Fran y su entrada en la lista versionada.
+
+**Hecho (5c, 19-oct-2026): BAL-DECISION-184-07.** Fran escribió en el chat del proyecto, el 19-oct 08:24Z: «Autorizo la sesión paper en vivo con Bitcoin».
+Con ese mensaje el commit abre `WALL_CLOCK_GATE` y agrega la única entrada de `AUTHORIZED_SESSIONS`: la captura viva de la Mac
+(`/Users/franco.sevillano/balancita-data.noindex/dev-live/futures-market.sqlite`, solo lectura), la carpeta nueva
+`/Users/franco.sevillano/balancita-data.noindex/paper-session-btc-2` y la ventana de decisiones del 21-oct 10:30Z al 11:30Z (1 h; Fran pidió el 21-oct no hacer corridas de un día entero. La ventana del 19-oct nunca empezó, la captura estaba parada; la del 21-oct 09:45Z a 10:45Z, en `paper-session-btc-1`, se trabó 11 minutos en una consulta del precio de referencia del funding y no operó. Por eso la carpeta nueva), con la
+configuración `config/paper-session-btc-1.json`: solo `PF_XBTUSD`, cartera simulada de 1000 USD, 100 USD por operación, funding observado, bloqueo de
+entradas a los 15 s, parada a los 25 s, tolerancia de velas de 15 s y `clock_guard.max_forward_jump_ms` de 30 s (hipótesis de las Issues, no un valor
+medido). Sigue sin existir ninguna ruta para órdenes reales ni credenciales. Cualquier otra fuente, carpeta o ventana vuelve a ser `real_session_not_authorized`.
+
+Cómo se corre (en la Mac, con `main` al día, sin tocar la captura ni `pnpm dev`; hay que correr el preflight entre 1 min 10 s después de la hora de inicio menos 10 min y la hora de inicio: la última vela de calentamiento
+no puede estar a más de 10 minutos de la primera decisión, y la vela de un minuto llega a la base unos 3 s después de cerrar; el preflight informa por separado la cantidad de velas, `warmup_<producto>`, y su frescura, `warmup_fresh_<producto>`):
+
+```
+PYTHONPATH=python python3 -m balancita_engine.paper_live_process preflight --config config/paper-session-btc-1.json \
+  --directory /Users/franco.sevillano/balancita-data.noindex/paper-session-btc-2 \
+  --source /Users/franco.sevillano/balancita-data.noindex/dev-live/futures-market.sqlite
+PYTHONPATH=python python3 -m balancita_engine.paper_live_process run --config config/paper-session-btc-1.json \
+  --directory /Users/franco.sevillano/balancita-data.noindex/paper-session-btc-2 \
+  --source /Users/franco.sevillano/balancita-data.noindex/dev-live/futures-market.sqlite --wall-clock
+```
+
+Se detiene en orden con SIGTERM (nunca con SIGKILL) y, si sale con error, solo se retoma con `--restart` y la decisión de una persona (BAL-DECISION-185-01).
 
 ## 4. Orden y revisión
 
