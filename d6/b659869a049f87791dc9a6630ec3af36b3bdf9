@@ -1,0 +1,23 @@
+src/features/strategy-lab/presentation/ComparisonView.test.tsx
+  s_463a0f35f123d0::t_a105faca9a635e 1-2,4-5,7-11,13,17,21-26,29-31
+src/features/strategy-lab/presentation/ComparisonView.tsx
+  s_463a0f35f123d0::t_db8ab4cb29480e 2,13-14,65,185-198
+src/features/strategy-lab/presentation/StrategyLab.tsx
+  s_463a0f35f123d0::t_3c7b15efdf5937 170
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "d6b659869a049f87791dc9a6630ec3af36b3bdf9",
+  "prompts": {},
+  "sessions": {
+    "s_463a0f35f123d0": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e7f89f82-7bd5-408a-976c-b17ade8168df",
+        "model": "claude-sonnet-5-5"
+      },
+      "human_author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
