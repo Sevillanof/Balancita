@@ -345,6 +345,37 @@ class AttemptsTests(Base):
         counts = dict(self.db().execute("SELECT family, COUNT(*) FROM attempts GROUP BY family").fetchall())
         self.assertEqual(counts, {"c25-pullback-perp": 3, "c26-reversion-perp": 1})
 
+    def _ledger(self, variants):
+        path = os.path.join(self.dir, "lab", "ledger.sqlite")
+        os.makedirs(os.path.dirname(path))
+        conn = sqlite3.connect(path)
+        conn.execute("CREATE TABLE trials(id INTEGER PRIMARY KEY AUTOINCREMENT, family TEXT, variant_key TEXT)")
+        for key in variants:
+            conn.execute("INSERT INTO trials(family,variant_key) VALUES(?,?)", ("c25-pullback-perp", key))
+        conn.execute("INSERT INTO trials(family,variant_key) VALUES('c25-pullback-perp','a')")  # repeated run
+        conn.execute("INSERT INTO trials(family,variant_key) VALUES('other-family','z')")
+        conn.commit()
+        conn.close()
+        return path
+
+    def test_lab_variants_add_to_the_attempts_and_the_ledger_is_never_written(self):
+        path = self._ledger(["a", "b", "c"])
+        with open(path, "rb") as handle:
+            before = (os.stat(path).st_mtime_ns, handle.read())
+        out = run("c25-pullback-perp-v1", self.dir, research_ledger=path)
+        self.assertEqual(out["result"]["attempts"], 1 + 3)
+        with open(out["report_path"], encoding="utf-8") as handle:
+            self.assertIn("intentos: 1 (de la compuerta) + 3 (variantes del laboratorio)", handle.read())
+        with open(path, "rb") as handle:
+            self.assertEqual((os.stat(path).st_mtime_ns, handle.read()), before)
+
+    def test_without_ledger_file_the_lab_adds_zero(self):
+        missing = os.path.join(self.dir, "nope", "ledger.sqlite")
+        out = run("c25-pullback-perp-v1", self.dir, research_ledger=missing)
+        self.assertEqual(out["result"]["attempts"], 1)
+        self.assertFalse(os.path.exists(missing))
+        self.assertEqual(g.research_trials("c25-pullback-perp", None), 0)
+
     def test_exam_is_not_an_attempt(self):
         run("lab-cheat-v1", self.dir, kind="exam", spec=dict(SPECS["c25-pullback-perp-v1"], id="lab-cheat-v1"),
             trade_source=cheating_source)
