@@ -440,6 +440,20 @@ class SplitTests(Base):
         with self.assertRaises(g.GateError):
             run("c25-pullback-perp-v1", self.dir, from_date="2025-01-21")
 
+    def test_practice_stage_ends_at_to_and_never_goes_past_the_cutoff(self):
+        out = run("c25-pullback-perp-v1", self.dir, from_date="2025-01-09", to_date="2025-01-15")
+        db = g.open_db(os.path.join(self.dir, g.DB_NAME))
+        params = json.loads(db.execute("SELECT params FROM runs WHERE id = ?", (out["run_id"],)).fetchone()[0])
+        db.close()
+        self.assertEqual((params["from"][:10], params["to"][:10]), ("2025-01-09", "2025-01-15"))
+        for bad in ("2025-01-22", "2025-01-09", "2025-01-01"):
+            with self.assertRaises(g.GateError):
+                run("c25-pullback-perp-v1", self.dir, from_date="2025-01-09", to_date=bad)
+
+    def test_exam_takes_no_to(self):
+        with self.assertRaises(g.GateError):
+            run("c25-pullback-perp-v1", self.dir, kind="exam", to_date="2025-01-15")
+
     def test_exam_takes_no_from(self):
         with self.assertRaises(g.GateError):
             run("c25-pullback-perp-v1", self.dir, kind="exam", from_date="2025-01-10")

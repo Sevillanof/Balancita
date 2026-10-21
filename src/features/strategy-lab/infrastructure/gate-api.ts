@@ -24,6 +24,8 @@ export type GateRun = {
   attempts: number | null
   error: string | null
   has_report: boolean
+  /** Window and products the run asked for (the server stores them). */
+  params?: { from?: string; to?: string; products?: string[] } | null
   /** True when the run is of the strategy's current content (the server marks it). */
   same_version?: boolean
 }
@@ -45,7 +47,12 @@ export type GateOverview = {
   running: { id: number; strategy_id: string } | null
 }
 
-export type GateRequest = { from?: string; products?: string[]; exam?: boolean }
+export type GateRequest = {
+  from?: string
+  to?: string
+  products?: string[]
+  exam?: boolean
+}
 
 export type GateApi = {
   overview: (strategyId: string) => Promise<GateOverview>

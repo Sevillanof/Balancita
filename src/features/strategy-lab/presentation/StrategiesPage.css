@@ -14,7 +14,19 @@
   list-style: none;
 }
 
+.strategies__heading {
+  margin: 0 0 8px;
+  color: var(--mc-text-2);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
 .strategies__list button {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
   width: 100%;
   padding: 8px 10px;
   border: 1px solid transparent;
@@ -40,4 +52,29 @@
   .strategies {
     grid-template-columns: minmax(0, 1fr);
   }
+}
+
+.strategies__dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--mc-text-2);
+}
+
+.strategies__dot[data-state='active'],
+.strategies__dot[data-state='tracking'] {
+  background: var(--mc-long);
+}
+
+.strategies__dot[data-state='draft'],
+.strategies__dot[data-state='shadow'] {
+  background: var(--mc-warn);
+}
+
+.strategies__dot[data-state='retired'],
+.strategies__dot[data-state='closed'],
+.strategies__dot[data-state='off'],
+.strategies__dot[data-state='inactive'] {
+  background: var(--mc-short);
 }
