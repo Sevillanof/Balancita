@@ -132,7 +132,7 @@ class TestWallClockIsOffButReady(Base):
         self.assertEqual(self.run_main([t[0], t[1], t[0]]), LP.EXIT_HALTED)
         self.assertIn("clock_regression", self.read(LP.REPORT_FILE)["halted"])
         self.setUp()
-        self.assertEqual(self.run_main([t[0], t[0] + GUARD["max_forward_jump_ms"] + 1]), LP.EXIT_HALTED)
+        self.assertEqual(self.run_main([t[0], t[0] + 10 * GUARD["max_forward_jump_ms"]]), LP.EXIT_HALTED)      # well beyond the bound: the real seconds the step takes are discounted
         self.assertIn("clock_jump", self.read(LP.REPORT_FILE)["halted"])
 
     def test_both_clocks_at_once_are_refused(self):
