@@ -1,3 +1,4 @@
+import gzip
 import json
 import os
 import shutil
@@ -11,6 +12,8 @@ from http.server import ThreadingHTTPServer
 from balancita_engine import futures_strategy_gate_api as gate_api
 from balancita_engine.futures_strategy_gate_api import GateApi
 from balancita_engine.futures_strategy_registry import make_handler
+from balancita_engine import strategy_gate
+from balancita_engine.futures_history import MINUTE_MS as MINUTE, CandleCache
 from balancita_engine.strategy_gate import open_db
 
 SPEC = {"id": "c29-test-v1", "name": "x"}
@@ -216,6 +219,119 @@ class GateApiTests(unittest.TestCase):
         self.assertEqual(raw.decode(), "# Informe\nñ\n")
         for run in (2, 3, 4, 77):
             self.assertEqual(self.call("/gate/runs/%d/report.md" % run)[0], 404)
+
+
+class VisualApiTests(unittest.TestCase):
+    """Stored trades and candles of a finished run, read-only, with the exam kept shut until it was taken."""
+
+    setUp, tearDown, spawn, call, json, insert = (GateApiTests.setUp, GateApiTests.tearDown, GateApiTests.spawn,
+                                                  GateApiTests.call, GateApiTests.json, GateApiTests.insert)
+    START = 1_760_000_000_000 // MINUTE * MINUTE
+    END = START + 600 * MINUTE
+
+    def trade(self, side, entry, exit_, net, product="PF_XBTUSD"):
+        return {"product_id": product, "side": side, "entry_time_ms": entry, "exit_time_ms": exit_,
+                "entry_price": "100.5", "exit_price": "101.0", "exit_reason": "time_stop", "net_bp": net,
+                "pnl_usd": net / 100, "funding_usd": None, "funding_status": "unknown"}
+
+    def store(self, run_id=1, kind="practice", status="done", products=("PF_XBTUSD",), candles=True):
+        self.insert(kind=kind, status=status)
+        meta = {"run_id": run_id, "strategy_id": "c29-test-v1", "family": "c29-test", "version_key": "k",
+                "kind": kind, "start_ms": self.START, "end_ms": self.END, "products": list(products),
+                "config_hash": "h"}
+        cfg = {"holdout_from": "2026-04-19"}
+        trades = [self.trade("LONG", self.START + 30 * MINUTE, self.START + 45 * MINUTE, 12.0),
+                  self.trade("SHORT", self.START + 200 * MINUTE, self.START + 230 * MINUTE, -4.2),
+                  self.trade("LONG", self.START + 400 * MINUTE, self.START + 410 * MINUTE, 3.0, "PF_ETHUSD")]
+        result = {"verdict": "NO PASA", "verdict_note": None, "inconclusive_reasons": [], "ci": (None, None),
+                  "overall": {"n": 3, "mean_bp": 3.6}, "percentile": 87.0, "funding_share": 0.0,
+                  "funding_status": {"unknown": 3},
+                  "rules": [{"id": "positive_folds", "value": {"positive": 2, "total": 5}}]}
+        cfg["rules"] = {"min_trades": 100, "min_positive_fold_share": 0.6, "min_percentile_vs_random": 95}
+        strategy_gate.write_artifact(self.dir, meta, cfg, SPEC, "h", trades, 1, result)
+        if candles:
+            cache = CandleCache(os.path.join(self.dir, "cache", "candles-PF_XBTUSD.sqlite"))
+            cache.db.executemany("INSERT INTO candles VALUES('1m',?,?,?,?,?,?)",
+                                 [(t, "100", "101", "99", "100.5", "2") for t in range(self.START - 5 * MINUTE,
+                                                                                    self.END + 5 * MINUTE, MINUTE)
+                                  if not 100 * MINUTE <= t - self.START < 103 * MINUTE])
+            cache.db.commit()
+            cache.close()
+
+    def test_summary_carries_identity_figures_and_trade_counts(self):
+        self.store()
+        status, body = self.json("/gate/runs/1/visual-summary")
+        self.assertEqual(status, 200)
+        self.assertEqual(body["products"], ["PF_XBTUSD"])
+        self.assertEqual(body["trades_by_product"], {"PF_XBTUSD": 2})
+        self.assertEqual((body["summary"]["trades"], body["summary"]["percentile"]), (3, 87.0))
+        self.assertEqual((body["summary"]["positive_folds"], body["summary"]["folds"]), (2, 5))
+        self.assertEqual(body["decision_evidence"], "not_captured")
+        self.assertEqual(body["label"], "Histórico Kraken · ejecuciones paper simuladas")
+
+    def test_trades_are_paginated_filtered_by_product_and_window(self):
+        self.store(products=("PF_XBTUSD", "PF_ETHUSD"))
+        status, body = self.json("/gate/runs/1/trades?product=PF_XBTUSD&limit=1")
+        self.assertEqual((status, body["total"], len(body["trades"]), body["next_cursor"]), (200, 2, 1, "1"))
+        self.assertEqual(body["trades"][0]["side"], "LONG")
+        second = self.json("/gate/runs/1/trades?product=PF_XBTUSD&limit=1&cursor=1")[1]
+        self.assertEqual((second["trades"][0]["side"], second["next_cursor"]), ("SHORT", None))
+        # A trade that enters before the window and leaves inside it is NOT dropped.
+        window = "&from={}&to={}".format(self.START + 40 * MINUTE, self.START + 100 * MINUTE)
+        inside = self.json("/gate/runs/1/trades?product=PF_XBTUSD" + window)[1]
+        self.assertEqual([t["entry_time_ms"] for t in inside["trades"]], [self.START + 30 * MINUTE])
+        self.assertEqual(self.json("/gate/runs/1/trades?product=PF_ETHUSD")[1]["total"], 1)
+
+    def test_candles_come_from_the_run_range_with_gaps_counted_not_filled(self):
+        self.store()
+        window = "&from={}&to={}".format(self.START + 90 * MINUTE, self.START + 130 * MINUTE)
+        status, body = self.json("/gate/runs/1/candles?product=PF_XBTUSD" + window)
+        self.assertEqual(status, 200)
+        self.assertEqual(len(body["candles"]), 37)
+        self.assertEqual(body["missing_minutes"], 3)
+        self.assertEqual(body["candles"][0]["time_ms"], self.START + 90 * MINUTE)
+        self.assertEqual(body["resolution"], "1m")
+
+    def test_default_window_is_around_the_newest_trade_and_never_leaves_the_range(self):
+        self.store()
+        body = self.json("/gate/runs/1/candles?product=PF_XBTUSD")[1]
+        self.assertGreaterEqual(body["from_ms"], self.START)
+        self.assertLessEqual(body["to_ms"], self.END)
+        self.assertLessEqual(body["from_ms"], self.START + 200 * MINUTE)
+        self.assertGreaterEqual(body["to_ms"], self.START + 230 * MINUTE)
+        outside = "&from={}&to={}".format(self.END, self.END + 60 * MINUTE)
+        self.assertEqual(self.json("/gate/runs/1/candles?product=PF_XBTUSD" + outside)[0], 400)
+        clamped = self.json("/gate/runs/1/candles?product=PF_XBTUSD&from=0&to={}".format(self.END * 2))[1]
+        self.assertEqual((clamped["from_ms"], clamped["to_ms"]), (self.START, self.END))
+
+    def test_an_exam_is_shut_until_it_finished_and_a_practice_without_artifact_says_so(self):
+        self.store(kind="exam", status="running")
+        for path in ("visual-summary", "candles?product=PF_XBTUSD", "trades?product=PF_XBTUSD"):
+            status, body = self.json("/gate/runs/1/" + path)
+            self.assertEqual((status, body["error"]), (409, "exam_not_unlocked"), path)
+        self.insert()
+        status, body = self.json("/gate/runs/2/visual-summary")
+        self.assertEqual((status, body["error"]), (404, "artifact_not_ready"))
+        self.assertEqual(self.json("/gate/runs/9/visual-summary")[1]["error"], "run_not_found")
+
+    def test_bad_products_and_values_are_refused_and_no_path_is_taken_from_the_client(self):
+        self.store()
+        for bad in ("product=PF_ETHUSD", "product=..%2F..%2Fx", "product=", "product=PF_XBTUSD&from=abc",
+                    "product=PF_XBTUSD&limit=0", "product=PF_XBTUSD&limit=9999"):
+            self.assertEqual(self.json("/gate/runs/1/trades?" + bad)[0], 400, bad)
+        self.assertEqual(self.json("/gate/runs/1/candles?product=PF_ETHUSD")[0], 400)
+
+    def test_a_tampered_trades_file_is_not_served(self):
+        self.store()
+        path = os.path.join(self.dir, "artifacts", "1", "trades.jsonl.gz")
+        with open(path, "wb") as handle:
+            handle.write(gzip.compress(b'{"product_id":"PF_XBTUSD"}\n'))
+        self.assertEqual(self.json("/gate/runs/1/trades?product=PF_XBTUSD")[1]["error"], "artifact_not_ready")
+
+    def test_missing_candle_cache_is_reported_not_invented(self):
+        self.store(candles=False)
+        status, body = self.json("/gate/runs/1/candles?product=PF_XBTUSD")
+        self.assertEqual((status, body["error"]), (404, "data_missing"))
 
 
 if __name__ == "__main__":
