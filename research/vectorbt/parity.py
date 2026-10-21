@@ -100,14 +100,14 @@ def _prior_window(values, period, func):
     return out
 
 
-def c27_arrays(spec, o, h, l, c, v, tick=1.0):
+def c27_arrays(spec, o, h, l, c, v, tick=1.0, donchian_period=20):
     """Everything C27 needs per bar, as float64 arrays: raw signals, protective levels and the frozen exit level."""
     params, risk = spec["params"], spec["rules"]["risk"]
     if risk["stop_atr"] != "$stop_atr" or risk["target_stop_ratio"] != "$target_stop_ratio":
         raise contract.ContractError("C27 espera stop y objetivo parametrizados")
     multiplier = float(params["volume_multiplier"])
     stop_atr, ratio = float(params["stop_atr"]), float(params["target_stop_ratio"])
-    period = 20
+    period = int(donchian_period)
     dh, dl = _prior_window(h, period, np.max), _prior_window(l, period, np.min)
     pvm = _prior_window(v, period, np.mean)
     atr = _wilder_atr(h, l, c, 14)

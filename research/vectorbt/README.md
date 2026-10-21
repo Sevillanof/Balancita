@@ -93,6 +93,69 @@ Hace dos niveles sobre las mismas velas:
 
 Una diferencia que no se explique con estas dos causas es un hallazgo para investigar. No se ajusta en silencio.
 
+## Barridos y estudios (F5)
+
+Tres herramientas sobre datos de práctica. Todas dejan la misma advertencia: lo que sale es una **hipótesis**, no una aprobación.
+
+### Barrido acotado (`optimize`)
+
+```bash
+.venv-vectorbt/bin/python -m research.vectorbt.optimize --dataset data/research-vectorbt/practice/PF_XBTUSD \
+  --experiment-id c27-exploracion-001 --budget 9 --seed 20261021
+```
+
+(Escribilo en una línea, o sin la barra invertida.)
+
+- Recorre una grilla fija de C27: período Donchian 15, 20 y 25 por multiplicador de volumen 1,25, 1,5 y 1,75. Son 9 variantes.
+- `--budget` es un tope. Si la grilla no entra, el comando se niega (código de salida 2) y no escribe nada. No amplía la grilla por su cuenta.
+- Cada corrida va al registro de intentos (`data/research-vectorbt/ledger.sqlite`) antes de escribir el informe, incluidas las que fallan o no operan. Repetir el comando suma corridas, no variantes.
+- Escribe `data/research-vectorbt/reports/c27-exploracion-001.md` y `.json`. El orden es por estabilidad del vecindario (cuántas vecinas de la grilla tienen media neta positiva), no por P&L.
+- Neto por operación = resultado de VectorBT menos funding real de Kraken menos el costo de ejecución del stop, que VectorBT no modela.
+- El resultado es una **hipótesis** sobre datos de práctica, nunca un PASA. El paso siguiente es `strategy_gate evaluate` sobre la reserva.
+
+### Estudio de señales (`feature_study`)
+
+```bash
+.venv-vectorbt/bin/python -m research.vectorbt.feature_study --dataset data/research-vectorbt/practice/PF_XBTUSD \
+  --horizons 5,15,30,60
+```
+
+- Describe qué hace el precio después de cada señal de C27 a 5, 15, 30 y 60 minutos. No simula operaciones.
+- Política causal: la señal se lee al cierre de la vela `i`; la entrada es el **OPEN de la vela `i+1`**; el retorno a `h` minutos es el cierre de la vela `i+h` contra esa entrada.
+- Eventos sin solape: un evento nuevo del mismo lado no empieza hasta pasado el mayor horizonte del anterior.
+- MFE y MAE usan máximos y mínimos de esas mismas velas. Describen el recorrido del precio. **No prueban que una orden se hubiera ejecutado a esos precios.**
+- Informe en `data/research-vectorbt/reports/feature-study-<estrategia>-PF_XBTUSD.md` y `.json`. Compara el retorno medio con el costo de ida y vuelta del producto.
+
+### Tarjeta de candidatas (`summarize`)
+
+```bash
+.venv-vectorbt/bin/python -m research.vectorbt.summarize --experiment-id c27-exploracion-001
+```
+
+- Lee el registro de intentos en solo lectura y resume cada variante distinta con su última corrida, la cantidad de corridas y las vecinas positivas. Imprime la tarjeta; no escribe nada.
+- Criterio **«prometedora en práctica»**: simple y declarado, no es un veredicto. Hace falta al menos 100 operaciones, media neta mayor que 0 y que más de la mitad de las vecinas de la grilla también tengan media neta mayor que 0.
+- Ninguna variante queda aprobada por esta tarjeta. La decisión es de la compuerta.
+
+## Ciclo de vida
+
+Esta tabla resume los estados del **ciclo de investigación**. No son los estados del registro S (`draft`, `shadow`, `active`, `retired`).
+
+| Estado                | Qué significa                                                                               | Quién decide                     |
+| --------------------- | ------------------------------------------------------------------------------------------- | -------------------------------- |
+| BORRADOR              | Hipótesis o variante escrita, todavía sin medir.                                            | Usuario / diseñador              |
+| INVESTIGACIÓN         | Se estudia en el laboratorio (barridos, estudios de señales). Los resultados son hipótesis. | Laboratorio                      |
+| CANDIDATA             | Cumple el criterio «prometedora en práctica» de `summarize`. No es aprobación.              | Criterio automático y declarado  |
+| PARIDAD               | El motor y VectorBT coinciden en señales, y las operaciones tienen causa explicada.         | Prueba de paridad                |
+| PRÁCTICA              | Corrida sobre la ventana de práctica con funding.                                           | Compuerta (antes del corte)      |
+| CONGELADA             | Spec y criterio fijados antes de mirar la reserva.                                          | Registro S (spec, hash, dataset) |
+| EXAMEN                | La compuerta evalúa sobre la reserva.                                                       | `strategy_gate evaluate`         |
+| APROBADA              | La compuerta la aprueba.                                                                    | `strategy_gate evaluate`         |
+| INCONCLUSA            | La compuerta no alcanza para decidir.                                                       | `strategy_gate evaluate`         |
+| SHADOW                | Fase posterior a la compuerta, fuera de este laboratorio.                                   | Sistema / usuario                |
+| FORWARD               | Fase posterior a la compuerta, fuera de este laboratorio.                                   | Usuario (solo paper)             |
+| SEGUIMIENTO           | Seguimiento posterior a la puesta en marcha.                                                | Operación                        |
+| DESCARTADA / RETIRADA | Sale del ciclo; queda en el registro.                                                       | Protocolo / usuario              |
+
 ## Cómo correr las pruebas
 
 ```bash
@@ -118,5 +181,6 @@ Una diferencia que no se explique con estas dos causas es un hallazgo para inves
   - **Familia.** Es el id sin el sufijo `-vN` (`family_of` de la compuerta), así que renombrar `c27-breakout-perp-v2` no cambia la familia ni borra historia.
   - **Selección.** Elegir una corrida para la compuerta (`Ledger.record_selection`) agrega una fila nueva con estado `selection`; la fila elegida no se toca.
   - **Conexión.** `strategy_gate.evaluate` suma a `attempts` las variantes distintas de la familia (`research_trials`, solo `sqlite3`). El Sharpe desinflado usa esa suma y el informe dice «intentos: N (de la compuerta) + M (variantes del laboratorio)». Opción `--research-ledger`; con la carpeta de datos por defecto lee `data/research-vectorbt/ledger.sqlite`, y si no existe suma 0.
-  - **Obligación para F5.** Todo barrido tiene que registrar cada corrida con `record_run`, incluso las que fallan o no operan.
-- **Barridos de parámetros (F5).** Todavía no existen. Hoy el laboratorio solo exporta datos y verifica señales y operaciones.
+  - **Obligación para F5.** Todo barrido tiene que registrar cada corrida con `record_run`, incluso las que fallan o no operan. `optimize` la cumple.
+- **Botón «Investigar con VectorBT» en `/estrategias`** (opcional, F5 de UX del documento). Hoy el barrido se corre solo por línea de comandos.
+- **Corrida real sobre toda la ventana de práctica con funding.** Las pruebas usan velas sintéticas. Falta exportar `PF_XBTUSD` con funding (sin `--no-funding`) y correr `optimize`, `feature_study` y `summarize` sobre `data/research-vectorbt/practice/PF_XBTUSD`.
