@@ -1,7 +1,8 @@
 """Select the Python test units of one CI group (BAL CI-speed, balanced split).
 
 A unit is a whole test module, or a single TestCase class (`module.Class`) for
-the modules that hold slow real-process tests (see python/tests/ci_weights.json).
+the modules that hold slow real-process tests (see python/tests/ci_weights.json),
+or a single test (`module.Class.test`) when that test has its own recorded weight.
 Units are packed into GROUPS groups with longest-first greedy packing on the
 recorded weights (seconds). A unit with no recorded weight gets DEFAULT_WEIGHT,
 so a new module or class is always assigned to some group and never left out.
@@ -40,7 +41,8 @@ def main():
             raise SystemExit("modules that fail to import: %s" % bad)
         if m in split:
             for i in ids:
-                units.setdefault(i.rsplit(".", 1)[0], []).append(i)
+                # a test with its own recorded weight is a unit by itself (one very slow test)
+                units.setdefault(i if i in weights else i.rsplit(".", 1)[0], []).append(i)
         else:
             units[m] = ids
     order = sorted(units, key=lambda u: (-weights.get(u, DEFAULT_WEIGHT), u))
