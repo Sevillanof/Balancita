@@ -57,6 +57,12 @@ def table(db, sql):
         con.close()
 
 
+def without_wall_clock(rows):
+    """The stored rows carry the measured `latency_ms` of each call, which is wall-clock time and differs between two
+    runs on a loaded machine; everything else must be identical."""
+    return [tuple(re.sub(r'"latency_ms": \d+', '"latency_ms": 0', c) if isinstance(c, str) else c for c in r) for r in rows]
+
+
 def prompt_pin(cfg):
     p = cfg["prompt"]
     body = {"p": p["system"], "a": p["answer_line"], "q": p["questions"], "v": p["version"], "o": p["orders"]}
@@ -183,7 +189,7 @@ class ConcurrencyTests(unittest.TestCase):
                         "orders_json, reason_json, outcome_json, net_bp_now FROM decisions ORDER BY 1, 2",
                         "SELECT * FROM trades ORDER BY 1, 2",
                         "SELECT block_id, t_ms, step, variant, order_json, probs_json, chosen, prompt_hash FROM calls ORDER BY 1, 2, 3, 4"):
-                self.assertEqual(table(one, sql), table(two, sql))
+                self.assertEqual(without_wall_clock(table(one, sql)), without_wall_clock(table(two, sql)))
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
 
