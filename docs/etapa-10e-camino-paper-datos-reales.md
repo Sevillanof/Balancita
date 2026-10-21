@@ -96,7 +96,7 @@ Ninguna sesión paper arranca sin la aprobación escrita de Fran.
 **Hecho (5c, 19-oct-2026): BAL-DECISION-184-07.** Fran escribió en el chat del proyecto, el 19-oct 08:24Z: «Autorizo la sesión paper en vivo con Bitcoin».
 Con ese mensaje el commit abre `WALL_CLOCK_GATE` y agrega la única entrada de `AUTHORIZED_SESSIONS`: la captura viva de la Mac
 (`/Users/franco.sevillano/balancita-data.noindex/dev-live/futures-market.sqlite`, solo lectura), la carpeta nueva
-`/Users/franco.sevillano/balancita-data.noindex/paper-session-btc-2` y la ventana de decisiones del 21-oct 10:30Z al 11:30Z (1 h; Fran pidió el 21-oct no hacer corridas de un día entero. La ventana del 19-oct nunca empezó, la captura estaba parada; la del 21-oct 09:45Z a 10:45Z, en `paper-session-btc-1`, se trabó 11 minutos en una consulta del precio de referencia del funding y no operó. Por eso la carpeta nueva), con la
+`/Users/franco.sevillano/balancita-data.noindex/paper-session-btc-3` y la ventana de decisiones del 21-oct 11:25Z al 12:25Z (1 h; Fran pidió el 21-oct no hacer corridas de un día entero. La ventana del 19-oct nunca empezó, la captura estaba parada; la del 21-oct 09:45Z a 10:45Z, en `paper-session-btc-1`, se trabó 11 minutos en una consulta del precio de referencia del funding y no operó. Por eso la carpeta nueva; la de `paper-session-btc-2`, 10:30Z a 11:30Z, se detuvo sola a los 8 minutos de arrancar porque su primer paso, que leía una línea de evidencia por hora de funding desde nov-2025, hizo saltar la alarma de salto de reloj; se arregló y va en `paper-session-btc-3`), con la
 configuración `config/paper-session-btc-1.json`: solo `PF_XBTUSD`, cartera simulada de 1000 USD, 100 USD por operación, funding observado, bloqueo de
 entradas a los 15 s, parada a los 25 s, tolerancia de velas de 15 s y `clock_guard.max_forward_jump_ms` de 30 s (hipótesis de las Issues, no un valor
 medido). Sigue sin existir ninguna ruta para órdenes reales ni credenciales. Cualquier otra fuente, carpeta o ventana vuelve a ser `real_session_not_authorized`.
@@ -106,10 +106,10 @@ no puede estar a más de 10 minutos de la primera decisión, y la vela de un min
 
 ```
 PYTHONPATH=python python3 -m balancita_engine.paper_live_process preflight --config config/paper-session-btc-1.json \
-  --directory /Users/franco.sevillano/balancita-data.noindex/paper-session-btc-2 \
+  --directory /Users/franco.sevillano/balancita-data.noindex/paper-session-btc-3 \
   --source /Users/franco.sevillano/balancita-data.noindex/dev-live/futures-market.sqlite
 PYTHONPATH=python python3 -m balancita_engine.paper_live_process run --config config/paper-session-btc-1.json \
-  --directory /Users/franco.sevillano/balancita-data.noindex/paper-session-btc-2 \
+  --directory /Users/franco.sevillano/balancita-data.noindex/paper-session-btc-3 \
   --source /Users/franco.sevillano/balancita-data.noindex/dev-live/futures-market.sqlite --wall-clock
 ```
 
@@ -202,3 +202,12 @@ reemplazo, el archivo no se borra.
 El borrado no toca las pruebas de estrategias congeladas (C25-C31, C29/C30/C32), forward ni Kronos o Qwen (AGENTS.md: no se
 modifican antes de 100 operaciones forward). `test_replay_9a_audit` y la fixture 9A sostienen la reproducibilidad de un veredicto
 ya registrado (9A): su borrado queda a decisión de Fran.
+
+Quinta entrega (21-oct): las dos primeras corridas reales no operaron y dejaron tres cambios. (1) El precio de referencia del funding se busca por el
+índice `(product_id, received_at, seq)` de la captura en la hora anterior, y se recuerda por hora: antes recorría todas las filas del producto
+(`paper-session-btc-1`, 11 minutos en una consulta). (2) Las respuestas de funding recibidas más de 24 h antes de la primera decisión no se leen (una
+línea resumen, `funding_responses_before_window`) y, dentro de las demás, las horas anteriores a ese margen se cuentan sin examinar
+(`before_window` en la línea de la respuesta) en vez de dejar una línea de evidencia, con `fsync`, por cada hora desde nov-2025 (73 mil líneas).
+(3) La alarma de salto de reloj descuenta el tiempo propio del proceso (reloj monotónico, solo con `--wall-clock`): un primer paso largo ya no cuenta
+como salto. Lo que pierde la cobertura: el detalle por hora de lo rechazado por falta de precio de referencia fuera de esas 24 h; la respuesta
+completa sigue en la captura y su hash en el registro.

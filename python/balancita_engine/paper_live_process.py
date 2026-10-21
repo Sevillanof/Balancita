@@ -106,11 +106,11 @@ SYNTHETIC_CLI = False                   # the command line refuses the synthetic
 # alone (which anyone can write) never opens a real source. The capture has no mark in its tables, hence the path.
 AUTHORIZED_SESSIONS = {                 # {"BAL-DECISION-<n>-<n>": {"source_path": "/abs/futures-market.sqlite", "directory": "/abs/session", "decide_from_ms": int, "decide_until_ms": int}}
     # BAL-DECISION-184-07: Fran, 19-oct-2026 08:24Z, in the project chat: "Autorizo la sesión paper en vivo con Bitcoin". One paper session on
-    # PF_XBTUSD (shared simulated portfolio, 100 USD per trade, no real order) from 2026-10-21T10:30Z for 1 h (Fran, 21-oct: no full-day runs), on the wall clock, in a new folder because btc-1 never operated, reading the
+    # PF_XBTUSD (shared simulated portfolio, 100 USD per trade, no real order) from 2026-10-21T11:25Z for 1 h (Fran, 21-oct: no full-day runs), on the wall clock, in a new folder because btc-1 and btc-2 stopped before operating, reading the
     # live capture of the Mac read-only. config/paper-session-btc-1.json is the configuration this entry belongs to.
     "BAL-DECISION-184-07": {"source_path": "/Users/franco.sevillano/balancita-data.noindex/dev-live/futures-market.sqlite",
-                            "directory": "/Users/franco.sevillano/balancita-data.noindex/paper-session-btc-2",
-                            "decide_from_ms": 1792578600000, "decide_until_ms": 1792582200000},
+                            "directory": "/Users/franco.sevillano/balancita-data.noindex/paper-session-btc-3",
+                            "decide_from_ms": 1792581900000, "decide_until_ms": 1792585500000},
 }
 WALL_CLOCK_GATE = True                   # ON since BAL-DECISION-184-07 (the same written authorization). Only a reviewed change of this constant opens or closes the wall clock
 FRESH_MS = 600_000                               # the newest warm-up candle may be this far from the first decision
@@ -376,7 +376,7 @@ class Supervisor(object):
     ``tick(now)`` is called before each step (a test releases the invented market there)."""
 
     def __init__(self, config, directory, source_path, *, clock, sleep=lambda seconds: None, tick=lambda now: None, strategies=None,
-                 resources=None, wall_time=None):
+                 resources=None, wall_time=None, monotonic=None):
         self.config, self.directory, self.source_path = config, directory, source_path
         self.clock, self.sleep, self.tick = clock, sleep, tick
         self.resources = resources or read_resources           # ``resources(directory) -> {"disk_bytes", "memory_bytes"}``; injected in tests
@@ -384,7 +384,8 @@ class Supervisor(object):
         self.stale_events, self._first_now = [], None
         self._warned = set()
         self.wall_time = wall_time or (lambda: int(time.time() * 1000))     # only read when ``clock_guard`` is configured
-        self.clock_events, self._last_now = [], None
+        self.monotonic = monotonic                                         # real seconds between two checks (wall-clock runs only): a long step is not a jump
+        self.clock_events, self._last_now, self._last_mono = [], None, None
         self.run_id = os.urandom(8).hex()                                  # one per process start: a pid repeats inside a container (D-231-04)
         self.publication = {"attempts": 0, "failures": 0, "last_error": None, "last_ok_observed_now_ms": None}     # only reported when ``publish_blocks`` is on
         self.source_identity = None
@@ -539,14 +540,20 @@ class Supervisor(object):
     def _check_clock(self, now):
         """Time must not run backwards and must not jump past the named bound between two steps. Returns the reason, or None. A clock
         anomaly is an insufficiency of continuity (rule 10D), not a Kraken outage: the caller HALTS durably (a restart needs the operator,
-        BAL-DECISION-184-01 / 185-01) and nothing is reordered or corrected; positions, stops and risk are not touched."""
+        BAL-DECISION-184-01 / 185-01) and nothing is reordered or corrected; positions, stops and risk are not touched. A step that takes
+        long (the first one reads the whole history) moves the clock forward by its own duration, which a monotonic reading measures: only
+        what the wall clock moved beyond that counts as a jump."""
         guard, last, self._last_now = self.config.get("clock_guard"), self._last_now, now
+        mono, last_mono = (self.monotonic() if self.monotonic else None), self._last_mono
+        self._last_mono = mono
         if not guard or last is None:
             return None
+        elapsed = 0 if mono is None or last_mono is None else max(0, int((mono - last_mono) * 1000))      # the process's own time since the last check
         if now < last:
             reason, detail = "clock_regression", "the clock went back {} ms".format(last - now)
-        elif now - last > guard["max_forward_jump_ms"]:
-            reason, detail = "clock_jump", "the clock jumped {} ms (bound {})".format(now - last, guard["max_forward_jump_ms"])
+        elif now - last - elapsed > guard["max_forward_jump_ms"]:
+            reason, detail = "clock_jump", "the clock jumped {} ms (bound {}; {} ms of them were the process's own time)".format(
+                now - last - elapsed, guard["max_forward_jump_ms"], elapsed)
         else:
             return None
         self.clock_events.append({"kind": reason, "previous_now_ms": last, "observed_now_ms": now, "detail": detail})
@@ -835,7 +842,8 @@ def main(argv=None, *, tick=lambda now: None):
             def clock():
                 return state["now"]
 
-        supervisor = Supervisor(config, args.directory, args.source, clock=clock, sleep=sleep, tick=tick)
+        supervisor = Supervisor(config, args.directory, args.source, clock=clock, sleep=sleep, tick=tick,
+                                monotonic=time.monotonic if args.wall_clock else None)
         supervisor.start(restart=args.restart)
         signal.signal(signal.SIGTERM, lambda signum, _frame: supervisor.request_stop(signum))
         signal.signal(signal.SIGINT, lambda signum, _frame: supervisor.request_stop(signum))

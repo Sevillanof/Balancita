@@ -86,7 +86,7 @@ def _number(value):
 
 def parse_response(raw, product_id, received_ms, *, settle_lag_ms=DEFAULT_SETTLE_LAG_MS,
                    max_abs_relative=DEFAULT_MAX_ABS_RELATIVE, reference_price=None, unit_tolerance=DEFAULT_UNIT_TOLERANCE,
-                   strict=True, stored_product_id=None):
+                   strict=True, stored_product_id=None, not_before_ms=None):
     """Checks one response. Returns ``{"sha256", "server_ms", "unit", "definitive", "provisional", "rejected", "conflicts"}``.
 
     ``definitive``: records ``{product_id, start_ms, end_ms, relative_rate, absolute_rate, unit, known_at_ms, sha256}`` (rates as
@@ -97,7 +97,12 @@ def parse_response(raw, product_id, received_ms, *, settle_lag_ms=DEFAULT_SETTLE
     ``strict`` is the default and is what real data requires; synthetic tests opt out with ``strict=False``. The product of the response is not written in its body, so the caller
     must pass the product the stored row declares (``stored_product_id``, from ``paper_futures_funding_periods`` for this response)
     and it must be ``product_id`` (``product_mismatch``); and every hour needs a reference price, since the absolute/relative
-    check is what catches a mixed-up product or unit (``reference_price_required`` / ``reference_price_missing``)."""
+    check is what catches a mixed-up product or unit (``reference_price_required`` / ``reference_price_missing``).
+
+    ``not_before_ms`` (optional): the periods that start before it are not examined at all (no reference price is looked up, no
+    evidence line is made for each): they are only counted, ``out["before_window"] = {"count", "not_before_ms"}``. A response of
+    Kraken carries every hour since the product began (thousands), most of them from before any session; the caller that knows
+    the first instant it can use gives that instant. Without it every period is examined, as before."""
     unit = unit_for(product_id)
     if strict:
         if reference_price is None:
@@ -121,6 +126,7 @@ def parse_response(raw, product_id, received_ms, *, settle_lag_ms=DEFAULT_SETTLE
     sha = stable_hash(raw)
     out = {"sha256": sha, "server_ms": server_ms, "unit": unit, "definitive": [], "provisional": [], "rejected": [], "conflicts": []}
     by_start, provisional = {}, {}
+    before = 0
     for index, item in enumerate(body["rates"]):
         def bad(reason, **extra):
             out["rejected"].append(dict({"index": index, "reason": reason}, **extra))
@@ -131,6 +137,9 @@ def parse_response(raw, product_id, received_ms, *, settle_lag_ms=DEFAULT_SETTLE
             start = _ms(item.get("timestamp"))
         except ValueError as error:
             bad(str(error))
+            continue
+        if not_before_ms is not None and start < not_before_ms:
+            before += 1
             continue
         if start % HOUR_MS:
             bad("period_not_hour_aligned", start_ms=start)
@@ -179,6 +188,8 @@ def parse_response(raw, product_id, received_ms, *, settle_lag_ms=DEFAULT_SETTLE
                 by_start[start] = None
             continue
         by_start[start] = record
+    if not_before_ms is not None:
+        out["before_window"] = {"count": before, "not_before_ms": not_before_ms}
     out["definitive"] = [record for _, record in sorted(by_start.items()) if record is not None]
     out["provisional"] = [provisional[start] for start in sorted(provisional)]
     return out

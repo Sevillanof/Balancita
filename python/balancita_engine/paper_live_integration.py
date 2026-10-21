@@ -162,6 +162,7 @@ class FundingSource(object):
 
 
 OBSERVED_FUNDING = "observed"
+FUNDING_WINDOW_MS = 86_400_000                      # the hours examined: from this long before the first decision (the capture keeps tickers 24 h)
 REFERENCE_LOOKBACK_MS = 3_600_000                  # how far before the hour a reference ticker may have arrived
 REFERENCE_LATE_MS = 60_000                          # and how long after it, for a ticker the capture stored late
 
@@ -176,16 +177,27 @@ class ObservedFundingSource(FundingSource):
     (``None`` when there is none): a reference that does not match within the adapter's tolerance makes the hour ``unit_mismatch``
     (rejected, with evidence)."""
 
+    def __init__(self, path):
+        FundingSource.__init__(self, path)
+        self._references = {}                    # (product, hour) -> mid, only those found
+
     def fundpct(self, after, limit=5000):
         if self.db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='synthetic_fundpct'").fetchone() is None:
             return []
         return FundingSource.fundpct(self, after, limit)
 
-    def responses(self, after, limit=200):
+    def responses(self, after, limit=200, not_before_ms=None):
+        """The capture's funding responses after row ``after``. A response received before ``not_before_ms`` comes without its text
+        (``raw`` is ``None``): it carries no hour that can matter and its megabyte is not read."""
         out = []
         for row in self.db.execute(
-                "SELECT rowid AS rid, sha256, received_at, raw_response FROM paper_futures_funding_responses WHERE rowid>? "
-                "ORDER BY rowid LIMIT ?", (after, limit)).fetchall():
+                "SELECT rowid AS rid, sha256, received_at, CASE WHEN received_at<? THEN NULL ELSE raw_response END AS raw_response "
+                "FROM paper_futures_funding_responses WHERE rowid>? ORDER BY rowid LIMIT ?",
+                (-1 if not_before_ms is None else int(not_before_ms), after, limit)).fetchall():
+            if row["raw_response"] is None:
+                out.append({"rid": row["rid"], "sha256": row["sha256"], "received_at": row["received_at"], "raw": None,
+                            "product_id": None, "products": []})
+                continue
             products = sorted(r[0] for r in self.db.execute(
                 "SELECT DISTINCT product_id FROM paper_futures_funding_periods WHERE response_sha256=?", (row["sha256"],)))
             out.append({"rid": row["rid"], "sha256": row["sha256"], "received_at": row["received_at"], "raw": row["raw_response"],
@@ -199,14 +211,18 @@ class ObservedFundingSource(FundingSource):
         the newest ``event_time`` over the whole product walks every row of it (the first real session, 21-oct-2026, sat 11 minutes
         in that one query). A product without a ticker in that hour has no reference (``None``, hour rejected with evidence), as one
         without any ticker does."""
+        key = (product_id, int(at_ms))
+        if key in self._references:                                   # the same hour comes in every response that carries it
+            return self._references[key]
         row = self.db.execute(
             "SELECT event_time, normalized_json FROM paper_futures_market_events WHERE product_id=? AND received_at>=? AND received_at<=? "
             "AND feed='ticker' AND event_time<=? ORDER BY event_time DESC LIMIT 1",
             (product_id, int(at_ms) - REFERENCE_LOOKBACK_MS, int(at_ms) + REFERENCE_LATE_MS, int(at_ms))).fetchone()
         if row is None:
-            return None
+            return None                                               # not remembered: a ticker of that hour may still arrive
         body = json.loads(row["normalized_json"])
-        return (Decimal(str(body["bid"])) + Decimal(str(body["ask"]))) / 2
+        self._references[key] = price = (Decimal(str(body["bid"])) + Decimal(str(body["ask"]))) / 2
+        return price
 
 
 # ------------------------------------------------------------------------------------------------ the policy for stale sources
@@ -462,16 +478,20 @@ class LiveSession(object):
         become ``funding`` events; everything else (provisional, rejected, contradicted) is evidence in the audit, never dropped.
         The cursor is the response's row id and, with the book, is written in the checkpoint: a replay after a death re-derives
         the same events, and the runner answers ``duplicate`` to the ones it already journaled."""
-        items = []
-        for row in self.funding.responses(self.cursors["accrual"]):
+        items, before = [], []
+        not_before = self.evaluator.decide_from_ms - FUNDING_WINDOW_MS
+        for row in self.funding.responses(self.cursors["accrual"], not_before_ms=not_before):
             if row["received_at"] > upto_ms:
                 break
             self.cursors["accrual"] = row["rid"]
+            if row["raw"] is None:                              # received before the window: no hour in it can matter, so it is only counted
+                before.append(row)
+                continue
             seen = len(self.book.evidence)
             try:
                 parsed = parse_response(row["raw"], row["product_id"] or "", row["received_at"],
                                         reference_price=lambda start, p=row["product_id"]: self.funding.reference_price(p, start),
-                                        stored_product_id=row["product_id"])
+                                        stored_product_id=row["product_id"], not_before_ms=self.evaluator.decide_from_ms - FUNDING_WINDOW_MS)
             except FundingAdapterError as error:
                 self.audit.add({"source": "funding", "kind": "funding_response_rejected", "sha256": row["sha256"],
                                 "received_at": row["received_at"], "products": row["products"], "reason": error.reason})
@@ -481,10 +501,14 @@ class LiveSession(object):
             self.audit.add({"source": "funding", "kind": "funding_response", "sha256": row["sha256"], "product_id": row["product_id"],
                             "received_at": row["received_at"], "definitive": len(parsed["definitive"]),
                             "provisional": len(parsed["provisional"]), "rejected": len(parsed["rejected"]),
-                            "conflicts": len(parsed["conflicts"])})
+                            "conflicts": len(parsed["conflicts"]), "before_window": parsed["before_window"]["count"]})
             for evidence in self.book.evidence[seen:]:
                 body = dict(evidence)
                 self.audit.add(dict(body, source="funding", kind="funding_evidence", evidence_kind=body.pop("kind")))
+        if before:
+            self.audit.add({"source": "funding", "kind": "funding_responses_before_window", "count": len(before), "not_before_ms": not_before,
+                            "first_received_at": before[0]["received_at"], "last_received_at": before[-1]["received_at"],
+                            "first_sha256": before[0]["sha256"], "last_sha256": before[-1]["sha256"]})
         return items
 
     def funding_divergence(self):

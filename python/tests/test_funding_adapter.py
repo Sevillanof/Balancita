@@ -48,6 +48,21 @@ def parse(raw, product_id, received_ms, **kw):
 
 
 class TestChecks(unittest.TestCase):
+    def test_the_hours_before_the_window_are_counted_and_not_examined(self):
+        """A response carries every hour since the product began: the hours before ``not_before_ms`` make no evidence line each and ask
+        for no reference price; the ones from there on are checked as always."""
+        asked = []
+        raw = response(settled(5), SERVER)
+        parsed = parse(raw, BTC, SERVER, not_before_ms=T0 + 2 * HOUR, strict=True, stored_product_id=BTC,
+                       reference_price=lambda start: asked.append(start) or D(80_000))
+        self.assertEqual(parsed["before_window"], {"count": 2, "not_before_ms": T0 + 2 * HOUR})
+        self.assertEqual([r["start_ms"] for r in parsed["definitive"]], [T0 + 2 * HOUR, T0 + 3 * HOUR, T0 + 4 * HOUR])
+        self.assertEqual(asked, [T0 + 2 * HOUR, T0 + 3 * HOUR, T0 + 4 * HOUR])
+        self.assertEqual(parsed["rejected"], [])
+        whole = parse(raw, BTC, SERVER, strict=True, stored_product_id=BTC, reference_price=lambda start: None)
+        self.assertEqual(len(whole["rejected"]), 5)                                    # without a window every hour is examined, as before
+        self.assertNotIn("before_window", whole)
+
     def test_the_unit_follows_the_product_and_only_perpetual_usd_products_exist(self):
         self.assertEqual(FA.unit_for(BTC), "USD/BTC/hour")
         self.assertEqual(FA.unit_for(ETH), "USD/ETH/hour")

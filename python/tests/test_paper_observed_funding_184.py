@@ -443,7 +443,7 @@ CREATE UNIQUE INDEX paper_futures_market_trade_uid ON paper_futures_market_event
 CREATE INDEX paper_futures_market_received ON paper_futures_market_events(product_id, received_at, seq);
 """)                                                                  # the capture's own schema (futures-market-store.ts)
         source = LI.ObservedFundingSource.__new__(LI.ObservedFundingSource)
-        source.db = db
+        source.db, source._references = db, {}
         source.db.row_factory = sqlite3.Row
         sql = inspect.getsource(LI.ObservedFundingSource.reference_price)
         self.assertIn("received_at>=?", sql)
