@@ -51,6 +51,7 @@ import sqlite3
 import statistics
 import sys
 import time
+import urllib.parse
 from decimal import Decimal
 
 from .futures_costs import COST_MODEL_VERSION, fee_rate, side_impact_bps, stop_exit_bps
@@ -70,6 +71,8 @@ ROOT = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", ".."))
 CONFIG_PATH = os.path.join(ROOT, "config", "strategy-gate.json")
 DATA_DIR = os.path.join(ROOT, "data", "strategy-gate")
 DB_NAME = "gate.sqlite"
+# Trial ledger of the VectorBT lab (research/vectorbt/trial_ledger.py). The gate only READS it: one writer, the lab.
+DEFAULT_RESEARCH_LEDGER = os.path.join(ROOT, "data", "research-vectorbt", "ledger.sqlite")
 CHUNK_FRAMES = 4000          # candles between two progress / cancellation checks inside a worker
 NOTIONAL_USD = 100.0
 PASS, FAIL, INCONCLUSIVE = "PASA", "NO PASA", "INCONCLUSO"
@@ -116,6 +119,29 @@ def attempts_of(db, family):
 def family_of(strategy_id):
     """The strategy family: the id without its version suffix (``c29-momentum-perp-v1`` -> ``c29-momentum-perp``)."""
     return re.sub(r"-v\d+$", "", strategy_id)
+
+
+def research_trials(family, ledger_path):
+    """Distinct hypotheses (``variant_key``) the lab tried on ``family``.
+
+    0 without a path or when the file does not exist. A file that EXISTS but cannot be read (corrupt, no ``trials``
+    table, permissions) raises ``GateError``: silently returning 0 would undercount attempts. Read-only
+    (``mode=ro``, stdlib only): the gate never writes into the lab's ledger.
+    """
+    if not ledger_path or not os.path.isfile(ledger_path):
+        return 0
+    try:
+        conn = sqlite3.connect("file:{}?mode=ro".format(urllib.parse.quote(os.path.abspath(ledger_path))), uri=True,
+                               timeout=5)
+        try:
+            return int(conn.execute("SELECT COUNT(DISTINCT variant_key) FROM trials WHERE family=?",
+                                    (family,)).fetchone()[0])
+        finally:
+            conn.close()
+    except sqlite3.Error as exc:
+        raise GateError("El registro de intentos del laboratorio existe pero no se puede leer ({}): {}. La compuerta "
+                        "no corre hasta arreglarlo, para no contar intentos de menos."
+                        .format(ledger_path, exc)) from exc
 
 
 def version_key_of(spec):
@@ -805,7 +831,8 @@ def build_report(meta, result, cfg, extra_notes=()):
               "- Ventana evaluada: {} a {} (exclusivo); fecha de corte (holdout): {}".format(
                   _stamp(meta["start_ms"]), _stamp(meta["end_ms"]), cfg["holdout_from"]),
               "- Productos: {}".format(", ".join(meta["products"])),
-              "- Intentos: {} (corridas de práctica sobre la familia `{}`)".format(r["attempts"], meta["family"]),
+              "- Intentos: {} (de la compuerta) + {} (variantes del laboratorio) = {} sobre la familia `{}`".format(
+                  meta.get("gate_attempts", r["attempts"]), meta.get("lab_variants", 0), r["attempts"], meta["family"]),
               "- Modelo de costos: {} · configuración `{}` (sha {})".format(COST_MODEL_VERSION, SCHEMA, meta["config_hash"][:12]),
               "- Funding de las operaciones: {}.".format(
                   ", ".join("{} {}".format(k, v) for k, v in sorted(r["funding_status"].items())) or "n/d"),
@@ -933,13 +960,16 @@ def _run_tasks(runner, jobs_list, workers, base, span):
 def evaluate(strategy_id, *, kind="practice", from_date=None, products=None, cfg=None, data_dir=None, spec=None,
              specs_dir=None, provider=None, trade_source=None, jobs=None, neighbors=True, json_progress=False,
              on_progress=None, now_ms=None, install_signals=False, stream=None, registry_db=None,
-             kronos_dir=None, qwen_exit_dir=None):
+             kronos_dir=None, qwen_exit_dir=None, research_ledger=None):
     """Runs the gate for one strategy. Returns ``{"run_id", "verdict", "report_path", "status"}``.
 
     ``spec`` / ``provider`` / ``trade_source`` / ``cfg`` are for tests (a spec outside the shipped directory, synthetic
-    candles, a "cheating" trade source). Raises ``GateError`` for refusals (nothing is written for an exam refusal).
+    candles, a "cheating" trade source). ``research_ledger``: the lab's trial ledger (read-only); by default the repo's
+    ``data/research-vectorbt/ledger.sqlite`` when ``data_dir`` is the default one, otherwise none. Raises ``GateError`` for refusals (nothing is written for an exam refusal).
     """
     cfg = cfg or load_config()
+    if research_ledger is None and data_dir is None:
+        research_ledger = DEFAULT_RESEARCH_LEDGER
     data_dir = data_dir or DATA_DIR
     if kind not in ("practice", "exam"):
         raise GateError("tipo desconocido: {}".format(kind))
@@ -965,6 +995,9 @@ def evaluate(strategy_id, *, kind="practice", from_date=None, products=None, cfg
     product_list = resolve_products(",".join(products) if isinstance(products, (list, tuple)) else
                                     (products or ",".join(cfg["default_products"])))
     names = [p for p, _ in product_list]
+    # Read the lab ledger BEFORE touching gate.sqlite: an unreadable ledger raises here, so it leaves no orphan
+    # 'running' run, no attempt and no consumed exam lock.
+    lab_variants = research_trials(family_of(strategy_id), research_ledger)
     os.makedirs(data_dir, exist_ok=True)
     provider = provider or KrakenProvider(os.path.join(data_dir, "cache"))
     db = open_db(os.path.join(data_dir, DB_NAME))
@@ -983,7 +1016,8 @@ def evaluate(strategy_id, *, kind="practice", from_date=None, products=None, cfg
             if kind == "practice":
                 db.execute("INSERT INTO attempts(family,strategy_id,version_key,run_id,at) VALUES(?,?,?,?,?)",
                            (family, strategy_id, key, run_id, _now_ms()))
-        attempts = attempts_of(db, family)
+        gate_attempts = attempts_of(db, family)
+        attempts = gate_attempts + lab_variants
         with db:
             db.execute("UPDATE runs SET attempts=? WHERE id=?", (attempts, run_id))
         runner = Runner(db, run_id, data_dir, json_progress=json_progress, on_progress=on_progress, stream=stream)
@@ -995,7 +1029,8 @@ def evaluate(strategy_id, *, kind="practice", from_date=None, products=None, cfg
                 previous[sig] = signal.signal(sig, stop)
         meta = {"run_id": run_id, "strategy_id": strategy_id, "family": family, "version_key": key, "kind": kind,
                 "start_ms": start_ms, "end_ms": end_ms, "products": names, "config_hash": config_hash(cfg),
-                "name": spec.get("name") or strategy_id}
+                "name": spec.get("name") or strategy_id,
+                "gate_attempts": gate_attempts, "lab_variants": lab_variants}
         started = time.time()
         try:
             outcome = _execute(runner, db, spec, cfg, meta, product_list, provider, trade_source, jobs, neighbors,
@@ -1224,6 +1259,7 @@ def _parser():
     e.add_argument("--specs-dir", default=DEFAULT_SPEC_DIR)
     e.add_argument("--kronos-dir", help="carpeta con kronos.sqlite (para juzgar a Kronos por sus operaciones guardadas)")
     e.add_argument("--qwen-exit-dir", help="carpeta con qwen-exit.sqlite (para juzgar a Qwen por sus operaciones guardadas)")
+    e.add_argument("--research-ledger", help="registro de intentos del laboratorio VectorBT (solo lectura)")
     e.add_argument("--registry-db", help="futures-strategies.sqlite del registro S (solo lectura): también se juzgan "
                                          "las estrategias creadas allí")
     r = sub.add_parser("runs", help="lista las corridas anteriores (una línea JSON por corrida)")
@@ -1251,7 +1287,7 @@ def main(argv=None):
             return 0
         out = evaluate(args.strategy, kind="exam" if args.exam else "practice", from_date=args.from_date,
                        products=args.products, data_dir=args.data_dir, specs_dir=args.specs_dir, registry_db=args.registry_db, kronos_dir=args.kronos_dir,
-                       qwen_exit_dir=args.qwen_exit_dir, jobs=args.jobs,
+                       qwen_exit_dir=args.qwen_exit_dir, jobs=args.jobs, research_ledger=args.research_ledger,
                        neighbors=not args.sin_vecinos, json_progress=args.json_progress, install_signals=True)
     except (GateError, HistoryError, ValueError) as error:
         print(str(error), file=sys.stderr)
