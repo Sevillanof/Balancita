@@ -193,8 +193,7 @@ function loadQwen(path: string | undefined): Loaded {
       const d = last ? list.at(-1) : list[0]
       if (!d) return null
       const probabilities = d.probabilities as
-        | Record<string, unknown>
-        | undefined
+        Record<string, unknown> | undefined
       const answer = typeof d.chosen === 'string' ? d.chosen : null
       return {
         answer,
