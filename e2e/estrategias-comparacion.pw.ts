@@ -138,7 +138,7 @@ test('the strategies page shows one separate book per strategy from the real reg
   ).toHaveText('Candidata, no fiable')
   await expect(
     card('c30-momentum-12h-perp-v1').getByTestId('operational-badge'),
-  ).toHaveText(OPERATIONAL_LABELS.active)
+  ).toHaveText(OPERATIONAL_LABELS.draft)
   // Kronos has no source for its state; Carry keeps the registry's state.
   await expect(
     card('kronos-small-1h-h4-v1').getByTestId('operational-badge'),

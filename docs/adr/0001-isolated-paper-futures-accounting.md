@@ -182,3 +182,20 @@ Fixed notional, per-product cost model, append-only storage, replay equality, no
 11. **Historical archive (planned, not implemented).** A monthly Parquet archive of the full data; SQLite stays the operational store. Nothing is deleted from SQLite before the archive is verified (row counts and hashes).
 
 12. **Single late-candle tolerance.** The forward and the paper session share ONE late-candle tolerance of **15 s** (`late_candle_tolerance_ms` in `config/forward-strategies.json`; measured on 1228 real 1m candles: p50 3.1 s, p99.9 8.1 s, max 8.2 s). A candle learned more than 15 s after its bucket closed never produces a live trade: in the forward the trade is simulated and marked `recovered` (it does not count); in the paper session the order is not executed and the would-be decision is recorded as recovered/suppressed with reason `candle_late` and its lag. This replaces the forward's former 5-minute late threshold and the paper session's 45 s.
+
+## Amendment 2026-10-19 — borrado completo de estrategias, pedido explícito del usuario
+
+Requested directly by the user (Fran) on 2026-10-19 ("El ADR esta mal. Que no conserve nada"): deleting a strategy from the front must remove everything about it, including its paper trades. Everything remains paper only. This amendment adds to the text above and does not rewrite it.
+
+### Supersedes
+
+- The sentence of Amendment 2026-10-11 (evening) "Switching a strategy off or deleting it stops new trades and keeps its trades." Switching a strategy off still stops new trades and keeps its trades. **Deleting it**, when the user asks for it explicitly in the front, deletes its trades too.
+- "The history stays because the registry is append-only" (same amendment) and the append-only rules for records ("Records are append-only guarded", "hash-chained append-only account DB", forward trades and their funding reconciliation, strategy registry rows), **only with respect to a user-initiated deletion of that one strategy**. In normal operation every one of those records stays append-only and guarded.
+
+### Rules
+
+1. **Scope.** A user-initiated delete removes the strategy's registry versions, events and backtests, its forward status and trades (and funding reconciliation), its rows in D's account DB, its replay rows, its gate runs, attempts, reports and logs, its configuration file when it is a shipped one, and its Qwen practice rows. Qwen and Kronos cannot be deleted from the front.
+2. **Single writer.** Each process deletes only the rows of its own database (a request file is consumed by the owning process on its next loop); the append-only guards of a table are lifted for that one transaction and restored afterwards.
+3. **D's hash chain stays valid.** The owning tool removes the deleted strategy's events, renumbers the remaining ones and recomputes the chain from the first affected event, rewrites the snapshots (the deleted book's state is dropped, heads re-pointed) and the config stored in the DB, and verifies the chain before committing; the other strategies' events and book balances are unchanged (every strategy has an independent book). The deletion leaves no trace of the strategy in the DB.
+4. **Two anonymous exceptions in the strategy gate**, neither naming the strategy: an exam tombstone (hash of the exam'd content, date, verdict), so an identical re-created version cannot retake the final exam, and a counter of practice attempts per family keyed by the SHA-256 of the family name, so deleting and re-creating a family does not reset the deflated-Sharpe trial count.
+5. Deleting a shipped strategy removes its file in `config/strategies/`.

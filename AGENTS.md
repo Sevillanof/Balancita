@@ -21,3 +21,7 @@ allowed as described in the 2026-10-11 amendment. It does not authorize real
 orders, private endpoints or credentials. C25-C31 and Kronos are not modified
 until they reach 100 forward trades. The ADR is immutable and read-only:
 consult it, never edit it, unless the user directly requests an amendment.
+
+Amendment 2026-10-19 (requested by the user): a user-initiated delete of a strategy
+removes everything about it, paper trades included; append-only still holds in
+normal operation. The new `odd/tasks/strategy-lifecycle.md` has the details.

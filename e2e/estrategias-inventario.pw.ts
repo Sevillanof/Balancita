@@ -240,9 +240,7 @@ test('Estrategias opens on the comparison and every interaction answers', async 
   await expect(c30.getByTestId('research-badge')).toHaveText(
     'Candidata, no fiable',
   )
-  await expect(c30.getByTestId('operational-badge')).toHaveText(
-    'Activa en el registro',
-  )
+  await expect(c30.getByTestId('operational-badge')).toHaveText('Borrador')
   await expect(
     page
       .locator('[data-id="kronos-small-1h-h4-v1"]')
@@ -348,9 +346,7 @@ test('the forward result of C30 renders live and recovered apart, with progress'
     .locator(`[data-id="${C30}"]`)
     .getByTestId('forward-result')
   await expect(forward).toBeVisible()
-  await expect(forward.getByTestId('forward-state')).toContainText(
-    'Activa en el registro',
-  )
+  await expect(forward.getByTestId('forward-state')).toContainText('Borrador')
   await expect(forward.getByTestId('forward-live')).toContainText('7 cerradas')
   await expect(forward.getByTestId('forward-live')).toContainText('+31,50 USD')
   await expect(forward.getByTestId('forward-recovered')).toContainText(
@@ -368,7 +364,7 @@ test('the forward result of C30 renders live and recovered apart, with progress'
     page
       .locator('[data-id="c29-momentum-perp-v1"]')
       .getByTestId('forward-result'),
-  ).toContainText('el forward no mide esta estrategia')
+  ).toContainText('sin resumen del forward')
 })
 
 test('navigation: Terminal <-> Estrategias <-> detail, no new tabs', async ({
@@ -473,9 +469,7 @@ test('Detalle C29 shows the real registry figures, B2 operations and no invented
     detail.getByRole('heading', { name: /^C29/, level: 2 }),
   ).toBeVisible()
   // Same badges as the cards.
-  await expect(detail.getByTestId('operational-badge')).toHaveText(
-    'Activa en el registro',
-  )
+  await expect(detail.getByTestId('operational-badge')).toHaveText('Borrador')
   await expect(detail.getByTestId('research-badge')).toHaveText(
     'Sin ventaja demostrada',
   )
@@ -502,7 +496,7 @@ test('Detalle C29 shows the real registry figures, B2 operations and no invented
   // Forward: C29 is not measured by the forward runner, so it says why and
   // shows no number. Pipeline: B3.
   await expect(performance).toContainText(
-    'resultados del forward: el forward no mide esta estrategia',
+    'resultados del forward: sin resumen del forward',
   )
   await expect(detail.getByTestId('module-pipeline')).toContainText('B3')
   // Real spec and hash.

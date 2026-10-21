@@ -342,6 +342,32 @@ export class StrategyApiError extends Error {
   }
 }
 
+/** What the delete dialog shows (GET /strategies/<id>/delete-preview). */
+export interface DeletePreview {
+  id: string
+  name: string
+  state: StrategyState
+  versions: { version: number; state: StrategyState }[]
+  /** Total time active in paper, in milliseconds (0: never was). */
+  active_ms: number
+  created_at: number
+  forward_trades: number
+  forward_net_usd: number
+  gate_runs: number
+  exam: { taken: false } | { taken: true; verdict: string; date: string }
+  /** Paper trades that are kept (ADR 0001: append-only ledgers). */
+  ledger_kept: boolean
+  warnings: string[]
+  /** True while something else (Qwen) still needs it. */
+  blocked: boolean
+}
+
+export interface PurgeStatus {
+  purge_id: string | null
+  state: 'running' | 'done'
+  consumers: Record<string, 'pending' | 'done'>
+}
+
 export interface StrategyApi {
   readonly mode: 'registry' | 'example'
   ranking(days: PeriodDays, product?: string): Promise<Ranking>
@@ -375,8 +401,14 @@ export interface StrategyApi {
     state: StrategyState,
     paperNow?: boolean,
   ): Promise<StrategyEntry & { gates: Gate[] }>
-  /** Hides the strategy and stops it; its history stays. `confirm` is its id typed back. */
-  deleteStrategy(id: string, confirm: string): Promise<void>
+  /** What deleting the strategy would remove, for the confirmation dialog. */
+  deletePreview(id: string): Promise<DeletePreview>
+  /** Deletes everything about the strategy. `confirm` is its name (or id) typed back. */
+  deleteStrategy(id: string, confirm: string): Promise<PurgeStatus>
+  /** Progress of the delete in the processes that own other data ("borrando…" / "listo"). */
+  purgeStatus(purgeId: string): Promise<PurgeStatus>
+  /** Whether this exact version already passed the gate (practice or exam); false when unknown. */
+  gatePassed?(id: string, version: number): Promise<boolean>
 }
 
 export const DEFAULT_PRODUCT = 'PF_XBTUSD'
@@ -450,10 +482,25 @@ export function httpStrategyApi(
         state,
         ...(paperNow ? { paper_now: true } : {}),
       }),
+    deletePreview: (id) =>
+      request(`/strategies/${encodeURIComponent(id)}/delete-preview`),
     deleteStrategy: async (id, confirm) => {
-      await request(`/strategies/${encodeURIComponent(id)}/delete`, {
-        confirm,
-      })
+      const result = await request<{
+        purge_id: string | null
+        state: 'running' | 'done'
+      }>(`/strategies/${encodeURIComponent(id)}/delete`, { confirm })
+      return { purge_id: result.purge_id, state: result.state, consumers: {} }
+    },
+    purgeStatus: (purgeId) => request(`/purges/${encodeURIComponent(purgeId)}`),
+    gatePassed: async (id, version) => {
+      try {
+        const overview = await request<{ passed?: { any?: boolean } }>(
+          `/strategies/${encodeURIComponent(id)}/gate/runs?version=${version}`,
+        )
+        return overview.passed?.any === true
+      } catch {
+        return false
+      }
     },
   }
 }

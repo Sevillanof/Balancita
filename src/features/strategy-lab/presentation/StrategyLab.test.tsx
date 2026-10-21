@@ -288,32 +288,54 @@ describe('StrategyLab', () => {
     ).toBeInTheDocument()
   })
 
-  it('switches a strategy off and on from the front without gates', async () => {
+  it('switches a strategy off right away and asks to confirm before switching it on', async () => {
     const user = userEvent.setup()
     await renderLab()
     await user.click(screen.getByRole('tab', { name: 'Versiones' }))
     await user.click(screen.getByRole('button', { name: 'Desactivar' }))
     await screen.findByText(/pasó a desactivada/)
     await user.click(screen.getByRole('button', { name: 'Activar' }))
+    const dialog = await screen.findByRole('dialog')
+    expect(dialog).toHaveTextContent(
+      'Esta versión no pasó la prueba. ¿Activarla igual en el paper real?',
+    )
+    await user.click(within(dialog).getByRole('button', { name: 'Cancelar' }))
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    expect(screen.queryByText(/pasó a activa en el registro/)).toBeNull()
+    await user.click(screen.getByRole('button', { name: 'Activar' }))
+    await user.click(
+      await screen.findByRole('button', { name: 'Activar igual' }),
+    )
     await screen.findByText(/pasó a activa en el registro/)
   })
 
-  it('deletes a strategy only after two confirmations and its id', async () => {
+  it('deletes a strategy after showing what goes away and typing its name', async () => {
     const user = userEvent.setup()
     await renderLab()
     await user.click(screen.getByRole('tab', { name: 'Versiones' }))
     await user.click(screen.getByRole('button', { name: 'Borrar' }))
-    await user.click(screen.getByRole('button', { name: 'Sí, continuar' }))
-    const finish = screen.getByRole('button', {
+    const dialog = await screen.findByRole('dialog')
+    expect(dialog).toHaveTextContent(
+      'Se borrará todo lo relacionado con esta estrategia. No se puede deshacer.',
+    )
+    expect(dialog).toHaveTextContent('3 días 4 h')
+    expect(dialog).toHaveTextContent('no se rindió')
+    const finish = within(dialog).getByRole('button', {
       name: 'Borrar definitivamente',
     })
     expect(finish).toBeDisabled()
     await user.type(
-      screen.getByLabelText('Escribí el id para confirmar'),
-      'c25-pullback-perp-v1',
+      within(dialog).getByLabelText('Escribí el nombre para confirmar'),
+      'C25 Pullback en tendencia',
     )
     await user.click(finish)
-    await screen.findByText(/se borró/)
+    await screen.findByText(
+      /Listo: C25 Pullback en tendencia se borró/,
+      undefined,
+      {
+        timeout: 4000,
+      },
+    )
     expect(
       within(ranking()).queryByText('C25 Pullback en tendencia'),
     ).not.toBeInTheDocument()

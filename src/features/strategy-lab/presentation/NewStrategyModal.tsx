@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { ActivationDialog } from './LifecycleDialogs.tsx'
 import { parseSpecText } from '../domain/strategy-spec.ts'
 import type {
   StrategyApi,
@@ -20,7 +21,9 @@ export function NewStrategyModal({ api, onClose, onCreated }: Props) {
   const [text, setText] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
-  const [activate, setActivate] = useState(true)
+  // Nothing runs in the real paper unless the user decides so: unchecked by default, and confirmed on submit.
+  const [activate, setActivate] = useState(false)
+  const [confirming, setConfirming] = useState(false)
   const area = useRef<HTMLTextAreaElement>(null)
 
   useEffect(() => {
@@ -32,7 +35,13 @@ export function NewStrategyModal({ api, onClose, onCreated }: Props) {
     return () => window.removeEventListener('keydown', onKey)
   }, [onClose])
 
-  const submit = async () => {
+  const submit = async (confirmed = false) => {
+    if (activate && !confirmed) {
+      const { spec: parsed, error: problem } = parseSpecText(text)
+      if (!parsed) return setError(problem ?? 'JSON inválido.')
+      return setConfirming(true)
+    }
+    setConfirming(false)
     const { spec, error: parseError } = parseSpecText(text)
     if (!spec) return setError(parseError ?? 'JSON inválido.')
     if (!api) return setError('El registro de estrategias no está conectado.')
@@ -83,8 +92,8 @@ export function NewStrategyModal({ api, onClose, onCreated }: Props) {
             checked={activate}
             onChange={(event) => setActivate(event.target.checked)}
           />{' '}
-          Operar en paper ya (100 USD por operación, sin pasar por las puertas
-          de promoción)
+          Activar en el paper real al agregarla (100 USD por operación, sin
+          dinero real; te pedimos confirmar)
         </label>
         {error && (
           <p
@@ -98,7 +107,7 @@ export function NewStrategyModal({ api, onClose, onCreated }: Props) {
           <button
             type="button"
             className="strategy-lab__button strategy-lab__button--primary"
-            onClick={submit}
+            onClick={() => void submit()}
             disabled={busy || text.trim() === ''}
           >
             Agregar estrategia
@@ -112,6 +121,15 @@ export function NewStrategyModal({ api, onClose, onCreated }: Props) {
           </button>
         </div>
       </div>
+      {confirming && (
+        <ActivationDialog
+          name="la estrategia nueva"
+          passed={false}
+          busy={busy}
+          onConfirm={() => void submit(true)}
+          onClose={() => setConfirming(false)}
+        />
+      )}
     </div>
   )
 }
