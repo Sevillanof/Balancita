@@ -110,7 +110,7 @@ AUTHORIZED_SESSIONS = {                 # {"BAL-DECISION-<n>-<n>": {"source_path
     # live capture of the Mac read-only. config/paper-session-btc-1.json is the configuration this entry belongs to.
     "BAL-DECISION-184-07": {"source_path": "/Users/franco.sevillano/balancita-data.noindex/dev-live/futures-market.sqlite",
                             "directory": "/Users/franco.sevillano/balancita-data.noindex/paper-session-btc-5",
-                            "decide_from_ms": 1792588800000, "decide_until_ms": 1792592400000},
+                            "decide_from_ms": 1792591200000, "decide_until_ms": 1792594800000},
 }
 WALL_CLOCK_GATE = True                   # ON since BAL-DECISION-184-07 (the same written authorization). Only a reviewed change of this constant opens or closes the wall clock
 FRESH_MS = 600_000                               # the newest warm-up candle may be this far from the first decision
