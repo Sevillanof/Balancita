@@ -43,3 +43,6 @@ __pycache__/
 # Claude Code agent worktrees
 .claude/worktrees/
 .venv-kronos/
+
+# Strategy gate (runs, reports, candle cache, locks)
+data/strategy-gate/
