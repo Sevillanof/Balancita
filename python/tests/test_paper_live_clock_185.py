@@ -135,6 +135,19 @@ class TestWallClockIsOffButReady(Base):
         self.assertEqual(self.run_main([t[0], t[0] + 10 * GUARD["max_forward_jump_ms"]]), LP.EXIT_HALTED)      # well beyond the bound: the real seconds the step takes are discounted
         self.assertIn("clock_jump", self.read(LP.REPORT_FILE)["halted"])
 
+    def test_the_wall_clock_runs_hand_the_real_monotonic_clock_to_the_supervisor_and_the_simulated_ones_do_not(self):
+        seen = []
+        real = LP.Supervisor
+
+        class Spy(real):
+            def __init__(self, *args, **kw):
+                seen.append(kw.get("monotonic"))
+                super().__init__(*args, **kw)
+
+        with mock.patch.object(LP, "Supervisor", Spy):
+            self.run_main([DECIDE_FROM + i * STEP for i in range(6)])
+        self.assertEqual(seen, [LP.time.monotonic])
+
     def test_both_clocks_at_once_are_refused(self):
         self.assertEqual(self.run_main([DECIDE_FROM], extra=("--clock-from-ms", "0")), LP.EXIT_REFUSED)
         self.assertFalse(os.path.exists(self.directory))
