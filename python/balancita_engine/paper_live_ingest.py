@@ -49,6 +49,7 @@ DEFAULT_PRODUCT_SILENCE_MS = 15_000    # hypothesis to test: a product's quote g
 REST_TICKER_EPOCH = 1_000_000          # server/src/features/kraken-futures/ticker-poll.ts: REST tickers; WebSocket epochs are 1..
 GAP_SAMPLE = 200                       # the latest capture gaps kept as evidence (the count is exact)
 SILENCE_SAMPLE = 200                   # the latest silences / epoch changes kept as evidence (the count is exact)
+CANDLE_HISTORY_BATCH = 1_000_000        # rows of one candle read when the start is bounded (the whole history of the window, every product)
 SOURCE_INTERVALS_KEPT = 16             # recent whole-source silences remembered to tell them from a product's own
 DEFAULT_CLOCK_EVERY_MS = 5_000
 DEFAULT_CANDLE_LAG_MS = 120_000        # hypothesis: how long an overdue candle holds the watermark back (0 = never)
@@ -522,8 +523,12 @@ class Ingestor(object):
             self.last_ticker_ms[row["product_id"]] = max(t_ms, self.last_ticker_ms.get(row["product_id"], t_ms))
             self.last_any_ticker_ms = max(t_ms, self.last_any_ticker_ms or t_ms)
             self._queue(t_ms, event)
-        rows = self.reader.candles(self.cursor["candle"], self.batch, *self._bound("candle"))
-        self.candle_more = len(rows) >= self.batch
+        # the candle history of a bounded start is read in one pass: the capture's backfills sit at later rowids than the live candles they
+        # fill in, and a batch boundary between them would release the later minute first and turn the backfilled one into a duplicate and a hole
+        # (271 holes, 12 days of suppressed decisions, on the real capture 21-oct). Read together, the release sorts them by time.
+        limit = CANDLE_HISTORY_BATCH if self.not_before["candle"] is not None else self.batch
+        rows = self.reader.candles(self.cursor["candle"], limit, *self._bound("candle"))
+        self.candle_more = len(rows) >= limit
         for row in rows:
             if self.causal_until_clock and max(row["known_at"], row["bucket_start"] + ONE_MINUTE_MS) > self._clock_now_ms:
                 self.candle_more = False
