@@ -7,6 +7,8 @@ to ``runs.pid`` (``strategy_gate.cancel_run``).
 """
 
 import datetime
+import gzip
+import hashlib
 import json
 import os
 import re
@@ -27,6 +29,13 @@ DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 PUBLIC_FIELDS = ("id", "strategy_id", "family", "kind", "status", "verdict", "progress", "phase", "detail", "eta_s",
                  "started_at", "updated_at", "finished_at", "attempts", "error", "params")
 SPAWN_WAIT_S = 30.0
+ARTIFACT_SCHEMA = "balancita.gate-run-artifact.v1"
+MINUTE_MS = 60_000
+PRODUCT = re.compile(r"^[A-Za-z0-9_]{3,32}$")
+MAX_WINDOW_MS = 3 * 24 * 60 * MINUTE_MS      # at most 3 days of 1m candles (4320) per request
+DEFAULT_WINDOW_MS = 6 * 60 * MINUTE_MS
+CONTEXT_MS = 2 * 60 * MINUTE_MS             # candles shown around the anchor trade
+MAX_TRADES_PAGE = 500
 
 
 class GateApiError(Exception):
@@ -306,6 +315,148 @@ class GateApi:
         if not isinstance(value, str) or not re.match(r"^[0-9]{1,9}$", value):
             raise GateApiError("not_found", "No existe esa corrida.", 404)
         return int(value)
+
+    # ------------------------------------------------------------------ stored trades and candles (read-only)
+
+    def _finished_run(self, run_id):
+        """The row of a FINISHED run. An exam still running (or cancelled/failed) has revealed nothing yet."""
+        rows = self._query("SELECT * FROM runs WHERE id=?", (self._run_id(run_id),))
+        if not rows:
+            raise GateApiError("run_not_found", "No existe esa corrida.", 404)
+        row = rows[0]
+        if row["status"] != "done":
+            code = "exam_not_unlocked" if row["kind"] == "exam" else "artifact_not_ready"
+            raise GateApiError(code, "Esa corrida todavía no terminó: no hay operaciones para mostrar.", 409)
+        return row
+
+    def _artifact(self, run_id):
+        """``(row, manifest, folder)`` of a finished run that stored its trades; refuses anything not inside ``artifacts``."""
+        row = self._finished_run(run_id)
+        root = os.path.realpath(os.path.join(self.data_dir, "artifacts"))
+        folder = os.path.realpath(os.path.join(root, str(row["id"])))
+        try:
+            if os.path.commonpath([root, folder]) != root:
+                raise ValueError("outside")
+            with open(os.path.join(folder, "manifest.json"), encoding="utf-8") as handle:
+                manifest = json.load(handle)
+        except (OSError, ValueError):
+            raise GateApiError("artifact_not_ready", "Esa corrida no guardó sus operaciones (es anterior a este "
+                                                     "cambio o no pudo guardarlas).", 404)
+        if (not isinstance(manifest, dict) or manifest.get("schema") != ARTIFACT_SCHEMA
+                or manifest.get("run_id") != row["id"] or manifest.get("status") != "complete"):
+            raise GateApiError("artifact_not_ready", "Las operaciones guardadas de esa corrida no son válidas.", 409)
+        return row, manifest, folder
+
+    def _stored_trades(self, folder, manifest):
+        try:
+            with open(os.path.join(folder, str(manifest.get("trades_file"))), "rb") as handle:
+                packed = handle.read()
+            raw = gzip.decompress(packed)
+        except (OSError, EOFError, ValueError):
+            raise GateApiError("artifact_not_ready", "No se pudieron leer las operaciones guardadas.", 409)
+        if hashlib.sha256(raw).hexdigest() != manifest.get("trades_sha256"):
+            raise GateApiError("artifact_not_ready", "Las operaciones guardadas no coinciden con su suma de control.", 409)
+        return [json.loads(line) for line in raw.decode("utf-8").splitlines() if line]
+
+    @staticmethod
+    def _product_of(manifest, product):
+        if not isinstance(product, str) or not PRODUCT.match(product) or product not in manifest.get("products", []):
+            raise GateApiError("invalid_product", "Ese producto no es de esta corrida.", 400)
+        return product
+
+    @staticmethod
+    def _ms(value, name):
+        if value is None:
+            return None
+        if not isinstance(value, str) or not re.match(r"^[0-9]{1,15}$", value):
+            raise GateApiError("invalid_window", "El valor '{}' no es un instante válido.".format(name))
+        return int(value)
+
+    def visual_summary(self, run_id):
+        """What the screen needs before any candle: the run's identity, its four figures and which products it has."""
+        row, manifest, folder = self._artifact(run_id)
+        trades = self._stored_trades(folder, manifest)
+        counts = {}
+        for trade in trades:
+            counts[trade["product_id"]] = counts.get(trade["product_id"], 0) + 1
+        return {"run": self._public(row),
+                "run_id": row["id"], "strategy_id": manifest["strategy_id"], "kind": manifest["kind"],
+                "spec_hash": manifest["spec_hash"], "products": manifest["products"],
+                "trades_by_product": {p: counts.get(p, 0) for p in manifest["products"]},
+                "range_start_ms": manifest["range_start_ms"], "range_end_ms": manifest["range_end_ms_exclusive"],
+                "source": manifest["source"], "resolution": manifest["resolution"],
+                "decision_evidence": manifest["decision_evidence"], "contaminated": manifest["contaminated"],
+                "cost_model_version": manifest["cost_model_version"], "summary": manifest.get("summary"),
+                "label": "Histórico Kraken · ejecuciones paper simuladas"}
+
+    def _window(self, manifest, trades, start, end):
+        lo, hi = manifest["range_start_ms"], manifest["range_end_ms_exclusive"]
+        if start is None and end is None:
+            if trades:       # around the newest closed trade of this product
+                last = max(trades, key=lambda t: t["exit_time_ms"])
+                start, end = last["entry_time_ms"] - CONTEXT_MS, last["exit_time_ms"] + CONTEXT_MS
+            else:
+                start, end = hi - DEFAULT_WINDOW_MS, hi
+        elif end is None:
+            end = start + DEFAULT_WINDOW_MS
+        elif start is None:
+            start = end - DEFAULT_WINDOW_MS
+        start, end = max(start, lo), min(end, hi)
+        if end - start > MAX_WINDOW_MS:
+            end = start + MAX_WINDOW_MS
+        if end <= start:
+            raise GateApiError("invalid_window", "La ventana pedida queda fuera de la prueba.")
+        return start // MINUTE_MS * MINUTE_MS, end
+
+    def _read_candles(self, product, start, end):
+        path = os.path.join(self.data_dir, "cache", "candles-{}.sqlite".format(product))
+        if not os.path.isfile(path):
+            raise GateApiError("data_missing", "No hay velas guardadas de {} para esa prueba.".format(product), 404)
+        db = sqlite3.connect("file:{}?mode=ro".format(path), uri=True, timeout=10)
+        try:
+            return db.execute("SELECT t,o,h,l,c,v FROM candles WHERE res='1m' AND t>=? AND t<? ORDER BY t",
+                              (start, end)).fetchall()
+        except sqlite3.OperationalError:
+            raise GateApiError("data_missing", "No hay velas guardadas de {} para esa prueba.".format(product), 404)
+        finally:
+            db.close()
+
+    def candles(self, run_id, product, start=None, end=None):
+        """The 1m candles Kraken published inside a finished run's range (never outside it), as the gate cached them.
+
+        Missing minutes are NOT filled: ``missing_minutes`` counts them and the chart shows the gap.
+        """
+        row, manifest, folder = self._artifact(run_id)
+        product = self._product_of(manifest, product)
+        mine = [t for t in self._stored_trades(folder, manifest) if t["product_id"] == product]
+        start, end = self._window(manifest, mine, self._ms(start, "from"), self._ms(end, "to"))
+        rows = self._read_candles(product, start, end)
+        expected = (end - start + MINUTE_MS - 1) // MINUTE_MS
+        return {"run_id": row["id"], "product": product, "resolution": "1m", "from_ms": start, "to_ms": end,
+                "range_start_ms": manifest["range_start_ms"], "range_end_ms": manifest["range_end_ms_exclusive"],
+                "candles": [{"time_ms": t, "open": o, "high": h, "low": l, "close": c, "volume": v}
+                            for t, o, h, l, c, v in rows],
+                "missing_minutes": max(0, expected - len(rows)),
+                "label": "Histórico Kraken · ejecuciones paper simuladas"}
+
+    def trades(self, run_id, product, start=None, end=None, cursor=None, limit=None):
+        """Closed trades of a run for one product, oldest first, paginated. With a window: those that overlap it."""
+        row, manifest, folder = self._artifact(run_id)
+        product = self._product_of(manifest, product)
+        start, end = self._ms(start, "from"), self._ms(end, "to")
+        offset = self._ms(cursor, "cursor") or 0
+        size = 200 if limit is None else self._ms(limit, "limit")
+        if not 1 <= size <= MAX_TRADES_PAGE:
+            raise GateApiError("invalid_window", "El límite debe estar entre 1 y {}.".format(MAX_TRADES_PAGE))
+        mine = [t for t in self._stored_trades(folder, manifest) if t["product_id"] == product]
+        if start is not None or end is not None:
+            lo = -1 if start is None else start
+            hi = float("inf") if end is None else end
+            mine = [t for t in mine if t["entry_time_ms"] < hi and t["exit_time_ms"] >= lo]
+        page = mine[offset:offset + size]
+        more = offset + size < len(mine)
+        return {"run_id": row["id"], "product": product, "total": len(mine), "trades": page,
+                "next_cursor": str(offset + size) if more else None}
 
     def cancel(self, run_id):
         number = self._run_id(run_id)

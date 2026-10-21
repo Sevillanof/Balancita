@@ -971,6 +971,15 @@ def make_handler(service):
                 self.end_headers()
                 self.wfile.write(data)
                 return True
+            if method == "GET" and len(parts) == 4 and parts[:2] == ["gate", "runs"] and parts[3] in (
+                    "visual-summary", "candles", "trades"):
+                query = {k: v[-1] for k, v in parse_qs(url.query).items()}
+                if parts[3] == "visual-summary":
+                    return gate.visual_summary(parts[2])
+                if parts[3] == "candles":
+                    return gate.candles(parts[2], query.get("product"), query.get("from"), query.get("to"))
+                return gate.trades(parts[2], query.get("product"), query.get("from"), query.get("to"),
+                                   query.get("cursor"), query.get("limit"))
             if method == "GET" and len(parts) == 3 and parts[:2] == ["gate", "runs"]:
                 return gate.run(parts[2])
             if method == "POST" and len(parts) == 4 and parts[:2] == ["gate", "runs"] and parts[3] == "cancel":
