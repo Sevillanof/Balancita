@@ -417,15 +417,42 @@ class TestObservedFundingScenarios(unittest.TestCase):
         self.addCleanup(source.close)
         self.assertEqual(source.fundpct(0), [])
 
-    def test_the_reference_price_has_no_age_limit_of_its_own(self):
-        """The unit check of the adapter keeps its own tolerance; this layer adds no threshold (an old reference that no longer fits
-        makes the hour ``unit_mismatch``, rejected with evidence)."""
+    def test_the_reference_price_is_the_newest_quote_that_arrived_in_the_hour_before(self):
+        """The capture has no index on ``event_time``: the lookup goes through ``(product_id, received_at, seq)`` over the hour before
+        the period, so it never walks the days of rows of a product (the first real session sat 11 minutes in that query)."""
         world, directory, session = self.start()
         self.go(world, session, PRE_INDEX, PRE_INDEX + 2)
-        last = session.funding.db.execute("SELECT MAX(event_time) FROM paper_futures_market_events WHERE feed='ticker' AND product_id=?",
-                                          (BTC,)).fetchone()[0]
-        self.assertIsNotNone(session.funding.reference_price(BTC, last + 30 * 86_400_000))             # a month later: still the newest quote
-        self.assertIsNone(session.funding.reference_price(BTC, 0))                                      # before any quote: none, never invented
+        db = session.funding.db
+        last = db.execute("SELECT MAX(event_time) FROM paper_futures_market_events WHERE feed='ticker' AND product_id=?", (BTC,)).fetchone()[0]
+        expected = db.execute("SELECT normalized_json FROM paper_futures_market_events WHERE feed='ticker' AND product_id=? AND event_time=?",
+                              (BTC, last)).fetchone()[0]
+        body = loads_exact(expected)
+        mid = (D(str(body["bid"])) + D(str(body["ask"]))) / 2
+        self.assertEqual(session.funding.reference_price(BTC, last + 30 * MIN), mid)                    # half an hour later: still the newest quote
+        self.assertIsNone(session.funding.reference_price(BTC, last + 30 * 86_400_000))                 # a month later: none in the hour before, never invented
+        self.assertIsNone(session.funding.reference_price(BTC, 0))                                      # before any quote: none
+
+    def test_the_reference_price_lookup_uses_the_capture_index_and_does_not_scan_the_product(self):
+        db = sqlite3.connect(":memory:")
+        db.executescript("""
+CREATE TABLE paper_futures_market_events (
+  event_id TEXT PRIMARY KEY, feed TEXT NOT NULL, product_id TEXT NOT NULL, epoch INTEGER NOT NULL, seq INTEGER NOT NULL,
+  event_time INTEGER NOT NULL, received_at INTEGER NOT NULL, persisted_at INTEGER NOT NULL, uid TEXT,
+  raw_json TEXT NOT NULL, normalized_json TEXT NOT NULL, content_hash TEXT NOT NULL) STRICT;
+CREATE UNIQUE INDEX paper_futures_market_trade_uid ON paper_futures_market_events(feed, product_id, uid) WHERE uid IS NOT NULL;
+CREATE INDEX paper_futures_market_received ON paper_futures_market_events(product_id, received_at, seq);
+""")                                                                  # the capture's own schema (futures-market-store.ts)
+        source = LI.ObservedFundingSource.__new__(LI.ObservedFundingSource)
+        source.db = db
+        source.db.row_factory = sqlite3.Row
+        sql = inspect.getsource(LI.ObservedFundingSource.reference_price)
+        self.assertIn("received_at>=?", sql)
+        plan = " ".join(r[3] for r in db.execute(
+            "EXPLAIN QUERY PLAN SELECT event_time, normalized_json FROM paper_futures_market_events WHERE product_id=? AND received_at>=? "
+            "AND received_at<=? AND feed='ticker' AND event_time<=? ORDER BY event_time DESC LIMIT 1", (BTC, 0, 1, 1)))
+        self.assertIn("paper_futures_market_received (product_id=? AND received_at>? AND received_at<?)", plan.replace(">=", ">").replace("<=", "<"))
+        self.assertIsNone(source.reference_price(BTC, 10))
+        db.close()
 
     def test_the_former_synthetic_accounting_no_longer_exists(self):
         world, directory, session = self.start()

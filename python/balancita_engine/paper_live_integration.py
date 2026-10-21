@@ -162,6 +162,8 @@ class FundingSource(object):
 
 
 OBSERVED_FUNDING = "observed"
+REFERENCE_LOOKBACK_MS = 3_600_000                  # how far before the hour a reference ticker may have arrived
+REFERENCE_LATE_MS = 60_000                          # and how long after it, for a ticker the capture stored late
 
 
 class ObservedFundingSource(FundingSource):
@@ -170,9 +172,9 @@ class ObservedFundingSource(FundingSource):
     Read-only, like the rest of the source. The signal channel (``fundpct``) is NOT this table: it keeps its own source, and when
     that source has no ``synthetic_fundpct`` table it is simply empty (the table is looked up, a failed read is not mistaken for it:
     a lock or a disk error goes up and halts the session, decision P3 of #186). ``reference_price`` is the mid of the newest ticker
-    at or before the hour, which is what the adapter's unit check needs; it never invents a price (``None`` when there is none) and
-    it has no age limit of its own: an old reference that no longer matches within the adapter's tolerance makes the hour
-    ``unit_mismatch`` (rejected, with evidence), so no new threshold is introduced here."""
+    at or before the hour (arrived in the hour before it), which is what the adapter's unit check needs; it never invents a price
+    (``None`` when there is none): a reference that does not match within the adapter's tolerance makes the hour ``unit_mismatch``
+    (rejected, with evidence)."""
 
     def fundpct(self, after, limit=5000):
         if self.db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='synthetic_fundpct'").fetchone() is None:
@@ -191,9 +193,16 @@ class ObservedFundingSource(FundingSource):
         return out
 
     def reference_price(self, product_id, at_ms):
+        """The mid of the newest ticker of the product at or before ``at_ms``, looked for in the capture's index
+        ``(product_id, received_at, seq)``: only the tickers that arrived in the hour before ``at_ms`` (and up to a minute after it,
+        for one stored late) are read. The capture holds days of rows per product and has no index on ``event_time``: asking for
+        the newest ``event_time`` over the whole product walks every row of it (the first real session, 21-oct-2026, sat 11 minutes
+        in that one query). A product without a ticker in that hour has no reference (``None``, hour rejected with evidence), as one
+        without any ticker does."""
         row = self.db.execute(
-            "SELECT event_time, normalized_json FROM paper_futures_market_events WHERE feed='ticker' AND product_id=? AND event_time<=? "
-            "ORDER BY event_time DESC LIMIT 1", (product_id, int(at_ms))).fetchone()
+            "SELECT event_time, normalized_json FROM paper_futures_market_events WHERE product_id=? AND received_at>=? AND received_at<=? "
+            "AND feed='ticker' AND event_time<=? ORDER BY event_time DESC LIMIT 1",
+            (product_id, int(at_ms) - REFERENCE_LOOKBACK_MS, int(at_ms) + REFERENCE_LATE_MS, int(at_ms))).fetchone()
         if row is None:
             return None
         body = json.loads(row["normalized_json"])
