@@ -284,6 +284,7 @@ def _ingestor_kw(ingest_kw, strategies, decide_from_ms, max_quote_gap_ms):
     kw.setdefault("not_before_candle_ms", int(decide_from_ms) - warmup - WARMUP_MARGIN_MS)
     kw.setdefault("not_before_ticker_ms", int(decide_from_ms) - max(int(max_quote_gap_ms), QUOTE_LOOKBACK_MS))
     kw.setdefault("not_before_gap_ms", kw["not_before_ticker_ms"])
+    kw.setdefault("candle_history_until_ms", int(decide_from_ms))
     return kw
 
 

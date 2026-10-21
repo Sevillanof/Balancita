@@ -191,8 +191,13 @@ def _quote_event(row):
                                            stream="ticker:" + row["product_id"], source_offset=None)
 
 
-def _candle_event(row):
+def _candle_event(row, history_until_ms=None):
+    """A candle is known at the later of its row's ``known_at`` and the close of its minute. ``history_until_ms`` (bounded start) says the
+    minutes that closed by then are the session's history, read whole at its start: they enter at their close, in the order of the market,
+    and not at the moment the capture happened to write them (a backfill of a hole is written later than the live minutes after it)."""
     t_ms = max(row["known_at"], row["bucket_start"] + ONE_MINUTE_MS)
+    if history_until_ms is not None and row["bucket_start"] + ONE_MINUTE_MS <= history_until_ms:
+        t_ms = row["bucket_start"] + ONE_MINUTE_MS
     payload = {"product_id": row["product_id"], "bucket_ms": row["bucket_start"],
                "candle": {"open": row["open_price"], "high": row["high_price"], "low": row["low_price"],
                           "close": row["close_price"], "volume_btc": row["volume_btc"]}}
@@ -206,11 +211,12 @@ class Ingestor(object):
     def __init__(self, reader, *, hold_ms=DEFAULT_HOLD_MS, dead_after_ms=DEFAULT_DEAD_AFTER_MS,
                  clock_every_ms=DEFAULT_CLOCK_EVERY_MS, candle_lag_ms=DEFAULT_CANDLE_LAG_MS, batch=5_000,
                  product_silence_ms=DEFAULT_PRODUCT_SILENCE_MS, expected_products=(), causal_until_clock=False,
-                 not_before_ticker_ms=None, not_before_candle_ms=None, not_before_gap_ms=None):
+                 not_before_ticker_ms=None, not_before_candle_ms=None, not_before_gap_ms=None, candle_history_until_ms=None):
         self.reader, self.hold_ms, self.dead_after_ms = reader, hold_ms, dead_after_ms
         # Opt-in lower bounds (source time; ``None`` = read everything, as before): a new session starts at its first need, not at the
         # first row the capture ever stored. The first read puts a cursor that still is 0 just below the first row at or after each bound.
         self.not_before = {"ticker": not_before_ticker_ms, "candle": not_before_candle_ms, "gap": not_before_gap_ms}
+        self.candle_history_until_ms = candle_history_until_ms
         self.seeded, self._seed_done = {}, False      # table -> cursor the first read started from, when a bound moved it
         self.expected_products = tuple(expected_products)
         # Opt-in (D-185-R4): rows whose arrival is after the caller's clock are not read yet, whatever the source already holds. Off by
@@ -561,7 +567,7 @@ class Ingestor(object):
             if self.candle_pending[key]["digest"] != digest:
                 self.stats["candle_revisions_differing"] += 1
             if known < self.candle_pending[key]["known"]:
-                t_ms, event = _candle_event(row)
+                t_ms, event = _candle_event(row, self.candle_history_until_ms)
                 self.pending.remove(held)
                 if self._queue(t_ms, event, key):
                     self.candle_pending[key] = {"digest": digest, "known": known}
@@ -570,7 +576,7 @@ class Ingestor(object):
             return
         if row["known_at"] < row["bucket_start"] + ONE_MINUTE_MS:   # first read before its minute was over: the session uses it as it came (D-17-oct 13:42Z)
             self.stats["candles_incomplete"] += 1
-        t_ms, event = _candle_event(row)
+        t_ms, event = _candle_event(row, self.candle_history_until_ms)
         self._last_candle_t = t_ms
         self.max_seen_ms = t_ms if self.max_seen_ms is None else max(self.max_seen_ms, t_ms)
         if self._queue(t_ms, event, key):
