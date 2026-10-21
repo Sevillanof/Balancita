@@ -17,6 +17,7 @@ import hashlib
 import json
 import os
 import sqlite3
+import urllib.parse
 import stat
 import sys
 from datetime import datetime, timezone
@@ -37,7 +38,7 @@ def read_cache(cache_dir, product, resolution, from_ms, to_ms):
     if not os.path.exists(path):
         raise contract.ContractError("no hay caché de velas en {} (usá --fetch o --cache-dir)".format(path))
     step = contract.INTERVAL_MS[resolution]
-    db = sqlite3.connect("file:{}?mode=ro".format(path), uri=True)
+    db = sqlite3.connect("file:{}?mode=ro".format(urllib.parse.quote(os.path.abspath(path))), uri=True)
     try:
         rows = db.execute("SELECT t,o,h,l,c,v FROM candles WHERE res=? AND t>=? AND t+?<=? ORDER BY t",
                           (resolution, from_ms, step, to_ms)).fetchall()
@@ -106,6 +107,7 @@ def export(product, resolutions, from_ms, to_ms, out_dir, *, cache_dir, gate_con
         files[name] = {"rows": table.num_rows, "filled_rows": sum(r["filled"] for r in table.to_pylist()),
                        "first_bucket_ms": rows[0]["bucket_start"], "last_bucket_ms": rows[-1]["bucket_start"]}
     if with_funding:
+        # Holdout funding is filtered here, in memory, before anything is written: it never reaches the disk.
         periods = [(s, r) for s, r in funding_source(product) if s + 3_600_000 <= to_ms]
         name = "{}_funding.parquet".format(product)
         table = pa.table({"product_id": [product] * len(periods), "period_start_ms": [s for s, _ in periods],

@@ -109,9 +109,11 @@ def family_of(strategy_id):
 
 
 def research_trials(family, ledger_path):
-    """Distinct hypotheses (``variant_key``) the lab tried on ``family``; 0 without ledger, file or table.
+    """Distinct hypotheses (``variant_key``) the lab tried on ``family``.
 
-    Read-only (``mode=ro``, stdlib only): the gate never writes into the lab's ledger.
+    0 without a path or when the file does not exist. A file that EXISTS but cannot be read (corrupt, no ``trials``
+    table, permissions) raises ``GateError``: silently returning 0 would undercount attempts. Read-only
+    (``mode=ro``, stdlib only): the gate never writes into the lab's ledger.
     """
     if not ledger_path or not os.path.isfile(ledger_path):
         return 0
@@ -123,8 +125,10 @@ def research_trials(family, ledger_path):
                                     (family,)).fetchone()[0])
         finally:
             conn.close()
-    except sqlite3.Error:
-        return 0
+    except sqlite3.Error as exc:
+        raise GateError("El registro de intentos del laboratorio existe pero no se puede leer ({}): {}. La compuerta "
+                        "no corre hasta arreglarlo, para no contar intentos de menos."
+                        .format(ledger_path, exc)) from exc
 
 
 def version_key_of(spec):
@@ -966,6 +970,9 @@ def evaluate(strategy_id, *, kind="practice", from_date=None, products=None, cfg
     product_list = resolve_products(",".join(products) if isinstance(products, (list, tuple)) else
                                     (products or ",".join(cfg["default_products"])))
     names = [p for p, _ in product_list]
+    # Read the lab ledger BEFORE touching gate.sqlite: an unreadable ledger raises here, so it leaves no orphan
+    # 'running' run, no attempt and no consumed exam lock.
+    lab_variants = research_trials(family_of(strategy_id), research_ledger)
     os.makedirs(data_dir, exist_ok=True)
     provider = provider or KrakenProvider(os.path.join(data_dir, "cache"))
     db = open_db(os.path.join(data_dir, DB_NAME))
@@ -985,7 +992,6 @@ def evaluate(strategy_id, *, kind="practice", from_date=None, products=None, cfg
                 db.execute("INSERT INTO attempts(family,strategy_id,version_key,run_id,at) VALUES(?,?,?,?,?)",
                            (family, strategy_id, key, run_id, _now_ms()))
         gate_attempts = db.execute("SELECT COUNT(*) FROM attempts WHERE family=?", (family,)).fetchone()[0]
-        lab_variants = research_trials(family, research_ledger)
         attempts = gate_attempts + lab_variants
         with db:
             db.execute("UPDATE runs SET attempts=? WHERE id=?", (attempts, run_id))

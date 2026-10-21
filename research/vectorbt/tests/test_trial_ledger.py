@@ -70,3 +70,18 @@ def test_read_only_count_does_not_write_and_handles_missing_file(tmp_path):
     assert (os.stat(path).st_mtime_ns, open(path, "rb").read()) == before
     with pytest.raises(sqlite3.OperationalError):
         tl._readonly(path).execute("DELETE FROM trials")
+
+
+def test_an_existing_unreadable_ledger_raises_instead_of_counting_zero(tmp_path):
+    from research.vectorbt.data_contract import ContractError
+    garbage = tmp_path / "garbage.sqlite"
+    garbage.write_bytes(os.urandom(4096))
+    with pytest.raises(ContractError):
+        tl.count_distinct_variants(str(garbage), FAMILY)
+    no_table = str(tmp_path / "no_table.sqlite")
+    conn = sqlite3.connect(no_table)
+    conn.execute("CREATE TABLE other(x)")
+    conn.commit()
+    conn.close()
+    with pytest.raises(ContractError):
+        tl.count_distinct_variants(no_table, FAMILY)
