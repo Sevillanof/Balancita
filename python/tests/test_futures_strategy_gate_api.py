@@ -139,18 +139,21 @@ class GateApiTests(unittest.TestCase):
     def test_launch_validates_and_spawns_without_shell(self):
         for bad in ({"from": "2025-13-01"}, {"from": "ayer"}, {"products": []}, {"products": ["PF_NOPE"]},
                     {"products": ["PF_XBTUSD", "PF_XBTUSD"]}, {"exam": "si"}, {"exam": True, "from": "2025-01-01"},
-                    {"extra": 1}, {"products": "PF_XBTUSD"}):
+                    {"extra": 1}, {"products": "PF_XBTUSD"}, {"to": "ayer"}, {"to": "2025-13-01"},
+                    {"exam": True, "to": "2025-06-01"}):
             self.assertEqual(self.json("/strategies/c29-test-v1/gate", bad)[0], 400, bad)
         self.assertEqual(self.json("/strategies/otra/gate", {})[0], 404)
         self.assertEqual(self.json("/strategies/..%2Fx;rm/gate", {})[0], 404)
         self.assertEqual(self.spawned, [])
         self.next_child = FakeChild(os.getpid())
-        status, body = self.json("/strategies/c29-test-v1/gate", {"from": "2025-02-01", "products": ["PF_ETHUSD"]})
+        status, body = self.json("/strategies/c29-test-v1/gate",
+                                 {"from": "2025-02-01", "to": "2025-05-01", "products": ["PF_ETHUSD"]})
         self.assertEqual((status, body["pending"], body["run_id"]), (200, True, None))
         args, env, cwd, _ = self.spawned[0]
         self.assertEqual(args[:3], ["py", "-m", "balancita_engine.strategy_gate"])
         self.assertEqual(args[args.index("--strategy") + 1], "c29-test-v1")
         self.assertEqual(args[args.index("--from") + 1], "2025-02-01")
+        self.assertEqual(args[args.index("--to") + 1], "2025-05-01")
         self.assertEqual(args[args.index("--products") + 1], "PF_ETHUSD")
         self.assertNotIn("--exam", args)
         self.assertIn("python", env["PYTHONPATH"])

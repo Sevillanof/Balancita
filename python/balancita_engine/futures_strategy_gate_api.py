@@ -144,7 +144,7 @@ class GateApi:
     def _validate(self, body):
         if not isinstance(body, dict):
             raise GateApiError("invalid_body", "El pedido debe ser un objeto.")
-        extra = set(body) - {"from", "products", "exam"}
+        extra = set(body) - {"from", "to", "products", "exam"}
         if extra:
             raise GateApiError("invalid_body", "Campos no admitidos: {}.".format(", ".join(sorted(extra))))
         exam = body.get("exam", False)
@@ -160,6 +160,16 @@ class GateApi:
                 raise GateApiError("invalid_from", "La fecha 'desde' no es válida.")
             if exam:
                 raise GateApiError("invalid_from", "El examen siempre usa los últimos meses: no lleva fecha 'desde'.")
+        end = body.get("to")
+        if end is not None:
+            if not isinstance(end, str) or not DATE.match(end):
+                raise GateApiError("invalid_to", "La fecha 'hasta' debe tener el formato AAAA-MM-DD.")
+            try:
+                datetime.date.fromisoformat(end)
+            except ValueError:
+                raise GateApiError("invalid_to", "La fecha 'hasta' no es válida.")
+            if exam:
+                raise GateApiError("invalid_to", "El examen no lleva fecha 'hasta'.")
         products = body.get("products")
         if products is not None:
             if (not isinstance(products, list) or not products or len(products) > 16
@@ -168,13 +178,13 @@ class GateApi:
             unknown = [p for p in products if p not in self._known_products()]
             if unknown:
                 raise GateApiError("invalid_products", "Producto desconocido: {}.".format(", ".join(unknown)))
-        return start, products, exam
+        return start, end, products, exam
 
     # ------------------------------------------------------------------ actions
 
     def launch(self, strategy_id, body):
         self._check_strategy(strategy_id)
-        start, products, exam = self._validate(body)
+        start, end, products, exam = self._validate(body)
         args = [self.python, "-m", "balancita_engine.strategy_gate", "--data-dir", self.data_dir, "evaluate",
                 "--strategy", strategy_id]
         registry_db = getattr(self.registry, "path", None)
@@ -186,6 +196,8 @@ class GateApi:
                     args += [flag, os.path.abspath(folder)]
         if start:
             args += ["--from", start]
+        if end:
+            args += ["--to", end]
         if products:
             args += ["--products", ",".join(products)]
         if exam:

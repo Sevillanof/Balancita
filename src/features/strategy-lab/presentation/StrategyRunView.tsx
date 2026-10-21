@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import ApprovedTerminalChart from '../../trading-view/presentation/ApprovedTerminalChart.tsx'
 import { amount } from '../../../shared/finance/format.ts'
 import { signedAmount } from '../domain/strategy-format.ts'
+import { nextStage } from '../domain/market-stages.ts'
 import { STAGES, deriveStage } from '../domain/run-stage.ts'
 import {
   priceLinesOf,
@@ -37,6 +38,9 @@ const STAGE_LABEL = [
 const DEFAULT_PRODUCT = 'PF_XBTUSD'
 const TRADES_PAGE = 500
 
+/** «C27 Ruptura Donchian» → «C27 · Ruptura Donchian». */
+const titleOf = (name: string) => name.replace(/^(C\d+)\s+/, '$1 · ')
+
 const message = (error: unknown) =>
   error instanceof Error ? error.message : String(error)
 
@@ -63,6 +67,9 @@ type Props = {
   version: number | string
   gate?: GateApi
   visual?: RunVisualApi
+  /** «Modificar» / «Crear»: lead to the laboratory's editor; absent = disabled. */
+  onModify?: () => void
+  onCreate?: () => void
 }
 
 /**
@@ -76,6 +83,8 @@ export default function StrategyRunView({
   version,
   gate = gateApi,
   visual = runVisualApi,
+  onModify,
+  onCreate,
 }: Props) {
   const [overview, setOverview] = useState<GateOverview | null>(null)
   const [overviewError, setOverviewError] = useState<string | null>(null)
@@ -90,6 +99,16 @@ export default function StrategyRunView({
   const invalidate = useCallback(() => {
     token.current += 1
   }, [])
+
+  const [reload, setReload] = useState(0)
+  const [testing, setTesting] = useState(false)
+  const [testError, setTestError] = useState<string | null>(null)
+  const busy = overview?.running != null
+  useEffect(() => {
+    if (!busy) return
+    const timer = setInterval(() => setReload((value) => value + 1), 10_000)
+    return () => clearInterval(timer)
+  }, [busy])
 
   useEffect(() => {
     let alive = true
@@ -107,7 +126,7 @@ export default function StrategyRunView({
     return () => {
       alive = false
     }
-  }, [gate, strategyId])
+  }, [gate, strategyId, reload])
 
   const finished = useMemo(
     () =>
@@ -252,6 +271,26 @@ export default function StrategyRunView({
     ? finished.find((run) => run.id === data.summary.run_id)
     : null
   const running = overview?.running ?? null
+  const stageToTest = nextStage(overview?.runs ?? [])
+  const testNote = stageToTest
+    ? `Prueba nueva en una etapa distinta del mercado: ${stageToTest.label}`
+    : 'Ya la probaste en todas las etapas del mercado'
+  const test = async () => {
+    if (!stageToTest) return
+    setTesting(true)
+    setTestError(null)
+    try {
+      await gate.start(strategyId, {
+        from: stageToTest.from,
+        to: stageToTest.to,
+      })
+      setReload((value) => value + 1)
+    } catch (error) {
+      setTestError(message(error))
+    } finally {
+      setTesting(false)
+    }
+  }
   // Retired strategies of the old engine are not in the gate's registry.
   const unknownToGate = overviewError?.startsWith('No existe') ?? false
 
@@ -264,7 +303,7 @@ export default function StrategyRunView({
       <header className="runview__head">
         <div>
           <p className="runview__title">
-            {strategyName} <small>v{version}</small>
+            {titleOf(strategyName)} <small>v{version}</small>
           </p>
           <p className="runview__sub">
             {lastRun
@@ -273,10 +312,33 @@ export default function StrategyRunView({
             {running && ' · hay una prueba en curso'}
           </p>
         </div>
-        <p className="runview__stage-label" title={stage.reason}>
-          {STAGE_LABEL[stage.index]}
-        </p>
+        <div className="runview__side">
+          <p className="runview__stage-label" title={stage.reason}>
+            {STAGE_LABEL[stage.index]}
+          </p>
+          <div className="runview__actions" role="group" aria-label="Acciones">
+            <button type="button" onClick={onModify} disabled={!onModify}>
+              Modificar
+            </button>
+            <button type="button" onClick={onCreate} disabled={!onCreate}>
+              Crear
+            </button>
+            <button
+              type="button"
+              onClick={() => void test()}
+              disabled={testing || running != null || !stageToTest}
+              title={testNote ?? undefined}
+            >
+              {running ? 'Prueba en curso…' : 'Testear'}
+            </button>
+          </div>
+        </div>
       </header>
+      {testError && (
+        <p role="alert" className="runview__warn">
+          {testError}
+        </p>
+      )}
 
       <ol className="runview__stages" aria-label="Etapa de la estrategia">
         {STAGES.map((name, index) => (
@@ -332,7 +394,7 @@ export default function StrategyRunView({
           label="Frente al azar"
           value={
             summary && summary.percentile != null
-              ? `p${amount(summary.percentile, 0)}`
+              ? `${amount(summary.percentile, 0)} %`
               : '—'
           }
           note={summary ? `Mínimo: percentil ${summary.min_percentile}` : ''}
@@ -346,6 +408,7 @@ export default function StrategyRunView({
               ? `${data.product} · Velas de la prueba`
               : 'Velas de la prueba'}
           </h4>
+          <span className="runview__chart-tags">LONG / SHORT / Salidas</span>
         </div>
 
         {unknownToGate && (

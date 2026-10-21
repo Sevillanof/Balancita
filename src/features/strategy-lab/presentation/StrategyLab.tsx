@@ -499,6 +499,24 @@ export default function StrategyLab({
     setError(null)
   }
 
+  /** «Modificar»: the editor of the laboratory on that strategy (new version or new strategy on save). */
+  const modify = (id: string) => {
+    setView('lab')
+    setNotice(null)
+    setError(null)
+    setFocus(null)
+    setShowPreview(false)
+    if (id !== selectedId) select(id)
+  }
+
+  /** «Crear»: the laboratory with the new-strategy dialog open. */
+  const create = () => {
+    setNotice(null)
+    setError(null)
+    setCreating(true)
+    setView('lab')
+  }
+
   const refresh = (id: string | null, message: string | null) => {
     setSelectedId(id)
     setReload((value) => value + 1)
@@ -756,6 +774,8 @@ export default function StrategyLab({
           reload={reload}
           selectedId={homeId}
           onSelect={setHomeId}
+          onModify={modify}
+          onCreate={create}
         />
       )}
       {view === 'lab' && (

@@ -158,7 +158,11 @@ function visualWith(overrides: Partial<RunVisualApi> = {}): RunVisualApi {
     ...overrides,
   }
 }
-const renderView = (gate: GateApi, visual: RunVisualApi) =>
+const renderView = (
+  gate: GateApi,
+  visual: RunVisualApi,
+  extra: { onModify?: () => void; onCreate?: () => void } = {},
+) =>
   render(
     <StrategyRunView
       strategyId="x2"
@@ -166,8 +170,64 @@ const renderView = (gate: GateApi, visual: RunVisualApi) =>
       version={3}
       gate={gate}
       visual={visual}
+      {...extra}
     />,
   )
+
+describe('StrategyRunView actions', () => {
+  it('Modificar and Crear call their handlers; they are disabled without one', async () => {
+    const user = userEvent.setup()
+    const onModify = vi.fn()
+    const onCreate = vi.fn()
+    renderView(gateWith(overview([])), visualWith(), { onModify, onCreate })
+    await user.click(screen.getByRole('button', { name: 'Modificar' }))
+    await user.click(screen.getByRole('button', { name: 'Crear' }))
+    expect(onModify).toHaveBeenCalledTimes(1)
+    expect(onCreate).toHaveBeenCalledTimes(1)
+  })
+
+  it('Modificar is disabled when the strategy cannot be edited', async () => {
+    renderView(gateWith(overview([])), visualWith())
+    expect(screen.getByRole('button', { name: 'Modificar' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Crear' })).toBeDisabled()
+  })
+
+  it('Testear starts a practice on the first stretch of the market not yet tried', async () => {
+    const user = userEvent.setup()
+    const gate = gateWith(
+      overview([
+        run(5, {
+          params: { from: '2025-01-01T00:00:00Z', to: '2025-04-01T00:00:00Z' },
+        }),
+      ]),
+    )
+    vi.mocked(gate.start).mockResolvedValue({ pending: true } as never)
+    renderView(gate, visualWith())
+    const button = await screen.findByRole('button', { name: 'Testear' })
+    await waitFor(() =>
+      expect(button).toHaveAttribute(
+        'title',
+        expect.stringContaining('abr–jun 2025'),
+      ),
+    )
+    await user.click(button)
+    expect(gate.start).toHaveBeenCalledWith('x2', {
+      from: '2025-04-01',
+      to: '2025-07-01',
+    })
+  })
+
+  it('Testear is disabled while a test runs', async () => {
+    const gate = gateWith({
+      ...overview([]),
+      running: { id: 9, strategy_id: 'x2' },
+    } as GateOverview)
+    renderView(gate, visualWith())
+    expect(
+      await screen.findByRole('button', { name: 'Prueba en curso…' }),
+    ).toBeDisabled()
+  })
+})
 
 describe('StrategyRunView', () => {
   it('shows the four figures of the latest finished run, its stage and the real candles', async () => {
@@ -181,7 +241,7 @@ describe('StrategyRunView', () => {
     expect(within(kpis).getByText('−4,2 pb')).toBeInTheDocument()
     expect(within(kpis).getByText('2 / 5')).toBeInTheDocument()
     expect(within(kpis).getByText('Mínimo: 3 de 5')).toBeInTheDocument()
-    expect(within(kpis).getByText('p87')).toBeInTheDocument()
+    expect(within(kpis).getByText('87 %')).toBeInTheDocument()
     expect(screen.getByText(/Última prueba · Práctica #24/)).toBeInTheDocument()
     expect(screen.getByText('En optimización')).toBeInTheDocument()
     expect(screen.getByText('Optimizar').closest('li')).toHaveAttribute(

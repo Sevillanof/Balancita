@@ -1079,7 +1079,7 @@ def _run_tasks(runner, jobs_list, workers, base, span):
     return results
 
 
-def evaluate(strategy_id, *, kind="practice", from_date=None, products=None, cfg=None, data_dir=None, spec=None,
+def evaluate(strategy_id, *, kind="practice", from_date=None, to_date=None, products=None, cfg=None, data_dir=None, spec=None,
              specs_dir=None, provider=None, trade_source=None, jobs=None, neighbors=True, json_progress=False,
              on_progress=None, now_ms=None, install_signals=False, stream=None, registry_db=None,
              kronos_dir=None, qwen_exit_dir=None, research_ledger=None, allow_contaminated=False):
@@ -1106,8 +1106,8 @@ def evaluate(strategy_id, *, kind="practice", from_date=None, products=None, cfg
     holdout_ms = _date_ms(cfg["holdout_from"])
     now_ms = (now_ms if now_ms is not None else _now_ms()) // MINUTE_MS * MINUTE_MS
     if kind == "exam":
-        if from_date:
-            raise GateError("El examen siempre evalúa desde la fecha de corte ({}); --from solo vale en la práctica."
+        if from_date or to_date:
+            raise GateError("El examen siempre evalúa desde la fecha de corte ({}); --from y --to solo valen en la práctica."
                             .format(cfg["holdout_from"]))
         start_ms, end_ms = holdout_ms, now_ms
         if end_ms - start_ms < MINUTE_MS:
@@ -1116,6 +1116,12 @@ def evaluate(strategy_id, *, kind="practice", from_date=None, products=None, cfg
         start_ms, end_ms = _date_ms(from_date or cfg["default_from"]), holdout_ms
         if start_ms >= holdout_ms:
             raise GateError("La práctica no puede empezar en o después de la fecha de corte ({}).".format(cfg["holdout_from"]))
+        if to_date:  # one market stage: the practice never goes past the holdout cut
+            end_ms = _date_ms(to_date)
+            if end_ms > holdout_ms:
+                raise GateError("La práctica no puede terminar después de la fecha de corte ({}).".format(cfg["holdout_from"]))
+            if end_ms <= start_ms:
+                raise GateError("La práctica tiene que terminar después de la fecha de inicio.")
     product_list = resolve_products(",".join(products) if isinstance(products, (list, tuple)) else
                                     (products or ",".join(cfg["default_products"])))
     names = [p for p, _ in product_list]
@@ -1465,6 +1471,7 @@ def _parser():
     e = sub.add_parser("evaluate", help="corre la prueba fija sobre una estrategia")
     e.add_argument("--strategy", required=True)
     e.add_argument("--from", dest="from_date", help="YYYY-MM-DD (solo práctica; por defecto el de la configuración)")
+    e.add_argument("--to", dest="to_date", help="YYYY-MM-DD (solo práctica; por defecto la fecha de corte): una etapa del mercado")
     e.add_argument("--products", help="PF_XBTUSD,PF_ETHUSD,... (por defecto los de la configuración)")
     e.add_argument("--exam", action="store_true", help="examen final: solo datos desde la fecha de corte; una vez por versión")
     e.add_argument("--examen-contaminado", action="store_true", dest="allow_contaminated",
@@ -1502,7 +1509,7 @@ def main(argv=None):
             cancel_run(args.run, args.data_dir)
             print("cancelación pedida para la corrida {}".format(args.run))
             return 0
-        out = evaluate(args.strategy, kind="exam" if args.exam else "practice", from_date=args.from_date,
+        out = evaluate(args.strategy, kind="exam" if args.exam else "practice", from_date=args.from_date, to_date=args.to_date,
                        products=args.products, data_dir=args.data_dir, specs_dir=args.specs_dir, registry_db=args.registry_db, kronos_dir=args.kronos_dir,
                        qwen_exit_dir=args.qwen_exit_dir, jobs=args.jobs, research_ledger=args.research_ledger,
                        neighbors=not args.sin_vecinos, json_progress=args.json_progress, install_signals=True,

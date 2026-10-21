@@ -4,6 +4,7 @@ import type {
   InventoryStrategy,
   StrategyApi,
 } from '../infrastructure/strategy-api.ts'
+import { operationalLabel } from '../domain/strategy-labels.ts'
 import StrategyRunView from './StrategyRunView.tsx'
 import './StrategiesPage.css'
 
@@ -14,6 +15,9 @@ type Props = {
   /** Selected strategy, kept by the parent. */
   selectedId?: string | null
   onSelect?: (id: string) => void
+  /** «Modificar» / «Crear»: both lead to the laboratory's editor. */
+  onModify?: (id: string) => void
+  onCreate?: () => void
 }
 
 /**
@@ -26,6 +30,8 @@ export default function StrategiesPage({
   reload,
   selectedId: keptId = null,
   onSelect,
+  onModify,
+  onCreate,
 }: Props) {
   const [rows, setRows] = useState<InventoryStrategy[] | null>(null)
   const [failure, setFailure] = useState<string | null>(null)
@@ -95,6 +101,7 @@ export default function StrategiesPage({
   return (
     <section className="strategies" aria-label="Estrategias">
       <nav className="strategies__list" aria-label="Lista de estrategias">
+        <p className="strategies__heading">Estrategias</p>
         <ul>
           {rows.map((row) => (
             <li key={row.id} data-id={row.id}>
@@ -103,7 +110,13 @@ export default function StrategiesPage({
                 aria-current={row.id === selected?.id ? 'true' : undefined}
                 onClick={() => pick(row.id)}
               >
-                {row.name}
+                <span>{row.name}</span>
+                <i
+                  className="strategies__dot"
+                  data-state={row.operational.state}
+                  title={operationalLabel(row.operational.state)}
+                  aria-hidden="true"
+                />
               </button>
             </li>
           ))}
@@ -116,6 +129,12 @@ export default function StrategiesPage({
             strategyId={selected.id}
             strategyName={selected.name}
             version={selected.version}
+            onModify={
+              selected.kind === 'rules' && onModify
+                ? () => onModify(selected.id)
+                : undefined
+            }
+            onCreate={onCreate}
           />
         )}
       </div>
