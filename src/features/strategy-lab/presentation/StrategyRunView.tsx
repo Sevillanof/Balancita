@@ -252,6 +252,8 @@ export default function StrategyRunView({
     ? finished.find((run) => run.id === data.summary.run_id)
     : null
   const running = overview?.running ?? null
+  // Retired strategies of the old engine are not in the gate's registry.
+  const unknownToGate = overviewError?.startsWith('No existe') ?? false
 
   return (
     <section
@@ -289,7 +291,7 @@ export default function StrategyRunView({
           </li>
         ))}
       </ol>
-      {overviewError && (
+      {overviewError && !unknownToGate && (
         <p role="alert" className="runview__warn">
           No se pudieron leer las pruebas: {overviewError}
         </p>
@@ -346,7 +348,12 @@ export default function StrategyRunView({
           </h4>
         </div>
 
-        {state.kind === 'loading' && (
+        {unknownToGate && (
+          <p className="runview__empty" data-testid="run-empty">
+            Esta estrategia no tiene pruebas guardadas.
+          </p>
+        )}
+        {state.kind === 'loading' && overviewError === null && (
           <p className="runview__empty">Cargando la última prueba…</p>
         )}
         {state.kind === 'empty' && (
