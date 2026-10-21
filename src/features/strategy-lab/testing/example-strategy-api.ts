@@ -436,15 +436,55 @@ export function exampleStrategyApi(
       events.push({ id, version, state, reason: 'manual', known_at: now() })
       return { ...entry(row), gates }
     },
+    async deletePreview(id) {
+      const rows = versions.filter((row) => row.spec.id === id)
+      if (rows.length === 0)
+        throw new StrategyApiError('not_found', 'No existe la estrategia.', 404)
+      return {
+        id,
+        name: rows[rows.length - 1].spec.name,
+        state: stateOf(id, rows[rows.length - 1].spec.version),
+        versions: rows.map((row) => ({
+          version: row.spec.version,
+          state: stateOf(id, row.spec.version),
+        })),
+        active_ms: 3 * 86_400_000 + 4 * 3_600_000,
+        created_at: 1_790_000_000_000,
+        forward_trades: 12,
+        forward_net_usd: -3.5,
+        gate_runs: 2,
+        exam: { taken: false },
+        ledger_kept: false,
+        warnings: [],
+        blocked: false,
+      }
+    },
     async deleteStrategy(id, confirm) {
-      if (confirm !== id)
+      const name = versions.filter((row) => row.spec.id === id).at(-1)
+        ?.spec.name
+      if (confirm !== id && confirm !== name)
         throw new StrategyApiError(
           'confirmation_required',
-          'Escribí el id de la estrategia para borrarla.',
+          'Escribí el nombre de la estrategia para borrarla.',
           409,
         )
       for (let index = versions.length - 1; index >= 0; index -= 1)
         if (versions[index].spec.id === id) versions.splice(index, 1)
+      return {
+        purge_id: 'ejemplo',
+        state: 'running',
+        consumers: { forward: 'pending' },
+      }
+    },
+    async purgeStatus() {
+      return {
+        purge_id: 'ejemplo',
+        state: 'done',
+        consumers: { forward: 'done' },
+      }
+    },
+    async gatePassed() {
+      return false
     },
   }
 }

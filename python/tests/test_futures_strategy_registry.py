@@ -83,14 +83,18 @@ class RegistryTests(unittest.TestCase):
         self.registry.close()
         shutil.rmtree(self.dir)
 
-    def test_seed_registers_every_shipped_spec_as_active_once(self):
+    def test_seed_registers_every_shipped_spec_as_draft_once(self):
         self.registry.seed(SPECS)
         entries = {e["id"]: e for e in self.registry.list()}
         self.assertEqual(set(entries), set(SPECS))
-        self.assertTrue(all(e["state"] == "active" and e["version"] == 1 for e in entries.values()))
-        self.assertEqual(set(self.registry.active_specs(0)), set(SPECS))
+        self.assertTrue(all(e["state"] == "draft" and e["version"] == 1 for e in entries.values()))
+        self.assertEqual(self.registry.active_specs(10**15), {})
+
+    def _activate(self, strategy_id):
+        self.registry.set_state(strategy_id, 1, "active", "test", skip_gates=True)
 
     def test_modify_appends_a_version_and_keeps_the_previous_one_active(self):
+        self._activate(C25_ID)
         spec = copy.deepcopy(SPECS[C25_ID])
         spec["params"]["rsi_long_min"] = "40"
         saved = self.registry.save(spec, "modify")
@@ -100,6 +104,7 @@ class RegistryTests(unittest.TestCase):
         self.assertEqual(self.registry.active_specs(10**15)[C25_ID]["version"], 1)
 
     def test_a_frozen_strategy_can_be_edited_but_a_later_version_is_not_activated(self):
+        self._activate(C25_ID)
         spec = copy.deepcopy(SPECS[C25_ID])
         spec["params"]["rsi_long_min"] = "40"
         saved = self.registry.save(spec, "modify")
@@ -159,7 +164,7 @@ class RegistryTests(unittest.TestCase):
         found = forward_candidates(self.registry_path)
         self.assertEqual(found[saved["id"]]["state"], "active")
         self.assertGreater(found[saved["id"]]["active_since_ms"], 0)
-        self.assertEqual(found["c29-momentum-perp-v1"]["active_since_ms"], 0)
+        self.assertEqual(found["c29-momentum-perp-v1"]["state"], "draft")
         self.registry.set_state(saved["id"], 1, "retired")
         self.assertEqual(forward_candidates(self.registry_path)[saved["id"]]["state"], "retired")
         self.assertIsNone(forward_candidates(self.registry_path + ".missing"))
@@ -237,6 +242,7 @@ class RegistryTests(unittest.TestCase):
                 self.registry.db.execute("UPDATE strategy_versions SET origin='x'")
 
     def test_promotion_is_gated_by_backtest_and_out_of_sample_evidence(self):
+        self._activate(C27_ID)
         spec = copy.deepcopy(SPECS[C27_ID])
         spec["params"]["volume_multiplier"] = "1.1"
         saved = self.registry.save(spec, "modify")

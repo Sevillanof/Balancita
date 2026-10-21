@@ -166,6 +166,9 @@ describe('devChildSpecs', () => {
       ],
       '--loop-seconds',
       '3600',
+      // A newly activated strategy gets a cycle within a minute, not after the hour.
+      '--registry-poll-seconds',
+      '60',
     ])
     assert.equal(env.PYTHONPATH, '/repo/python')
     const strategiesArgs = byName.strategies.args
