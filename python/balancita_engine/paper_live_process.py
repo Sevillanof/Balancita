@@ -106,11 +106,11 @@ SYNTHETIC_CLI = False                   # the command line refuses the synthetic
 # alone (which anyone can write) never opens a real source. The capture has no mark in its tables, hence the path.
 AUTHORIZED_SESSIONS = {                 # {"BAL-DECISION-<n>-<n>": {"source_path": "/abs/futures-market.sqlite", "directory": "/abs/session", "decide_from_ms": int, "decide_until_ms": int}}
     # BAL-DECISION-184-07: Fran, 19-oct-2026 08:24Z, in the project chat: "Autorizo la sesión paper en vivo con Bitcoin". One paper session on
-    # PF_XBTUSD (shared simulated portfolio, 100 USD per trade, no real order) from 2026-10-21T11:25Z for 1 h (Fran, 21-oct: no full-day runs), on the wall clock, in a new folder because btc-1 and btc-2 stopped before operating, reading the
+    # PF_XBTUSD (shared simulated portfolio, 100 USD per trade, no real order) from 2026-10-21T21:00Z to 2026-10-22T06:00Z (Fran, 21-oct 20:36Z: "Si, arrancala hasta las 8am hora de madrid"), on the wall clock, in a new folder because btc-1 and btc-2 stopped before operating, reading the
     # live capture of the Mac read-only. config/paper-session-btc-1.json is the configuration this entry belongs to.
     "BAL-DECISION-184-07": {"source_path": "/Users/franco.sevillano/balancita-data.noindex/dev-live/futures-market.sqlite",
-                            "directory": "/Users/franco.sevillano/balancita-data.noindex/paper-session-btc-5",
-                            "decide_from_ms": 1792591200000, "decide_until_ms": 1792594800000},
+                            "directory": "/Users/franco.sevillano/balancita-data.noindex/paper-session-btc-6",
+                            "decide_from_ms": 1792616400000, "decide_until_ms": 1792648800000},
 }
 WALL_CLOCK_GATE = True                   # ON since BAL-DECISION-184-07 (the same written authorization). Only a reviewed change of this constant opens or closes the wall clock
 FRESH_MS = 600_000                               # the newest warm-up candle may be this far from the first decision
