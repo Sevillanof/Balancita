@@ -132,8 +132,21 @@ class TestWallClockIsOffButReady(Base):
         self.assertEqual(self.run_main([t[0], t[1], t[0]]), LP.EXIT_HALTED)
         self.assertIn("clock_regression", self.read(LP.REPORT_FILE)["halted"])
         self.setUp()
-        self.assertEqual(self.run_main([t[0], t[0] + GUARD["max_forward_jump_ms"] + 1]), LP.EXIT_HALTED)
+        self.assertEqual(self.run_main([t[0], t[0] + 10 * GUARD["max_forward_jump_ms"]]), LP.EXIT_HALTED)      # well beyond the bound: the real seconds the step takes are discounted
         self.assertIn("clock_jump", self.read(LP.REPORT_FILE)["halted"])
+
+    def test_the_wall_clock_runs_hand_the_real_monotonic_clock_to_the_supervisor_and_the_simulated_ones_do_not(self):
+        seen = []
+        real = LP.Supervisor
+
+        class Spy(real):
+            def __init__(self, *args, **kw):
+                seen.append(kw.get("monotonic"))
+                super().__init__(*args, **kw)
+
+        with mock.patch.object(LP, "Supervisor", Spy):
+            self.run_main([DECIDE_FROM + i * STEP for i in range(6)])
+        self.assertEqual(seen, [LP.time.monotonic])
 
     def test_both_clocks_at_once_are_refused(self):
         self.assertEqual(self.run_main([DECIDE_FROM], extra=("--clock-from-ms", "0")), LP.EXIT_REFUSED)
@@ -219,6 +232,27 @@ class TestClockGuard(Base):
         _, code = self.go([t, t + GUARD["max_forward_jump_ms"], t + GUARD["max_forward_jump_ms"]], "edge")
         self.assertEqual(code, LP.EXIT_OK)
         self.assertEqual(self.read(LP.REPORT_FILE)["clock"]["events"], [])
+
+    def test_a_long_step_is_not_a_jump_but_a_wall_clock_that_moved_by_itself_is(self):
+        """The first real step reads the whole history and takes minutes: the wall clock moves by the step's own time. The process
+        measures its own time (monotonic) and only what the wall clock moved beyond that counts (the first real run, 21-oct)."""
+        t = DECIDE_FROM
+        jump = GUARD["max_forward_jump_ms"] * 3
+        spent = iter([0.0, jump / 1000.0, jump / 1000.0 + 1.0])                       # the process itself spent the whole `jump` between two checks
+        directory = os.path.join(self.root, "slow")
+        self.directory = directory
+        supervisor = self.supervisor(Scripted([t, t + jump, t + jump + 1000]), clock_guard=GUARD)
+        supervisor.monotonic, supervisor.wall_time = (lambda: next(spent)), (lambda: 123)
+        supervisor.start()
+        self.assertEqual(supervisor.run(max_steps=3), LP.EXIT_OK)
+        self.assertEqual(self.read(LP.REPORT_FILE)["clock"]["events"], [])
+        still = iter([0.0, 1.0])                                                       # the wall clock moved `jump` and the process spent 1 s
+        self.directory = os.path.join(self.root, "moved")
+        supervisor = self.supervisor(Scripted([t, t + jump]), clock_guard=GUARD)
+        supervisor.monotonic, supervisor.wall_time = (lambda: next(still)), (lambda: 123)
+        supervisor.start()
+        self.assertEqual(supervisor.run(max_steps=3), LP.EXIT_HALTED)
+        self.assertIn("clock_jump", self.read(LP.REPORT_FILE)["halted"])
 
     def test_the_wall_time_changes_neither_the_decisions_nor_the_digests(self):
         t = [DECIDE_FROM + i * STEP for i in range(4)]
