@@ -2,7 +2,6 @@ import { render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 import StrategyDetailView from './StrategyDetailView.tsx'
-import { exampleStrategyApi } from '../testing/example-strategy-api.ts'
 import StrategyLab from './StrategyLab.tsx'
 import { exampleInventory } from '../testing/inventory-fixture.ts'
 import { syntheticCandles } from '../testing/synthetic-candles.ts'
@@ -272,8 +271,8 @@ describe('StrategyDetailView (datos de ejemplo)', () => {
   })
 })
 
-describe('StrategyLab opens the detail from the strategies page', () => {
-  it('shows the detail beside the list and switches strategy', async () => {
+describe('StrategyLab opens on the strategies screen', () => {
+  it('lists every strategy by name and shows the chosen one beside the list', async () => {
     render(
       <StrategyLab
         loadCandles={() =>
@@ -284,45 +283,12 @@ describe('StrategyLab opens the detail from the strategies page', () => {
       />,
     )
     await userEvent.click(
-      await screen.findByRole('button', { name: 'Ver X2 Sin ventaja' }),
+      await screen.findByRole('button', { name: 'X2 Sin ventaja' }),
     )
-    const detail = await screen.findByTestId('strategy-detail')
-    expect(detail).toBeVisible()
-    expect(detail).toHaveAccessibleName('Detalle de X2 Sin ventaja')
+    expect(await screen.findByTestId('run-view')).toHaveAccessibleName(
+      'Última prueba de X2 Sin ventaja',
+    )
     expect(screen.queryByRole('tablist')).toBeNull()
-    expect(
-      screen.getByRole('heading', { name: 'Un libro paper por estrategia' }),
-    ).toBeVisible()
-  })
-
-  it('opens the laboratory from Nueva estrategia and comes back', async () => {
-    const candles = syntheticCandles()
-    const off = { status: 'off' as const, reason: 'off', products: [] }
-    render(
-      <StrategyLab
-        loadCandles={() => Promise.resolve({ source: 'live', candles })}
-        connect={() =>
-          Promise.resolve({
-            ...exampleStrategyApi(candles),
-            inventory: api.inventory,
-          })
-        }
-        loadQwen={() => Promise.resolve(off)}
-        loadKronos={() => Promise.resolve(off)}
-        loadActivity={() => Promise.resolve(report([]))}
-      />,
-    )
-    await userEvent.click(
-      await screen.findByRole('button', { name: 'Nueva estrategia' }),
-    )
-    expect(await screen.findByRole('dialog')).toBeVisible()
-    expect(screen.getByRole('heading', { name: 'Laboratorio' })).toBeVisible()
-    await userEvent.keyboard('{Escape}')
-    await userEvent.click(screen.getByRole('button', { name: '← Estrategias' }))
-    expect(
-      await screen.findByRole('heading', {
-        name: 'Un libro paper por estrategia',
-      }),
-    ).toBeVisible()
+    expect(screen.queryByText(/Nueva estrategia/)).toBeNull()
   })
 })
