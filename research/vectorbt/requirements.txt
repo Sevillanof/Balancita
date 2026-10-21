@@ -1,0 +1,4 @@
+# Dependencias SOLO del laboratorio (entorno .venv-vectorbt, Python 3.12). El motor de Balancita no las usa.
+vectorbt==1.2.0
+pyarrow
+pytest

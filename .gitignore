@@ -46,3 +46,7 @@ __pycache__/
 
 # Strategy gate (runs, reports, candle cache, locks)
 data/strategy-gate/
+
+# Laboratorio VectorBT
+.venv-vectorbt/
+data/research-vectorbt/
