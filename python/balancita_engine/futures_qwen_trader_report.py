@@ -42,10 +42,12 @@ def load(db_path):
                 "bin": r["time_bin"], "fold": r["fold"], "wakes": r["wakes"], "seconds": r["seconds"],
                 "closes": list(closes)}
         data["trades"] = [dict(r) for r in pdb.db.execute("SELECT * FROM trades ORDER BY exit_ms, entry_ms")]
+        present = {r[1] for r in pdb.db.execute("PRAGMA table_info(decisions)")}
+        lean = "".join(", " + c for c in qt.LEAN_COLUMNS if c in present)      # v3.1 columns (absent in older bases)
         data["decisions"] = [dict(r) for r in pdb.db.execute(
             "SELECT block_id, seq, t_ms, kind, product, fold, model_action, p_action, action, override, reason, "
             "orders_json, reason_json, outcome_json, net_bp_now, latency_ms, wake_json, prompt_version, state_hash, state_text, "
-            "position_json, trade_no FROM decisions")]
+            "position_json, trade_no" + lean + " FROM decisions")]
         data["calls"] = dict(pdb.db.execute("SELECT COUNT(*) AS n, AVG(latency_ms) AS mean_ms FROM calls").fetchone())
         data["runs"] = [dict(r) for r in pdb.db.execute("SELECT * FROM runs ORDER BY id")]
         return data
@@ -173,6 +175,95 @@ def _hm(minutes):
 MAIN_HEADER = ["Operaciones", "Por día", "Acierto", "Promedio por operación", "Resultado total", "Factor de beneficio",
                "Caída máxima", "Duración media", "Cerró Qwen", "Cerró el stop", "Cerró el límite de 24 h",
                "Cerró el fin del bloque"]
+
+
+def main_header(cfg):
+    """``MAIN_HEADER`` with the time limit of this version (v3.1: 4 h; v2 / v3 have none and the column stays at 0)."""
+    hold = (cfg.get("guardrails") or {}).get("max_hold_min")
+    hours = 24 if hold is None else hold / 60.0
+    return [h.replace("24 h", "{} h".format(_es(hours, 0))) for h in MAIN_HEADER]
+
+
+# --------------------------------------------------------------------------- v3.1: entry by lean
+
+LEAN_BANDS = ((-1.01, -0.3), (-0.3, -0.15), (-0.15, -0.05), (-0.05, 0.05), (0.05, 0.15), (0.15, 0.3), (0.3, 1.01))
+CLOSED_BY_LABEL = {"qwen": "Qwen la cerró", "stop": "Stop (precio en contra)", "tiempo": "Límite de tiempo",
+                   "fin_de_bloque": "Fin del bloque"}
+
+
+def _band_label(lo, hi):
+    if lo < -1:
+        return "menos de {}".format(_es(hi, 2, True))
+    if hi > 1:
+        return "{} o más".format(_es(lo, 2, True))
+    return "{} a {}".format(_es(lo, 2, True), _es(hi, 2, True))
+
+
+def lean_summary(decisions, trades, cfg):
+    """v3.1 numbers: the distribution of ``lean_num`` over the flat wakes, the habit, the entries per side and the closes by
+    reason with their net result. Pure."""
+    flat = [d for d in decisions if d["kind"] == "flat" and d.get("lean_num") is not None]
+    entry_lean = float(cfg.get("entry_lean") or 0.0)
+    bands = [{"label": _band_label(lo, hi), "n": sum(1 for d in flat if lo <= d["lean_num"] < hi)} for lo, hi in LEAN_BANDS]
+    out = {"n": len(flat), "bands": bands, "entry_lean": entry_lean,
+           "mean_lean_num": statistics.fmean(d["lean_num"] for d in flat) if flat else None,
+           "mean_abs_lean_num": statistics.fmean(abs(d["lean_num"]) for d in flat) if flat else None,
+           "mean_habit": statistics.fmean(d["habit"] for d in flat) if flat else None,
+           "mean_abs_habit": statistics.fmean(abs(d["habit"]) for d in flat) if flat else None,
+           "entered": sum(1 for d in flat if d["action"] in ("LARGO", "CORTO")),
+           "unanswered": sum(1 for d in decisions if d["kind"] == "flat" and d.get("lean_num") is None),
+           "sides": {s: sum(1 for t in trades if t["side"] == s) for s in ("LONG", "SHORT")}, "closes": []}
+    for how in qt.CLOSED_BY:
+        sub = [t for t in trades if t["closed_by"] == how]
+        if not sub:
+            out["closes"].append({"closed_by": how, "n": 0})
+            continue
+        values = [t["net_bp"] for t in sub]
+        out["closes"].append({"closed_by": how, "n": len(sub), "hit": sum(1 for v in values if v > 0) / len(sub),
+                              "mean_bp": statistics.fmean(values), "total_bp": sum(values),
+                              "hold_min": statistics.fmean(t["hold_min"] for t in sub)})
+    return out
+
+
+def lean_lines(decisions, trades, cfg):
+    """The «Entrada por inclinación» section (only for a base in ``entry_mode`` lean)."""
+    if qt.entry_mode_of(cfg) != "lean":
+        return []
+    s = lean_summary(decisions, trades, cfg)
+    guard = cfg["guardrails"]
+    lines = ["", "## Entrada por inclinación", "",
+             "En esta versión Qwen no elige la entrada con una letra. En cada despertar sin posición se le pregunta dos veces: "
+             "con los números reales y con los números dados vuelta (el espejo). La **inclinación** es la probabilidad de "
+             "LARGO menos la de CORTO; la que **viene de los números** es la mitad de la diferencia entre la real y la del "
+             "espejo, y el **hábito** es la mitad de la suma (lo que diría igual aunque el mercado estuviera al revés). Se "
+             "entra LARGO si la que viene de los números llega a {u}, CORTO si baja de -{u}; si no, se espera.".format(
+                 u=_es(s["entry_lean"], 2)), ""]
+    if not s["n"]:
+        return lines + ["Todavía no hay despertares sin posición con las dos preguntas contestadas.", ""]
+    lines += ["**Distribución de la inclinación que viene de los números** ({} despertares sin posición{})".format(
+        s["n"], "" if not s["unanswered"] else "; {} sin respuesta, no cuentan".format(s["unanswered"])), ""]
+    lines += _table(["Inclinación de los números", "Despertares", "Parte"],
+                    [[b["label"], b["n"], _share(b["n"] / s["n"])] for b in s["bands"]])
+    lines += ["", "- Promedio {} (en valor absoluto {}); hábito promedio {} (en valor absoluto {}).".format(
+        _es(s["mean_lean_num"], 3, True), _es(s["mean_abs_lean_num"], 3), _es(s["mean_habit"], 3, True),
+        _es(s["mean_abs_habit"], 3)),
+        "- Entró en {} de los {} despertares ({}): **{} largas y {} cortas**.".format(
+            s["entered"], s["n"], _share(s["entered"] / s["n"]), s["sides"]["LONG"], s["sides"]["SHORT"]), ""]
+    lines += ["**Cierres por motivo** (plan fijo: stop a {} veces la volatilidad diaria, entre {} % y {} %; cierre automático a "
+              "las {} h; Qwen puede cerrar antes)".format(
+                  _es(guard["stop_sigma_24h"], 1) if guard["stop_sigma_24h"] is not None else "n/d",
+                  _es((guard["min_stop_pct"] or 0) * 100, 1), _es((guard["max_stop_pct"] or 0) * 100, 1),
+                  _es(guard["max_hold_min"] / 60.0, 0) if guard["max_hold_min"] is not None else "n/d"), ""]
+    rows = []
+    for c in s["closes"]:
+        if not c["n"]:
+            rows.append([CLOSED_BY_LABEL[c["closed_by"]], 0, "n/d", "n/d", "n/d", "n/d"])
+            continue
+        rows.append([CLOSED_BY_LABEL[c["closed_by"]], c["n"], _share(c["hit"]), _pct_bp(c["mean_bp"], 2, True),
+                     _usd(c["total_bp"]), _hm(c["hold_min"])])
+    lines += _table(["Quién cerró", "Operaciones", "Acierto", "Promedio por operación", "Resultado neto", "Duración media"],
+                    rows)
+    return lines + [""]
 
 
 def _main_row(label, s):
@@ -690,7 +781,7 @@ def _verdict_line(r, rules):
         if r["verdict_note"] else "")
 
 
-def _points(r, sel, ov, coverage_text, cal_s):
+def _points(r, sel, ov, coverage_text, cal_s, label="Umbral de entrada"):
     points = []
     if ov["n"] == 0:
         return ["En el tramo de validación no hubo ninguna operación con el umbral elegido ({}), así que no hay nada que "
@@ -703,7 +794,7 @@ def _points(r, sel, ov, coverage_text, cal_s):
         pc = r["percentile"]
         points.append("Le fue {} que entrar al azar en los mismos bloques ({} que el {} % de los sorteos).".format(
             "mejor" if pc >= 50 else "peor", "mejor" if pc >= 50 else "peor", _es(pc if pc >= 50 else 100 - pc, 0)))
-    points.append("Umbral de entrada elegido en calibración: **{}** ({}).".format(_es(sel["threshold"], 2), sel["reason"]))
+    points.append("{} elegido en calibración: **{}** ({}).".format(label, _es(sel["threshold"], 2), sel["reason"]))
     points.append(coverage_text)
     if ov["n"] < 100:
         points.append("Son pocas operaciones para sacar conclusiones firmes.")
@@ -783,7 +874,10 @@ def render(data, cfg, history=None, other=None, same_state=None, db_path=None):
              "<sub>`{}` · prompt `{}` v{} · práctica sobre bloques al azar, nunca desde el {}</sub>".format(
                  qt.SCHEMA, cfg["prompt"]["name"], cfg["prompt"]["version"],
                  qt.stamp(meta["holdout_ms"]) if meta.get("holdout_ms") else "corte"), "", _verdict_line(r, rules), ""]
-    lines += ["### En pocas palabras", ""] + ["- " + p for p in _points(r, sel, ov, coverage_text, None)] + [""]
+    lean_mode = qt.entry_mode_of(cfg) == "lean"
+    thr_label = "Umbral de inclinación" if lean_mode else "Umbral de entrada"
+    header = main_header(cfg)
+    lines += ["### En pocas palabras", ""] + ["- " + p for p in _points(r, sel, ov, coverage_text, None, thr_label)] + [""]
     xrows = insights.position_rows(data, cfg, history)
     seed_i = meta.get("seed", cfg["practice"]["seed"])
     extra = []
@@ -812,7 +906,7 @@ def render(data, cfg, history=None, other=None, same_state=None, db_path=None):
         sub = [t for t in chosen if t["fold"] == fold]
         rows.append(_main_row(label, stats_row(sub, _days(blocks, fold))))
     rows.append(_main_row("**Todo**", stats_row(chosen, days_total)))
-    lines += _table([""] + MAIN_HEADER, rows)
+    lines += _table([""] + header, rows)
     lines += ["", "### Por producto", ""]
     prows = []
     for p in products:
@@ -821,10 +915,11 @@ def render(data, cfg, history=None, other=None, same_state=None, db_path=None):
             prows.append(_main_row("{} · {}".format(p, label), stats_row(sub, _days(blocks, fold, p))))
         sub = [t for t in chosen if t["product"] == p]
         prows.append(_main_row("**{} · todo**".format(p), stats_row(sub, _days(blocks, None, p))))
-    lines += _table(["Producto"] + MAIN_HEADER, prows)
+    lines += _table(["Producto"] + header, prows)
     if sum(1 for t in chosen if t["closed_by"] == "fin_de_bloque"):
         lines += ["", "> Las operaciones abiertas al terminar un bloque se cierran al último precio, con costos (no las cerró "
                   "Qwen): se cuentan en «Cerró el fin del bloque»."]
+    lines += lean_lines(data["decisions"], chosen, cfg)
 
     lines += ["", "## Comparación con otras opciones, en los mismos bloques", "",
               "Sobre las operaciones de validación. Todas las cifras son el promedio por operación, sin funding para "
@@ -892,7 +987,12 @@ def render(data, cfg, history=None, other=None, same_state=None, db_path=None):
     lines += reason_diversity_lines(data["decisions"])
     lines += throughput_lines(data, cfg)
 
-    lines += ["", "## Umbral de entrada", "",
+    lines += ["", "## " + thr_label, "",
+              ("La práctica entra con la inclinación mínima de la config ({}); aquí se prueba una grilla fijada de antemano "
+               "sobre la inclinación que vino de los números en cada entrada, en el tramo de calibración, y se elige el valor "
+               "con mayor resultado total (con al menos {} operaciones). El tramo de validación no participa en la elección."
+               .format(_es(float(cfg.get("entry_lean") or 0.0), 2), cfg["threshold_rule"]["min_calibration_trades"]))
+              if lean_mode else
               "Se prueba una grilla fijada de antemano en el tramo de calibración y se elige el umbral con mayor resultado "
               "total (con al menos {} operaciones). El tramo de validación no participa en la elección.".format(
                   cfg["threshold_rule"]["min_calibration_trades"]), ""]
@@ -918,9 +1018,17 @@ def render(data, cfg, history=None, other=None, same_state=None, db_path=None):
               "- **Bloque**: un tramo continuo de 3 días de historia que Qwen opera de principio a fin, empezando sin posición.",
               "- **Calibración / validación**: el 60 % más viejo de los bloques sirve para elegir el umbral; el 40 % más "
               "nuevo, para el veredicto.",
-              "- **Umbral de entrada**: la probabilidad mínima que Qwen debe darle a LARGO o CORTO para que se abra la "
-              "posición.",
-              "- **Stop**: pérdida máxima automática (1,5 veces la volatilidad diaria); Qwen no puede cambiarla.",
+              ("- **Umbral de inclinación**: la inclinación mínima que debe venir de los números (real menos espejo, a la "
+               "mitad) para que se abra la posición; el lado lo da su signo." if lean_mode else
+               "- **Umbral de entrada**: la probabilidad mínima que Qwen debe darle a LARGO o CORTO para que se abra la "
+               "posición."),
+              ("- **Stop**: pérdida máxima automática ({} veces la volatilidad diaria{}); Qwen no puede cambiarla.".format(
+                  _es(cfg["guardrails"]["stop_sigma_24h"], 1),
+                  "" if cfg["guardrails"]["max_stop_pct"] is None or cfg["guardrails"]["max_stop_pct"] >= 0.1 else
+                  ", entre {} % y {} %".format(_es(cfg["guardrails"]["min_stop_pct"] * 100, 1),
+                                               _es(cfg["guardrails"]["max_stop_pct"] * 100, 1)))
+               if cfg["guardrails"]["stop_sigma_24h"] is not None else
+               "- **Stop**: esta versión no tiene stop automático; la posición solo la cierra Qwen o el fin del bloque."),
               "- **Factor de beneficio**: lo ganado en las operaciones buenas dividido por lo perdido en las malas.",
               "- **Caída máxima**: la mayor pérdida acumulada desde un pico hasta el punto más bajo siguiente.",
               "- **Entradas al azar**: operar lo mismo (lado, duración, bloque) pero en momentos elegidos a la suerte."] + insights.GLOSSARY + [""]

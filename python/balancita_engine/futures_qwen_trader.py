@@ -32,6 +32,13 @@ Commands (``python -m balancita_engine.futures_qwen_trader <command> --help``)
     report     Spanish markdown (``futures_qwen_trader_report``); no model
     export     one JSON line per decision with state, answer and realized outcome (learning data)
 
+v3.1 (``config/qwen-trader-v3.1.json``, ``entry_mode`` = ``lean``)
+    Flat, Qwen is asked the same question about the real STATE and about the mirrored one (always, in three cyclic option
+    orders so every option takes every letter). ``lean`` = p(LARGO) - p(CORTO) of each; what comes from the numbers is
+    ``lean_num = (lean - lean_m) / 2`` and the habit is ``(lean + lean_m) / 2``. LARGO when ``lean_num >= entry_lean``,
+    CORTO when ``<= -entry_lean``, otherwise wait: no 0.5 threshold, no comparison of chosen letters. Exits follow a fixed
+    plan (``guardrails``: stop at 1 daily sigma, clamped; automatic close at 4 h) and Qwen may still close earlier.
+
 The holdout (``holdout_from`` of ``config/strategy-gate.json``) is NEVER read: the history layer raises ``HoldoutError``
 for any request that reaches it. The model only runs on loopback (``llm.check_loopback_url``).
 """
@@ -67,14 +74,16 @@ CONFIG_PATH = os.path.join(ROOT, "config", "qwen-trader.json")
 CONFIG_PATH_V2 = os.path.join(ROOT, "config", "qwen-trader-v2.json")
 CONFIG_PATH_V21 = os.path.join(ROOT, "config", "qwen-trader-v2.1.json")
 CONFIG_PATH_V3 = os.path.join(ROOT, "config", "qwen-trader-v3.json")
+CONFIG_PATH_V31 = os.path.join(ROOT, "config", "qwen-trader-v3.1.json")
 GATE_CONFIG_PATH = os.path.join(ROOT, "config", "strategy-gate.json")
 DATA_DIR = os.path.join(ROOT, "data", "qwen-trader")
 DEFAULT_DB = os.path.join(DATA_DIR, "practice.sqlite")
 DEFAULT_DB_V2 = os.path.join(DATA_DIR, "practice-v2.sqlite")
 DEFAULT_DB_V21 = os.path.join(DATA_DIR, "practice-v2.1.sqlite")
 DEFAULT_DB_V3 = os.path.join(DATA_DIR, "practice-v3.sqlite")
+DEFAULT_DB_V31 = os.path.join(DATA_DIR, "practice-v3.1.sqlite")
 DEFAULT_EXAM_DB_V3 = os.path.join(DATA_DIR, "exam-v3.sqlite")
-VERSIONS = ("1", "2", "2.1", "3")
+VERSIONS = ("1", "2", "2.1", "3", "3.1")
 DEFAULT_CACHE = os.path.join(DATA_DIR, "cache")
 DEFAULT_URL = "http://127.0.0.1:{}".format(llm.DEFAULT_LLAMA_PORT)
 
@@ -86,6 +95,8 @@ FLAT_ACTIONS = ("LARGO", "CORTO", "ESPERAR")
 POSITION_ACTIONS = ("MANTENER", "CERRAR")
 SAFE_FIRST = ("ESPERAR", "MANTENER")           # ties go to the inactive option
 CLOSED_BY = ("qwen", "stop", "tiempo", "fin_de_bloque")
+ENTRY_MODES = ("choice", "lean")                # choice: v1-v3 (chosen option + threshold [+ mirror]); lean: v3.1
+LEAN_COLUMNS = ("lean", "lean_m", "lean_num", "habit")   # v3.1 columns of ``decisions`` (only in v3.1 bases)
 
 WAKE_HOOKS = {}   # name -> callable(trader, t_ms) -> list of wake reasons. Extension point (strategy signals, news): empty today.
 
@@ -114,8 +125,8 @@ class DecisionError(Exception):
 
 
 def version_paths(version):
-    """``(config path, practice database)`` of a trader version. v1 stays exactly where it was; v2, v2.1 and v3 have their
-    own files."""
+    """``(config path, practice database)`` of a trader version. v1 stays exactly where it was; v2, v2.1, v3 and v3.1 have
+    their own files."""
     version = str(version)
     if version == "1":
         return CONFIG_PATH, DEFAULT_DB
@@ -125,7 +136,9 @@ def version_paths(version):
         return CONFIG_PATH_V21, DEFAULT_DB_V21
     if version == "3":
         return CONFIG_PATH_V3, DEFAULT_DB_V3
-    raise TraderError("versión desconocida: {!r} (1, 2, 2.1 o 3)".format(version))
+    if version == "3.1":
+        return CONFIG_PATH_V31, DEFAULT_DB_V31
+    raise TraderError("versión desconocida: {!r} (1, 2, 2.1, 3 o 3.1)".format(version))
 
 
 def load_config(path=None):
@@ -143,7 +156,10 @@ def config_hash(cfg):
     """Identity of everything that shapes a decision. ``entry_threshold`` is an OUTPUT of the report, not an input."""
     # ``runtime`` (concurrency, skipping the entry reason) only changes speed / what is stored, never an action: not identity.
     # ``exam`` and ``exam_lean`` (v3) only shape the ``exam`` command, which has its own identity (``futures_qwen_trader_exam``)
-    body = {k: v for k, v in cfg.items() if k not in ("entry_threshold", "note", "rules", "runtime", "exam", "exam_lean")}
+    # ``entry_lean_note`` (v3.1) is prose about where ``entry_lean`` comes from; ``entry_mode``, ``entry_lean``, the guardrails
+    # and ``state_variant`` ARE identity (v3.1 differs from v3 in them; v3 and v2.1 keep their hashes).
+    body = {k: v for k, v in cfg.items()
+            if k not in ("entry_threshold", "note", "rules", "runtime", "exam", "exam_lean", "entry_lean_note")}
     body["practice"] = {k: v for k, v in cfg["practice"].items() if k != "target_blocks"}   # how many blocks is not identity
     raw = json.dumps({"config": body, "state": STATE_VERSION, "costs": COST_MODEL_VERSION}, sort_keys=True)
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
@@ -191,6 +207,23 @@ def runtime_of(cfg):
     runtime = cfg.get("runtime") or {}
     return {"concurrent_orders": bool(runtime.get("concurrent_orders")),
             "skip_entry_reason": bool(runtime.get("skip_entry_reason"))}
+
+
+def entry_mode_of(cfg):
+    """``choice`` (v1-v3: the chosen option, the threshold and, in v3, the mirror) or ``lean`` (v3.1)."""
+    mode = cfg.get("entry_mode", "choice")
+    if mode not in ENTRY_MODES:
+        raise TraderError("entry_mode desconocido: {!r} (choice o lean)".format(mode))
+    return mode
+
+
+def lean_split(real_probs, mirror_probs):
+    """v3.1: ``lean`` = p(LARGO) - p(CORTO) on the real STATE, ``lean_m`` the same on the mirrored one; ``lean_num`` =
+    (lean - lean_m) / 2 is what comes from the numbers (a reading that follows the signs), ``habit`` = (lean + lean_m) / 2
+    is what stays whatever the signs say (letter or side preference)."""
+    lean = real_probs.get("LARGO", 0.0) - real_probs.get("CORTO", 0.0)
+    lean_m = mirror_probs.get("LARGO", 0.0) - mirror_probs.get("CORTO", 0.0)
+    return {"lean": lean, "lean_m": lean_m, "lean_num": (lean - lean_m) / 2.0, "habit": (lean + lean_m) / 2.0}
 
 
 def es(value, places=2, sign=False):
@@ -514,6 +547,12 @@ class Trader:
         self.trade_seq = 0
         self.hooks = [WAKE_HOOKS[name] for name in cfg["wake"].get("hooks", [])]
         self.skip_entry_reason = runtime_of(cfg)["skip_entry_reason"]
+        self.entry_mode = entry_mode_of(cfg)
+        self.entry_lean = None
+        if self.entry_mode == "lean":
+            if cfg.get("entry_lean") is None:
+                raise TraderError("entry_mode lean sin entry_lean: la config debe fijar la inclinación mínima")
+            self.entry_lean = float(cfg["entry_lean"])
 
     # ---- data
 
@@ -537,6 +576,16 @@ class Trader:
 
     def _logret(self, bars):
         return self.lc[-1] - self.lc[-1 - bars]
+
+    def _stop_pct(self, sigma5=None):
+        """Stop distance (fraction of the price) the guardrails would set now: ``stop_sigma_24h`` x the daily sigma, clamped
+        to ``[min_stop_pct, max_stop_pct]``; ``None`` when the config has no stop (v2, v2.1, v3)."""
+        guard = self.cfg["guardrails"]
+        if guard["stop_sigma_24h"] is None:
+            return None
+        sigma5 = self._sigma5() if sigma5 is None else sigma5
+        stop_pct = guard["stop_sigma_24h"] * sigma5 * math.sqrt(H24)
+        return min(guard["max_stop_pct"], max(guard["min_stop_pct"], stop_pct))
 
     # ---- wake rules
 
@@ -673,10 +722,23 @@ class Trader:
         """v2 tail of the state: no stop, no time limit; the exit decision gets the after-cost result, the fee logic and the
         size of the moves to expect. Facts only, no hint about what to choose."""
         guard, last = self.cfg["guardrails"], self.c[-1]
-        lines.append("Reglas fijas que no podés cambiar: espera de {} min despues de cerrar; tamaño fijo de 100 USD; una sola "
-                     "posicion; sin limite de operaciones por dia. No hay stop ni limite de tiempo: la posicion solo se "
-                     "cierra cuando la cerras.".format(guard["cooldown_min"]))
         position = self.position
+        plan = self.cfg.get("state_variant", 1) >= 3 and (guard["max_hold_min"] is not None or guard["stop_sigma_24h"] is not None)
+        rules = "Reglas fijas que no podés cambiar: espera de {} min despues de cerrar; tamaño fijo de 100 USD; una sola " \
+                "posicion; sin limite de operaciones por dia. ".format(guard["cooldown_min"])
+        if not plan:
+            rules += "No hay stop ni limite de tiempo: la posicion solo se cierra cuando la cerras."
+        else:
+            # v3.1: the exit plan is fixed in the config and the model is told exactly that (the stop distance shown is the one
+            # a position opened now would get, or the one of the open position)
+            stop_pct = position.stop_pct if position is not None else self._stop_pct(sigma5)
+            parts = []
+            if guard["max_hold_min"] is not None:
+                parts.append("a las {} h".format(es(guard["max_hold_min"] / 60.0, 0)))
+            if stop_pct is not None:
+                parts.append("si el precio va {} % en contra (stop)".format(es(stop_pct * 100, 2)))
+            rules += "La posicion se cierra sola {}; podes cerrarla antes.".format(" o ".join(parts))
+        lines.append(rules)
         if position is None:
             lines.append("Posicion: ninguna.")
             return "\n".join(lines)
@@ -693,6 +755,15 @@ class Trader:
         lines.append("Movimiento tipico del precio esperable (segun la volatilidad actual): proxima 1h +-{} % | proximas "
                      "4h +-{} %. Movimiento a favor de la posicion desde que abriste, sin costos: {} %.".format(
                          es(sigma5 * math.sqrt(H1) * 100, 2), es(sigma5 * math.sqrt(H4) * 100, 2), es(captured, 2, True)))
+        if plan:
+            parts = []
+            if position.max_hold_ms is not None:
+                parts.append("Cierre automatico en {} si no la cerras antes.".format(
+                    _hm((position.entry_ms + position.max_hold_ms - t_ms) / MINUTE_MS)))
+            if position.stop_px is not None:
+                to_stop = (last - position.stop_px) / last if position.side == "LONG" else (position.stop_px - last) / last
+                parts.append("El stop esta a {} % del precio actual.".format(es(max(0.0, to_stop) * 100, 2)))
+            lines.append(" ".join(parts))
         return "\n".join(lines)
 
     # ---- feeding
@@ -765,10 +836,7 @@ class Trader:
     def _open(self, t_ms, side, probability, reason):
         guard = self.cfg["guardrails"]
         last = self.c[-1]
-        stop_pct = None                                  # v2: no stop (config guardrails.stop_sigma_24h is null)
-        if guard["stop_sigma_24h"] is not None:
-            stop_pct = guard["stop_sigma_24h"] * self._sigma5() * math.sqrt(H24)
-            stop_pct = min(guard["max_stop_pct"], max(guard["min_stop_pct"], stop_pct))
+        stop_pct = self._stop_pct()                      # None in v2 / v2.1 / v3 (guardrails.stop_sigma_24h is null)
         entry = entry_fill(D(repr(last)), side, self.product)
         self.trade_seq += 1
         self.position = Position(
@@ -792,6 +860,28 @@ class Trader:
             return False
         return True
 
+    def _lean_entry(self, t_ms, reasons, state, question, event):
+        """v3.1: asks the real STATE and the mirrored one (always), splits the lean into numbers and habit and returns the
+        side to open (``LARGO`` / ``CORTO``) or ``None``. The chosen letters are never compared; there is no 0.5 threshold."""
+        try:
+            real = self.decider.ask(self.key, t_ms, "action", question, state)
+        except DecisionError:
+            event["override"] = "sin_respuesta"
+            return None
+        event.update(answer=real, model_action=real["chosen"], p_action=real["probabilities"][real["chosen"]])
+        try:
+            mirror = self.decider.ask(self.key, t_ms, "mirror", question, self.state_text(t_ms, reasons, mirror=True))
+        except DecisionError:
+            event["override"] = "espejo_sin_respuesta"
+            return None
+        event.update(mirror_action=mirror["chosen"], mirror_p=mirror["probabilities"][mirror["chosen"]])
+        event.update(lean_split(real["probabilities"], mirror["probabilities"]))
+        if event["lean_num"] >= self.entry_lean:
+            return "LARGO"
+        if event["lean_num"] <= -self.entry_lean:
+            return "CORTO"
+        return None
+
     def _decide(self, t_ms, reasons):
         self.last_call_ms = t_ms
         in_position = self.position is not None
@@ -806,30 +896,38 @@ class Trader:
                              self.notional)["net_bp"]
         event = {"type": "decision", "kind": kind, "t_ms": t_ms, "wake": list(reasons), "state_text": state,
                  "state_hash": llm.text_hash(state)[:16], "position": snapshot, "net_bp_now": net_now,
-                 "threshold": None if in_position else self.threshold, "answer": None, "model_action": None,
-                 "p_action": None, "mirror_action": None, "mirror_p": None,
+                 "threshold": None if in_position else (self.entry_lean if self.entry_mode == "lean" else self.threshold),
+                 "answer": None, "model_action": None, "p_action": None, "mirror_action": None, "mirror_p": None,
+                 "lean": None, "lean_m": None, "lean_num": None, "habit": None,
                  "action": "MANTENER" if in_position else "ESPERAR", "override": None,
                  "reason": None, "reason_answer": None, "trade_no": self.position.trade_no if in_position else None}
-        try:
-            answer = self.decider.ask(self.key, t_ms, "action", question, state)
-        except DecisionError:
-            event["override"] = "sin_respuesta"
-            return [event]
-        event.update(answer=answer, model_action=answer["chosen"], p_action=answer["probabilities"][answer["chosen"]])
-        action = answer["chosen"]
-        wants_move = action in ("LARGO", "CORTO", "CERRAR")
-        if wants_move and not in_position and event["p_action"] < self.threshold:
-            event["override"] = "bajo_umbral"
-            wants_move = False
-        if wants_move and not in_position and self.cfg.get("mirror"):
-            wants_move = self._passes_mirror(t_ms, reasons, action, event)
-        if not wants_move:
-            return [event]
+        if not in_position and self.entry_mode == "lean":
+            action = self._lean_entry(t_ms, reasons, state, question, event)
+            if action is None:
+                return [event]
+            entry_p = abs(event["lean_num"])             # v3.1: what is stored as entry_p is |lean_num|
+        else:
+            try:
+                answer = self.decider.ask(self.key, t_ms, "action", question, state)
+            except DecisionError:
+                event["override"] = "sin_respuesta"
+                return [event]
+            event.update(answer=answer, model_action=answer["chosen"], p_action=answer["probabilities"][answer["chosen"]])
+            action = answer["chosen"]
+            wants_move = action in ("LARGO", "CORTO", "CERRAR")
+            if wants_move and not in_position and event["p_action"] < self.threshold:
+                event["override"] = "bajo_umbral"
+                wants_move = False
+            if wants_move and not in_position and self.cfg.get("mirror"):
+                wants_move = self._passes_mirror(t_ms, reasons, action, event)
+            if not wants_move:
+                return [event]
+            entry_p = event["p_action"]
         reason = None
         if not in_position and self.skip_entry_reason:
             # ``runtime.skip_entry_reason``: the entry reason is degenerate (95 % «tendencia»), so it is not asked at all
             event.update(action=action, reason=None)
-            self._open(t_ms, "LONG" if action == "LARGO" else "SHORT", event["p_action"], None)
+            self._open(t_ms, "LONG" if action == "LARGO" else "SHORT", entry_p, None)
             event["trade_no"] = self.position.trade_no
             return [event]
         try:
@@ -843,7 +941,7 @@ class Trader:
         event.update(action=action, reason=reason)
         if in_position:
             return [event] + self._close(t_ms, self.c[-1], "strategy_exit", "qwen", reason)
-        self._open(t_ms, "LONG" if action == "LARGO" else "SHORT", event["p_action"], reason)
+        self._open(t_ms, "LONG" if action == "LARGO" else "SHORT", entry_p, reason)
         event["trade_no"] = self.position.trade_no
         return [event]
 
@@ -969,7 +1067,8 @@ CREATE TABLE IF NOT EXISTS decisions(
   fold TEXT NOT NULL, state_hash TEXT, state_text TEXT, wake_json TEXT, orders_json TEXT, probs_json TEXT,
   confidence REAL, model_action TEXT, p_action REAL, threshold REAL, action TEXT, override TEXT, reason TEXT,
   reason_json TEXT, latency_ms INTEGER, prompt_version INTEGER, prompt_hash TEXT, model TEXT, position_json TEXT,
-  net_bp_now REAL, trade_no INTEGER, outcome_json TEXT, PRIMARY KEY(block_id, seq));
+  net_bp_now REAL, trade_no INTEGER, outcome_json TEXT,
+  PRIMARY KEY(block_id, seq));
 CREATE TABLE IF NOT EXISTS trades(
   block_id TEXT NOT NULL, trade_no INTEGER NOT NULL, product TEXT NOT NULL, side TEXT NOT NULL, fold TEXT NOT NULL,
   time_bin INTEGER NOT NULL, entry_ms INTEGER NOT NULL, exit_ms INTEGER NOT NULL, entry_px REAL, exit_px REAL,
@@ -980,16 +1079,32 @@ CREATE TABLE IF NOT EXISTS trades(
 
 
 class PracticeDB:
-    """Single writer of the practice database (the ``practice`` command). Readers open it ``mode=ro``."""
+    """Single writer of the practice database (the ``practice`` command). Readers open it ``mode=ro``.
 
-    def __init__(self, path, readonly=False):
+    ``lean`` (v3.1 only) adds the lean columns to ``decisions``; any other version keeps the 27 original columns, so a base
+    of v2.1 / v3 (or an exam base) is never altered and the positional INSERT of those versions keeps working."""
+
+    def __init__(self, path, readonly=False, lean=False):
+        self.lean = bool(lean)
         if readonly:
             self.db = sqlite3.connect("file:{}?mode=ro".format(path), uri=True)
         else:
             os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
             self.db = sqlite3.connect(path)
             self.db.executescript(_SCHEMA_SQL)
+            self._migrate()
         self.db.row_factory = sqlite3.Row
+
+    def _migrate(self):
+        """v3.1 only: adds the lean columns to its ``decisions`` table (new bases are created without them). Does nothing
+        unless the base is opened for v3.1, so bases of other versions keep their 27 columns."""
+        if not self.lean:
+            return
+        present = {r[1] for r in self.db.execute("PRAGMA table_info(decisions)")}
+        with self.db:
+            for column in LEAN_COLUMNS:
+                if column not in present:
+                    self.db.execute("ALTER TABLE decisions ADD COLUMN {} REAL".format(column))
 
     def close(self):
         self.db.close()
@@ -1051,7 +1166,15 @@ class PracticeDB:
                 seq += 1
                 answer = ev.get("answer")
                 first = (answer or {}).get("orders") or [{}]
-                self.db.execute("INSERT INTO decisions VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", (
+                cols = ("block_id, seq, t_ms, kind, product, fold, state_hash, state_text, wake_json, orders_json, probs_json, "
+                        "confidence, model_action, p_action, threshold, action, override, reason, reason_json, latency_ms, "
+                        "prompt_version, prompt_hash, model, position_json, net_bp_now, trade_no, outcome_json")
+                extra = ()
+                if self.lean:
+                    cols += ", " + ", ".join(LEAN_COLUMNS)
+                    extra = tuple(ev.get(k) for k in LEAN_COLUMNS)
+                self.db.execute(
+                    "INSERT INTO decisions({}) VALUES({})".format(cols, ",".join("?" * (27 + len(extra)))), (
                     block["block_id"], seq, ev["t_ms"], ev["kind"], block["product"], block["fold"],
                     ev.get("state_hash"), ev.get("state_text"), json.dumps(ev.get("wake")),
                     json.dumps(first if answer else None), json.dumps(answer["probabilities"] if answer else None),
@@ -1060,7 +1183,7 @@ class PracticeDB:
                     json.dumps(ev.get("reason_answer")), answer["latency_ms"] if answer else None,
                     decisions_meta["prompt_version"], first[0].get("prompt_hash"), decisions_meta["model"],
                     json.dumps(ev.get("position")), ev.get("net_bp_now"), ev.get("trade_no"),
-                    json.dumps(ev.get("outcome"))))
+                    json.dumps(ev.get("outcome"))) + extra)
 
 
 # --------------------------------------------------------------------------- outcomes
@@ -1216,7 +1339,7 @@ def run_practice(history, db_path, provider, cfg, holdout_ms, *, max_minutes=55.
         cfg = dict(cfg, runtime=dict(cfg.get("runtime") or {}, **overrides))
     seed = cfg["practice"]["seed"] if seed is None else seed
     plan, fold_cut = block_plan(cfg, holdout_ms, seed=seed, blocks=blocks, block_days=block_days, from_date=from_date)
-    pdb = PracticeDB(db_path)
+    pdb = PracticeDB(db_path, lean=entry_mode_of(cfg) == "lean")
     try:
         check_identity(pdb, cfg, {
             "config_hash": config_hash(cfg), "seed": seed, "holdout_ms": holdout_ms, "fold_cut_ms": fold_cut,
@@ -1366,6 +1489,7 @@ def export_dataset(db_path, out_path, cfg=None, cache_dir=None):
                     "confidence": r["confidence"], "model_action": r["model_action"], "action": r["action"],
                     "p_action": r["p_action"], "entry_threshold": r["threshold"],
                     "guardrail": {"override": r["override"], "forced": r["kind"] == "guardrail"},
+                    "lean": {k: r[k] for k in LEAN_COLUMNS} if "lean_num" in r.keys() and r["lean_num"] is not None else None,
                     "reason": r["reason"], "reason_probabilities": (json.loads(r["reason_json"] or "null") or {}).get(
                         "probabilities"),
                     "position": snapshot, "net_bp_now": r["net_bp_now"], "exit_labels": label,
@@ -1399,8 +1523,9 @@ def _parser():
     def common(p, version_default="2", versions=VERSIONS):
         p.add_argument("--version", default=version_default, choices=versions,
                        help="trader version (default %(default)s): 1 = stop + 24 h limit, 2 = only Qwen (or the block end) "
-                            "closes, 2.1 = v2 with the fixed prompt text first (speed only), 3 = 2.1 plus the mirror test; "
-                            "each has its own config and practice database")
+                            "closes, 2.1 = v2 with the fixed prompt text first (speed only), 3 = 2.1 plus the mirror test, "
+                            "3.1 = entry by lean (real vs mirrored state), three option orders, stop + 4 h limit; each has "
+                            "its own config and practice database")
         p.add_argument("--config", default=None, help="default: the config of the version")
         p.add_argument("--db", default=None, help="practice database (default: practice.sqlite for v1, practice-v2.sqlite "
                                                   "for v2, in data/qwen-trader)")
@@ -1452,6 +1577,7 @@ def _parser():
     rp.add_argument("--out-v2", default=os.path.join(DATA_DIR, "informe-v2.md"), help="report of v2 (with v1 vs v2)")
     rp.add_argument("--out-v21", default=os.path.join(DATA_DIR, "informe-v2.1.md"), help="report of v2.1 (with v2 vs v2.1)")
     rp.add_argument("--out-v3", default=os.path.join(DATA_DIR, "informe-v3.md"), help="report of v3 (practice with the mirror)")
+    rp.add_argument("--out-v31", default=os.path.join(DATA_DIR, "informe-v3.1.md"), help="report of v3.1 (entry by lean)")
     ex = sub.add_parser("export", help="learning data: one JSON line per decision")
     common(ex)
     ex.add_argument("--out", default=os.path.join(DATA_DIR, "dataset.jsonl"))
@@ -1546,7 +1672,7 @@ def main(argv=None):
                     raise TraderError("no existe la base de la versión {}: {}".format(v, db))
                 text = build_report(db, load_config(args.config or config_path), args.cache_dir,
                                     baseline=base if v == "2" else None, prompt_baseline=same_state if v == "2.1" else None)
-                out = {"1": args.out, "2": args.out_v2, "2.1": args.out_v21, "3": args.out_v3}[v]
+                out = {"1": args.out, "2": args.out_v2, "2.1": args.out_v21, "3": args.out_v3, "3.1": args.out_v31}[v]
                 os.makedirs(os.path.dirname(os.path.abspath(out)), exist_ok=True)
                 with open(out, "w", encoding="utf-8") as handle:
                     handle.write(text)
