@@ -664,7 +664,10 @@ describe('observability health', () => {
       )
       writeForwardConfig(b, ['C30'], [])
       const report = createObservabilityHealth(optionsOf(b)).report()
-      const coverage = check(component(report, 'strategies'), 'forward_coverage')
+      const coverage = check(
+        component(report, 'strategies'),
+        'forward_coverage',
+      )
       expect(coverage.detail).toMatch(/Ninguna estrategia debe estar/)
       expect(coverage.status).not.toBe('error')
     })

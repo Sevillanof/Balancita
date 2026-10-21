@@ -4,7 +4,10 @@ import {
   NOT_PASSED_WARNING,
   formatActiveTime,
 } from '../domain/lifecycle-text.ts'
-import type { DeletePreview, PurgeStatus } from '../infrastructure/strategy-api.ts'
+import type {
+  DeletePreview,
+  PurgeStatus,
+} from '../infrastructure/strategy-api.ts'
 
 function Backdrop({
   label,
@@ -72,9 +75,7 @@ export function ActivationDialog({
         </p>
       )}
       {passed === true && (
-        <p className="strategy-lab__notice">
-          Esta versión pasó la prueba.
-        </p>
+        <p className="strategy-lab__notice">Esta versión pasó la prueba.</p>
       )}
       <div className="strategy-lab__row-actions">
         <button
@@ -148,7 +149,10 @@ export function DeleteDialog({
             : 'no se rindió'}
         </dd>
       </dl>
-      <p role="alert" className="strategy-lab__notice strategy-lab__notice--warn">
+      <p
+        role="alert"
+        className="strategy-lab__notice strategy-lab__notice--warn"
+      >
         Se borrará todo lo relacionado con esta estrategia. No se puede
         deshacer.
       </p>
@@ -164,7 +168,10 @@ export function DeleteDialog({
         </p>
       ))}
       {preview.blocked && (
-        <p role="alert" className="strategy-lab__notice strategy-lab__notice--warn">
+        <p
+          role="alert"
+          className="strategy-lab__notice strategy-lab__notice--warn"
+        >
           Qwen (C31) la está usando como entrada: no se puede borrar mientras
           esté encendido.
         </p>

@@ -122,9 +122,9 @@ export function VersionsTab({
         )}
       </div>
       <small className="strategy-lab__context">
-        Toda estrategia empieza en borrador: solo opera en el paper real si
-        vos la activás (100 USD por operación, sin dinero real). Al desactivar
-        deja de abrir operaciones; al borrar se elimina todo lo suyo.
+        Toda estrategia empieza en borrador: solo opera en el paper real si vos
+        la activás (100 USD por operación, sin dinero real). Al desactivar deja
+        de abrir operaciones; al borrar se elimina todo lo suyo.
       </small>
     </div>
   )

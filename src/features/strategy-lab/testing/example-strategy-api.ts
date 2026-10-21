@@ -460,8 +460,8 @@ export function exampleStrategyApi(
       }
     },
     async deleteStrategy(id, confirm) {
-      const name = versions.filter((row) => row.spec.id === id).at(-1)?.spec
-        .name
+      const name = versions.filter((row) => row.spec.id === id).at(-1)
+        ?.spec.name
       if (confirm !== id && confirm !== name)
         throw new StrategyApiError(
           'confirmation_required',
@@ -470,10 +470,18 @@ export function exampleStrategyApi(
         )
       for (let index = versions.length - 1; index >= 0; index -= 1)
         if (versions[index].spec.id === id) versions.splice(index, 1)
-      return { purge_id: 'ejemplo', state: 'running', consumers: { forward: 'pending' } }
+      return {
+        purge_id: 'ejemplo',
+        state: 'running',
+        consumers: { forward: 'pending' },
+      }
     },
     async purgeStatus() {
-      return { purge_id: 'ejemplo', state: 'done', consumers: { forward: 'done' } }
+      return {
+        purge_id: 'ejemplo',
+        state: 'done',
+        consumers: { forward: 'done' },
+      }
     },
     async gatePassed() {
       return false

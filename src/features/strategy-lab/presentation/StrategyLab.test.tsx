@@ -329,9 +329,13 @@ describe('StrategyLab', () => {
       'C25 Pullback en tendencia',
     )
     await user.click(finish)
-    await screen.findByText(/Listo: C25 Pullback en tendencia se borró/, undefined, {
-      timeout: 4000,
-    })
+    await screen.findByText(
+      /Listo: C25 Pullback en tendencia se borró/,
+      undefined,
+      {
+        timeout: 4000,
+      },
+    )
     expect(
       within(ranking()).queryByText('C25 Pullback en tendencia'),
     ).not.toBeInTheDocument()

@@ -1,10 +1,4 @@
-import {
-  closeSync,
-  openSync,
-  readFileSync,
-  readSync,
-  statSync,
-} from 'node:fs'
+import { closeSync, openSync, readFileSync, readSync, statSync } from 'node:fs'
 import { basename } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 
@@ -1134,7 +1128,8 @@ export function expectedPairs(
     if (entry.state === 'active')
       strategies.push({
         id: entry.id,
-        source: entry.id in registered ? 'archivo de registro forward' : 'registro',
+        source:
+          entry.id in registered ? 'archivo de registro forward' : 'registro',
         activeSinceMs: entry.at,
       })
   return { state: 'known', strategies, products, notes: [] }

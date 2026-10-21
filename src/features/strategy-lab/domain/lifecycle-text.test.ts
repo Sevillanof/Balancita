@@ -1,8 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import {
-  formatActiveTime,
-  isProtectedStrategy,
-} from './lifecycle-text.ts'
+import { formatActiveTime, isProtectedStrategy } from './lifecycle-text.ts'
 
 describe('formatActiveTime', () => {
   it('says never when it was never active', () => {

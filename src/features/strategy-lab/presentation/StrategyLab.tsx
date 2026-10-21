@@ -646,7 +646,12 @@ export default function StrategyLab({
     })
 
   useEffect(() => {
-    if (!api || !purge || purge.status.state === 'done' || !purge.status.purge_id)
+    if (
+      !api ||
+      !purge ||
+      purge.status.state === 'done' ||
+      !purge.status.purge_id
+    )
       return
     const id = purge.status.purge_id
     const timer = setInterval(() => {

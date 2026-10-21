@@ -31,14 +31,14 @@ Single-writer design: S writes a small request file per delete in `<strategies d
 
 `POST /api-strategies/strategies/<id>/delete {confirm}` (name or id typed back; Qwen/Kronos refused; refused while a gate run of it is alive or while a running C31 uses it as an entry) and `GET .../delete-preview` (name, versions, state, time active in paper = sum of active periods, created date, forward trades and net, gate runs, exam taken and verdict).
 
-| Owner | What is deleted | How |
-| --- | --- | --- |
-| S, registry DB | versions, events, backtests (hard delete; the append-only triggers are lifted for that one transaction and restored) | `StrategyRegistry.hard_delete` |
-| S, repo config | `config/strategies/<id>.json` (builtins), the entry in `forward-strategies.json`, the id in `strategy-freeze.json` | `Lifecycle._purge_config`; only when S was started with those paths |
-| S, replay run DBs | `replay_summary/trade/decision` rows | `ReplayJobs.purge_strategy` |
-| S, offline Qwen practice files (`data/qwen-practice`) | `signals`, `decisions`, `decision_errors` rows | `Lifecycle._purge_practice` |
-| gate (single writer of `gate.sqlite`) | runs, attempts, exam locks, reports, cancel flags, launch logs naming the id | `python -m balancita_engine.strategy_gate purge --strategy <id>`, launched by S like `evaluate` |
-| forward (single writer of `forward.sqlite`) | `forward_status/open/diverged/recovered/blocked/unclassified/era/first_seen` rows and the entry in `forward-reliability.json` | request file, `futures_forward.consume_purges` at the head of each poll |
+| Owner                                                 | What is deleted                                                                                                               | How                                                                                             |
+| ----------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| S, registry DB                                        | versions, events, backtests (hard delete; the append-only triggers are lifted for that one transaction and restored)          | `StrategyRegistry.hard_delete`                                                                  |
+| S, repo config                                        | `config/strategies/<id>.json` (builtins), the entry in `forward-strategies.json`, the id in `strategy-freeze.json`            | `Lifecycle._purge_config`; only when S was started with those paths                             |
+| S, replay run DBs                                     | `replay_summary/trade/decision` rows                                                                                          | `ReplayJobs.purge_strategy`                                                                     |
+| S, offline Qwen practice files (`data/qwen-practice`) | `signals`, `decisions`, `decision_errors` rows                                                                                | `Lifecycle._purge_practice`                                                                     |
+| gate (single writer of `gate.sqlite`)                 | runs, attempts, exam locks, reports, cancel flags, launch logs naming the id                                                  | `python -m balancita_engine.strategy_gate purge --strategy <id>`, launched by S like `evaluate` |
+| forward (single writer of `forward.sqlite`)           | `forward_status/open/diverged/recovered/blocked/unclassified/era/first_seen` rows and the entry in `forward-reliability.json` | request file, `futures_forward.consume_purges` at the head of each poll                         |
 
 Not applicable: C's verdicts, the forecast scores and Qwen's decisions DB only reference the hard-coded C25-C28 (already closed, not deletable from the front) and no strategy a user can delete, so they have no consumer. `config/strategy-reliability.json` (hash-pinned table of past backtests) is not edited.
 
