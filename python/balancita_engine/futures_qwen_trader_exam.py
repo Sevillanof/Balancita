@@ -25,6 +25,8 @@ from .futures_costs import round_trip_cost_bps
 DAY_MS, MINUTE_MS, BAR_MS = qt.DAY_MS, qt.MINUTE_MS, qt.BAR_MS
 PASS, FAIL, INCONCLUSIVE = "PASA", "NO PASA", "INCONCLUSO"
 
+ORDERS_PER_QUESTION = 2        # config prompt.orders for a 3-option question
+
 _EXAM_SQL = """
 CREATE TABLE IF NOT EXISTS exam_snapshots(
   snap_id TEXT PRIMARY KEY, product TEXT NOT NULL, t_ms INTEGER NOT NULL, ord INTEGER NOT NULL, wake_json TEXT,
@@ -192,7 +194,9 @@ def load_answers(db_path):
             probs = json.loads(r["probs_json"])
             acc = sums.setdefault((r["block_id"], r["step"]), [0.0, 0.0, 0])
             acc[0], acc[1], acc[2] = acc[0] + probs.get("LARGO", 0.0), acc[1] + probs.get("CORTO", 0.0), acc[2] + 1
-        leans = {k: (v[0] / v[2], v[1] / v[2]) for k, v in sums.items()}     # mean over the option orders, as _merge does
+        # mean over the option orders, as _merge does; a question with fewer than both orders stored (cut or failed halfway)
+        # has no lean at all
+        leans = {k: (v[0] / v[2], v[1] / v[2]) for k, v in sums.items() if v[2] == ORDERS_PER_QUESTION}
         rows = pdb.db.execute("SELECT s.*, a.real_action, a.real_p, a.mirror_action, a.mirror_p FROM exam_snapshots s "
                               "JOIN exam_answers a USING(snap_id) ORDER BY s.ord").fetchall()
         out = []
@@ -200,7 +204,8 @@ def load_answers(db_path):
             d = dict(r)
             d["moves"] = json.loads(d.pop("moves_json"))
             d["p_largo"], d["p_corto"] = leans.get((d["snap_id"], "action"), (None, None))
-            d["p_largo_m"], d["p_corto_m"] = leans.get((d["snap_id"], "mirror"), (None, None))
+            d["p_largo_m"], d["p_corto_m"] = leans.get((d["snap_id"], "mirror"), (None, None)) \
+                if d["mirror_action"] is not None else (None, None)
             d.update(split_lean(d))
             out.append(d)
         return out, pdb.meta()
@@ -500,8 +505,10 @@ def lean_lines(rows, cfg):
                  "Operar a favor de la inclinación en esos extremos rindió **{}** por operación después de costos "
                  "(rango {}).".format(_bp(d["top_move"]), _bp(d["bottom_move"]), _bp(d["ext_net"]), _ci(d["ext_ci"])))
     if a["habit"]:
-        lines.append("- El **hábito** promedio fue {} (positivo: tiende a largo aunque cambien los números). El espejo "
-                     "cambió de lado en el {} de las fotos.".format(_rho(a["habit"]["mean"]), _pct(a["habit"]["coherent"])))
+        mean_habit = a["habit"]["mean"]
+        lean_to = "tiende a largo" if mean_habit > 0.005 else ("tiende a corto" if mean_habit < -0.005 else "no tiende a ningún lado")
+        lines.append("- El **hábito** promedio fue {} ({} aunque cambien los números). El espejo cambió de lado en el {} de "
+                     "las fotos.".format(_rho(mean_habit), lean_to, _pct(a["habit"]["coherent"])))
     lines += ["", "## Qué revisamos", "",
               "Cada foto es un momento en que el operador habría preguntado de verdad, tomado de velas guardadas anteriores "
               "al corte de prueba final (el holdout, que no se toca). A Qwen se le preguntó con los números reales y otra vez "
@@ -537,7 +544,7 @@ def lean_lines(rows, cfg):
                 ("Mejor que el % de sorteos al azar", lambda x: _pctile(x["ext_pct"])),
                 ("Acierto de signo (inclinación ≥ {})".format(qt.es(lr["sign_min_abs"], 2)),
                  lambda x: "{} ({} fotos)".format(_pct(x["hit"]), x["hit_n"])),
-                ("Neto operando el lado de la inclinación en todas las fotos", lambda x: _bp(x["all_net"])),
+                ("Neto operando el lado de la inclinación en todas las fotos con inclinación distinta de cero", lambda x: _bp(x["all_net"])),
                 ("Rango de confianza del 95 %", lambda x: _ci(x["all_ci"])),
                 ("Mejor que el % de sorteos al azar", lambda x: _pctile(x["all_pct"])),
                 ("Siempre largo en esas mismas fotos", lambda x: _bp(x["always_long"])),

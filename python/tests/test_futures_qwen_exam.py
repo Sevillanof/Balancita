@@ -218,6 +218,18 @@ class ExamTests(unittest.TestCase):
         con.close()
         self.assertEqual(provider.calls, 60)                       # 30 photos x 2 option orders, the mirror only
 
+    def test_a_mirror_cut_after_one_order_does_not_count_as_a_mirrored_photo(self):
+        self.go()
+        con = sqlite3.connect(self.db)
+        with con:
+            snap = con.execute("SELECT snap_id FROM exam_answers LIMIT 1").fetchone()[0]
+            con.execute("DELETE FROM calls WHERE block_id=? AND step='mirror' AND variant=1", (snap,))
+        con.close()
+        rows, _ = ex.load_answers(self.db)
+        cut = next(r for r in rows if r["snap_id"] == snap)
+        self.assertIsNone(cut["lean_num"])
+        self.assertEqual(sum(1 for r in rows if r["lean_num"] is not None), 29)
+
     def test_lean_is_split_into_numbers_and_habit(self):
         r = {"p_largo": 0.6, "p_corto": 0.2, "p_largo_m": 0.5, "p_corto_m": 0.3}
         got = ex.split_lean(r)
