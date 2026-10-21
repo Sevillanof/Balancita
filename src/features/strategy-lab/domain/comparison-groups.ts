@@ -3,7 +3,7 @@ import type {
   InventoryStrategy,
 } from '../infrastructure/strategy-api.ts'
 
-const RETIRED_STATES: readonly string[] = [
+export const RETIRED_STATES: readonly string[] = [
   'closed',
   'off',
   'retired',

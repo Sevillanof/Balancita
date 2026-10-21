@@ -273,7 +273,7 @@ describe('StrategyDetailView (datos de ejemplo)', () => {
 })
 
 describe('StrategyLab opens the detail from the strategies page', () => {
-  it('goes to the detail and comes back', async () => {
+  it('shows the detail beside the list and switches strategy', async () => {
     render(
       <StrategyLab
         loadCandles={() =>
@@ -284,15 +284,14 @@ describe('StrategyLab opens the detail from the strategies page', () => {
       />,
     )
     await userEvent.click(
-      await screen.findByRole('button', { name: 'Detalle de X2 Sin ventaja' }),
+      await screen.findByRole('button', { name: 'Ver X2 Sin ventaja' }),
     )
-    expect(await screen.findByTestId('strategy-detail')).toBeVisible()
+    const detail = await screen.findByTestId('strategy-detail')
+    expect(detail).toBeVisible()
+    expect(detail).toHaveAccessibleName('Detalle de X2 Sin ventaja')
     expect(screen.queryByRole('tablist')).toBeNull()
-    await userEvent.click(screen.getByRole('button', { name: 'Estrategias' }))
     expect(
-      await screen.findByRole('heading', {
-        name: 'Un libro paper por estrategia',
-      }),
+      screen.getByRole('heading', { name: 'Un libro paper por estrategia' }),
     ).toBeVisible()
   })
 

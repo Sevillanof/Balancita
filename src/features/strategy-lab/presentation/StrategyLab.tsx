@@ -46,7 +46,6 @@ import {
   type PurgeStatus,
   type PeriodDays,
   type Ranking,
-  type Inventory,
   type InventoryStrategy,
   type StrategyApi,
   type StrategyPlan,
@@ -79,7 +78,7 @@ import {
   PurgeNotice,
 } from './LifecycleDialogs.tsx'
 import ComparisonView from './ComparisonView.tsx'
-import StrategyDetailView, { type LoadActivity } from './StrategyDetailView.tsx'
+import type { LoadActivity } from './StrategyDetailView.tsx'
 import {
   MODEL_TEXTS,
   STATE_LABELS,
@@ -99,7 +98,7 @@ type Props = {
   loadActivity?: LoadActivity
 }
 
-type StrategyView = 'home' | 'lab' | 'detail'
+type StrategyView = 'home' | 'lab'
 
 type Tab = 'rules' | 'params' | 'risk' | 'plan' | 'json' | 'versions'
 type SaveMode = 'modify' | 'new'
@@ -171,14 +170,13 @@ export default function StrategyLab({
   loadActivity,
 }: Props) {
   const [view, setView] = useState<StrategyView>(initialView)
+  const [homeId, setHomeId] = useState<string | null>(null)
   // «Ver contador» de la tarjeta de Carry: lleva al contador de Carry dentro del laboratorio.
   const [carryRequest, setCarryRequest] = useState(0)
   const carryRef = useRef<HTMLDivElement>(null)
   // Last carry request already served: a later entry to the laboratory from
   // another view (home, detail) must not pull the focus back to Carry.
   const carryServed = useRef(0)
-  const [detailRow, setDetailRow] = useState<InventoryStrategy | null>(null)
-  const [inventory, setInventory] = useState<Inventory | null>(null)
   const [market, setMarket] = useState<LabCandles | null>(null)
   const [api, setApi] = useState<StrategyApi | null>(null)
   const [connectError, setConnectError] = useState<string | null>(null)
@@ -516,15 +514,6 @@ export default function StrategyLab({
     }
   }
 
-  const openFromInventory = (row: InventoryStrategy) => {
-    if (row.kind === 'rules' && api?.detail && inventory) {
-      setDetailRow(row)
-      setView('detail')
-      return
-    }
-    openInLab(row)
-  }
-
   const refresh = (id: string | null, message: string | null) => {
     setSelectedId(id)
     setReload((value) => value + 1)
@@ -780,24 +769,16 @@ export default function StrategyLab({
           api={api}
           connectError={connectError}
           reload={reload}
-          onOpen={openFromInventory}
-          onLoaded={setInventory}
+          onOpen={openInLab}
+          selectedId={homeId}
+          onSelect={setHomeId}
+          loadDetailActivity={loadActivity}
           onNew={() => {
             setNotice(null)
             setError(null)
             setCreating(true)
             setView('lab')
           }}
-        />
-      )}
-      {view === 'detail' && detailRow && api && inventory && (
-        <StrategyDetailView
-          api={api}
-          row={detailRow}
-          inventory={inventory}
-          loadActivity={loadActivity}
-          onBack={() => setView('home')}
-          onOpenLab={() => openInLab(detailRow)}
         />
       )}
       {view === 'lab' && (

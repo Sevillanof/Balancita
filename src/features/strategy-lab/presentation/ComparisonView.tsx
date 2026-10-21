@@ -1,7 +1,11 @@
 import { useEffect, useState } from 'react'
 import { DataState, StatusPill } from '../../../shared/mission-control/index.ts'
 import { count, horizonText, netBpPerOp } from '../domain/strategy-format.ts'
-import { retiredReason, splitStrategies } from '../domain/comparison-groups.ts'
+import {
+  RETIRED_STATES,
+  retiredReason,
+  splitStrategies,
+} from '../domain/comparison-groups.ts'
 import type {
   Inventory,
   InventoryStrategy,
@@ -20,6 +24,7 @@ import {
 } from './StrategyStatusBadges.tsx'
 import { ForwardResult } from './ForwardResult.tsx'
 import { ForwardHealth } from './ForwardHealth.tsx'
+import StrategyDetailView, { type LoadActivity } from './StrategyDetailView.tsx'
 import './ComparisonView.css'
 
 const KIND_LABELS: Record<InventoryStrategy['kind'], string> = {
@@ -192,16 +197,61 @@ export function ExperimentCard({
   )
 }
 
+/** One row of the list on the left; retired ones keep their reason visible. */
+function ListItem({
+  row,
+  selected,
+  testId,
+  onSelect,
+}: {
+  row: InventoryStrategy
+  selected: boolean
+  testId: string
+  onSelect: () => void
+}) {
+  const stopped = RETIRED_STATES.includes(row.operational.state)
+  return (
+    <li data-testid={testId} data-id={row.id}>
+      <button
+        type="button"
+        className={selected ? 'is-selected' : undefined}
+        aria-current={selected ? 'true' : undefined}
+        aria-label={`Ver ${row.name}`}
+        onClick={onSelect}
+      >
+        <b>{row.name}</b> <small>v{row.version}</small>
+        <OperationalBadge
+          state={row.operational.state}
+          basis={row.operational.basis}
+          sinceMs={row.operational.since_ms}
+          reason={row.operational.reason}
+        />
+        {stopped && (
+          <small className="comparison__why">
+            Motivo: {retiredReason(row.operational.reason) ?? 'No disponible'}
+            {row.operational.since_ms != null &&
+              ` · desde ${utcDay(row.operational.since_ms)}`}
+          </small>
+        )}
+      </button>
+    </li>
+  )
+}
+
 type Props = {
   api: StrategyApi | null
   connectError: string | null
   reload: number
+  /** Opens a strategy in the laboratory. */
   onOpen: (row: InventoryStrategy) => void
   /** «Nueva estrategia»: opens the laboratory. */
   onNew: () => void
-  /** The loaded inventory, for the detail view of the page. */
-  onLoaded?: (inventory: Inventory | null) => void
+  /** Selected strategy, kept by the parent so it survives a visit to the laboratory. */
+  selectedId?: string | null
+  onSelect?: (id: string) => void
   loadActivity?: () => Promise<KronosActivity>
+  /** Activity loader of the detail pane (tests). */
+  loadDetailActivity?: LoadActivity
 }
 
 const ACTIVITY_TICK_MS = 30_000
@@ -219,8 +269,10 @@ export default function ComparisonView({
   reload,
   onOpen,
   onNew,
-  onLoaded,
+  selectedId: keptId = null,
+  onSelect,
   loadActivity = defaultLoadActivity,
+  loadDetailActivity,
 }: Props) {
   const [inventory, setInventory] = useState<Inventory | null>(null)
   const [read, setRead] = useState<KronosActivity | null>(null)
@@ -253,6 +305,12 @@ export default function ComparisonView({
   }, [])
   const activity = activityAt(read, now)
   const [failure, setFailure] = useState<string | null>(null)
+  const [localId, setLocalId] = useState<string | null>(null)
+  const selectedId = keptId ?? localId
+  const setSelectedId = (id: string) => {
+    setLocalId(id)
+    onSelect?.(id)
+  }
 
   useEffect(() => {
     if (!api?.inventory) return
@@ -262,18 +320,16 @@ export default function ComparisonView({
         if (!active) return
         setInventory(loaded)
         setFailure(null)
-        onLoaded?.(loaded)
       },
       (error: unknown) => {
         if (!active) return
         setFailure(error instanceof Error ? error.message : String(error))
-        onLoaded?.(null)
       },
     )
     return () => {
       active = false
     }
-  }, [api, reload, onLoaded])
+  }, [api, reload])
 
   if (connectError)
     return (
@@ -310,6 +366,12 @@ export default function ComparisonView({
 
   const { active: running, retired } = splitStrategies(inventory)
   const cost = inventory.cost_model
+  const selected =
+    inventory.strategies.find((row) => row.id === selectedId) ??
+    running.find((row) => row.kind === 'rules') ??
+    running[0] ??
+    retired[0] ??
+    null
   return (
     <section className="comparison" aria-label="Estrategias">
       <header className="comparison__head">
@@ -332,20 +394,63 @@ export default function ComparisonView({
 
       <ForwardHealth health={inventory.forward_health} now={now} />
 
-      <h3 className="comparison__group">
-        Activas · <span data-testid="running-count">{running.length}</span>
-      </h3>
-      <div className="comparison__grid">
-        {running.map((row) => (
-          <ExperimentCard
-            key={row.id}
-            row={row}
-            inventory={inventory}
-            onOpen={() => onOpen(row)}
-            activity={activity}
-            now={now}
-          />
-        ))}
+      <div className="comparison__split">
+        <nav className="comparison__list" aria-label="Lista de estrategias">
+          <h3 className="comparison__group">
+            Activas · <span data-testid="running-count">{running.length}</span>
+          </h3>
+          <ul>
+            {running.map((row) => (
+              <ListItem
+                key={row.id}
+                row={row}
+                selected={row.id === selected?.id}
+                testId="strategy-list-item"
+                onSelect={() => setSelectedId(row.id)}
+              />
+            ))}
+          </ul>
+          <h3 className="comparison__group" data-testid="retired">
+            Retiradas y apagadas ·{' '}
+            <span data-testid="stopped-count">{retired.length}</span>
+          </h3>
+          <ul>
+            {retired.map((row) => (
+              <ListItem
+                key={row.id}
+                row={row}
+                selected={row.id === selected?.id}
+                testId="retired-row"
+                onSelect={() => setSelectedId(row.id)}
+              />
+            ))}
+          </ul>
+        </nav>
+
+        <div className="comparison__detail" data-testid="strategy-pane">
+          {selected &&
+            (selected.kind === 'rules' && typeof api.detail === 'function' ? (
+              <>
+                <ForwardResult row={selected} now={now} />
+                <StrategyDetailView
+                  key={selected.id}
+                  api={api}
+                  row={selected}
+                  inventory={inventory}
+                  loadActivity={loadDetailActivity}
+                  onOpenLab={() => onOpen(selected)}
+                />
+              </>
+            ) : selected ? (
+              <ExperimentCard
+                row={selected}
+                inventory={inventory}
+                onOpen={() => onOpen(selected)}
+                activity={activity}
+                now={now}
+              />
+            ) : null)}
+        </div>
       </div>
 
       <details className="comparison__panel" data-testid="measure-table">
@@ -380,32 +485,6 @@ export default function ComparisonView({
             ))}
           </tbody>
         </table>
-      </details>
-
-      <details className="comparison__panel" data-testid="retired">
-        <summary>
-          Retiradas y apagadas ·{' '}
-          <span data-testid="stopped-count">{retired.length}</span>
-        </summary>
-        <ul className="comparison__retired">
-          {retired.map((row) => (
-            <li key={row.id} data-testid="retired-row" data-id={row.id}>
-              <b>{row.name}</b> <small>v{row.version}</small>
-              <OperationalBadge
-                state={row.operational.state}
-                basis={row.operational.basis}
-                sinceMs={row.operational.since_ms}
-                reason={row.operational.reason}
-              />
-              <span>
-                Motivo:{' '}
-                {retiredReason(row.operational.reason) ?? 'No disponible'}
-                {row.operational.since_ms != null &&
-                  ` · desde ${utcDay(row.operational.since_ms)}`}
-              </span>
-            </li>
-          ))}
-        </ul>
       </details>
     </section>
   )

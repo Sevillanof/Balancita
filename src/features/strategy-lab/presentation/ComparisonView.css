@@ -304,3 +304,62 @@
   color: var(--mc-text-2);
   font-size: 12px;
 }
+
+/* Estrategias, pantalla completa: lista a la izquierda, detalle a la derecha. */
+.comparison__split {
+  display: grid;
+  grid-template-columns: minmax(220px, 280px) minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+
+.comparison__list {
+  display: grid;
+  gap: 8px;
+  position: sticky;
+  top: 8px;
+}
+
+.comparison__list ul {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.comparison__list button {
+  display: grid;
+  gap: 4px;
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--mc-border, #2a2f3a);
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.comparison__list button.is-selected {
+  border-color: var(--mc-accent, #4f8cff);
+  background: rgba(79, 140, 255, 0.08);
+}
+
+.comparison__why {
+  color: var(--mc-text-2);
+}
+
+.comparison__detail {
+  min-width: 0;
+}
+
+@media (max-width: 900px) {
+  .comparison__split {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .comparison__list {
+    position: static;
+  }
+}
