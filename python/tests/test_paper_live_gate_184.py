@@ -52,7 +52,7 @@ class TestRealSessionGate(Base):
         config = LP.load_config(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "config", "paper-session-btc-1.json"))
         self.assertEqual(config["authorization_ref"], "BAL-DECISION-184-07")
         self.assertEqual((config["decide_from_ms"], config["decide_until_ms"]), (grant["decide_from_ms"], grant["decide_until_ms"]))
-        self.assertEqual(grant["decide_until_ms"] - grant["decide_from_ms"], 24 * 3_600_000)
+        self.assertEqual(grant["decide_until_ms"] - grant["decide_from_ms"], 3_600_000)
         self.assertTrue(os.path.isabs(grant["source_path"]) and os.path.isabs(grant["directory"]))
         self.assertEqual((config["source_id"], config["products"], config["funding_mode"]), (LP.REAL_SOURCE, ["PF_XBTUSD"], "observed"))
         self.assertEqual((config["max_quote_gap_ms"], config["stale_stop"], config["evaluator_kw"]),
