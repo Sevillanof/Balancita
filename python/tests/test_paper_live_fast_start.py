@@ -102,7 +102,9 @@ class FastStart(Base):
         self.assertLess(bounded_counts["gaps"], whole_counts["gaps"])
         # what the strategies read is the same: every candle of the product the session trades reached the evaluator, in both runs
         self.assertEqual(bounded_session.evaluator.stats["candles"], whole_session.evaluator.stats["candles"])
-        self.assertEqual(bounded_session.evaluator.log.head == whole_session.evaluator.log.head, True)   # the candle inputs are the same, byte for byte
+        def candles_of(session):          # the history enters at its close in a bounded start (not when the capture wrote it): same candles, same order
+            return [(e["data"]["product_id"], e["data"]["candle"]) for e in session.evaluator.log.entries if e["kind"] == "candle"]
+        self.assertEqual(candles_of(bounded_session), candles_of(whole_session))
 
     def test_a_candle_bound_before_the_first_needed_candle_skips_the_rows_before_it(self):
         whole, whole_counts, whole_session = self.run_session(INGEST_KW, "whole")
