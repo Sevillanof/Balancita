@@ -5,12 +5,15 @@ only here; it is not in config/strategies nor in any registry.
 """
 
 import copy
+import gzip
+import hashlib
 import io
 import json
 import math
 import os
 import random
 import sqlite3
+import shutil
 import tempfile
 import unittest
 from contextlib import redirect_stdout
@@ -824,3 +827,89 @@ class RandomBaselineTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ArtifactTests(Base):
+    """Each finished run keeps its closed trades (manifest + trades) without changing a single number of the verdict."""
+
+    def stored(self, directory, run_id):
+        folder = os.path.join(directory, g.ARTIFACTS_DIR, str(run_id))
+        with open(os.path.join(folder, "manifest.json"), encoding="utf-8") as handle:
+            manifest = json.load(handle)
+        with gzip.open(os.path.join(folder, g.TRADES_FILE), "rb") as handle:
+            raw = handle.read()
+        return folder, manifest, raw, [json.loads(line) for line in raw.decode("utf-8").splitlines()]
+
+    def test_finished_run_stores_the_judged_trades_with_a_matching_checksum(self):
+        out = run("c27-breakout-perp-v1", self.dir)
+        folder, manifest, raw, trades = self.stored(self.dir, out["run_id"])
+        self.assertEqual(manifest["schema"], g.ARTIFACT_SCHEMA)
+        self.assertEqual(manifest["status"], "complete")
+        self.assertEqual(manifest["trades_count"], len(trades))
+        self.assertEqual(len(trades), out["result"]["overall"]["n"])
+        self.assertEqual(manifest["trades_sha256"], hashlib.sha256(raw).hexdigest())
+        self.assertEqual(manifest["spec_hash"], spec_hash(SPECS["c27-breakout-perp-v1"]))
+        self.assertEqual(manifest["decision_evidence"], "not_captured")
+        summary, result = manifest["summary"], out["result"]
+        self.assertEqual((summary["trades"], summary["mean_bp"], summary["percentile"], summary["verdict"]),
+                         (result["overall"]["n"], result["overall"]["mean_bp"], result["percentile"], out["verdict"]))
+        self.assertEqual(summary["folds"], CFG["practice_folds"])
+        self.assertEqual(summary["min_trades"], CFG["rules"]["min_trades"])
+        self.assertEqual(manifest["range_end_ms_exclusive"], HOLDOUT)
+        self.assertEqual([t["trade_id"] for t in trades], ["{}-{}".format(out["run_id"], i + 1) for i in range(len(trades))])
+        self.assertTrue(all(t["execution_type"] == "simulated" and t["signal_time_ms"] is None for t in trades))
+        self.assertEqual(sum(t["net_bp"] for t in trades) / len(trades), out["result"]["overall"]["mean_bp"])
+        self.assertFalse([n for n in os.listdir(os.path.dirname(folder)) if n.startswith(".tmp")])
+
+    def test_stored_trades_carry_the_simulators_prices_and_reasons(self):
+        out = run("c27-breakout-perp-v1", self.dir)
+        trades = self.stored(self.dir, out["run_id"])[3]
+        self.assertTrue(trades)
+        for trade in trades:
+            self.assertIn(trade["side"], ("LONG", "SHORT"))
+            self.assertLess(trade["entry_time_ms"], trade["exit_time_ms"])
+            self.assertLessEqual(trade["exit_time_ms"], HOLDOUT)
+            self.assertTrue(float(trade["entry_price"]) > 0 and float(trade["exit_price"]) > 0)
+            self.assertTrue(trade["exit_reason"])
+
+    def test_storing_the_trades_changes_no_result_and_is_deterministic(self):
+        a = run("c27-breakout-perp-v1", self.dir)
+        other = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, other, True)
+        original = g.write_artifact
+        g.write_artifact = lambda *args, **kwargs: (_ for _ in ()).throw(OSError("disco lleno"))
+        try:
+            b = run("c27-breakout-perp-v1", other)
+        finally:
+            g.write_artifact = original
+        self.assertEqual(a["verdict"], b["verdict"])
+        self.assertEqual(a["result"]["overall"], b["result"]["overall"])
+        self.assertEqual(a["result"]["folds"], b["result"]["folds"])
+        self.assertEqual(a["result"]["percentile"], b["result"]["percentile"])
+        self.assertFalse(os.path.exists(os.path.join(other, g.ARTIFACTS_DIR, str(b["run_id"]))))
+        self.assertEqual(b["status"], "done")
+        third = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, third, True)
+        c = run("c27-breakout-perp-v1", third)
+        self.assertEqual(self.stored(self.dir, a["run_id"])[2], self.stored(third, c["run_id"])[2])
+
+    def test_a_cancelled_run_stores_nothing(self):
+        before = os.path.join(self.dir, g.ARTIFACTS_DIR)
+        with self.assertRaises(g.GateError):
+            run("c25-pullback-perp-v1", self.dir, from_date="2025-01-21")
+        self.assertFalse(os.path.exists(before))
+
+    def test_a_published_artifact_is_never_overwritten(self):
+        out = run("c27-breakout-perp-v1", self.dir)
+        meta = {"run_id": out["run_id"], "strategy_id": "x", "family": "x", "version_key": "x", "kind": "practice",
+                "start_ms": 0, "end_ms": 1, "products": [], "config_hash": "h"}
+        with self.assertRaises(g.GateError):
+            g.write_artifact(self.dir, meta, CFG, SPECS["c27-breakout-perp-v1"], "d", [], 0)
+        self.assertFalse([n for n in os.listdir(os.path.join(self.dir, g.ARTIFACTS_DIR)) if n.startswith(".tmp")])
+
+    def test_purge_removes_the_stored_trades_too(self):
+        out = run("c27-breakout-perp-v1", self.dir)
+        self.assertTrue(os.path.isdir(os.path.join(self.dir, g.ARTIFACTS_DIR, str(out["run_id"]))))
+        counts = g.purge_strategy("c27-breakout-perp-v1", self.dir)
+        self.assertEqual(counts["artifacts"], 1)
+        self.assertFalse(os.path.exists(os.path.join(self.dir, g.ARTIFACTS_DIR, str(out["run_id"]))))

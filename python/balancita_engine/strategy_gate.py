@@ -42,6 +42,7 @@ import array
 import bisect
 import collections
 import concurrent.futures
+import gzip
 import hashlib
 import json
 import math
@@ -49,6 +50,7 @@ import multiprocessing
 import os
 import random
 import re
+import shutil
 import signal
 import sqlite3
 import statistics
@@ -405,6 +407,20 @@ def _compact(product, trade):
             "funding_status": trade.get("funding_status", "unknown"), "reason": trade.get("exit_reason", "")}
 
 
+FULL_TRADE_FIELDS = ("side", "entry_bucket_ms", "entry_time_ms", "entry_price", "stop_price", "target_price",
+                     "exit_bucket_ms", "exit_time_ms", "exit_price", "exit_reason", "reason_code", "quantity",
+                     "notional_usd", "net_bp", "pnl_usd", "funding_usd", "funding_status", "funding_covered_ms",
+                     "funding_held_ms")
+
+
+def _full(product, trade):
+    """The closed trade as the simulator booked it (prices as text, nothing recomputed) for the run's artifact."""
+    out = {"product_id": product}
+    for key in FULL_TRADE_FIELDS:
+        out[key] = trade.get(key)
+    return out
+
+
 def simulate_task(job):
     """Worker: one (spec, product). Returns the trades, the 1m closes (for the random draws) and some stats."""
     t0 = time.time()
@@ -420,7 +436,8 @@ def simulate_task(job):
     trades, open_at_end = source(job["spec"], product, job["tick"], ones, fives, funding, start_ms, end_ms,
                                  lambda fraction: _chunk(index, fraction))
     out = {"index": index, "product": product, "label": job["label"], "open_at_end": open_at_end,
-           "trades": [_compact(product, t) for t in trades], "candles_1m": len(ones),
+           "trades": [_compact(product, t) for t in trades],
+           "full_trades": [_full(product, t) for t in trades] if job["want_closes"] else [], "candles_1m": len(ones),
            "seconds": round(time.time() - t0, 1)}
     if job["want_closes"]:
         base = bisect.bisect_left([c["bucket_start"] for c in ones], start_ms)
@@ -1164,6 +1181,75 @@ def evaluate(strategy_id, *, kind="practice", from_date=None, products=None, cfg
         db.close()
 
 
+def run_summary(result, cfg):
+    """What the strategy screen shows about a finished run, copied from the judge's output (nothing recomputed)."""
+    rules = {r["id"]: r for r in result["rules"]}
+    folds = rules["positive_folds"]["value"]
+    return {"verdict": result["verdict"], "verdict_note": result.get("verdict_note"),
+            "inconclusive_reasons": result.get("inconclusive_reasons", []),
+            "trades": result["overall"]["n"], "min_trades": cfg["rules"]["min_trades"],
+            "mean_bp": result["overall"]["mean_bp"], "ci": list(result["ci"]),
+            "positive_folds": folds["positive"], "folds": folds["total"],
+            "min_positive_fold_share": cfg["rules"]["min_positive_fold_share"],
+            "percentile": result["percentile"], "min_percentile": cfg["rules"]["min_percentile_vs_random"],
+            "funding_share": result["funding_share"], "funding_status": result["funding_status"],
+            "open_at_end": None, "contaminated": bool(result.get("contaminated"))}
+
+
+ARTIFACT_SCHEMA = "balancita.gate-run-artifact.v1"
+TRADE_SCHEMA = "balancita.gate-trade.v1"
+ARTIFACTS_DIR = "artifacts"
+TRADES_FILE = "trades.jsonl.gz"
+
+
+def write_artifact(data_dir, meta, cfg, spec, digest, trades, open_at_end, result=None):
+    """Publishes ``<data>/artifacts/<run_id>/`` (manifest + closed trades) once, atomically and never again.
+
+    The trades are those the simulator booked for the judged run, in the order the report uses: nothing is recomputed
+    here, so the files cannot disagree with the verdict. ``result`` (the judge's output) gives the manifest the four
+    figures the screen shows (``summary``); they are copied, never recomputed. The folder is built under a temporary name and renamed into
+    place only when complete; a run without that folder simply has no stored trades (older runs never had them).
+    """
+    run_id = meta["run_id"]
+    root = os.path.join(data_dir, ARTIFACTS_DIR)
+    final = os.path.join(root, str(run_id))
+    temp = os.path.join(root, ".tmp-{}-{}".format(run_id, os.getpid()))
+    os.makedirs(root, exist_ok=True)
+    shutil.rmtree(temp, ignore_errors=True)
+    os.makedirs(temp)
+    try:
+        ordered = sorted(trades, key=lambda t: (t["entry_time_ms"], t["product_id"], t["side"]))
+        lines = []
+        for i, trade in enumerate(ordered, 1):
+            lines.append(json.dumps(dict(trade, schema=TRADE_SCHEMA, run_id=run_id,
+                                         trade_id="{}-{}".format(run_id, i), signal_time_ms=None,
+                                         execution_type="simulated"), sort_keys=True, ensure_ascii=False))
+        body = ("\n".join(lines) + ("\n" if lines else "")).encode("utf-8")
+        with open(os.path.join(temp, TRADES_FILE), "wb") as handle:
+            # mtime=0: the same trades give the same bytes (and the same checksum) every time.
+            handle.write(gzip.compress(body, mtime=0))
+        manifest = {"schema": ARTIFACT_SCHEMA, "run_id": run_id, "strategy_id": meta["strategy_id"],
+                    "family": meta["family"], "version_key": meta["version_key"], "code_hash": digest,
+                    "spec_hash": spec_hash(spec), "spec": spec, "kind": meta["kind"], "status": "complete",
+                    "holdout_from": cfg["holdout_from"], "range_start_ms": meta["start_ms"],
+                    "range_end_ms_exclusive": meta["end_ms"], "products": meta["products"],
+                    "source": "kraken_futures_official_candles", "resolution": "1m",
+                    "cost_model_version": COST_MODEL_VERSION, "gate_config_sha256": meta["config_hash"],
+                    "trades_file": TRADES_FILE, "trades_count": len(ordered),
+                    "trades_sha256": hashlib.sha256(body).hexdigest(), "open_at_end": int(open_at_end),
+                    "decision_evidence": "not_captured", "contaminated": bool(meta.get("contaminated")),
+                    "artifact_created_at_ms": _now_ms(), "summary": (dict(run_summary(result, cfg), open_at_end=int(open_at_end)) if result else None)}
+        with open(os.path.join(temp, "manifest.json"), "w", encoding="utf-8") as handle:
+            json.dump(manifest, handle, sort_keys=True, ensure_ascii=False, indent=1)
+        if os.path.exists(final):
+            raise GateError("la corrida {} ya tiene operaciones guardadas".format(run_id))
+        os.rename(temp, final)
+    except BaseException:
+        shutil.rmtree(temp, ignore_errors=True)
+        raise
+    return final
+
+
 def _finish(db, run_id, status, verdict, report_path, error, kind):
     with db:
         db.execute("UPDATE runs SET status=?, verdict=?, report_path=?, error=?, finished_at=?, updated_at=?, "
@@ -1210,6 +1296,7 @@ def _execute(runner, db, spec, cfg, meta, product_list, provider, trade_source, 
                   "want_closes": True} for i, (p, t) in enumerate(product_list)]
     results = _run_tasks(runner, main_jobs, workers, DOWNLOAD_SHARE, span)
     trades = sorted((t for r in results for t in r["trades"]), key=lambda t: (t["entry_ms"], t["product"], t["side"]))
+    full_trades = [t for r in results for t in r["full_trades"]]
     series = {r["product"]: {"closes": r["closes"], "first_ms": r["first_ms"], "start_index": r["start_index"]}
               for r in results}
     open_at_end = sum(r["open_at_end"] for r in results)
@@ -1250,6 +1337,12 @@ def _execute(runner, db, spec, cfg, meta, product_list, provider, trade_source, 
     if not any(funding.values()):
         notes.append("Atención: no se pudo leer el historial de funding de Kraken; los costos de funding no están incluidos.")
     report = build_report(meta, result, cfg, notes)
+    try:
+        write_artifact(data_dir, meta, cfg, spec, digest, full_trades, open_at_end, result)
+    except (OSError, GateError, TypeError, ValueError) as error:
+        # The verdict is already computed and must not depend on storing the trades: a run without the folder just
+        # shows no chart (the API answers "artifact_not_ready").
+        print("aviso: no se guardaron las operaciones de la corrida {}: {}".format(run_id, error), file=sys.stderr)
     reports = os.path.join(data_dir, "reports")
     os.makedirs(reports, exist_ok=True)
     path = os.path.join(reports, "{}.md".format(run_id))
@@ -1270,14 +1363,15 @@ def _execute(runner, db, spec, cfg, meta, product_list, provider, trade_source, 
 def purge_strategy(strategy_id, data_dir=None, keep_tombstone=None):
     """Deletes everything the gate holds about ``strategy_id`` (the gate is the single writer of ``gate.sqlite``).
 
-    Runs, attempts, exam locks, reports, cancel flags and launch logs that mention it. The one exception is the
+    Runs, attempts, exam locks, reports, stored trades, cancel flags and launch logs that mention it. The one exception is the
     anonymous exam tombstone (``strategy_purge.KEEP_EXAM_TOMBSTONE``): ``spec_hash``, date and verdict of each
     exam taken, nothing that names the strategy. Refuses while a run of it is still alive.
     Returns the counts of what was removed.
     """
     data_dir = data_dir or DATA_DIR
     keep_tombstone = strategy_purge.KEEP_EXAM_TOMBSTONE if keep_tombstone is None else keep_tombstone
-    counts = {"runs": 0, "attempts": 0, "exam_locks": 0, "reports": 0, "logs": 0, "cancel_flags": 0, "tombstones": 0}
+    counts = {"runs": 0, "attempts": 0, "exam_locks": 0, "reports": 0, "artifacts": 0, "logs": 0, "cancel_flags": 0,
+              "tombstones": 0}
     path = os.path.join(data_dir, DB_NAME)
     if os.path.exists(path):
         db = open_db(path)
@@ -1316,6 +1410,10 @@ def purge_strategy(strategy_id, data_dir=None, keep_tombstone=None):
                     if os.path.isfile(candidate):
                         os.remove(candidate)
                         counts[key] += 1
+                stored = os.path.join(data_dir, ARTIFACTS_DIR, str(row["id"]))
+                if os.path.isdir(stored):
+                    shutil.rmtree(stored, ignore_errors=True)
+                    counts["artifacts"] += 1
                 recorded = row["report_path"]
                 if recorded and os.path.isfile(recorded) and os.path.realpath(recorded).startswith(
                         os.path.realpath(os.path.join(data_dir, "reports")) + os.sep):
