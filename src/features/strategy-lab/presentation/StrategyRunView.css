@@ -1,0 +1,338 @@
+/* Cabecera de la estrategia: etapa, cuatro cifras y velas reales de la última prueba. */
+.runview {
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid var(--mc-border);
+  border-radius: var(--mc-radius-lg);
+  background: var(--mc-surface-1);
+  min-width: 0;
+}
+
+.runview__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px 16px;
+}
+
+.runview__title {
+  margin: 0;
+  color: var(--mc-text);
+  font-size: 22px;
+  font-weight: 600;
+}
+
+.runview__title small {
+  color: var(--mc-text-2);
+  font-size: 13px;
+  font-weight: 400;
+}
+
+.runview__sub,
+.runview__hint,
+.runview__stage-label {
+  margin: 0;
+  color: var(--mc-text-2);
+  font-size: 13px;
+}
+
+.runview__stage-label {
+  color: var(--mc-text);
+  font-size: 14px;
+}
+
+.runview__warn {
+  margin: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--mc-warn);
+  border-radius: var(--mc-radius);
+  color: var(--mc-text);
+  font-size: 13px;
+}
+
+.runview__stages {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.runview__stage {
+  display: grid;
+  gap: 6px;
+  text-align: center;
+}
+
+.runview__stage-bar {
+  height: 6px;
+  border-radius: 3px;
+  background: var(--mc-surface-2);
+}
+
+.runview__stage[data-reached='true'] .runview__stage-bar {
+  background: var(--mc-info);
+}
+
+.runview__stage-name {
+  color: var(--mc-text-3);
+  font-size: 13px;
+}
+
+.runview__stage[aria-current='step'] .runview__stage-name {
+  color: var(--mc-text);
+  font-weight: 600;
+}
+
+.runview__kpis {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.runview__kpi {
+  display: grid;
+  gap: 4px;
+  padding: 12px 14px;
+  border: 1px solid var(--mc-border);
+  border-radius: var(--mc-radius-lg);
+  background: var(--mc-canvas);
+}
+
+.runview__kpi-label,
+.runview__kpi-note {
+  color: var(--mc-text-2);
+  font-size: 13px;
+}
+
+.runview__kpi-value {
+  color: var(--mc-text);
+  font-size: 30px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.1;
+}
+
+.runview__kpi-value[data-tone='bad'],
+.runview__facts dd[data-tone='bad'] {
+  color: var(--mc-short);
+}
+
+.runview__facts dd[data-tone='good'] {
+  color: var(--mc-long);
+}
+
+.runview__chart-card {
+  display: grid;
+  gap: 10px;
+  padding: 12px 14px;
+  border-radius: var(--mc-radius-lg);
+  background: var(--mc-canvas);
+  min-width: 0;
+}
+
+.runview__chart-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.runview__chart-head h4 {
+  margin: 0;
+  color: var(--mc-text);
+  font-size: 15px;
+  font-weight: 500;
+}
+
+.runview__controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  color: var(--mc-text-2);
+  font-size: 13px;
+}
+
+.runview__controls select {
+  padding: 4px 8px;
+  border: 1px solid var(--mc-border-strong);
+  border-radius: var(--mc-radius);
+  color: var(--mc-text);
+  background: var(--mc-surface-1);
+  font: inherit;
+}
+
+.runview__chart {
+  /* The chart reads this variable for its own height (see DemoShell.css). */
+  --terminal-chart-height: clamp(380px, 56vh, 600px);
+  min-width: 0;
+}
+
+.runview__chart .demo-terminal__chart {
+  --terminal-chart-height: clamp(380px, 56vh, 600px);
+}
+
+.runview__empty {
+  margin: 0;
+  padding: 32px 12px;
+  color: var(--mc-text-2);
+  font-size: 14px;
+  text-align: center;
+}
+
+.runview__legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  color: var(--mc-text-2);
+  font-size: 13px;
+}
+
+.runview__legend b {
+  display: inline-block;
+  min-width: 1.4em;
+  text-align: center;
+}
+
+.runview__long {
+  color: var(--mc-long);
+}
+
+.runview__short {
+  color: var(--mc-short);
+}
+
+.runview__legend-note {
+  margin-left: auto;
+}
+
+.runview__detail {
+  display: grid;
+  gap: 8px;
+  padding-top: 10px;
+  border-top: 1px solid var(--mc-border);
+}
+
+.runview__detail-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.runview__detail-head h4 {
+  margin: 0;
+  color: var(--mc-text);
+  font-size: 14px;
+}
+
+.runview__detail-head button {
+  margin-left: 6px;
+  padding: 2px 10px;
+  border: 1px solid var(--mc-border-strong);
+  border-radius: var(--mc-radius);
+  color: var(--mc-text);
+  background: var(--mc-surface-1);
+  font: inherit;
+  cursor: pointer;
+}
+
+.runview__detail-head button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.runview__facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 6px 16px;
+  margin: 0;
+  font-size: 13px;
+}
+
+.runview__facts dt {
+  color: var(--mc-text-2);
+}
+
+.runview__facts dd {
+  margin: 0;
+  color: var(--mc-text);
+  font-variant-numeric: tabular-nums;
+}
+
+.runview__tech summary {
+  color: var(--mc-text-2);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.runview__tech p {
+  margin: 6px 0 0;
+  color: var(--mc-text-2);
+  font-size: 12px;
+}
+
+.runview__table-wrap {
+  max-height: 260px;
+  overflow: auto;
+}
+
+.runview__table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.runview__table caption {
+  padding-bottom: 6px;
+  color: var(--mc-text-2);
+  text-align: left;
+}
+
+.runview__table th,
+.runview__table td {
+  padding: 4px 8px;
+  border-top: 1px solid var(--mc-border);
+  color: var(--mc-text);
+  text-align: left;
+  white-space: nowrap;
+}
+
+.runview__table th {
+  color: var(--mc-text-2);
+  font-weight: 500;
+}
+
+.runview__table tr[data-selected='true'] td {
+  background: var(--mc-surface-hover);
+}
+
+.runview__table button {
+  padding: 0;
+  border: 0;
+  color: var(--mc-info);
+  background: none;
+  font: inherit;
+  cursor: pointer;
+}
+
+.runview__num {
+  text-align: right !important;
+  font-variant-numeric: tabular-nums;
+}
+
+@media (max-width: 720px) {
+  .runview__kpis {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .runview__chart,
+  .runview__chart .demo-terminal__chart {
+    --terminal-chart-height: 340px;
+  }
+}

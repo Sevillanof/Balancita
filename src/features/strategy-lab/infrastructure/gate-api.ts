@@ -24,6 +24,8 @@ export type GateRun = {
   attempts: number | null
   error: string | null
   has_report: boolean
+  /** True when the run is of the strategy's current content (the server marks it). */
+  same_version?: boolean
 }
 
 export type GateExam =
