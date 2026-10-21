@@ -4,10 +4,6 @@ import { amount } from '../../../shared/finance/format.ts'
 import { signedAmount } from '../domain/strategy-format.ts'
 import { STAGES, deriveStage } from '../domain/run-stage.ts'
 import {
-  exitReasonText,
-  fundingText,
-  holdText,
-  madridTime,
   priceLinesOf,
   markerIds,
   tradeOfMarker,
@@ -83,7 +79,6 @@ export default function StrategyRunView({
 }: Props) {
   const [overview, setOverview] = useState<GateOverview | null>(null)
   const [overviewError, setOverviewError] = useState<string | null>(null)
-  const [pickedRun, setPickedRun] = useState<number | null>(null)
   const [state, setState] = useState<
     | { kind: 'loading' }
     | { kind: 'empty'; reason: 'no-runs' | 'no-trades-saved' }
@@ -91,7 +86,6 @@ export default function StrategyRunView({
     | { kind: 'ready'; data: Loaded }
   >({ kind: 'loading' })
   const [selectedId, setSelectedId] = useState<string | null>(null)
-  const [moreError, setMoreError] = useState<string | null>(null)
   const token = useRef(0)
   const invalidate = useCallback(() => {
     token.current += 1
@@ -184,10 +178,7 @@ export default function StrategyRunView({
   useEffect(() => {
     if (overview === null) return
     const mine = ++token.current
-    const candidates =
-      pickedRun !== null
-        ? finished.filter((run) => run.id === pickedRun)
-        : finished
+    const candidates = finished
     void (async () => {
       if (finished.length === 0) {
         setState({ kind: 'empty', reason: 'no-runs' })
@@ -201,7 +192,7 @@ export default function StrategyRunView({
         } catch (error) {
           if (token.current !== mine) return
           const code = error instanceof RunVisualError ? error.code : 'error'
-          if (code === 'artifact_not_ready' && pickedRun === null) continue
+          if (code === 'artifact_not_ready') continue
           setState({ kind: 'error', text: message(error), code })
           return
         }
@@ -210,7 +201,7 @@ export default function StrategyRunView({
         setState({ kind: 'empty', reason: 'no-trades-saved' })
     })()
     return invalidate
-  }, [overview, finished, pickedRun, openRun, invalidate])
+  }, [overview, finished, openRun, invalidate])
 
   const data = state.kind === 'ready' ? state.data : null
 
@@ -238,24 +229,8 @@ export default function StrategyRunView({
     }
   }
 
-  const changeProduct = async (product: string) => {
-    if (!data) return
-    const mine = ++token.current
-    setMoreError(null)
-    try {
-      await loadProduct(mine, data.summary, product)
-    } catch (error) {
-      if (token.current === mine) setMoreError(message(error))
-    }
-  }
-
   const selected =
     data?.trades.find((trade) => trade.trade_id === selectedId) ?? null
-  const selectedIndex = selected && data ? data.trades.indexOf(selected) : -1
-  const step = (delta: number) => {
-    const next = data?.trades[selectedIndex + delta]
-    if (next) void select(next)
-  }
 
   const candlesData = data?.candles ?? null
   const chartCandles = useMemo(
@@ -314,7 +289,6 @@ export default function StrategyRunView({
           </li>
         ))}
       </ol>
-      <p className="runview__hint">{stage.reason}</p>
       {overviewError && (
         <p role="alert" className="runview__warn">
           No se pudieron leer las pruebas: {overviewError}
@@ -363,16 +337,6 @@ export default function StrategyRunView({
           tone={null}
         />
       </div>
-      {data && (
-        <p className="runview__hint">
-          Las cuatro cifras son de la prueba completa (
-          {data.summary.products.length}{' '}
-          {data.summary.products.length === 1 ? 'producto' : 'productos'}); el
-          gráfico muestra un producto a la vez.
-          {summary?.verdict === 'INCONCLUSO' && ' El veredicto es inconcluso.'}
-        </p>
-      )}
-
       <div className="runview__chart-card">
         <div className="runview__chart-head">
           <h4>
@@ -380,38 +344,6 @@ export default function StrategyRunView({
               ? `${data.product} · Velas de la prueba`
               : 'Velas de la prueba'}
           </h4>
-          <div className="runview__controls">
-            {finished.length > 1 && (
-              <label>
-                Prueba{' '}
-                <select
-                  value={data?.summary.run_id ?? ''}
-                  onChange={(event) => setPickedRun(Number(event.target.value))}
-                >
-                  {finished.map((run) => (
-                    <option key={run.id} value={run.id}>
-                      {runName(run)} · {run.verdict ?? '—'}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            )}
-            {data && data.summary.products.length > 1 && (
-              <label>
-                Producto{' '}
-                <select
-                  value={data.product}
-                  onChange={(event) => void changeProduct(event.target.value)}
-                >
-                  {data.summary.products.map((product) => (
-                    <option key={product} value={product}>
-                      {product} ({data.summary.trades_by_product[product] ?? 0})
-                    </option>
-                  ))}
-                </select>
-              </label>
-            )}
-          </div>
         </div>
 
         {state.kind === 'loading' && (
@@ -420,8 +352,8 @@ export default function StrategyRunView({
         {state.kind === 'empty' && (
           <p className="runview__empty" data-testid="run-empty">
             {state.reason === 'no-runs'
-              ? 'Todavía no hay pruebas terminadas de esta estrategia. Corré una práctica abajo, en «Prueba fija».'
-              : 'Las pruebas anteriores no guardaron sus operaciones, así que no hay gráfico de ellas. Corré una práctica nueva y va a aparecer acá.'}
+              ? 'Todavía no hay pruebas terminadas de esta estrategia.'
+              : 'Las pruebas anteriores no guardaron sus operaciones: no hay gráfico de ellas.'}
           </p>
         )}
         {state.kind === 'error' && (
@@ -429,11 +361,6 @@ export default function StrategyRunView({
             {state.code === 'exam_not_unlocked'
               ? 'El examen todavía no terminó: sus velas y operaciones se muestran recién después.'
               : state.text}
-          </p>
-        )}
-        {moreError && (
-          <p role="alert" className="runview__warn">
-            {moreError}
           </p>
         )}
 
@@ -490,24 +417,6 @@ export default function StrategyRunView({
                 Madrid
               </li>
             </ul>
-
-            {selected && (
-              <TradeDetail
-                trade={selected}
-                index={selectedIndex}
-                total={data.trades.length}
-                summary={data.summary}
-                onStep={step}
-              />
-            )}
-            {data.trades.length > 0 && (
-              <TradeTable
-                trades={data.trades}
-                selectedId={selectedId}
-                total={data.total}
-                onSelect={(trade) => void select(trade)}
-              />
-            )}
           </>
         )}
       </div>
@@ -533,164 +442,6 @@ function Kpi({
         {value}
       </strong>
       <span className="runview__kpi-note">{note}</span>
-    </div>
-  )
-}
-
-function TradeDetail({
-  trade,
-  index,
-  total,
-  summary,
-  onStep,
-}: {
-  trade: RunTrade
-  index: number
-  total: number
-  summary: RunVisualSummary
-  onStep: (delta: number) => void
-}) {
-  const long = trade.side === 'LONG'
-  const usd = (value: string | null) =>
-    value == null ? 'sin dato' : `${amount(Number(value), 2)} USD`
-  return (
-    <section className="runview__detail" aria-label="Operación seleccionada">
-      <div className="runview__detail-head">
-        <h4>
-          {long ? 'LONG' : 'SHORT'} · operación {index + 1} de {total}
-        </h4>
-        <span>
-          <button
-            type="button"
-            onClick={() => onStep(-1)}
-            disabled={index <= 0}
-            aria-label="Operación anterior"
-          >
-            ‹
-          </button>
-          <button
-            type="button"
-            onClick={() => onStep(1)}
-            disabled={index >= total - 1}
-            aria-label="Operación siguiente"
-          >
-            ›
-          </button>
-        </span>
-      </div>
-      <dl className="runview__facts">
-        <div>
-          <dt>Entrada</dt>
-          <dd>
-            {madridTime(trade.entry_time_ms)} · {usd(trade.entry_price)}{' '}
-            <small>(precio modelado)</small>
-          </dd>
-        </div>
-        <div>
-          <dt>Salida</dt>
-          <dd>
-            {madridTime(trade.exit_time_ms)} · {usd(trade.exit_price)}{' '}
-            <small>(precio modelado)</small>
-          </dd>
-        </div>
-        <div>
-          <dt>Motivo de salida</dt>
-          <dd>{exitReasonText(trade.exit_reason)}</dd>
-        </div>
-        <div>
-          <dt>Duración</dt>
-          <dd>{holdText(trade.exit_time_ms - trade.entry_time_ms)}</dd>
-        </div>
-        <div>
-          <dt>Resultado neto</dt>
-          <dd data-tone={trade.net_bp < 0 ? 'bad' : 'good'}>
-            {bp(trade.net_bp)}
-            {trade.pnl_usd != null &&
-              ` · ${signedAmount(trade.pnl_usd, 2)} USD`}
-          </dd>
-        </div>
-        <div>
-          <dt>Costes</dt>
-          <dd>
-            Incluidos en el neto (comisión e impacto modelados) ·{' '}
-            {fundingText(trade.funding_status)}
-            {trade.funding_usd != null &&
-              ` (${signedAmount(trade.funding_usd, 4)} USD)`}
-          </dd>
-        </div>
-        <div>
-          <dt>Señal</dt>
-          <dd>
-            {trade.signal_time_ms != null
-              ? madridTime(trade.signal_time_ms)
-              : 'La hora de la señal no se guardó.'}
-          </dd>
-        </div>
-      </dl>
-      <details className="runview__tech">
-        <summary>Ver detalles</summary>
-        <p>
-          Operación <code>{trade.trade_id}</code> · prueba{' '}
-          <code>{summary.run_id}</code> · versión{' '}
-          <code>{summary.spec_hash.slice(0, 12)}</code> · costes{' '}
-          <code>{summary.cost_model_version}</code>
-        </p>
-      </details>
-    </section>
-  )
-}
-
-function TradeTable({
-  trades,
-  selectedId,
-  total,
-  onSelect,
-}: {
-  trades: RunTrade[]
-  selectedId: string | null
-  total: number
-  onSelect: (trade: RunTrade) => void
-}) {
-  return (
-    <div className="runview__table-wrap">
-      <table className="runview__table">
-        <caption>
-          Operaciones cerradas de este producto
-          {total > trades.length
-            ? ` (primeras ${trades.length} de ${total})`
-            : ` (${total})`}
-        </caption>
-        <thead>
-          <tr>
-            <th scope="col">Lado</th>
-            <th scope="col">Entrada</th>
-            <th scope="col">Salida</th>
-            <th scope="col">Motivo</th>
-            <th scope="col" className="runview__num">
-              Neto
-            </th>
-          </tr>
-        </thead>
-        <tbody>
-          {trades.map((trade) => (
-            <tr
-              key={trade.trade_id}
-              aria-selected={trade.trade_id === selectedId}
-              data-selected={trade.trade_id === selectedId}
-            >
-              <td>
-                <button type="button" onClick={() => onSelect(trade)}>
-                  {trade.side}
-                </button>
-              </td>
-              <td>{madridTime(trade.entry_time_ms)}</td>
-              <td>{madridTime(trade.exit_time_ms)}</td>
-              <td>{exitReasonText(trade.exit_reason)}</td>
-              <td className="runview__num">{bp(trade.net_bp)}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
     </div>
   )
 }

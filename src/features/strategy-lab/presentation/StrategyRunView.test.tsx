@@ -192,11 +192,9 @@ describe('StrategyRunView', () => {
       '5 velas · 2 marcas',
     )
     expect(visual.summary).toHaveBeenCalledWith(24)
-    // The newest trade is selected and the candles were requested around it.
-    expect(screen.getByText(/SHORT · operación 2 de 2/)).toBeInTheDocument()
-    expect(
-      screen.getByText('La hora de la señal no se guardó.'),
-    ).toBeInTheDocument()
+    // Only the screen of the reference: no trade table and no extra panels.
+    expect(screen.queryByRole('table')).toBeNull()
+    expect(screen.queryByText(/Ver detalles/)).toBeNull()
     expect(screen.getByTestId('run-gaps')).toHaveTextContent('Faltan 3 velas')
     expect(
       screen.getByText(/Histórico Kraken · ejecuciones paper simuladas/),
@@ -278,24 +276,18 @@ describe('StrategyRunView', () => {
     expect(screen.queryByTestId('chart')).not.toBeInTheDocument()
   })
 
-  it('selecting a trade in the table loads the candles around it; a marker click does the same', async () => {
+  it('a marker click loads the candles around that trade', async () => {
     const user = userEvent.setup()
     const visual = visualWith()
     renderView(gateWith(overview([run(24)])), visual)
     await screen.findByTestId('chart')
-    await user.click(screen.getByRole('button', { name: 'LONG' }))
-    expect(screen.getByText(/LONG · operación 1 de 2/)).toBeInTheDocument()
-    expect(screen.getByText('+12,0 pb', { selector: 'td' })).toBeInTheDocument()
-    expect(vi.mocked(visual.candles).mock.calls.at(-1)?.[2]).toEqual({
-      from: T0 + 60 * MIN - 120 * MIN,
-      to: T0 + 60 * MIN + 30 * MIN + 120 * MIN,
-    })
-    await user.click(
-      screen.getByRole('button', { name: 'Operación siguiente' }),
-    )
-    expect(screen.getByText(/SHORT · operación 2 de 2/)).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: 'marca-1' }))
-    expect(screen.getByText(/LONG · operación 1 de 2/)).toBeInTheDocument()
+    await waitFor(() =>
+      expect(vi.mocked(visual.candles).mock.calls.at(-1)?.[2]).toEqual({
+        from: T0 + 60 * MIN - 120 * MIN,
+        to: T0 + 60 * MIN + 30 * MIN + 120 * MIN,
+      }),
+    )
   })
 
   it('derives the stage from the gate records: a failed exam stays at "Examen", only a passed one reaches Paper', async () => {

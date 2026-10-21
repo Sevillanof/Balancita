@@ -46,7 +46,6 @@ import {
   type PurgeStatus,
   type PeriodDays,
   type Ranking,
-  type InventoryStrategy,
   type StrategyApi,
   type StrategyPlan,
   type StrategyDetail,
@@ -77,7 +76,7 @@ import {
   DeleteDialog,
   PurgeNotice,
 } from './LifecycleDialogs.tsx'
-import ComparisonView from './ComparisonView.tsx'
+import StrategiesPage from './StrategiesPage.tsx'
 import type { LoadActivity } from './StrategyDetailView.tsx'
 import {
   MODEL_TEXTS,
@@ -167,12 +166,11 @@ export default function StrategyLab({
   loadQwen = defaultLoadQwen,
   loadKronos = defaultLoadKronos,
   initialView = 'home',
-  loadActivity,
 }: Props) {
   const [view, setView] = useState<StrategyView>(initialView)
   const [homeId, setHomeId] = useState<string | null>(null)
   // «Ver contador» de la tarjeta de Carry: lleva al contador de Carry dentro del laboratorio.
-  const [carryRequest, setCarryRequest] = useState(0)
+  const [carryRequest] = useState(0)
   const carryRef = useRef<HTMLDivElement>(null)
   // Last carry request already served: a later entry to the laboratory from
   // another view (home, detail) must not pull the focus back to Carry.
@@ -501,19 +499,6 @@ export default function StrategyLab({
     setError(null)
   }
 
-  const openInLab = (row: InventoryStrategy) => {
-    setView('lab')
-    setNotice(null)
-    setError(null)
-    if (row.kind === 'carry') setCarryRequest((value) => value + 1)
-    else if (row.kind === 'model') setFocus('kronos')
-    else if (row.kind === 'rules') {
-      setFocus(null)
-      setShowPreview(false)
-      if (row.id !== selectedId) select(row.id)
-    }
-  }
-
   const refresh = (id: string | null, message: string | null) => {
     setSelectedId(id)
     setReload((value) => value + 1)
@@ -765,20 +750,12 @@ export default function StrategyLab({
   return (
     <div className="strategy-lab">
       {view === 'home' && (
-        <ComparisonView
+        <StrategiesPage
           api={api}
           connectError={connectError}
           reload={reload}
-          onOpen={openInLab}
           selectedId={homeId}
           onSelect={setHomeId}
-          loadDetailActivity={loadActivity}
-          onNew={() => {
-            setNotice(null)
-            setError(null)
-            setCreating(true)
-            setView('lab')
-          }}
         />
       )}
       {view === 'lab' && (

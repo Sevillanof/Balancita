@@ -22,8 +22,6 @@ const REGISTRY_PORT = 8790
 const LIVE_PORT = 8789
 const SHOTS =
   process.env.INVENTORY_SHOTS_DIR ?? 'playwright-artifacts/inventario'
-const DETAIL_SHOTS =
-  process.env.DETAIL_SHOTS_DIR ?? 'playwright-artifacts/detalle-c29'
 const SANDBOX_NOTE =
   'DATOS DE EJEMPLO · SANDBOX · config/ real copiada (solo lectura) + base temporal del registro · estados de registro sembrados, no los de la Mac'
 
@@ -211,7 +209,7 @@ test('GET /api-strategies/inventory answers through the Vite proxy with the real
   ).toBe(404)
 })
 
-test('Estrategias opens on the comparison and every interaction answers', async ({
+test('Estrategias is only the list of names and the last test of the chosen one', async ({
   page,
 }) => {
   const log: { method: string; url: string; status: number }[] = []
@@ -226,321 +224,37 @@ test('Estrategias opens on the comparison and every interaction answers', async 
   })
 
   await page.goto('/estrategias')
-  await expect(
-    page.getByRole('heading', { name: 'Un libro paper por estrategia' }),
-  ).toBeVisible()
-  // One page: no tabs, no separate inventory.
+  const list = page.getByRole('navigation', { name: 'Lista de estrategias' })
+  // Every strategy is in the list, retired ones included (10 + the 6 retired).
+  await expect(list.getByRole('button')).toHaveCount(10)
+  await expect(list.getByRole('button', { name: /^C27/ })).toBeVisible()
   await expect(page.getByRole('tablist')).toHaveCount(0)
-  const cards = page.getByTestId('strategy-list-item')
-  await expect(cards).toHaveCount(4)
-  const retiredRows = page.getByTestId('retired-row')
-  await expect(retiredRows).toHaveCount(6)
-  // Same words for both axes; C30 is the only candidate, never "reliable".
-  const c30 = page.locator('li[data-id="c30-momentum-12h-perp-v1"]')
-  await expect(c30.getByTestId('operational-badge')).toHaveText('Borrador')
-  await c30.getByRole('button').click()
+
+  // The chosen strategy shows its last test: stage bar and the four figures.
+  await list.getByRole('button', { name: /^C29/ }).click()
+  const view = page.getByTestId('run-view')
+  await expect(view).toBeVisible()
   await expect(
-    page.getByTestId('strategy-detail').getByTestId('research-badge'),
-  ).toHaveText('Candidata, no fiable')
-  await expect(
-    page
-      .locator('li[data-id="kronos-small-1h-h4-v1"]')
-      .getByTestId('operational-badge'),
-  ).toHaveText('Estado no verificado')
-  await expect(page.getByText('Activa en paper')).toHaveCount(0)
-  await expect(page.getByText('Con evidencia de ventaja')).toHaveCount(0)
+    view.getByRole('list', { name: 'Etapa de la estrategia' }),
+  ).toBeVisible()
+  await expect(view.getByTestId('run-kpis')).toBeVisible()
+  await list.getByRole('button', { name: /^C27/ }).click()
+  await expect(page.getByTestId('run-view')).toHaveAccessibleName(/C27/)
   await shot(page, '1-estrategias')
 
-  // Retired and turned-off strategies: always in the list, each with reason and date.
-  await expect(page.getByTestId('retired')).toContainText(
-    'Retiradas y apagadas',
-  )
-  await expect(
-    page.locator('li[data-id^="c25"]').getByTestId('operational-badge'),
-  ).toHaveText('Retirada')
-  await expect(page.locator('li[data-id^="c25"]')).toContainText(
-    'se cerró con el motor viejo D: sin ventaja tras costes',
-  )
-  await expect(page.locator('li[data-id^="c25"]')).not.toContainText(
-    'closed_with_engine_d',
-  )
-  // C31 is off by owner decision (2026-10-18): the badge says so and shows why.
-  const c31 = page.locator('li[data-id^="c31"]')
-  await expect(c31.getByTestId('operational-badge')).toHaveText('Apagada')
-  await expect(c31.getByTestId('operational-badge')).toHaveAttribute(
-    'title',
-    /^Apagada desde 2026-10-18 · motivo: apagada desde 2026-10-18: Decisión del propietario/,
-  )
-  await expect(c31).toContainText('desde 2026-10-18')
-  await expect(c31).not.toContainText('Para reactivarla')
-  expect((await c31.innerText()).match(/2026-10-18/g)).toHaveLength(1)
-  // C32 was retired by the owner: closed, with its own reason and date.
-  const c32 = page.locator('li[data-id^="c32"]')
-  await expect(c32.getByTestId('operational-badge')).toHaveAttribute(
-    'title',
-    /^Retirada desde 2026-10-18 · motivo: Retirada \(18-oct\): ya no se usa/,
-  )
-  await expect(c32).toContainText('Motivo: ya no se usa')
-  await shot(page, '2-retiradas')
-
-  // Detail opens the C29 detail view; the laboratory stays one click away.
-  await page.getByRole('button', { name: /^Ver C29/ }).click()
-  await expect(page.getByTestId('strategy-detail')).toBeVisible()
-  await page.getByRole('button', { name: 'Abrir en Laboratorio' }).click()
-  await expect(
-    page.getByRole('heading', { name: /^C29/ }).first(),
-  ).toBeVisible()
-  await expect(
-    page.getByRole('button', { name: 'Nueva estrategia' }),
-  ).toBeVisible()
-  await expect(page.getByRole('button', { name: 'Importar' })).toBeVisible()
-  await shot(page, '3-laboratorio-c29')
-  await page.getByRole('button', { name: '← Estrategias' }).click()
-  await expect(cards).toHaveCount(4)
-
-  // «Ver contador» of the Carry card opens the real counter and returns.
-  await page
-    .getByRole('button', { name: /^Ver .*Carry/ })
-    .first()
-    .click()
-  await page.getByRole('button', { name: /Ver contador de/ }).click()
-  await expect(page.getByRole('heading', { name: 'Laboratorio' })).toBeVisible()
-  const carryPanel = page.getByRole('region', { name: 'Carry de funding' })
-  await expect(carryPanel).toBeVisible()
-  await expect(page.getByTestId('carry-destino')).toBeFocused()
-  await expect(carryPanel).toBeInViewport()
-  await shot(page, '4-contador-carry')
-  await page.getByRole('button', { name: '← Estrategias' }).click()
-  await expect(cards).toHaveCount(4)
-
-  // The Carry request is served once: entering the Laboratory again through
-  // «Nueva estrategia» (not «Ver contador») must not pull the focus to Carry.
-  await page.getByRole('button', { name: 'Nueva estrategia' }).click()
-  await expect(page.getByRole('dialog')).toBeVisible()
-  await page.keyboard.press('Escape')
-  await expect(
-    page.getByRole('region', { name: 'Carry de funding' }),
-  ).toBeVisible()
-  await expect(page.getByTestId('carry-destino')).not.toBeFocused()
-  await page.getByRole('button', { name: '← Estrategias' }).click()
-  await expect(cards).toHaveCount(4)
+  // Nothing else is on the screen.
+  await expect(page.getByText('Nueva estrategia')).toHaveCount(0)
+  await expect(page.getByText('Ver detalles')).toHaveCount(0)
+  await expect(page.getByText(/Módulo \d\d/i)).toHaveCount(0)
 
   mkdirSync(SHOTS, { recursive: true })
   writeFileSync(join(SHOTS, 'solicitudes.json'), JSON.stringify(log, null, 2))
-  const inventoryCalls = log.filter((entry) =>
-    entry.url.startsWith('/api-strategies/inventory'),
-  )
-  expect(inventoryCalls.length).toBeGreaterThan(0)
-  expect(inventoryCalls.every((entry) => entry.status === 200)).toBe(true)
-  const notFound = log.filter(
-    (entry) => entry.url.startsWith('/api-strategies/') && entry.status === 404,
-  )
-  expect(notFound, JSON.stringify(notFound, null, 2)).toEqual([])
-  const failed = log.filter(
-    (entry) => entry.url.startsWith('/api-strategies/') && entry.status >= 500,
-  )
-  expect(failed, JSON.stringify(failed, null, 2)).toEqual([])
-})
-
-test('the forward result of C30 renders live and recovered apart, with progress', async ({
-  page,
-}) => {
-  await page.goto('/estrategias')
-  await page.locator(`li[data-id="${C30}"]`).getByRole('button').click()
-  const forward = page
-    .getByTestId('strategy-pane')
-    .getByTestId('forward-result')
-  await expect(forward).toBeVisible()
-  await expect(forward.getByTestId('forward-state')).toContainText('Borrador')
-  await expect(forward.getByTestId('forward-live')).toContainText('7 cerradas')
-  await expect(forward.getByTestId('forward-live')).toContainText('+31,50 USD')
-  await expect(forward.getByTestId('forward-recovered')).toContainText(
-    '2 cerradas',
-  )
-  await expect(forward.getByTestId('forward-progress')).toContainText(
-    '7/15 operaciones en vivo',
-  )
-  await expect(forward.getByTestId('forward-last-run')).toContainText(
-    'hace 10 min',
-  )
-  await expect(forward.getByText('Atrasado')).toHaveCount(0)
-  // A strategy the summary does not list shows the reason, not a number.
-  await page
-    .locator('li[data-id="c29-momentum-perp-v1"]')
-    .getByRole('button')
-    .click()
-  await expect(
-    page.getByTestId('strategy-pane').getByTestId('forward-result'),
-  ).toContainText('sin resumen del forward')
-})
-
-test('navigation: Terminal <-> Estrategias <-> detail, no new tabs', async ({
-  page,
-}) => {
-  await page.route('**/api-live/**', (route) =>
-    route.fulfill({ status: 503, json: {} }),
-  )
-  // The Terminal side of the round trip (with its own navigation) is covered
-  // against the real gateway in integracion-gateway.pw.ts.
-  await page.goto('/estrategias')
-  await expect(
-    page.getByRole('heading', { name: 'Un libro paper por estrategia' }),
-  ).toBeVisible()
-  await expect(page.getByTestId('strategy-list-item')).toHaveCount(4)
-  // No tabs: Estrategias is one page.
-  await expect(page.getByRole('tablist')).toHaveCount(0)
-  // Strategies page -> detail of C29 -> back through the breadcrumb.
-  await page.getByRole('button', { name: /^Ver C29/ }).click()
-  const detail = page.getByTestId('strategy-detail')
-  await expect(detail).toBeVisible()
-  await expect(detail.getByRole('heading', { name: /^C29/ })).toBeVisible()
-  await expect(page.getByTestId('strategy-list-item')).toHaveCount(4)
-  // The detail is generic: other rules strategies open the same view, with
-  // their own figures and without C29's.
-  await page.getByRole('button', { name: /^Ver C30/ }).click()
-  await expect(detail.getByRole('heading', { name: /^C30/ })).toBeVisible()
-  await expect(detail.getByTestId('module-performance')).toBeVisible()
-  await expect(detail.getByTestId('module-config')).not.toContainText(
-    'HASH: ca81f9ce',
-  )
-  await expect(detail.getByTestId('module-performance')).toContainText(
-    'Fuera de muestra (OOS)',
-  )
-  // Detail of C29 -> general Terminal (no C29 selection) -> back.
-  await page.getByRole('button', { name: /^Ver C29/ }).click()
-  await expect(detail.getByRole('heading', { name: /^C29/ })).toBeVisible()
-  await expect(detail.getByText('Ver en Terminal')).toHaveCount(0)
-  const toTerminal = detail.getByRole('link', { name: /Abrir la Terminal/ })
-  await expect(toTerminal).toHaveAccessibleDescription(
-    'Abre la Terminal general; no selecciona el experimento C29.',
-  )
-  await toTerminal.click()
-  await expect(page).toHaveURL(/\/terminal$/)
-  expect(new URL(page.url()).search + new URL(page.url()).hash).toBe('')
-  await expect(page.getByTestId('strategy-detail')).toHaveCount(0)
-  await page.goBack()
-  await expect(page).toHaveURL(/\/estrategias$/)
-  await expect(page.getByTestId('strategy-list-item')).toHaveCount(4)
-  await page.getByRole('button', { name: /^Ver C30/ }).click()
-  // Detail -> laboratory (explicit action) -> back to the strategies page.
-  await detail.getByRole('button', { name: 'Abrir en Laboratorio' }).click()
-  await expect(page.getByRole('heading', { name: 'Laboratorio' })).toBeVisible()
-  await page.getByRole('button', { name: '← Estrategias' }).click()
-  await expect(page.getByTestId('strategy-list-item')).toHaveCount(4)
-  // Estrategias -> Terminal -> back: opens on the strategies page again.
-  await page.getByRole('link', { name: 'Terminal', exact: true }).click()
-  await expect(page).toHaveURL(/\/terminal$/)
-  await page.goBack()
-  await expect(page).toHaveURL(/\/estrategias$/)
-  await expect(page.getByTestId('strategy-list-item')).toHaveCount(4)
-})
-
-test('Detalle C29 shows the real registry figures, B2 operations and no invented data', async ({
-  page,
-}) => {
-  const log: { method: string; url: string; status: number }[] = []
-  page.on('response', (response) => {
-    const url = new URL(response.url())
-    if (url.pathname.startsWith('/api-'))
-      log.push({
-        method: response.request().method(),
-        url: url.pathname + url.search,
-        status: response.status(),
-      })
-  })
-  const reliability = JSON.parse(
-    readFileSync(join(configCopy, 'strategy-reliability.json'), 'utf8'),
-  ) as {
-    strategies: Record<
-      string,
-      {
-        trades: number
-        mean_net_bp: number
-        pnl_usd: number
-        t_stat: number
-        spec_hash: string
-        verdict: string
-        by_range: Record<string, { trades: number }>
-      }
-    >
-  }
-  const c29 = reliability.strategies['c29-momentum-perp-v1']!
-
-  await page.goto('/estrategias')
-  await page.getByRole('button', { name: /^Ver C29/ }).click()
-  const detail = page.getByTestId('strategy-detail')
-  await expect(detail).toBeVisible()
-  await expect(
-    detail.getByRole('heading', { name: /^C29/, level: 2 }),
-  ).toBeVisible()
-  // Same badges as the cards.
-  await expect(detail.getByTestId('operational-badge')).toHaveText('Borrador')
-  await expect(detail.getByTestId('research-badge')).toHaveText(
-    'Sin ventaja demostrada',
-  )
-  await expect(detail.getByTestId('frozen-badge')).toBeVisible()
-  // Figures straight from strategy-reliability.json.
-  const performance = detail.getByTestId('module-performance')
-  await expect(performance).toContainText(`${String(c29.trades)} operaciones`)
-  await expect(performance).toContainText('+24,02 pb/op')
-  await expect(performance).toContainText('+174,59 USD')
-  await expect(performance.getByTestId('range-table')).toContainText(
-    String(c29.by_range.previous!.trades),
-  )
-  // The real ranges last 237 days (first/last bucket), not the 240 of a label.
-  await expect(performance).toContainText('2 rangos de 237 d')
-  await expect(performance.getByTestId('range-table')).not.toContainText('240')
-  // Backtest, out of sample and forward are separate and never mixed.
-  await expect(performance.getByTestId('oos-note')).toContainText(
-    'No disponible',
-  )
-  await expect(performance.getByText('Fuente:')).toHaveCount(3)
-  await expect(performance.getByTestId('verdict')).toContainText(
-    'no es rentabilidad demostrada',
-  )
-  // Forward: C29 is not measured by the forward runner, so it says why and
-  // shows no number. Pipeline: B3.
-  await expect(performance).toContainText(
-    'resultados del forward: sin resumen del forward',
-  )
-  await expect(detail.getByTestId('module-pipeline')).toContainText('B3')
-  // Real spec and hash.
-  await expect(detail.getByTestId('module-config')).toContainText(
-    `HASH: ${c29.spec_hash.slice(0, 8)}`,
-  )
-  await expect(detail.getByTestId('params-table')).toContainText('sqrt_bars')
-  await expect(detail.getByTestId('side-LONG')).toContainText(
-    'c29_long_momentum',
-  )
-  await expect(detail.getByTestId('plan-table')).toContainText('100 USD')
-  // B2 answered for real (sandbox forward has no C29 row: said, not invented).
-  await expect(detail.getByTestId('module-operations')).not.toContainText(
-    'Leyendo operaciones',
-  )
-  await expect(detail.getByTestId('module-operations')).not.toContainText(
-    'no se pudo leer B2',
-  )
-  expect(await detail.locator('svg, canvas').count()).toBe(0)
-
-  mkdirSync(DETAIL_SHOTS, { recursive: true })
-  await shot(page, 'detalle-c29', DETAIL_SHOTS, false)
-  await shot(page, 'detalle-c29-completo', DETAIL_SHOTS)
-  // Back to the strategies page through the breadcrumb.
-  await expect(page.getByTestId('strategy-list-item')).toHaveCount(4)
-
-  writeFileSync(
-    join(DETAIL_SHOTS, 'solicitudes.json'),
-    JSON.stringify(log, null, 2),
-  )
-  const activity = log.filter((entry) =>
-    entry.url.startsWith('/api-live/observability/activity'),
-  )
-  expect(activity.length).toBeGreaterThan(0)
-  expect(activity.every((entry) => entry.status === 200)).toBe(true)
-  const broken = log.filter(
+  const bad = log.filter(
     (entry) =>
       entry.url.startsWith('/api-strategies/') &&
+      // This sandbox registry runs without a gate database.
+      !entry.url.includes('/gate/') &&
       (entry.status === 404 || entry.status >= 500),
   )
-  expect(broken, JSON.stringify(broken, null, 2)).toEqual([])
+  expect(bad, JSON.stringify(bad, null, 2)).toEqual([])
 })
