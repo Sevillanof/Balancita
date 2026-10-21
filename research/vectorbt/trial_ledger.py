@@ -19,6 +19,7 @@ import sqlite3
 import time
 import urllib.parse
 
+from research.vectorbt.data_contract import ContractError
 from research.vectorbt.engine import ROOT, futures_costs
 from balancita_engine.strategy_gate import family_of
 
@@ -133,7 +134,11 @@ class Ledger:
 
 
 def count_distinct_variants(path, family):
-    """Distinct variants of ``family`` read-only; 0 if the file or the table does not exist. Never writes."""
+    """Distinct variants of ``family`` read-only; 0 only if the file does not exist. Never writes.
+
+    An existing file that cannot be read (corrupt, no ``trials`` table) raises ``ContractError``: returning 0 would
+    undercount attempts.
+    """
     if not os.path.isfile(path):
         return 0
     try:
@@ -143,5 +148,5 @@ def count_distinct_variants(path, family):
                                 (family,)).fetchone()[0]
         finally:
             conn.close()
-    except sqlite3.Error:
-        return 0
+    except sqlite3.Error as exc:
+        raise ContractError("El registro de intentos existe pero no se puede leer ({}): {}".format(path, exc)) from exc

@@ -70,3 +70,21 @@ def test_check_candles_rejects_a_candle_that_closes_after_the_holdout():
     row = {"bucket_start": holdout - 60_000 + 1, "open": "1", "high": "2", "low": "1", "close": "2", "volume_btc": "1"}
     with pytest.raises(contract.ContractError):
         contract.check_candles([row], "1m", holdout)
+
+
+def test_check_window_exact_edges():
+    holdout = contract.date_ms("2025-03-02")
+    start = holdout - 3_600_000
+    contract.check_window(start, holdout, holdout)  # ends exactly at the holdout: accepted
+    with pytest.raises(contract.ContractError):
+        contract.check_window(start, holdout + 60_000, holdout)  # one minute into the holdout
+    with pytest.raises(contract.ContractError):
+        contract.check_window(start, start, holdout)  # empty window
+
+
+def test_read_cache_accepts_a_directory_with_spaces(tmp_path):
+    cache = str(tmp_path / "carpeta con espacio" / "cache")
+    minutes = helpers.synthetic_minutes(60)
+    helpers.write_cache(cache, PRODUCT, minutes)
+    rows = export_practice.read_cache(cache, PRODUCT, "1m", helpers.START_MS, helpers.START_MS + 60 * 60_000)
+    assert len(rows) == 60
