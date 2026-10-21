@@ -25,6 +25,8 @@ class InventoryTest(unittest.TestCase):
         self.registry = StrategyRegistry(os.path.join(self.dir, "s.db"))
         self.registry.seed(load_specs())
         self.registry.apply_closed()
+        for strategy_id in ("c29-momentum-perp-v1", "c30-momentum-12h-perp-v1"):  # shipped ones start as drafts
+            self.registry.set_state(strategy_id, 1, "active", "test", skip_gates=True)
         self.addCleanup(self.registry.close)
         self.service = StrategyService(self.registry, None, {})
 
@@ -39,6 +41,15 @@ class InventoryTest(unittest.TestCase):
         c29 = _row(inv, "c29-momentum-perp-v1")
         self.assertEqual((c29["operational"]["state"], c29["research"]["state"]), ("active", "no_edge"))
         self.assertFalse(c29["research"]["evidence_of_edge"])
+
+    def test_shipped_strategies_start_as_drafts_until_the_user_activates_them(self):
+        registry = StrategyRegistry(os.path.join(self.dir, "fresh.db"))
+        self.addCleanup(registry.close)
+        registry.seed(load_specs())
+        registry.apply_closed()
+        inv = StrategyService(registry, None, {}).inventory()
+        self.assertEqual(_row(inv, "c29-momentum-perp-v1")["operational"]["state"], "draft")
+        self.assertEqual(inv["counts"]["active"], 0)
 
     def test_edge_evidence_only_for_candidate_or_better(self):
         inv = self.inventory()

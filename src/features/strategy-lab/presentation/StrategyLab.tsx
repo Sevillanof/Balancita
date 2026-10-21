@@ -41,7 +41,9 @@ import {
   StrategyApiError,
   connectStrategyApi,
   type Backtest,
+  type DeletePreview,
   type Gate,
+  type PurgeStatus,
   type PeriodDays,
   type Ranking,
   type Inventory,
@@ -70,6 +72,11 @@ import {
   VersionsTab,
 } from './StrategyLabPanels.tsx'
 import { NewStrategyModal } from './NewStrategyModal.tsx'
+import {
+  ActivationDialog,
+  DeleteDialog,
+  PurgeNotice,
+} from './LifecycleDialogs.tsx'
 import ComparisonView from './ComparisonView.tsx'
 import StrategyDetailView, { type LoadActivity } from './StrategyDetailView.tsx'
 import {
@@ -205,6 +212,15 @@ export default function StrategyLab({
   const [importText, setImportText] = useState('')
   const [importNotes, setImportNotes] = useState<string[]>([])
   const [notice, setNotice] = useState<string | null>(null)
+  /** Activation waiting for the user's confirmation (`passed`: did this version pass the gate; null: checking). */
+  const [activation, setActivation] = useState<{
+    passed: boolean | null
+  } | null>(null)
+  const [deletion, setDeletion] = useState<DeletePreview | null>(null)
+  const [purge, setPurge] = useState<{
+    name: string
+    status: PurgeStatus
+  } | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [gates, setGates] = useState<Gate[]>([])
   const [busy, setBusy] = useState(false)
@@ -508,7 +524,7 @@ export default function StrategyLab({
     openInLab(row)
   }
 
-  const refresh = (id: string | null, message: string) => {
+  const refresh = (id: string | null, message: string | null) => {
     setSelectedId(id)
     setReload((value) => value + 1)
     setSaveMode('modify')
@@ -582,25 +598,72 @@ export default function StrategyLab({
       )
     })
 
+  const changeStateNow = async (state: StrategyState, paperNow?: boolean) => {
+    if (!api || !detail) return
+    await api.setState(detail.id, detail.version, state, paperNow)
+    refresh(
+      detail.id,
+      `${shortName(detail.name, detail.id)} pasó a ${STATE_LABELS[state].toLowerCase()}.`,
+    )
+  }
+
   const changeState = (state: StrategyState, paperNow?: boolean) =>
+    run(() => changeStateNow(state, paperNow))
+
+  const requestActivation = () =>
     run(async () => {
       if (!api || !detail) return
-      await api.setState(detail.id, detail.version, state, paperNow)
-      refresh(
-        detail.id,
-        `${shortName(detail.name, detail.id)} pasó a ${STATE_LABELS[state].toLowerCase()}.`,
-      )
+      setActivation({ passed: null })
+      const passed = api.gatePassed
+        ? await api.gatePassed(detail.id, detail.version).catch(() => false)
+        : false
+      setActivation({ passed })
+    })
+
+  const confirmActivation = () =>
+    run(async () => {
+      setActivation(null)
+      await changeStateNow('active', true)
+    })
+
+  const requestDeletion = () =>
+    run(async () => {
+      if (!api || !detail) return
+      setDeletion(await api.deletePreview(detail.id))
     })
 
   const deleteStrategy = (confirm: string) =>
     run(async () => {
       if (!api || !detail) return
-      await api.deleteStrategy(detail.id, confirm)
+      const result = await api.deleteStrategy(detail.id, confirm)
+      const name = shortName(detail.name, detail.id)
+      setDeletion(null)
       setSelectedId(null)
       setDetail(null)
       setDraft(null)
-      refresh(null, `${shortName(detail.name, detail.id)} se borró.`)
+      setPurge({ name, status: result })
+      refresh(null, null)
     })
+
+  useEffect(() => {
+    if (
+      !api ||
+      !purge ||
+      purge.status.state === 'done' ||
+      !purge.status.purge_id
+    )
+      return
+    const id = purge.status.purge_id
+    const timer = setInterval(() => {
+      void api
+        .purgeStatus(id)
+        .then((status) =>
+          setPurge((current) => (current ? { ...current, status } : current)),
+        )
+        .catch(() => undefined)
+    }, 2000)
+    return () => clearInterval(timer)
+  }, [api, purge])
 
   const importSpec = () =>
     run(async () => {
@@ -855,6 +918,24 @@ export default function StrategyLab({
             <p role="status" className="strategy-lab__notice">
               {notice}
             </p>
+          )}
+          {purge && <PurgeNotice name={purge.name} status={purge.status} />}
+          {activation && detail && (
+            <ActivationDialog
+              name={shortName(detail.name, detail.id)}
+              passed={activation.passed}
+              busy={busy}
+              onConfirm={confirmActivation}
+              onClose={() => setActivation(null)}
+            />
+          )}
+          {deletion && (
+            <DeleteDialog
+              preview={deletion}
+              busy={busy}
+              onConfirm={deleteStrategy}
+              onClose={() => setDeletion(null)}
+            />
           )}
           {error && (
             <div role="alert" className="strategy-lab__errors">
@@ -1557,7 +1638,8 @@ export default function StrategyLab({
                     detail={detail}
                     busy={busy}
                     onState={changeState}
-                    onDelete={deleteStrategy}
+                    onRequestActivate={requestActivation}
+                    onRequestDelete={requestDeletion}
                   />
                 )}
 

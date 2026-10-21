@@ -615,11 +615,10 @@ describe('observability health', () => {
       }
     })
 
-    it('rebuilds the expected set like the runner: file strategies unless the registry switched them off, plus registry-active ones', () => {
+    it('rebuilds the expected set like the runner: only what the registry has active, the file never switches anything on', () => {
       const b = box()
       seedHealthy(b)
-      // File: C30 (also active in the registry), C28 (retired in the registry),
-      // FILE1 (file only, with a spec) and NOSPEC (file only, no spec).
+      // File: C30 (active in the registry), C28 (retired), FILE1 (file only: draft by default, not expected).
       fresh(b.strategiesDb)
       seedStrategies(
         b.strategiesDb,
@@ -627,6 +626,7 @@ describe('observability health', () => {
           { id: 'C29', state: 'active' },
           { id: 'C30', state: 'active' },
           { id: 'C28', state: 'retired' },
+          { id: 'C33', state: 'draft' },
         ],
         NOW,
       )
@@ -634,7 +634,7 @@ describe('observability health', () => {
       fresh(b.forwardDb)
       seedForward(b.forwardDb, {
         now: NOW,
-        strategies: ['C29', 'C30', 'FILE1'],
+        strategies: ['C29', 'C30'],
         checkedAgeMs: 5 * 60_000,
       })
       const report = createObservabilityHealth(optionsOf(b)).report()
@@ -645,29 +645,72 @@ describe('observability health', () => {
         .filter((r) => r.strategy_id)
         .map((r) => [r.strategy_id, r.source])
       expect(ids).toEqual([
-        ['C30', 'archivo de registro forward'],
-        ['FILE1', 'archivo de registro forward'],
         ['C29', 'registro'],
+        ['C30', 'archivo de registro forward'],
       ])
-      expect(component(report, 'strategies').limitations.join(' ')).toMatch(
-        /NOSPEC.*omite/,
-      )
     })
 
-    it('says unknown for a file-only strategy when the specs folder is not configured', () => {
+    it('expects nothing when everything is a draft: no pairs, nothing to complain about', () => {
       const b = box()
       seedHealthy(b)
-      writeForwardConfig(b, ['FILE1'], ['FILE1'])
-      const report = createObservabilityHealth({
-        ...optionsOf(b),
-        strategySpecsDir: undefined,
-      }).report()
-      expect(check(component(report, 'paper'), 'forward_cycle').status).toBe(
-        'unknown',
+      fresh(b.strategiesDb)
+      seedStrategies(
+        b.strategiesDb,
+        [
+          { id: 'C29', state: 'draft' },
+          { id: 'C30', state: 'draft' },
+        ],
+        NOW,
       )
-      expect(check(component(report, 'paper'), 'forward_cycle').detail).toMatch(
-        /FILE1/,
+      writeForwardConfig(b, ['C30'], [])
+      const report = createObservabilityHealth(optionsOf(b)).report()
+      const coverage = check(
+        component(report, 'strategies'),
+        'forward_coverage',
       )
+      expect(coverage.detail).toMatch(/Ninguna estrategia debe estar/)
+      expect(coverage.status).not.toBe('error')
+    })
+
+    it('an active strategy without a row is pending (warning) while the forward is alive, until one loop plus the candle wait passed', () => {
+      for (const [ageMs, expected] of [
+        [2 * 60_000, 'warning'],
+        [64 * 60_000, 'warning'],
+        [70 * 60_000, 'error'],
+      ] as const) {
+        const b = box()
+        seedHealthy(b)
+        fresh(b.strategiesDb)
+        seedStrategies(
+          b.strategiesDb,
+          [
+            { id: 'C29', state: 'active' },
+            { id: 'C30', state: 'active' },
+          ],
+          NOW,
+        )
+        const db = new DatabaseSync(b.strategiesDb)
+        db.exec(
+          `UPDATE strategy_events SET known_at=${NOW - ageMs} WHERE strategy_id='C30' AND state='active'`,
+        )
+        db.close()
+        fresh(b.forwardDb)
+        seedForward(b.forwardDb, {
+          now: NOW,
+          strategies: ['C29'],
+          checkedAgeMs: 60_000,
+        })
+        const report = createObservabilityHealth(optionsOf(b)).report()
+        const items = component(report, 'paper').items as Record<string, any>[]
+        const c30 = items.find((i) => i.strategy_id === 'C30')!
+        expect(c30.status, `${ageMs}`).toBe(expected)
+        if (expected === 'warning') {
+          expect(c30.reason).toBe('awaiting_first_cycle')
+          expect(
+            check(component(report, 'strategies'), 'forward_coverage').detail,
+          ).toMatch(/pendiente: esperando el primer ciclo/)
+        }
+      }
     })
   })
 

@@ -1,12 +1,5 @@
-import {
-  closeSync,
-  openSync,
-  readdirSync,
-  readFileSync,
-  readSync,
-  statSync,
-} from 'node:fs'
-import { basename, join } from 'node:path'
+import { closeSync, openSync, readFileSync, readSync, statSync } from 'node:fs'
+import { basename } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 
 /**
@@ -125,6 +118,11 @@ const FORWARD_LOOP_MS = 60 * MINUTE
 const QWEN_EXIT_LOOP_MS = 30 * MINUTE
 const FORWARD_OK_MS = 1.5 * FORWARD_LOOP_MS
 const FORWARD_ERROR_MS = 2 * FORWARD_LOOP_MS
+/**
+ * A strategy activated by the user gets a cycle within ~1 min (the runner looks at the registry every 60 s), but
+ * the first cycle can also wait for a candle: it is only "stuck" once one full loop plus the candle wait passed.
+ */
+const FORWARD_FIRST_CYCLE_MS = FORWARD_LOOP_MS + CANDLE_ERROR_MS
 /** Kronos loops every 3600 s (docs/kronos-supervision.md). */
 const KRONOS_LOOP_MS = 60 * MINUTE
 /** The supervisor rewrites its health file every 5 s (scripts/dev.mjs). */
@@ -1098,11 +1096,13 @@ export type Expected =
 
 /**
  * Which (strategy, product) pairs the forward runner must be updating now,
- * rebuilt from the same inputs as `futures_forward.effective_registration`:
- * the registered file, minus the strategies the registry says are not active,
- * plus every strategy the registry has active; every product of the forward's
- * list (the runner has no per-strategy product filter). When any input cannot
- * be read the set cannot be known, and that is reported, never assumed.
+ * rebuilt from the same input as `futures_forward.effective_registration`:
+ * only the strategies the registry has `active` (owner decision 2026-10-19:
+ * everything starts as a draft). `config/forward-strategies.json` no longer
+ * switches anything on; it only has to be readable because the runner needs it.
+ * Every product of the forward's list (the runner has no per-strategy product
+ * filter). When any input cannot be read the set cannot be known, and that is
+ * reported, never assumed.
  */
 export function expectedPairs(
   options: ObservabilityHealthOptions,
@@ -1114,70 +1114,25 @@ export function expectedPairs(
       reason: `registro de estrategias no disponible (${registry.detail})`,
     }
   const registration = readJson(options.forwardRegistrationPath)
-  const registered = rowOf(registration?.strategies)
   if (!registration || !('strategies' in registration))
     return {
       state: 'unknown',
       reason: 'archivo de estrategias del forward no disponible',
     }
+  const registered = rowOf(registration.strategies)
   const products = options.forwardProducts ?? options.products
   if (products.length === 0)
     return { state: 'unknown', reason: 'lista de productos del forward vacía' }
-  const byId = new Map(registry.value.map((s) => [s.id, s]))
-  const notes: string[] = []
   const strategies: ExpectedStrategy[] = []
-  let specIds: Set<string> | null = null
-  const specs = () => {
-    if (specIds) return specIds
-    specIds = new Set<string>()
-    for (const file of listJson(options.strategySpecsDir)) {
-      const id = readJson(file)?.id
-      if (typeof id === 'string') specIds.add(id)
-    }
-    return specIds
-  }
-  for (const id of Object.keys(registered)) {
-    const entry = byId.get(id)
-    if (entry && entry.state !== 'active') continue
-    if (!entry) {
-      // Only a spec in the specs folder can be run for a file-only strategy.
-      if (!options.strategySpecsDir)
-        return {
-          state: 'unknown',
-          reason: `no se puede comprobar la especificación de ${id} (carpeta de specs sin configurar)`,
-        }
-      if (!specs().has(id)) {
-        notes.push(
-          `${id} figura en el archivo pero no tiene especificación: el forward la omite`,
-        )
-        continue
-      }
-    }
-    strategies.push({
-      id,
-      source: 'archivo de registro forward',
-      activeSinceMs: entry?.at ?? null,
-    })
-  }
   for (const entry of registry.value)
-    if (entry.state === 'active' && !(entry.id in registered))
+    if (entry.state === 'active')
       strategies.push({
         id: entry.id,
-        source: 'registro',
+        source:
+          entry.id in registered ? 'archivo de registro forward' : 'registro',
         activeSinceMs: entry.at,
       })
-  return { state: 'known', strategies, products, notes }
-}
-
-function listJson(dir: string | undefined): string[] {
-  if (!dir) return []
-  try {
-    return readdirSync(dir)
-      .filter((name) => name.endsWith('.json'))
-      .map((name) => join(dir, name))
-  } catch {
-    return []
-  }
+  return { state: 'known', strategies, products, notes: [] }
 }
 
 interface PairResult {
@@ -1211,12 +1166,14 @@ function pairResults(
         FORWARD_ERROR_MS,
         false,
       )
-      // A strategy switched on a moment ago has no row until the next cycle.
+      // A strategy switched on a moment ago has no row until its first cycle (pending, not an error) while the
+      // forward process is alive; a dead process, or a wait longer than one loop plus the candle wait, stays an error.
       if (
         row === undefined &&
+        process !== 'down' &&
         strategy.activeSinceMs !== null &&
         strategy.activeSinceMs > 0 &&
-        now - strategy.activeSinceMs <= FORWARD_OK_MS
+        now - strategy.activeSinceMs <= FORWARD_FIRST_CYCLE_MS
       ) {
         status = 'warning'
         reason = 'awaiting_first_cycle'
@@ -1239,7 +1196,11 @@ function describePairs(pairs: readonly PairResult[], limit = 8): string {
   const late = pairs.filter((p) => p.status !== 'ok')
   const shown = late.slice(0, limit).map((p) => {
     const age =
-      p.ageMs === null ? 'sin estado' : `${Math.round(p.ageMs / MINUTE)} min`
+      p.reason === 'awaiting_first_cycle'
+        ? 'pendiente: esperando el primer ciclo'
+        : p.ageMs === null
+          ? 'sin estado'
+          : `${Math.round(p.ageMs / MINUTE)} min`
     return `${p.strategy}/${p.product} (${age})`
   })
   return `${shown.join(', ')}${late.length > limit ? ` y ${late.length - limit} más` : ''}`
