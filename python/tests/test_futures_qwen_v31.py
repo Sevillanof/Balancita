@@ -448,6 +448,24 @@ class PracticeV31Tests(unittest.TestCase):
         qt.PracticeDB(path, lean=True).close()
         self.assertEqual(len(rows(path, "PRAGMA table_info(decisions)")), 31)
 
+    def test_run_practice_with_a_non_lean_config_opens_the_base_without_the_lean_columns(self):
+        cfg = copy.deepcopy(CFG3)
+        cfg["practice"].update(block_days=1, time_bins=3, target_blocks=4, **{"from": START_DAY})
+        self.assertNotEqual(qt.entry_mode_of(cfg), "lean")
+        self.run_practice(cfg)
+        info = rows(self.db, "PRAGMA table_info(decisions)")
+        self.assertEqual(len(info), 27)
+        self.assertFalse(set(qt.LEAN_COLUMNS) & {r[1] for r in info})
+
+    def test_reopening_a_created_v31_base_with_lean_does_not_fail_and_keeps_31_columns(self):
+        path = os.path.join(self.tmp, "again31.sqlite")
+        qt.PracticeDB(path, lean=True).close()
+        qt.PracticeDB(path, lean=True).close()
+        self.assertEqual(len(rows(path, "PRAGMA table_info(decisions)")), 31)
+        self.run_practice()                                                    # and a full run reopens it the same way
+        self.run_practice()
+        self.assertEqual(len(rows(self.db, "PRAGMA table_info(decisions)")), 31)
+
     def test_export_carries_the_lean(self):
         self.run_practice()
         out = os.path.join(self.tmp, "dataset.jsonl")
