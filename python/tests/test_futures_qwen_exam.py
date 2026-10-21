@@ -16,6 +16,13 @@ from test_futures_qwen_trader import (HOLDOUT, START_DAY, ClockedProvider, MemHi
 CFG3 = qt.load_config(qt.CONFIG_PATH_V3)
 
 
+def cfg3_from(base, **exam):
+    cfg = copy.deepcopy(base)
+    cfg["practice"]["from"] = START_DAY
+    cfg["exam"].update(snapshots=30, time_bins=3, **exam)
+    return cfg
+
+
 def cfg3(**exam):
     cfg = copy.deepcopy(CFG3)
     cfg["practice"]["from"] = START_DAY
@@ -53,6 +60,17 @@ class V3ConfigTests(unittest.TestCase):
         other = copy.deepcopy(CFG3)
         other["exam"]["snapshots"] = 7
         self.assertEqual(qt.config_hash(other), qt.config_hash(CFG3))
+
+    def test_the_exam_rules_of_the_lean_do_not_change_the_identity_of_an_existing_exam_base(self):
+        self.assertTrue(qt.config_hash(CFG3).startswith("c342bf2ce551"))          # the hash of the first exam base
+        old = copy.deepcopy(CFG3)
+        del old["exam_lean"]
+        self.assertEqual(qt.config_hash(old), qt.config_hash(CFG3))
+        with tempfile.TemporaryDirectory() as folder:
+            db = os.path.join(folder, "exam.sqlite")
+            for cfg in (cfg3_from(old), cfg3_from(CFG3)):
+                ex.run_exam(MemHistory(), db, ClockedProvider([0.0], entries=state_policy), cfg, HOLDOUT, max_minutes=500,
+                            clock=lambda: 0.0, log=lambda *a: None)
 
 
 class MirrorStateTests(unittest.TestCase):
@@ -317,6 +335,20 @@ class LeanVerdictTests(unittest.TestCase):
             r.update(p_largo=0.8, p_corto=0.1, p_largo_m=0.8, p_corto_m=0.1)
             r.update(ex.split_lean(r))
         self.assertTrue(all(abs(r["lean_num"]) < 1e-12 and r["habit"] > 0.6 for r in habit))
+
+    def test_the_random_baseline_flips_whole_days_not_single_photos(self):
+        rows = [lean_row(i, 0.5, 100.0) for i in range(40)]
+        for r in rows:
+            r["t_ms"] = 7 * ex.DAY_MS + r["t_ms"] % 1000          # one single day
+        observed = ex.mean([ex.net(r, 1, 240) for r in rows])
+        pct = ex.random_percentile(rows, 240, 400, 1, observed, side=lambda r: 1)
+        self.assertTrue(30 <= pct <= 70, pct)                       # a coin per photo would give ~100
+
+    def test_photos_with_a_lean_of_exactly_zero_are_not_extremes(self):
+        rows = [lean_row(i, 0.0, 50.0) for i in range(100)] + [lean_row(100 + i, 0.5, 80.0) for i in range(10)]
+        block = ex.lean_block(rows, "lean_num", 240, self.cfg())
+        self.assertAlmostEqual(block["top_move"], 80.0)
+        self.assertAlmostEqual(block["bottom_move"], 80.0)           # only 10 non-zero photos: the bottom fifth is one of them
 
     def test_spearman_and_ties(self):
         self.assertAlmostEqual(ex.spearman([1, 2, 3, 4], [10, 20, 30, 40]), 1.0)

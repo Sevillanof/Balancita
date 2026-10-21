@@ -408,12 +408,13 @@ def day_bootstrap_stat(rows, stat, draws, seed):
 def lean_block(rows, key, h, cfg):
     """What the lean ``key`` (``lean_num`` or ``lean``) says about the move over ``h`` minutes, after costs."""
     rules = cfg["exam_rules"]
-    lr, draws, seed = rules["inclinacion"], rules["random_draws"], cfg["exam"]["seed"]
+    lr, draws, seed = cfg["exam_lean"], rules["random_draws"], cfg["exam"]["seed"]
     move = lambda r: r["moves"][str(h)]
     out = {"n": len(rows), "spearman": spearman([r[key] for r in rows], [move(r) for r in rows])}
     out["sp_ci"] = day_bootstrap_stat(rows, lambda p: spearman([r[key] for r in p], [move(r) for r in p]), draws, seed)
-    k = max(1, int(len(rows) * lr["extreme_share"]))
-    ordered = sorted(rows, key=lambda r: r[key])
+    pool = [r for r in rows if r[key] != 0]                          # a lean of exactly 0 leans nowhere: not an extreme
+    k = max(1, int(len(pool) * lr["extreme_share"]))
+    ordered = sorted(pool, key=lambda r: r[key])
     bottom, top = ordered[:k], ordered[-k:]
     top_ids = {r["snap_id"] for r in top}
     side = lambda r: 1 if r["snap_id"] in top_ids else -1           # long on the top fifth, short on the bottom fifth
@@ -435,7 +436,7 @@ def lean_block(rows, key, h, cfg):
 
 def analyse_lean(rows, cfg):
     """The main verdict: does the lean that comes from the numbers anticipate the move? Decided on one horizon only."""
-    exam, lr = cfg["exam"], cfg["exam_rules"]["inclinacion"]
+    exam, lr = cfg["exam"], cfg["exam_lean"]
     mirrored = [r for r in rows if r.get("lean_num") is not None]
     out = {"n": len(mirrored), "horizons": {}}
     if not mirrored:
@@ -449,7 +450,7 @@ def analyse_lean(rows, cfg):
     out["habit"] = {"mean": mean(habit), "median": ordered[len(ordered) // 2],
                     "coherent": mean([1.0 if sign(r["lean_m"]) == -sign(r["lean"]) else 0.0 for r in both]), "n": len(both)}
     d = out["horizons"][lr["decide_horizon_min"]]["lean_num"]
-    pct = cfg["exam_rules"]["inclinacion"]["min_percentile_vs_random"]
+    pct = cfg["exam_lean"]["min_percentile_vs_random"]
     out["checks"] = [
         {"id": "photos", "ok": len(mirrored) >= lr["min_photos"], "value": len(mirrored)},
         {"id": "extremes", "ok": d["ext_ci"][0] is not None and d["ext_ci"][0] > 0, "value": (d["ext_net"], d["ext_ci"])},
@@ -477,7 +478,7 @@ def _pctile(value):
 
 def lean_lines(rows, cfg):
     a, rules = analyse_lean(rows, cfg), cfg["exam_rules"]
-    lr, horizons = rules["inclinacion"], cfg["exam"]["horizons_min"]
+    lr, horizons = cfg["exam_lean"], cfg["exam"]["horizons_min"]
     h0 = lr["decide_horizon_min"]
     meaning = {
         PASS: "Las fotos hacia las que Qwen más se inclina, mirando solo lo que viene de los números, ganaron después de "
@@ -666,5 +667,5 @@ def build_exam_report(db_path, cfg):
                   rules["random_draws"], rules["random_draws"]),
               "- Veredicto principal: PASA si se cumplen todas las reglas de inclinación; INCONCLUSO si hay menos de {} fotos "
               "con espejo; NO PASA en otro caso. El de entradas: PASA si se cumplen todas; INCONCLUSO si no hubo entradas o "
-              "solo faltan entradas; NO PASA en otro caso.".format(rules["inclinacion"]["min_photos"]), ""]
+              "solo faltan entradas; NO PASA en otro caso.".format(cfg["exam_lean"]["min_photos"]), ""]
     return "\n".join(lines)

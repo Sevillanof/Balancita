@@ -213,13 +213,13 @@
   "exam_rules": {
     "min_operations": 100,
     "min_percentile_vs_random": 95,
-    "random_draws": 1000,
-    "inclinacion": {
-      "min_photos": 500,
-      "decide_horizon_min": 240,
-      "extreme_share": 0.2,
-      "sign_min_abs": 0.05,
-      "min_percentile_vs_random": 95
-    }
+    "random_draws": 1000
+  },
+  "exam_lean": {
+    "min_photos": 500,
+    "decide_horizon_min": 240,
+    "extreme_share": 0.2,
+    "sign_min_abs": 0.05,
+    "min_percentile_vs_random": 95
   }
 }

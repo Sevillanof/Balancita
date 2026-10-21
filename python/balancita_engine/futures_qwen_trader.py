@@ -142,8 +142,8 @@ def load_config(path=None):
 def config_hash(cfg):
     """Identity of everything that shapes a decision. ``entry_threshold`` is an OUTPUT of the report, not an input."""
     # ``runtime`` (concurrency, skipping the entry reason) only changes speed / what is stored, never an action: not identity.
-    # ``exam`` (v3) only shapes the ``exam`` command, which has its own identity (``futures_qwen_trader_exam``)
-    body = {k: v for k, v in cfg.items() if k not in ("entry_threshold", "note", "rules", "runtime", "exam")}
+    # ``exam`` and ``exam_lean`` (v3) only shape the ``exam`` command, which has its own identity (``futures_qwen_trader_exam``)
+    body = {k: v for k, v in cfg.items() if k not in ("entry_threshold", "note", "rules", "runtime", "exam", "exam_lean")}
     body["practice"] = {k: v for k, v in cfg["practice"].items() if k != "target_blocks"}   # how many blocks is not identity
     raw = json.dumps({"config": body, "state": STATE_VERSION, "costs": COST_MODEL_VERSION}, sort_keys=True)
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
