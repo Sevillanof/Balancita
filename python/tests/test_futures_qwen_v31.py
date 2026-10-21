@@ -220,6 +220,12 @@ class FixedPlanTests(unittest.TestCase):
         self.assertTrue(all(d["action"] == "MANTENER" for d in position_asks))
         self.assertLess(trade[0]["net_bp"], 0)                                # costs of both legs were charged
 
+    def test_the_stop_is_clamped_between_half_a_percent_and_three_percent(self):
+        t, _, _, _ = open_with(UP, DOWN)
+        self.assertEqual(t._stop_pct(sigma5=1e-9), 0.005)                    # very low sigma: floor
+        self.assertEqual(t._stop_pct(sigma5=1.0), 0.03)                      # very high sigma: cap
+        self.assertTrue(0.005 < t._stop_pct(sigma5=0.0005) < 0.03)           # in between: 1 sigma daily, unclamped
+
     def test_the_stop_closes_on_the_candle_that_touches_it_not_only_on_a_wake(self):
         t, _, _, bucket = open_with(UP, DOWN)
         stop_pct = t.position.stop_pct
@@ -395,7 +401,7 @@ class PracticeV31Tests(unittest.TestCase):
         self.assertIn("Cerró el límite de 24 h", rep.main_header(cfg3))
         self.assertIn("Cerró el límite de 4 h", rep.main_header(CFG31))
 
-    def test_an_older_decisions_table_gets_the_lean_columns_when_opened_for_writing(self):
+    def test_an_older_decisions_table_gets_the_lean_columns_only_when_opened_for_v31(self):
         old = os.path.join(self.tmp, "old.sqlite")
         con = sqlite3.connect(old)
         with con:
@@ -405,10 +411,42 @@ class PracticeV31Tests(unittest.TestCase):
         con.close()
         qt.PracticeDB(old, readonly=True).close()                             # a reader never alters anything
         self.assertFalse({"lean_num"} & {r[1] for r in rows(old, "PRAGMA table_info(decisions)")})
-        qt.PracticeDB(old).close()
+        qt.PracticeDB(old).close()                                            # another version: not touched
+        self.assertFalse({"lean_num"} & {r[1] for r in rows(old, "PRAGMA table_info(decisions)")})
+        qt.PracticeDB(old, lean=True).close()
         columns = {r[1] for r in rows(old, "PRAGMA table_info(decisions)")}
         self.assertTrue(set(qt.LEAN_COLUMNS) <= columns)
         self.assertEqual(rows(old, "SELECT lean_num FROM decisions"), [(None,)])
+
+    def test_bases_of_other_versions_keep_27_columns_and_the_positional_insert(self):
+        block = {"block_id": "BTC:x", "product": "BTC", "start_ms": 0, "end_ms": 1, "bin": 0, "fold": "calibration"}
+        stats = {"bars": 0, "wakes": 0, "seconds": 0.0}
+        event = {"type": "decision", "t_ms": 5, "kind": "flat", "action": "ESPERAR"}
+        for name, cfg in (("v3", CFG3), ("v2.1", CFG21)):
+            path = os.path.join(self.tmp, "practice-{}.sqlite".format(name))
+            con = sqlite3.connect(path)                                        # a base made by the code without lean
+            with con:
+                con.executescript(qt._SCHEMA_SQL)
+            con.close()
+            self.assertEqual(len(rows(path, "PRAGMA table_info(decisions)")), 27)
+            pdb = qt.PracticeDB(path, lean=qt.entry_mode_of(cfg) == "lean")
+            pdb.commit_block(block, [event], {"prompt_version": 1, "model": "m"}, stats, [])
+            pdb.close()
+            info = rows(path, "PRAGMA table_info(decisions)")
+            self.assertEqual(len(info), 27)
+            self.assertFalse({"lean", "lean_m", "lean_num", "habit"} & {r[1] for r in info})
+            self.assertEqual(rows(path, "SELECT kind, action FROM decisions"), [("flat", "ESPERAR")])
+            con = sqlite3.connect(path)                                        # the 27-value positional INSERT still works
+            with con:
+                con.execute("INSERT INTO decisions VALUES(" + ",".join("?" * 27) + ")",
+                            ("BTC:y", 1, 0, "flat", "BTC", "calibration") + (None,) * 21)
+            con.close()
+            self.assertEqual(rows(path, "SELECT count(*) FROM decisions"), [(2,)])
+
+    def test_a_new_v31_base_has_the_lean_columns(self):
+        path = os.path.join(self.tmp, "new31.sqlite")
+        qt.PracticeDB(path, lean=True).close()
+        self.assertEqual(len(rows(path, "PRAGMA table_info(decisions)")), 31)
 
     def test_export_carries_the_lean(self):
         self.run_practice()

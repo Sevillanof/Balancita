@@ -96,7 +96,7 @@ POSITION_ACTIONS = ("MANTENER", "CERRAR")
 SAFE_FIRST = ("ESPERAR", "MANTENER")           # ties go to the inactive option
 CLOSED_BY = ("qwen", "stop", "tiempo", "fin_de_bloque")
 ENTRY_MODES = ("choice", "lean")                # choice: v1-v3 (chosen option + threshold [+ mirror]); lean: v3.1
-LEAN_COLUMNS = ("lean", "lean_m", "lean_num", "habit")   # v3.1 columns of ``decisions`` (added to older bases on open)
+LEAN_COLUMNS = ("lean", "lean_m", "lean_num", "habit")   # v3.1 columns of ``decisions`` (only in v3.1 bases)
 
 WAKE_HOOKS = {}   # name -> callable(trader, t_ms) -> list of wake reasons. Extension point (strategy signals, news): empty today.
 
@@ -1067,7 +1067,7 @@ CREATE TABLE IF NOT EXISTS decisions(
   fold TEXT NOT NULL, state_hash TEXT, state_text TEXT, wake_json TEXT, orders_json TEXT, probs_json TEXT,
   confidence REAL, model_action TEXT, p_action REAL, threshold REAL, action TEXT, override TEXT, reason TEXT,
   reason_json TEXT, latency_ms INTEGER, prompt_version INTEGER, prompt_hash TEXT, model TEXT, position_json TEXT,
-  net_bp_now REAL, trade_no INTEGER, outcome_json TEXT, lean REAL, lean_m REAL, lean_num REAL, habit REAL,
+  net_bp_now REAL, trade_no INTEGER, outcome_json TEXT,
   PRIMARY KEY(block_id, seq));
 CREATE TABLE IF NOT EXISTS trades(
   block_id TEXT NOT NULL, trade_no INTEGER NOT NULL, product TEXT NOT NULL, side TEXT NOT NULL, fold TEXT NOT NULL,
@@ -1079,9 +1079,13 @@ CREATE TABLE IF NOT EXISTS trades(
 
 
 class PracticeDB:
-    """Single writer of the practice database (the ``practice`` command). Readers open it ``mode=ro``."""
+    """Single writer of the practice database (the ``practice`` command). Readers open it ``mode=ro``.
 
-    def __init__(self, path, readonly=False):
+    ``lean`` (v3.1 only) adds the lean columns to ``decisions``; any other version keeps the 27 original columns, so a base
+    of v2.1 / v3 (or an exam base) is never altered and the positional INSERT of those versions keeps working."""
+
+    def __init__(self, path, readonly=False, lean=False):
+        self.lean = bool(lean)
         if readonly:
             self.db = sqlite3.connect("file:{}?mode=ro".format(path), uri=True)
         else:
@@ -1092,8 +1096,10 @@ class PracticeDB:
         self.db.row_factory = sqlite3.Row
 
     def _migrate(self):
-        """Adds the v3.1 lean columns to a ``decisions`` table created before them (each version has its own base, so this
-        only ever touches a base this same version is writing)."""
+        """v3.1 only: adds the lean columns to its ``decisions`` table (new bases are created without them). Does nothing
+        unless the base is opened for v3.1, so bases of other versions keep their 27 columns."""
+        if not self.lean:
+            return
         present = {r[1] for r in self.db.execute("PRAGMA table_info(decisions)")}
         with self.db:
             for column in LEAN_COLUMNS:
@@ -1160,12 +1166,15 @@ class PracticeDB:
                 seq += 1
                 answer = ev.get("answer")
                 first = (answer or {}).get("orders") or [{}]
+                cols = ("block_id, seq, t_ms, kind, product, fold, state_hash, state_text, wake_json, orders_json, probs_json, "
+                        "confidence, model_action, p_action, threshold, action, override, reason, reason_json, latency_ms, "
+                        "prompt_version, prompt_hash, model, position_json, net_bp_now, trade_no, outcome_json")
+                extra = ()
+                if self.lean:
+                    cols += ", " + ", ".join(LEAN_COLUMNS)
+                    extra = tuple(ev.get(k) for k in LEAN_COLUMNS)
                 self.db.execute(
-                    "INSERT INTO decisions(block_id, seq, t_ms, kind, product, fold, state_hash, state_text, wake_json, "
-                    "orders_json, probs_json, confidence, model_action, p_action, threshold, action, override, reason, "
-                    "reason_json, latency_ms, prompt_version, prompt_hash, model, position_json, net_bp_now, trade_no, "
-                    "outcome_json, lean, lean_m, lean_num, habit) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,"
-                    "?,?,?,?)", (
+                    "INSERT INTO decisions({}) VALUES({})".format(cols, ",".join("?" * (27 + len(extra)))), (
                     block["block_id"], seq, ev["t_ms"], ev["kind"], block["product"], block["fold"],
                     ev.get("state_hash"), ev.get("state_text"), json.dumps(ev.get("wake")),
                     json.dumps(first if answer else None), json.dumps(answer["probabilities"] if answer else None),
@@ -1174,7 +1183,7 @@ class PracticeDB:
                     json.dumps(ev.get("reason_answer")), answer["latency_ms"] if answer else None,
                     decisions_meta["prompt_version"], first[0].get("prompt_hash"), decisions_meta["model"],
                     json.dumps(ev.get("position")), ev.get("net_bp_now"), ev.get("trade_no"),
-                    json.dumps(ev.get("outcome")), ev.get("lean"), ev.get("lean_m"), ev.get("lean_num"), ev.get("habit")))
+                    json.dumps(ev.get("outcome"))) + extra)
 
 
 # --------------------------------------------------------------------------- outcomes
@@ -1330,7 +1339,7 @@ def run_practice(history, db_path, provider, cfg, holdout_ms, *, max_minutes=55.
         cfg = dict(cfg, runtime=dict(cfg.get("runtime") or {}, **overrides))
     seed = cfg["practice"]["seed"] if seed is None else seed
     plan, fold_cut = block_plan(cfg, holdout_ms, seed=seed, blocks=blocks, block_days=block_days, from_date=from_date)
-    pdb = PracticeDB(db_path)
+    pdb = PracticeDB(db_path, lean=entry_mode_of(cfg) == "lean")
     try:
         check_identity(pdb, cfg, {
             "config_hash": config_hash(cfg), "seed": seed, "holdout_ms": holdout_ms, "fold_cut_ms": fold_cut,
