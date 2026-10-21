@@ -29,7 +29,8 @@ from decimal import Decimal
 
 from . import paper_live_evaluator as LE
 from .funding_adapter import FundingAdapterError, FundingBook, compare_with_portfolio, parse_response
-from .multi_signals import stable_hash
+from .multi_experiment import required_warmup_ms
+from .multi_signals import merged_indicators, stable_hash
 from .paper_live_ingest import GAP_SAMPLE, SILENCE_SAMPLE, Ingestor, SourceReader
 from .paper_runner import STOPPED, PaperRunner, RunnerError, make_event
 from .paper_runner_store import CHECKPOINT_FILE as RUNNER_CHECKPOINT_FILE
@@ -267,6 +268,25 @@ def _session_config(runner_config, max_quote_gap_ms, block_stale_entries):
     return dataclasses.replace(runner_config, entry_max_quote_age_ms=int(max_quote_gap_ms))
 
 
+WARMUP_MARGIN_MS = 2 * HOUR_MS           # candles are read this much before the warm-up the indicators need (``bounded_start``)
+QUOTE_LOOKBACK_MS = HOUR_MS              # quotes and capture gaps are read from this long before the first decision, or ``max_quote_gap_ms`` if longer
+
+
+def _ingestor_kw(ingest_kw, strategies, decide_from_ms, max_quote_gap_ms):
+    """What ``Ingestor`` is built with. ``ingest_kw`` stays exactly what the session identity holds; the opt-in ``bounded_start`` (default
+    off: the whole source is read, as before) becomes explicit lower bounds from the decision window, unless the caller named them:
+    candles from ``decide_from - required warm-up - 2 h`` (what the indicators of these strategies need, never less), quotes and capture
+    gaps from ``decide_from - max(max_quote_gap_ms, 1 h)``. The bounds are a function of the configuration, so a recovery computes the same."""
+    kw = dict(ingest_kw)
+    if not kw.pop("bounded_start", False):
+        return kw
+    warmup = required_warmup_ms(merged_indicators(strategies))
+    kw.setdefault("not_before_candle_ms", int(decide_from_ms) - warmup - WARMUP_MARGIN_MS)
+    kw.setdefault("not_before_ticker_ms", int(decide_from_ms) - max(int(max_quote_gap_ms), QUOTE_LOOKBACK_MS))
+    kw.setdefault("not_before_gap_ms", kw["not_before_ticker_ms"])
+    return kw
+
+
 def _funding_source(path):
     return ObservedFundingSource(path)
 
@@ -330,7 +350,8 @@ class LiveSession(object):
             identity = cls._identity(products, ingest_kw, evaluator, runner.journal.entries[0], source_id, max_quote_gap_ms, funding_mode)
             audit = AuditJournal.create(os.path.join(directory, AUDIT_FILE), {"session_id": identity["session_id"]})
             reader = SourceReader(source_path)
-            session = cls(directory, source_path, strategies, runner_config, runner, evaluator, audit, Ingestor(reader, expected_products=tuple(products), **ingest_kw),
+            ingestor = Ingestor(reader, expected_products=tuple(products), **_ingestor_kw(ingest_kw, strategies, decide_from_ms, max_quote_gap_ms))
+            session = cls(directory, source_path, strategies, runner_config, runner, evaluator, audit, ingestor,
                           reader, _funding_source(source_path), identity, max_quote_gap_ms=max_quote_gap_ms,
                           funding_mode=funding_mode, on_funding_divergence=on_funding_divergence)
             _atomic_write(os.path.join(directory, SESSION_FILE), identity)
@@ -403,7 +424,8 @@ class LiveSession(object):
         _verify_checkpoint(checkpoint, stored, runner_journal.entries, runner_checkpoint, evaluator, audit)
         runner = PaperRunner.recover(runner_dir, runner_config, strategies, recovery_ms, evaluator=evaluator.evaluator, lock=lock)
         reader = SourceReader(source_path)
-        ingestor = Ingestor.from_checkpoint(reader, checkpoint["ingestor"], expected_products=tuple(products), **ingest_kw)
+        ingestor = Ingestor.from_checkpoint(reader, checkpoint["ingestor"], expected_products=tuple(products),
+                                             **_ingestor_kw(ingest_kw, strategies, decide_from_ms, max_quote_gap_ms))
         ingestor.mark_recovered()               # the stretch nobody observed is told as an observation_gap, never as a silence
         for (_product, _from, gap_to), _loss in runner.source_losses.items():     # a loss the runner made durable is never delivered under
             ingestor.released_ms = max(ingestor.released_ms or 0, gap_to - 1)     # (the quote that ends it, at gap_to, still comes)
@@ -800,6 +822,7 @@ class LiveSession(object):
         if self.halted is not None:
             raise IntegrationError("session_halted", self.halted)
         try:
+            self.evaluator.flush()                  # the checkpoint is never ahead of the evaluator's log: warm-up entries wait for this
             return self._write_checkpoint()
         except Exception as error:               # noqa: BLE001 - a simulated death is a BaseException and is not caught here
             self.halted = repr(error)
@@ -877,6 +900,7 @@ class LiveSession(object):
         self.stopped = {"cancelled": list(last["cancel_ids"]), "expired": list(last["expire_ids"]), "declared_ms": last["declared_ms"]}
 
     def close(self):
+        self.evaluator.flush()
         self.runner.close()
         self.reader.close()
         self.funding.close()

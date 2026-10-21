@@ -76,30 +76,60 @@ class SourceReader(object):
     def close(self):
         self.db.close()
 
-    def tickers(self, after_rowid, limit):
+    # ``not_before_ms`` (optional, ``None`` = every row): rows older than it are not read at all (tickers by ``persisted_at``, candles by
+    # ``bucket_start``, gaps by ``detected_at``). The ingestor sets it from the session's decision window; the default reads what it always read.
+    def tickers(self, after_rowid, limit, not_before_ms=None):
         rows = self.db.execute(
             "SELECT rowid AS rid, event_id, product_id, epoch, seq, event_time, received_at, persisted_at, content_hash, "
             "normalized_json "
-            "FROM paper_futures_market_events WHERE feed='ticker' AND rowid>? ORDER BY rowid LIMIT ?",
-            (after_rowid, limit)).fetchall()
+            "FROM paper_futures_market_events WHERE feed='ticker' AND rowid>? " + ("" if not_before_ms is None else "AND persisted_at>=? ") +
+            "ORDER BY rowid LIMIT ?",
+            (after_rowid,) + (() if not_before_ms is None else (int(not_before_ms),)) + (limit,)).fetchall()
         return [dict(r) for r in rows]
 
-    def candles(self, after_rowid, limit):
+    def candles(self, after_rowid, limit, not_before_ms=None):
         rows = self.db.execute(
             "SELECT rowid AS rid, product_id, bucket_start, revision_hash, known_at, open_price, high_price, low_price, "
-            "close_price, volume_btc FROM paper_futures_official_candles WHERE interval_ms=? AND rowid>? ORDER BY rowid LIMIT ?",
-            (ONE_MINUTE_MS, after_rowid, limit)).fetchall()
+            "close_price, volume_btc FROM paper_futures_official_candles WHERE interval_ms=? AND rowid>? " +
+            ("" if not_before_ms is None else "AND bucket_start>=? ") + "ORDER BY rowid LIMIT ?",
+            (ONE_MINUTE_MS, after_rowid) + (() if not_before_ms is None else (int(not_before_ms),)) + (limit,)).fetchall()
         return [dict(r) for r in rows]
 
-    def gaps(self, after_rowid, limit):
+    def gaps(self, after_rowid, limit, not_before_ms=None):
         """The capture's own gap evidence. Empty when the source has no such table (older schema or a minimal fixture)."""
         try:
             rows = self.db.execute(
                 "SELECT rowid AS rid, gap_id, feed, product_id, epoch, expected_seq, actual_seq, detected_at, reason, policy_version "
-                "FROM paper_futures_data_gaps WHERE rowid>? ORDER BY rowid LIMIT ?", (after_rowid, limit)).fetchall()
+                "FROM paper_futures_data_gaps WHERE rowid>? " + ("" if not_before_ms is None else "AND detected_at>=? ") + "ORDER BY rowid LIMIT ?",
+                (after_rowid,) + (() if not_before_ms is None else (int(not_before_ms),)) + (limit,)).fetchall()
         except sqlite3.OperationalError:
             return []
         return [dict(r) for r in rows]
+
+    def seed_cursors(self, products, ticker_not_before_ms=None, candle_not_before_ms=None):
+        """The cursor (one rowid below the first row that can matter) that skips what lies before the bounds, found through the capture's
+        own indexes instead of by reading past it: tickers ``(product_id, received_at, seq)``, candles their primary key. ``None`` for a
+        table with no bound, no row at or after it or (tickers) no product to ask for; the caller then starts at 0 as always. The
+        lowest rowid over the products is taken, so no row of theirs at or after the bound lies below the cursor (rows of other
+        products or feeds that sit in between are read past, as before)."""
+        out = {"ticker": None, "candle": None}
+        try:
+            if ticker_not_before_ms is not None and products:
+                firsts = [self.db.execute("SELECT MIN(rowid) FROM paper_futures_market_events WHERE product_id=? AND received_at>=?",
+                                          (product, int(ticker_not_before_ms))).fetchone()[0] for product in products]
+                firsts = [rid for rid in firsts if rid is not None]
+                out["ticker"] = min(firsts) - 1 if firsts else None
+            if candle_not_before_ms is not None:
+                firsts = ([self.db.execute("SELECT MIN(rowid) FROM paper_futures_official_candles WHERE product_id=? AND interval_ms=? "
+                                           "AND bucket_start>=?", (product, ONE_MINUTE_MS, int(candle_not_before_ms))).fetchone()[0]
+                           for product in products] if products else
+                          [self.db.execute("SELECT MIN(rowid) FROM paper_futures_official_candles WHERE interval_ms=? AND bucket_start>=?",
+                                           (ONE_MINUTE_MS, int(candle_not_before_ms))).fetchone()[0]])
+                firsts = [rid for rid in firsts if rid is not None]
+                out["candle"] = min(firsts) - 1 if firsts else None
+        except sqlite3.OperationalError:
+            return {"ticker": None, "candle": None}
+        return out
 
     def identity(self, name, rowid):
         """What the row at ``rowid`` is (its event id, candle key or gap id), or ``None`` when no row has that rowid."""
@@ -168,8 +198,13 @@ class Ingestor(object):
 
     def __init__(self, reader, *, hold_ms=DEFAULT_HOLD_MS, dead_after_ms=DEFAULT_DEAD_AFTER_MS,
                  clock_every_ms=DEFAULT_CLOCK_EVERY_MS, candle_lag_ms=DEFAULT_CANDLE_LAG_MS, batch=5_000,
-                 product_silence_ms=DEFAULT_PRODUCT_SILENCE_MS, expected_products=(), causal_until_clock=False):
+                 product_silence_ms=DEFAULT_PRODUCT_SILENCE_MS, expected_products=(), causal_until_clock=False,
+                 not_before_ticker_ms=None, not_before_candle_ms=None, not_before_gap_ms=None):
         self.reader, self.hold_ms, self.dead_after_ms = reader, hold_ms, dead_after_ms
+        # Opt-in lower bounds (source time; ``None`` = read everything, as before): a new session starts at its first need, not at the
+        # first row the capture ever stored. The first read puts a cursor that still is 0 just below the first row at or after each bound.
+        self.not_before = {"ticker": not_before_ticker_ms, "candle": not_before_candle_ms, "gap": not_before_gap_ms}
+        self.seeded, self._seed_done = {}, False      # table -> cursor the first read started from, when a bound moved it
         self.expected_products = tuple(expected_products)
         # Opt-in (D-185-R4): rows whose arrival is after the caller's clock are not read yet, whatever the source already holds. Off by
         # default: the ingestor is source-time driven and a replay of a complete file relies on that.
@@ -406,7 +441,7 @@ class Ingestor(object):
                                                 "outage": outage, "rowid": rowid}, **extra)])[-SILENCE_SAMPLE:]
 
     def _read_gaps(self):
-        for row in self.reader.gaps(self.cursor["gap"], self.batch):
+        for row in self.reader.gaps(self.cursor["gap"], self.batch, *self._bound("gap")):
             self.cursor["gap"] = row["rid"]
             self.anchors["gap"] = row["gap_id"]
             self.gap_pending.append(row)
@@ -433,10 +468,28 @@ class Ingestor(object):
         self.stats["foreign_product_rows"] = self.stats.get("foreign_product_rows", 0) + 1
         return True
 
+    def _bound(self, name):
+        """The bound as an extra argument of the reader's call, or nothing at all when there is none (a reader without bounds is called as before)."""
+        return () if self.not_before[name] is None else (self.not_before[name],)
+
+    def _seed(self):
+        """A cursor that is still 0 starts just below the first row at or after its bound (once). A cursor already moved (a recovered
+        checkpoint) is never touched."""
+        if self._seed_done:
+            return
+        self._seed_done = True
+        if self.not_before["ticker"] is None and self.not_before["candle"] is None:
+            return
+        found = self.reader.seed_cursors(self.expected_products, self.not_before["ticker"], self.not_before["candle"])
+        for name in ("ticker", "candle"):
+            if found[name] is not None and self.cursor[name] == 0 and found[name] > 0:
+                self.cursor[name] = self.seeded[name] = found[name]
+
     def _read_streams(self):
         self._check_cursors()
+        self._seed()
         self._read_gaps()
-        rows = self.reader.tickers(self.cursor["ticker"], self.batch)
+        rows = self.reader.tickers(self.cursor["ticker"], self.batch, *self._bound("ticker"))
         self.ticker_more = len(rows) >= self.batch
         for row in rows:
             if self.causal_until_clock and max(row["persisted_at"], row["received_at"]) > self._clock_now_ms:
@@ -463,7 +516,7 @@ class Ingestor(object):
             self.last_ticker_ms[row["product_id"]] = max(t_ms, self.last_ticker_ms.get(row["product_id"], t_ms))
             self.last_any_ticker_ms = max(t_ms, self.last_any_ticker_ms or t_ms)
             self._queue(t_ms, event)
-        rows = self.reader.candles(self.cursor["candle"], self.batch)
+        rows = self.reader.candles(self.cursor["candle"], self.batch, *self._bound("candle"))
         self.candle_more = len(rows) >= self.batch
         for row in rows:
             if self.causal_until_clock and max(row["known_at"], row["bucket_start"] + ONE_MINUTE_MS) > self._clock_now_ms:
@@ -491,9 +544,8 @@ class Ingestor(object):
             if known < first["known"]:
                 self.stats["candle_earlier_revision_after_emit"] += 1
             return
-        waiting = [p for p in self.pending if p[3] == key]
-        if waiting:                                               # same release batch: the lowest (known_at, hash) wins
-            held = waiting[0]
+        if key in self.candle_pending:                            # same release batch (a pending entry and its candle_pending record come and go together)
+            held = next(p for p in self.pending if p[3] == key)  # only a revision of a candle that is still waiting scans the queue
             self.stats["candle_revisions_seen"] += 1
             if self.candle_pending[key]["digest"] != digest:
                 self.stats["candle_revisions_differing"] += 1
