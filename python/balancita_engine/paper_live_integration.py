@@ -487,6 +487,9 @@ class LiveSession(object):
             if row["raw"] is None:                              # received before the window: no hour in it can matter, so it is only counted
                 before.append(row)
                 continue
+            if row["products"] and not any(product in self.evaluator.state for product in row["products"]):
+                self.stats["foreign_funding_responses"] = self.stats.get("foreign_funding_responses", 0) + 1     # the capture stores other products too
+                continue
             seen = len(self.book.evidence)
             try:
                 parsed = parse_response(row["raw"], row["product_id"] or "", row["received_at"],

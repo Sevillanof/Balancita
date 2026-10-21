@@ -425,6 +425,14 @@ class Ingestor(object):
                                                                       "actual_seq", "detected_at", "reason", "policy_version")}])[-GAP_SAMPLE:]
         self.gap_pending = keep
 
+    def _foreign(self, row):
+        """The live capture stores more products than a session trades: a row of a product the session does not list is read past (the
+        cursor moves) and counted, never queued, so it cannot reach the evaluator, the silence evidence or the clock."""
+        if not self.expected_products or row["product_id"] in self.expected_products:
+            return False
+        self.stats["foreign_product_rows"] = self.stats.get("foreign_product_rows", 0) + 1
+        return True
+
     def _read_streams(self):
         self._check_cursors()
         self._read_gaps()
@@ -437,6 +445,8 @@ class Ingestor(object):
                 break
             self.cursor["ticker"] = row["rid"]
             self.anchors["ticker"] = row["event_id"]
+            if self._foreign(row):
+                continue
             t_ms, event = _quote_event(row)
             if t_ms is None:
                 self.stats["unreadable_rows"] += 1
@@ -462,6 +472,8 @@ class Ingestor(object):
                 break
             self.cursor["candle"] = row["rid"]
             self.anchors["candle"] = "{}|{}|{}".format(row["product_id"], row["bucket_start"], row["revision_hash"])
+            if self._foreign(row):
+                continue
             self._read_candle(row)
             self.last_candle_read_ms = max(self.last_candle_read_ms or 0, self._last_candle_t)
 
