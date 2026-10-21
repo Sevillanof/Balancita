@@ -269,14 +269,14 @@ def _session_config(runner_config, max_quote_gap_ms, block_stale_entries):
 
 
 WARMUP_MARGIN_MS = 2 * HOUR_MS           # candles are read this much before the warm-up the indicators need (``bounded_start``)
-QUOTE_LOOKBACK_MS = HOUR_MS              # quotes and capture gaps are read from this long before the first decision, or ``max_quote_gap_ms`` if longer
+QUOTE_LOOKBACK_MS = 600_000              # quotes and capture gaps are read from this long before the first decision, or ``max_quote_gap_ms`` if longer (10 min)
 
 
 def _ingestor_kw(ingest_kw, strategies, decide_from_ms, max_quote_gap_ms):
     """What ``Ingestor`` is built with. ``ingest_kw`` stays exactly what the session identity holds; the opt-in ``bounded_start`` (default
     off: the whole source is read, as before) becomes explicit lower bounds from the decision window, unless the caller named them:
     candles from ``decide_from - required warm-up - 2 h`` (what the indicators of these strategies need, never less), quotes and capture
-    gaps from ``decide_from - max(max_quote_gap_ms, 1 h)``. The bounds are a function of the configuration, so a recovery computes the same."""
+    gaps from ``decide_from - max(max_quote_gap_ms, 10 min)``. The bounds are a function of the configuration, so a recovery computes the same."""
     kw = dict(ingest_kw)
     if not kw.pop("bounded_start", False):
         return kw
