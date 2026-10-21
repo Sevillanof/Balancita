@@ -11,6 +11,7 @@ import { createObservabilityActivity } from '../features/live-gateway/observabil
 import { createObservabilityDecisions } from '../features/live-gateway/observability-decisions.ts'
 import { loadPinnedProducts } from '../features/kraken-futures/futures-products.ts'
 import { serverConfigFrom } from '../platform/config.ts'
+import { createMovements } from '../features/live-gateway/movements.ts'
 import { qwenExitOffFromEnv } from '../features/live-gateway/qwen-exit-off.ts'
 
 function pythonUnavailableReason(status: string | undefined) {
@@ -56,6 +57,20 @@ function kronosScoresFrom(env: NodeJS.ProcessEnv) {
     : qwenScoresOff('kronos_not_configured')
 }
 
+/** Both models' own DBs, read-only, for the movements list. */
+function movementsFrom(env: NodeJS.ProcessEnv) {
+  const beside = (summary: string | undefined, file: string) =>
+    summary?.trim() ? join(dirname(summary.trim()), file) : undefined
+  return createMovements({
+    qwenExitDbPath:
+      env.QWEN_EXIT_DB_PATH?.trim() ||
+      beside(env.QWEN_EXIT_SUMMARY_PATH, 'qwen-exit.sqlite'),
+    kronosDbPath:
+      env.KRONOS_DB_PATH?.trim() ||
+      beside(env.KRONOS_SUMMARY_PATH, 'kronos.sqlite'),
+  })
+}
+
 /** Product ids the forward runner iterates: `FUTURES_PRODUCTS`, else the pinned list. */
 function forwardProducts(env: NodeJS.ProcessEnv): string[] {
   const listed = (env.FUTURES_PRODUCTS ?? '')
@@ -81,6 +96,7 @@ async function main(): Promise<void> {
     ),
     qwenScores: qwenScoresFrom(process.env),
     kronosScores: kronosScoresFrom(process.env),
+    movements: movementsFrom(process.env),
     processHealthPath: process.env.DEV_HEALTH_FILE || undefined,
     sessionBlocksPath: process.env.PAPER_SESSION_BLOCKS_FILE || undefined,
     sessionHeartbeatPath: process.env.PAPER_SESSION_HEARTBEAT_FILE || undefined,

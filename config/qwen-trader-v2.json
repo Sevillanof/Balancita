@@ -1,0 +1,199 @@
+{
+  "schema": "balancita-qwen-trader.v1",
+  "version": 2,
+  "note": "Qwen operador v2 (sin stop ni límite de 24 h: solo sale Qwen o el fin del bloque). Misma semilla, mismos bloques y mismo periodo que la v1 para comparar parejo; resultados en otra base (practice-v2.sqlite). v1 queda intacta en config/qwen-trader.json. Ver odd/tasks/qwen-trader.md. runtime (no entra en la identidad de la base): pide los dos órdenes a la vez y no pregunta el motivo de la entrada.",
+  "products": [
+    "PF_XBTUSD",
+    "PF_ETHUSD"
+  ],
+  "notional_usd": "100",
+  "timeframe_min": 5,
+  "prompt": {
+    "name": "qwen-trader",
+    "version": 2,
+    "system": "Sos un operador de futuros perpetuos en papel (sin dinero real). Respondé con exactamente una letra de opción y nada más.",
+    "answer_line": "Respondé con una sola letra ({letters}):",
+    "prefill": null,
+    "probability_source": "auto",
+    "temperature": 1.0,
+    "orders": {
+      "3": [
+        [
+          0,
+          1,
+          2
+        ],
+        [
+          1,
+          2,
+          0
+        ]
+      ],
+      "2": [
+        [
+          0,
+          1
+        ],
+        [
+          1,
+          0
+        ]
+      ],
+      "7": [
+        [
+          0,
+          1,
+          2,
+          3,
+          4,
+          5,
+          6
+        ],
+        [
+          4,
+          5,
+          6,
+          0,
+          1,
+          2,
+          3
+        ]
+      ]
+    },
+    "questions": {
+      "flat": {
+        "id": "trader_flat",
+        "version": 2,
+        "type": "choice",
+        "instruction": "No tenés ninguna posición. Con el estado de arriba, ¿qué hacés ahora? Entrar y salir cuesta ~{cost} % del tamaño; solo vale la pena operar si esperás un movimiento claramente mayor. Si no ves una ventaja clara, esperá.",
+        "options": [
+          {
+            "id": "LARGO",
+            "description": "abrir una posición larga (apostás a que sube)"
+          },
+          {
+            "id": "CORTO",
+            "description": "abrir una posición corta (apostás a que baja)"
+          },
+          {
+            "id": "ESPERAR",
+            "description": "no operar ahora"
+          }
+        ]
+      },
+      "position": {
+        "id": "trader_position",
+        "version": 2,
+        "type": "choice",
+        "instruction": "Tenés una posición abierta. Con el estado de arriba, ¿la mantenés o la cerrás ahora? Cerrar solo agrega el costo de salida (~{exit_cost} % del tamaño, ya descontado del resultado que se muestra); el de entrada ya está pagado. No hay stop ni límite de tiempo: la posición sigue abierta hasta que la cierres.",
+        "options": [
+          {
+            "id": "MANTENER",
+            "description": "seguir con la posición abierta"
+          },
+          {
+            "id": "CERRAR",
+            "description": "cerrar la posición ahora"
+          }
+        ]
+      },
+      "reason": {
+        "id": "trader_reason",
+        "version": 2,
+        "type": "choice",
+        "instruction": "Elegiste {action}. ¿Cuál es el motivo principal de esa decisión?",
+        "options": [
+          {
+            "id": "movimiento_exagerado",
+            "description": "el precio se movió de más y espero que vuelva"
+          },
+          {
+            "id": "tendencia",
+            "description": "hay una tendencia clara y la sigo"
+          },
+          {
+            "id": "funding_extremo",
+            "description": "el funding está en un extremo"
+          },
+          {
+            "id": "sin_ventaja",
+            "description": "no veo ventaja suficiente para seguir"
+          },
+          {
+            "id": "proteger_ganancia",
+            "description": "asegurar la ganancia que ya hay"
+          },
+          {
+            "id": "cortar_perdida",
+            "description": "cortar una pérdida antes de que crezca"
+          },
+          {
+            "id": "otro",
+            "description": "otro motivo"
+          }
+        ]
+      }
+    },
+    "reason_orders": "both"
+  },
+  "guardrails": {
+    "stop_sigma_24h": null,
+    "min_stop_pct": null,
+    "max_stop_pct": null,
+    "max_hold_min": null,
+    "cooldown_min": 15
+  },
+  "entry_threshold": null,
+  "entry_threshold_grid": [
+    0.5,
+    0.6,
+    0.7,
+    0.8
+  ],
+  "practice_entry_threshold": 0.5,
+  "threshold_rule": {
+    "min_calibration_trades": 30,
+    "objective": "total_net_bp",
+    "if_none_positive": "max_grid"
+  },
+  "wake": {
+    "flat_every_min": 60,
+    "position_every_min": 15,
+    "strong_move_sigmas": 2.0,
+    "strong_move_windows_min": [
+      15,
+      30
+    ],
+    "extra_wake_min_gap_min": 10,
+    "funding_extreme_abs_rate": 5e-05,
+    "funding_change_abs_rate": 3e-05,
+    "hooks": [],
+    "position_big_move_sigma_24h": 1.0,
+    "position_big_move_gap_min": 60
+  },
+  "outcome_window_min": 60,
+  "practice": {
+    "from": "2025-01-01",
+    "block_days": 3,
+    "warmup_days": 8,
+    "target_blocks": 60,
+    "time_bins": 10,
+    "calibration_share": 0.6,
+    "seed": 20261019
+  },
+  "rules": {
+    "min_trades": 100,
+    "ci_level": 0.95,
+    "min_percentile_vs_random": 95,
+    "min_positive_group_share": 0.6,
+    "min_positive_product_share": 0.5,
+    "cost_stress_multiplier": 1.5,
+    "random_draws": 1000,
+    "bootstrap_draws": 2000
+  },
+  "state_variant": 2,
+  "runtime": {
+    "concurrent_orders": true,
+    "skip_entry_reason": true
+  }
+}

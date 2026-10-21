@@ -49,6 +49,7 @@
   "test_futures_qwen_exit": 6,
   "test_futures_qwen_practice": 22,
   "test_futures_qwen_practice_report": 6,
+  "test_futures_qwen_trader": 14,
   "test_futures_replay": 17,
   "test_futures_replay_compare": 1,
   "test_futures_simulator": 6,

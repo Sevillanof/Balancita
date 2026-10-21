@@ -8,6 +8,7 @@ import WebSocket, { WebSocketServer } from 'ws'
 import { LiveMarketFollower } from './market-follower.ts'
 import { PaperEngineFollower } from './paper-engine-follower.ts'
 import { qwenScoresOff, type QwenScores } from './qwen-scores.ts'
+import { createMovements, type Movements } from './movements.ts'
 import { CHART_INTERVALS_MS } from './terminal-chart.ts'
 import type { SystemUsage } from './system-usage.ts'
 import {
@@ -58,6 +59,8 @@ export interface LiveGatewayOptions {
   readonly qwenScores?: QwenScores
   /** Kronos' forward paper decisions in Qwen's shape. Absent: reported `off`. */
   readonly kronosScores?: QwenScores
+  /** Read-only list of Qwen's and Kronos' paper movements. Absent: both reported `off`. */
+  readonly movements?: Movements
   /** JSON written by the dev supervisor with each process's health. */
   readonly processHealthPath?: string
   /** Derived blocks file the Supervisor publishes (#187). Read-only; absent: reported `absent`. */
@@ -460,6 +463,29 @@ export async function buildLiveGateway(
       if (result.status === 'error' && result.reason === 'invalid_product')
         return reply.code(400).send(result)
       return result
+    },
+  )
+  const movements = options.movements ?? createMovements({})
+  app.get<{ Querystring: Record<string, string | string[] | undefined> }>(
+    '/api/movements',
+    (request, reply) => {
+      const q = request.query
+      for (const value of Object.values(q))
+        if (Array.isArray(value))
+          return reply
+            .code(400)
+            .send({ status: 'error', reason: 'repeated_parameter' })
+      const one = (name: string) => q[name] as string | undefined
+      const result = movements.report({
+        source: one('source'),
+        product: one('product'),
+        from: one('from'),
+        to: one('to'),
+        status: one('status'),
+        limit: one('limit'),
+        offset: one('offset'),
+      })
+      return result.status === 'error' ? reply.code(400).send(result) : result
     },
   )
   app.get(STREAM_PATH, async (_request, reply) =>
