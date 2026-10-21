@@ -18,50 +18,15 @@ env:
   PYTHON_VERSION: '3.12'
   # Number of Python groups. The matrix of `python-tests` must list 0..PYTHON_GROUPS-1;
   # the `python` gate fails if a group file is missing or extra.
-  PYTHON_GROUPS: 10
+  PYTHON_GROUPS: 6
 
 jobs:
-  # Frontend: fast checks (no network services, no databases).
-  frontend:
+  # Everything in Node in ONE job (frontend, formatting, server, e2e): each of
+  # them takes 0.5-3 min, far less than the Python groups, and one job installs
+  # and caches the dependencies once instead of four times. Cheap checks first.
+  node:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-        with:
-          version: ${{ env.PNPM_VERSION }}
-      - uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm typecheck
-      - run: pnpm lint
-      - run: pnpm test
-      # The `pnpm dev` launcher (scripts/dev*.mjs) has its own node:test suites.
-      - run: node --test scripts/*.node-test.mjs
-      - run: pnpm build
-
-  # Formatting. Requires the formatting-only PR to be merged first.
-  format:
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-        with:
-          version: ${{ env.PNPM_VERSION }}
-      - uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm format:check
-
-  # Server: typecheck and Vitest. Uses temporary SQLite files only.
-  server:
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -76,8 +41,31 @@ jobs:
             server/pnpm-lock.yaml
       - run: pnpm install --frozen-lockfile
       - run: pnpm --dir server install --frozen-lockfile
+      - run: pnpm format:check
+      - run: pnpm typecheck
+      - run: pnpm lint
+      - run: pnpm test
+      # The `pnpm dev` launcher (scripts/dev*.mjs) has its own node:test suites.
+      - run: node --test scripts/*.node-test.mjs
+      - run: pnpm build
+      # Server: typecheck and Vitest (includes no-real-orders). Temporary SQLite files only.
       - run: pnpm typecheck:server
       - run: pnpm test:server
+      # End to end: Playwright with mocked network responses (see e2e/screens.pw.ts).
+      # The integration spec starts the real gateway (needs the server deps above)
+      # and the strategy registry S (Python) with a throwaway database.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - run: pnpm exec playwright install --with-deps chromium
+      - run: pnpm test:e2e
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-results
+          path: test-results/
+          retention-days: 7
+
   # Python engine, split in GROUPS balanced parallel groups. Every test still
   # runs: scripts/ci_python_group.py packs whole modules (and, for the slow
   # real-process modules, single TestCase classes) into groups using the
@@ -93,7 +81,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        group: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+        group: [0, 1, 2, 3, 4, 5]
     env:
       GROUP: ${{ matrix.group }}
       PYTHONPATH: python:python/tests
@@ -112,9 +100,9 @@ jobs:
             echo "Group $GROUP has no modules on this branch; nothing to run."
             echo "Ran 0 tests" > run.log
           else
-            # 3 side-by-side unittest processes on the 4-vCPU runner (most of
+            # 4 side-by-side unittest processes on the 4-vCPU runner (most of
             # these tests wait on timers and child processes).
-            python scripts/ci_python_run.py 3 2>&1 | tee run.log
+            python scripts/ci_python_run.py 4 2>&1 | tee run.log
             [ "${PIPESTATUS[0]}" = 0 ]
           fi
       - name: Check that unittest ran exactly the tests loaded
@@ -157,35 +145,3 @@ jobs:
           merge-multiple: true
       - name: Compare the groups with a full discovery
         run: python scripts/ci_python_compare.py "$PYTHON_GROUPS" ids
-
-  # End to end: Playwright with mocked network responses (see e2e/screens.pw.ts).
-  e2e:
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-        with:
-          version: ${{ env.PNPM_VERSION }}
-      - uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: pnpm
-          cache-dependency-path: |
-            pnpm-lock.yaml
-            server/pnpm-lock.yaml
-      - run: pnpm install --frozen-lockfile
-      # The integration spec starts the real gateway, which needs its deps.
-      - run: pnpm --dir server install --frozen-lockfile
-      # ... and the strategy registry S (Python) with a throwaway database.
-      - uses: actions/setup-python@v5
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-      - run: pnpm exec playwright install --with-deps chromium
-      - run: pnpm test:e2e
-      - uses: actions/upload-artifact@v4
-        if: failure()
-        with:
-          name: playwright-results
-          path: test-results/
-          retention-days: 7
