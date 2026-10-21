@@ -43,6 +43,7 @@ import {
   ResearchBadge,
 } from './StrategyStatusBadges.tsx'
 import './StrategyDetailView.css'
+import GatePanel from './GatePanel.tsx'
 
 const NA = 'No disponible'
 
@@ -1086,6 +1087,7 @@ export default function StrategyDetailView({
           <PerformanceModule row={row} inventory={inventory} />
           <OperationsModule row={row} activity={activity} />
           <PlanModule plan={plan} />
+          <GatePanel strategyId={row.id} strategyName={row.name} />
         </div>
       </div>
       <ProvenanceModule row={row} inventory={inventory} detail={stored} />

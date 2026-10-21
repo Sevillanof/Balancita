@@ -15,7 +15,8 @@ Every backtest of a strategy we are fond of is another draw from the same lotter
 - `evaluate --strategy <id> [--from YYYY-MM-DD] [--products PF_XBTUSD,...] [--exam] [--json-progress] [--sin-vecinos] [--jobs N]` runs the test, writes `data/strategy-gate/reports/<run_id>.md` (Spanish) and records the run.
 - `runs [--strategy <id>]` lists the runs, one JSON line each.
 - `cancel --run N` asks a running evaluation to stop.
-- Verdicts: `PASA`, `NO PASA`, `INCONCLUSO` (fewer than 100 trades).
+- Verdicts: `PASA`, `NO PASA`, `INCONCLUSO`. With fewer than 100 trades: if any other rule fails the verdict is `NO PASA` with the note "(pocas operaciones)" (the stricter reading); `INCONCLUSO` only when trades < min and every other rule passes.
+- `--registry-db <futures-strategies.sqlite>`: also judges strategies that exist only in the S registry (created in the UI). Opened read-only (`mode=ro`), latest non-deleted version, same `spec_json`/`spec_hash` the registry uses, same `propose_spec`/`Book` path as live. Precedence: `config/strategies` first (versioned in git; the registry seeds its builtins from those same files so a shared id has the same content), the registry only for ids not in `config/strategies`. The S API (`GateApi`) always passes its own registry path to the child.
 
 ## Data split
 
@@ -33,7 +34,11 @@ Every backtest of a strategy we are fond of is another draw from the same lotter
 
 ## Rules (predeclared, printed in each report)
 
-PASA only if all hold: n >= 100 · mean net bp > 0 and the 95 % bootstrap CI lower bound > 0 · percentile >= 95 against 1000 random-entry draws (same count, product, side and holding time; compared before funding because the draws do not model it) · deflated Sharpe probability >= 0.95 with the attempts as trials · positive in >= 60 % of the folds and in >= half of the products · still positive with fees and impact x1.5. Reported too: hit rate, profit factor, max drawdown, per product / side / fold, parameter neighbours (+-20 %, informative only, `n/d` without numeric params).
+PASA only if all hold: n >= 100 (fewer: `NO PASA (pocas operaciones)` if another rule fails, else `INCONCLUSO`) · mean net bp > 0 and the 95 % bootstrap CI lower bound > 0 · percentile >= 95 against 1000 random-entry draws (same count, product, side and holding time; compared before funding because the draws do not model it) · deflated Sharpe probability >= 0.95 with the attempts as trials · positive in >= 60 % of the folds and in >= half of the products · still positive with fees and impact x1.5. Reported too: hit rate, profit factor, max drawdown, per product / side / fold, parameter neighbours (+-20 %, informative only, `n/d` without numeric params; neighbours that produce exactly the same trades are shown once, e.g. c29 `z_min` and `sqrt_bars` because the entry threshold is `z_min * vol * sqrt_bars`).
+
+## Report (Markdown, Spanish, for a non-technical reader)
+
+H1 with the strategy name (id small), a big verdict line (✅ PASA / ❌ NO PASA / ⚠️ INCONCLUSO), "En pocas palabras" (3-5 plain bullets), "Qué revisamos" (one ✅/❌ bullet per rule with a one-phrase explanation, % with bp in parentheses only where it helps), short tables with Spanish headers and decimal commas, "Glosario", and last "Detalles técnicos" (version hash, window, attempts, cost model, seed, config JSON). Numbers: net bp / 100 = % of the 100 USD position; totals and drawdown in USD.
 
 ## Progress and cancellation
 
@@ -58,3 +63,21 @@ PASA only if all hold: n >= 100 · mean net bp > 0 and the 95 % bootstrap CI low
 ## Next step
 
 Run `evaluate` for C25-C32 on the Mac (negative control on real data), note the verdicts here, then decide which versions deserve an exam.
+
+## UI en /estrategias (PR sobre #317)
+
+- Registro S (`python/balancita_engine/futures_strategy_gate_api.py`, enganchado en `futures_strategy_registry.py`), solo 127.0.0.1:
+  - `POST /api-strategies/strategies/<id>/gate` `{from?, products?, exam?}`: id en la lista blanca del registro, entradas validadas (fecha AAAA-MM-DD, productos fijados en `config/futures-products.json`, sin campos extra, `exam` sin `from`). 409 en español si ya hay una corrida `running` (con proceso vivo). 422 con el mensaje del gate si lo rechaza (examen ya rendido, hash distinto).
+  - `GET /api-strategies/strategies/<id>/gate/runs` (corridas, `exam` con fecha/veredicto, `running`), `GET /api-strategies/gate/runs/<n>`, `POST /api-strategies/gate/runs/<n>/cancel` (`strategy_gate.cancel_run`: archivo + SIGTERM), `GET /api-strategies/gate/runs/<n>/report.md` (`text/markdown`, `attachment`, nombre `<estrategia>-<tipo>-<fecha>-<n>.md`; la ruta se resuelve dentro de `data/strategy-gate/reports/`).
+  - `gate.sqlite` se abre solo lectura (`mode=ro`); si no existe, listas vacías. Una fila `running` cuyo pid ya no existe se informa como `failed`.
+- Lanzamiento: `subprocess.Popen([python, -m, balancita_engine.strategy_gate, --data-dir, ..., evaluate, ...], shell=False, start_new_session=True, stdin=DEVNULL, salida a data/strategy-gate/logs/launch-*.log)`; `python` = `BALANCITA_PYTHON` o el intérprete con el que dev.mjs arrancó S; `PYTHONPATH=python`. El hijo es líder de su propia sesión: sobrevive al pedido HTTP y a un reinicio de S; la UI lo encuentra por la base. S espera hasta 30 s a que aparezca la fila con el pid del hijo; si el hijo sale antes, devuelve su último mensaje (422); si no, `{pending: true}`.
+- Pantalla: `GatePanel` en el detalle de cada estrategia (botones «Probar estrategia» y «Examen final» con confirmación, barra de avance, Cancelar, veredicto, historial, intentos). Consulta cada 2 s solo mientras hay una corrida activa. Una sola corrida a la vez en toda la app, con aviso de cuál estrategia corre.
+- Pruebas: `python/tests/test_futures_strategy_gate_api.py` (spawn simulado) y `GatePanel.test.tsx`.
+- El gate también carga las estrategias creadas solo en el registro: S pasa `--registry-db` con su propia base (lectura); `config/strategies` gana si el id está en ambos. La API acepta cualquier id del registro (no borrado).
+- Informe: «Ver informe» abre el Markdown en un diálogo (renderizador propio y seguro en `MarkdownView.tsx`: solo elementos React, HTML crudo se muestra como texto, sin enlaces ni imágenes) junto a «Descargar (.md)»; `GET .../report.md` se lee con `fetch`.
+
+## Hallazgos de la primera práctica real (2026-10-19, BTC 2025-01-01..2026-04-19)
+
+- Reproducido offline con la misma caché de velas: c29 da 115 operaciones, media -52,27 bp, costos x1,5 -57,34.
+- Costos x1,5 idénticos: no es un bug. La comisión taker ida y vuelta (10 bp) domina el costo; en BTC una operación cuesta 10,06 (objetivo), 10,12 (salida por tiempo) o 10,24 bp (stop), así que el costo medio es ~10,13-10,14 bp en cualquier estrategia con mezcla parecida de salidas. El estrés es `media - 0,5 * costo medio` = media - 5,07 bp: dos estrategias con media -52,27 y -52,28 dan ambas -57,34. Las medias de c29 y c30 se calculan sobre sus propias operaciones (115 y 41); que coincidan a 0,01 bp es casualidad de los datos, no de un conjunto compartido (ver el informe de c30 en la Mac para confirmarlo).
+- Vecinos `sqrt_bars` y `z_min` idénticos: por diseño. El umbral de entrada es `logvol * z_min * sqrt_bars`; mover cualquiera un 20 % mueve el umbral igual, y da exactamente las mismas operaciones (197 y 197, media -20,12 en la caché local). Ahora el informe los muestra juntos como una sola variante.

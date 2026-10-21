@@ -18,7 +18,7 @@ from contextlib import redirect_stdout
 from balancita_engine import strategy_gate as g
 from balancita_engine.futures_costs import entry_fill
 from balancita_engine.futures_qwen_practice import horizon_net_bp
-from balancita_engine.futures_spec_strategy import load_specs
+from balancita_engine.futures_spec_strategy import load_specs, spec_hash
 from test_futures_qwen_practice import MINUTE, T0, aggregate, synthetic
 
 DAY = 86_400_000
@@ -135,6 +135,11 @@ class IdentityTests(unittest.TestCase):
         self.assertEqual(cfg["rules"]["cost_stress_multiplier"], 1.5)
 
 
+META = {"run_id": 7, "strategy_id": "x-v1", "name": "Estrategia de prueba", "family": "x", "version_key": "x-v1:abc",
+        "kind": "practice", "start_ms": 0, "end_ms": 86_400_000, "products": ["BTC"], "config_hash": "0" * 64,
+        "open_at_end": 0, "seconds": 1}
+
+
 class JudgeTests(unittest.TestCase):
     def series(self):
         rng, price, closes = random.Random(3), 50_000.0, []
@@ -164,7 +169,38 @@ class JudgeTests(unittest.TestCase):
         self.assertEqual(result["verdict"], "PASA", [c for c in result["rules"] if not c["ok"]])
 
     def test_few_trades_are_inconclusive(self):
-        self.assertEqual(self.judge(self.trades(60, 25))["verdict"], "INCONCLUSO")
+        result = self.judge(self.trades(60, 25))
+        self.assertEqual(result["verdict"], "INCONCLUSO")
+        self.assertIsNone(result["verdict_note"])
+        self.assertEqual([c["id"] for c in result["rules"] if not c["ok"]], ["n_trades"])
+
+    def test_few_trades_and_another_failed_rule_is_no_pasa_with_a_note(self):
+        result = self.judge(self.trades(60, -4))
+        self.assertEqual(result["verdict"], "NO PASA")
+        self.assertEqual(result["verdict_note"], "(pocas operaciones)")
+        self.assertGreater(len([c for c in result["rules"] if not c["ok"]]), 1)
+        text = g.build_report(META, result, CFG)
+        self.assertIn("## ❌ NO PASA (pocas operaciones)", text)
+
+    def test_enough_trades_never_carry_the_few_trades_note(self):
+        self.assertIsNone(self.judge(self.trades(400, -4))["verdict_note"])
+
+    def test_identical_neighbors_are_shown_once_and_say_so(self):
+        trades = self.trades(150, 3.5)
+        same = self.trades(120, 1.0, seed=9)
+        other = self.trades(100, -2.0, seed=4)
+        neighbors = [{"param": "z_min", "direction": "-20%", "value": "2", "trades": same},
+                     {"param": "sqrt_bars", "direction": "-20%", "value": "6.7", "trades": [dict(t) for t in same]},
+                     {"param": "stop_atr", "direction": "-20%", "value": "1.6", "trades": other}]
+        end = max(t["exit_ms"] for t in trades) + 1
+        result = g.judge(trades, self.series(), CFG, kind="practice", start_ms=0, end_ms=end, attempts=1,
+                         products=["BTC"], seed=5, neighbors=neighbors)
+        self.assertEqual(len(result["sensitivity"]), 2)
+        self.assertEqual(result["sensitivity"][0]["also"], [{"param": "sqrt_bars", "direction": "-20%", "value": "6.7"}])
+        self.assertEqual(result["sensitivity"][1]["also"], [])
+        text = g.build_report(META, result, CFG)
+        self.assertIn("z_min -20% y sqrt_bars -20%", text)
+        self.assertIn("exactamente las mismas operaciones", text)
 
     def test_more_attempts_make_the_deflated_sharpe_stricter(self):
         trades = self.trades(150, 3.5)
@@ -177,6 +213,27 @@ class JudgeTests(unittest.TestCase):
         stress = [c for c in result["rules"] if c["id"] == "cost_stress"][0]
         self.assertFalse(stress["ok"])
         self.assertEqual(result["verdict"], "NO PASA")
+
+    def test_cost_stress_is_the_mean_minus_the_extra_cost_and_nothing_is_shared_between_runs(self):
+        """Two different strategies can show the same stressed mean without any bug: the stress is
+        ``mean - (x - 1) * mean_cost`` and a BTC round trip costs ~10.1 bp (fees dominate) whatever the strategy."""
+        extra = CFG["rules"]["cost_stress_multiplier"] - 1
+        cost = g.trade_cost_bp("BTC", "time_stop")
+        first, second = self.trades(115, -52, seed=1), self.trades(41, -52, seed=2)
+        results = [self.judge(t) for t in (first, second, first)]
+        for trades, result in zip((first, second, first), results):
+            mean = sum(t["net_bp"] for t in trades) / len(trades)
+            self.assertAlmostEqual(result["overall"]["mean_bp"], mean, places=9)       # its own trades only
+            self.assertAlmostEqual(result["stress_mean_bp"], mean - extra * cost, places=9)
+        self.assertNotAlmostEqual(results[0]["overall"]["mean_bp"], results[1]["overall"]["mean_bp"], places=3)
+        self.assertEqual(results[0]["stress_mean_bp"], results[2]["stress_mean_bp"])  # no state leaks across calls
+        # same mean to the cent => same stressed mean, because the cost per BTC trade is (almost) constant
+        a, b = dict(first[0], net_bp=-52.27, reason="time_stop"), dict(second[0], net_bp=-52.28, reason="time_stop")
+        sa = g.judge([a] * 3, self.series(), CFG, kind="practice", start_ms=0, end_ms=10**10, attempts=1,
+                     products=["BTC"], seed=5)["stress_mean_bp"]
+        sb = g.judge([b] * 3, self.series(), CFG, kind="practice", start_ms=0, end_ms=10**10, attempts=1,
+                     products=["BTC"], seed=5)["stress_mean_bp"]
+        self.assertAlmostEqual(sa - sb, 0.01, places=9)
 
     def test_max_drawdown(self):
         self.assertEqual(g.max_drawdown([5, -3, -4, 10, -2]), 7)
@@ -220,7 +277,81 @@ class ControlTests(Base):
         out = run("c29-momentum-perp-v1", self.dir, cfg=cfg, neighbors=True)
         self.assertEqual(len(out["result"]["sensitivity"]), 4)
         with open(out["report_path"], encoding="utf-8") as handle:
-            self.assertIn("Vecinos con media positiva", handle.read())
+            self.assertIn("Variantes con promedio positivo", handle.read())
+
+
+class CouplingTests(unittest.TestCase):
+    def test_c29_z_min_and_sqrt_bars_are_one_threshold(self):
+        """The entry threshold is z_min * volatility * sqrt_bars: scaling either by the same factor is the same
+        strategy, so the two neighbours are not independent evidence (found on the first real run)."""
+        base = SPECS["c29-momentum-perp-v1"]
+        trades = []
+        for name in ("z_min", "sqrt_bars"):
+            spec = copy.deepcopy(base)
+            spec["params"][name] = str(float(spec["params"][name]) * 0.5)
+            out, _ = g.book_trades(spec, "PF_XBTUSD", "0.5", ONES, FIVES, [], FROM, HOLDOUT, lambda f: None)
+            trades.append([(t["entry_time_ms"], t["exit_time_ms"], t["side"], str(t["net_bp"])) for t in out])
+        self.assertGreater(len(trades[0]), 0)
+        self.assertEqual(trades[0], trades[1])
+
+
+class RegistrySpecTests(Base):
+    def make_registry(self):
+        from balancita_engine.futures_strategy_registry import StrategyRegistry
+
+        path = os.path.join(self.dir, "futures-strategies.sqlite")
+        registry = StrategyRegistry(path)
+        self.addCleanup(registry.close)
+        spec = copy.deepcopy(SPECS["c29-momentum-perp-v1"])
+        spec.update(id="c31-momentum-breakout-5m", name="Impulso Adaptativo 5m")
+        spec["params"]["z_min"] = "2.2"
+        entry = registry.import_spec(spec)
+        return registry, path, spec, entry
+
+    def test_registry_only_strategy_is_judged_from_the_registry_row(self):
+        registry, path, spec, entry = self.make_registry()
+        with self.assertRaises(g.GateError) as refused:
+            run("c31-momentum-breakout-5m", self.dir)
+        self.assertIn("estrategia desconocida", str(refused.exception))
+        out = run("c31-momentum-breakout-5m", self.dir, registry_db=path)
+        self.assertEqual(out["status"], "done")
+        row = self.db().execute("SELECT version_key, code_hash FROM runs WHERE id=?", (out["run_id"],)).fetchone()
+        self.assertEqual(row["code_hash"], entry["spec_hash"])           # the registry's own digest
+        self.assertEqual(row["version_key"], "c31-momentum-breakout-5m:" + entry["spec_hash"])
+        with open(out["report_path"], encoding="utf-8") as handle:
+            self.assertIn("# Impulso Adaptativo 5m", handle.read())
+
+    def test_registry_spec_goes_through_the_same_book_path(self):
+        registry, path, spec, entry = self.make_registry()
+        loaded = g.registry_specs(path)["c31-momentum-breakout-5m"]
+        self.assertEqual(g.spec_hash(loaded), entry["spec_hash"])
+        direct = g.book_trades(loaded, "PF_XBTUSD", "0.5", ONES, FIVES, [], FROM, HOLDOUT, lambda f: None)[0]
+        again = g.book_trades(spec, "PF_XBTUSD", "0.5", ONES, FIVES, [], FROM, HOLDOUT, lambda f: None)[0]
+        self.assertEqual([t["net_bp"] for t in direct], [t["net_bp"] for t in again])
+
+    def test_config_spec_wins_over_a_registry_spec_with_the_same_id(self):
+        registry, path, spec, entry = self.make_registry()
+        clash = copy.deepcopy(SPECS["c25-pullback-perp-v1"])
+        clash["params"] = dict(clash.get("params", {}))
+        found = g.find_spec("c25-pullback-perp-v1", registry_db=path)
+        self.assertEqual(g.spec_hash(found), g.spec_hash(SPECS["c25-pullback-perp-v1"]))
+        self.assertEqual(g.spec_hash(g.find_spec("c25-pullback-perp-v1", registry_db=None)),
+                         g.spec_hash(SPECS["c25-pullback-perp-v1"]))
+
+    def test_deleted_and_missing_registry_rows_are_not_loaded_and_the_db_is_read_only(self):
+        registry, path, spec, entry = self.make_registry()
+        self.assertIn("c31-momentum-breakout-5m", g.registry_specs(path))
+        registry.delete("c31-momentum-breakout-5m", "c31-momentum-breakout-5m")
+        self.assertNotIn("c31-momentum-breakout-5m", g.registry_specs(path))
+        self.assertEqual(g.registry_specs(os.path.join(self.dir, "nope.sqlite")), {})
+        self.assertEqual(g.registry_specs(None), {})
+        with self.assertRaises(g.GateError):
+            run("c31-momentum-breakout-5m", self.dir, registry_db=path)
+
+    def test_cli_accepts_the_registry_db(self):
+        registry, path, spec, entry = self.make_registry()
+        args = g._parser().parse_args(["evaluate", "--strategy", "c31-momentum-breakout-5m", "--registry-db", path])
+        self.assertEqual(args.registry_db, path)
 
 
 class SplitTests(Base):
@@ -340,7 +471,7 @@ class AttemptsTests(Base):
         out = run(sid(2), self.dir, spec=dict(SPECS["c25-pullback-perp-v1"], id=sid(2)))
         self.assertEqual(out["result"]["attempts"], 3)
         with open(out["report_path"], encoding="utf-8") as handle:
-            self.assertIn("intentos: 3", handle.read())
+            self.assertIn("Intentos: 3", handle.read())
         run("c26-reversion-perp-v1", self.dir)
         counts = dict(self.db().execute("SELECT family, COUNT(*) FROM attempts GROUP BY family").fetchall())
         self.assertEqual(counts, {"c25-pullback-perp": 3, "c26-reversion-perp": 1})
@@ -413,14 +544,35 @@ class ReportAndCliTests(Base):
                   trade_source=cheating_source)
         with open(out["report_path"], encoding="utf-8") as handle:
             text = handle.read()
-        for needle in ("## Veredicto: **PASA**", "✓", "## Reglas (declaradas de antemano", "## Por tramo de tiempo",
-                       "## Por producto", "## Por lado", "Entradas al azar", "Costes x1.5", "intentos: 1",
-                       "n/d", "min_trades", "Operaciones aún abiertas"):
+        for needle in ("# C25 Pullback en tendencia", "`lab-cheat-v1`", "## ✅ PASA", "### En pocas palabras",
+                       "## Qué revisamos", "- ✅ **Operaciones suficientes**", "## Resultado general", "## Por periodo",
+                       "## Por producto", "## Compra contra venta", "## Comparación con entradas al azar",
+                       "## Con costos más altos", "## Glosario", "## Detalles técnicos", "Intentos: 1",
+                       "min_trades", "Operaciones aún abiertas", "Factor de beneficio", "Sharpe desinflado"):
             self.assertIn(needle, text)
+        self.assertLess(text.index("## Glosario"), text.index("## Detalles técnicos"))
+        top = text[:text.index("## Resultado general")]
+        for jargon in ("version_key", "sha ", "kraken-futures-costs", "Semilla", "```"):
+            self.assertNotIn(jargon, top)
+        self.assertIn("%", text.split("### En pocas palabras")[1].split("## Qué revisamos")[0])
+        self.assertRegex(text, r"\d,\d\d %")           # decimal comma, percentages
+        self.assertNotRegex(text, r"(?m)^\|.*\d\.\d\d % \|")
+        bullets = text.split("### En pocas palabras")[1].split("## Qué revisamos")[0].strip().splitlines()
+        self.assertTrue(3 <= len([b for b in bullets if b.startswith("- ")]) <= 5)
+        # every table row has the same number of cells as its header (valid GFM)
+        block = []
+        for line in text.splitlines() + [""]:
+            if line.startswith("|"):
+                block.append(line)
+            elif block:
+                self.assertEqual({row.count("|") for row in block}, {block[0].count("|")}, block)
+                block = []
         failing = run("lab-losing-v1", self.dir, spec=dict(SPECS["c25-pullback-perp-v1"], id="lab-losing-v1"),
                       trade_source=losing_source)
         with open(failing["report_path"], encoding="utf-8") as handle:
-            self.assertIn("✕", handle.read())
+            lost = handle.read()
+        self.assertIn("- ❌ ", lost)
+        self.assertRegex(lost, r"## ❌ NO PASA")
 
     def test_runs_lists_json_lines_and_filters(self):
         run("c26-reversion-perp-v1", self.dir)
