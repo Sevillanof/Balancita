@@ -22,6 +22,14 @@ export type RunSummary = {
   funding_status: Record<string, number>
   open_at_end: number | null
   contaminated: boolean
+  /** Every rule with what it asked and what the run got; absent in runs saved before it existed. */
+  rules?: Array<{
+    id: string
+    label: string
+    value: unknown
+    threshold: unknown
+    ok: boolean
+  }>
 }
 
 export type RunVisualSummary = {

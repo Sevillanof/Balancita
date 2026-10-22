@@ -172,6 +172,9 @@ class StrategyRegistry:
               oos_sharpe REAL, summary_json TEXT NOT NULL
             ) STRICT;
             CREATE INDEX IF NOT EXISTS strategy_backtests_by_hash ON strategy_backtests(spec_hash, product_id, seq);
+            CREATE TABLE IF NOT EXISTS strategy_titles(
+              strategy_id TEXT PRIMARY KEY, title TEXT NOT NULL, set_at INTEGER NOT NULL
+            ) STRICT;
             """
         )
         self._guard_triggers()
@@ -273,7 +276,8 @@ class StrategyRegistry:
         state = self._state(row["strategy_id"], row["version"])
         return {
             "id": row["strategy_id"], "version": row["version"], "spec_hash": row["spec_hash"],
-            "name": spec["name"], "description": spec.get("description", ""), "kind": spec.get("kind", "rules"),
+            "name": self._title(row["strategy_id"], spec), "description": spec.get("description", ""),
+            "kind": spec.get("kind", "rules"),
             "state": state["state"], "state_reason": state["reason"], "state_known_at": state["known_at"],
             "active_version": self._active_version(row["strategy_id"]), "origin": row["origin"],
             "parent": None if row["parent_id"] is None else {"id": row["parent_id"], "version": row["parent_version"]},
@@ -281,6 +285,25 @@ class StrategyRegistry:
             "reliability": self._reliability(spec),
             "frozen": row["strategy_id"] in load_freeze()["ids"],
         }
+
+    def _title(self, strategy_id, spec):
+        """The name the owner gave last: a rename is not a new version, so it lives apart from the frozen specs."""
+        row = self.db.execute("SELECT title FROM strategy_titles WHERE strategy_id=?", (strategy_id,)).fetchone()
+        return spec["name"] if row is None else row[0]
+
+    def rename(self, strategy_id, title):
+        """Changes only the displayed title: versions, tests and exam stay exactly as they are."""
+        title = " ".join(str(title or "").split())
+        if not title or len(title) > 120:
+            raise RegistryError("invalid_title", "El título no puede estar vacío ni pasar de 120 caracteres.")
+        with self.lock, self.db:
+            row = self._version_row(strategy_id, None)
+            if row is None or self._deleted(strategy_id):
+                raise RegistryError("not_found", "No existe la estrategia indicada.", 404)
+            self.db.execute("INSERT INTO strategy_titles(strategy_id, title, set_at) VALUES(?,?,?) "
+                            "ON CONFLICT(strategy_id) DO UPDATE SET title=excluded.title, set_at=excluded.set_at",
+                            (strategy_id, title, self.clock()))
+            return self._entry(row)
 
     @staticmethod
     def _reliability(spec):
@@ -491,7 +514,7 @@ class StrategyRegistry:
                      "created_at": c} for v, h, c in self.db.execute(
             "SELECT version, spec_hash, created_at FROM strategy_versions WHERE strategy_id=? ORDER BY version",
             (strategy_id,)).fetchall()]
-        return {"id": strategy_id, "name": latest["spec"].get("name") or strategy_id, "state": versions[-1]["state"],
+        return {"id": strategy_id, "name": self._title(strategy_id, latest["spec"]) or strategy_id, "state": versions[-1]["state"],
                 "active_version": self._active_version(strategy_id), "versions": versions,
                 "created_at": min(v["created_at"] for v in versions), "origin": latest["origin"],
                 "builtin": latest["origin"] == "builtin", "active_ms": self.active_ms(strategy_id)}
@@ -529,6 +552,8 @@ class StrategyRegistry:
                         "DELETE FROM strategy_backtests WHERE spec_hash=?", (digest,)).rowcount
                 counts["strategy_versions"] = raw.execute(
                     "DELETE FROM strategy_versions WHERE strategy_id=?", (strategy_id,)).rowcount
+                counts["strategy_titles"] = raw.execute(
+                    "DELETE FROM strategy_titles WHERE strategy_id=?", (strategy_id,)).rowcount
                 raw.execute("COMMIT")
             except BaseException:
                 try:
@@ -950,6 +975,8 @@ def make_handler(service):
             if len(parts) == 3 and parts[0] == "strategies" and parts[2] == "state":
                 return registry.set_state(parts[1], body.get("version"), body.get("state"),
                                           body.get("reason") or "manual", skip_gates=bool(body.get("paper_now")))
+            if len(parts) == 3 and parts[0] == "strategies" and parts[2] == "rename":
+                return registry.rename(parts[1], body.get("title"))
             if len(parts) == 3 and parts[0] == "strategies" and parts[2] == "delete":
                 return service.lifecycle.delete(parts[1], body.get("confirm"))
             raise RegistryError("not_found", "no route", 404)

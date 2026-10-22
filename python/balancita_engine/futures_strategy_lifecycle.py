@@ -96,6 +96,11 @@ class Lifecycle:
             return None
         return "off" if config.get("off") else "on"
 
+    @staticmethod
+    def _operating(info):
+        """Running in the paper (active or in observation): it must be switched off before it can be deleted."""
+        return info["active_version"] is not None or info["state"] in ("active", "shadow")
+
     def preview(self, strategy_id):
         self._refuse_if_protected(strategy_id)
         info = self.registry.lifecycle(strategy_id)
@@ -112,10 +117,11 @@ class Lifecycle:
             warnings.append("Qwen (C31, hoy apagado) usa esta estrategia como entrada: si lo reactivás vas a "
                             "necesitar volver a crearla.")
         blocked = dependency == "on"
-        return dict(info, forward_trades=trades, forward_net_usd=net, gate_runs=len(runs),
+        operating = self._operating(info)
+        return dict(info, operating=operating, forward_trades=trades, forward_net_usd=net, gate_runs=len(runs),
                     gate_practice_runs=sum(1 for r in runs if r["kind"] == "practice"), exam=exam,
                     ledger_kept=(not strategy_purge.PURGE_PAPER_LEDGER) and trades > 0,
-                    warnings=warnings, blocked=blocked)
+                    warnings=warnings, blocked=blocked or operating)
 
     # ------------------------------------------------------------------ the delete itself
 
@@ -124,6 +130,8 @@ class Lifecycle:
         info = self.registry.lifecycle(strategy_id)
         if confirm not in (strategy_id, info["name"]):
             raise LifecycleError("confirmation_required", "Escribí el nombre de la estrategia para borrarla.", 409)
+        if self._operating(info):
+            raise LifecycleError("operating", "Está operando en el paper: primero apagala y después borrala.", 409)
         if self._qwen_dependency(strategy_id) == "on":
             raise LifecycleError("in_use", "Qwen (C31) está operando con esta estrategia como entrada: no se puede "
                                            "borrar mientras esté encendido.", 409)

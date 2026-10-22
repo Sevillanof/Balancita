@@ -249,7 +249,8 @@ class VisualApiTests(unittest.TestCase):
         result = {"verdict": "NO PASA", "verdict_note": None, "inconclusive_reasons": [], "ci": (None, None),
                   "overall": {"n": 3, "mean_bp": 3.6}, "percentile": 87.0, "funding_share": 0.0,
                   "funding_status": {"unknown": 3},
-                  "rules": [{"id": "positive_folds", "value": {"positive": 2, "total": 5}}]}
+                  "rules": [{"id": "positive_folds", "label": "folds", "value": {"positive": 2, "total": 5},
+                             "threshold": 0.6, "ok": False}]}
         cfg["rules"] = {"min_trades": 100, "min_positive_fold_share": 0.6, "min_percentile_vs_random": 95}
         strategy_gate.write_artifact(self.dir, meta, cfg, SPEC, "h", trades, 1, result)
         if candles:

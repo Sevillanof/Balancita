@@ -282,6 +282,18 @@ class DeleteFlowTests(Base):
         self.assertEqual(self.states(C29), {C29: "draft"})
         self.assertEqual(self.count(os.path.join(self.gate_dir, "gate.sqlite"), "runs"), 3)
 
+    def test_a_strategy_that_operates_must_be_switched_off_first(self):
+        self.registry.set_state(C29, 1, "active", "manual", skip_gates=True)
+        self.assertTrue(self.life.preview(C29)["operating"])
+        self.assertTrue(self.life.preview(C29)["blocked"])
+        with self.assertRaises(LifecycleError) as raised:
+            self.life.delete(C29, C29)
+        self.assertEqual((raised.exception.code, raised.exception.status), ("operating", 409))
+        self.assertIn(C29, self.states())
+        self.registry.set_state(C29, 1, "retired")
+        self.assertFalse(self.life.preview(C29)["operating"])
+        self.assertTrue(self.life.delete(C29, C29)["deleted"])
+
     def test_qwen_and_kronos_cannot_be_deleted(self):
         for strategy_id in ("kronos-small-1h-h4-v1", "c31-qwen-exit-perp-v1"):
             for call in (lambda: self.life.delete(strategy_id, strategy_id), lambda: self.life.preview(strategy_id)):
