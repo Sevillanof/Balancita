@@ -215,3 +215,7 @@ Esta tabla resume los estados del **ciclo de investigación**. No son los estado
   - **Obligación para F5.** Todo barrido tiene que registrar cada corrida con `record_run`, incluso las que fallan o no operan. `optimize` la cumple.
 - **Botón «Investigar con VectorBT» en `/estrategias`** (opcional). El laboratorio ya tiene el contrato para el front (`explore`, ver arriba); falta la pantalla.
 - **Corrida real sobre toda la ventana de práctica con funding.** Las pruebas usan velas sintéticas. Falta exportar `PF_XBTUSD` con funding (sin `--no-funding`) y correr `optimize`, `feature_study` y `summarize` sobre `data/research-vectorbt/practice/PF_XBTUSD`.
+
+## Detalle de eventos del analizador (`event_trades`)
+
+Para simular apalancamiento y tamaños de entrada en la app hacen falta los eventos uno por uno, no solo promedios. `python -m research.vectorbt.event_trades --datasets DIR_BTC DIR_ETH DIR_SOL --out data/research-vectorbt/analyzer/events.json` reusa `event_study` (sin modificarlo) y escribe `balancita.analyzer-events.v1`: las mismas 78 celdas del informe más, por producto, tipo y ventana, cada evento con retorno de largo, máximo y mínimo del precio y funding para los horizontes 5, 15, 30 y 60. Solo datos de práctica; no toca el registro de intentos ni los informes. El engine lo sirve de solo lectura en `GET /analyzer/events`.

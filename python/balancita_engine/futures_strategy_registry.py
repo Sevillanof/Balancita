@@ -47,6 +47,7 @@ from .futures_strategy_plan import all_plans, load_freeze
 from .futures_strategy_reliability import load_reliability, reliability_for
 from .futures_purged import cscv_pbo
 from .futures_strategy_gate_api import GateApi, GateApiError
+from .analyzer_events_api import read_events as read_analyzer_events
 from .futures_strategy_vectorbt_api import VectorbtApi
 from . import strategy_purge
 from .futures_strategy_lifecycle import Lifecycle, LifecycleError
@@ -1030,6 +1031,8 @@ def make_handler(service):
             if parts[:1] == ["api-strategies"]:
                 parts = parts[1:]
             vectorbt = getattr(service, "vectorbt", None)
+            if vectorbt is not None and method == "GET" and parts == ["analyzer", "events"]:
+                return read_analyzer_events(vectorbt.data_dir, vectorbt.python)
             if vectorbt is None or len(parts) < 3 or parts[0] != "strategies" or parts[2] != "vectorbt":
                 return None
             if len(parts) == 3 and method == "GET":

@@ -146,6 +146,19 @@ class VectorbtApiTests(unittest.TestCase):
 
     # ------------------------------------------------------------------ environment and state
 
+    def test_analyzer_events_route_reads_file_or_says_how_to_make_it(self):
+        status, body = self.call("/analyzer/events")
+        self.assertEqual(status, 200)
+        self.assertFalse(body["available"])
+        self.assertIn("research.vectorbt.event_trades", body["command"])
+        path = os.path.join(self.api.data_dir, "analyzer", "events.json")
+        os.makedirs(os.path.dirname(path))
+        with open(path, "w", encoding="utf-8") as handle:
+            json.dump({"schema": "balancita.analyzer-events.v1", "cells": [], "events": {}}, handle)
+        status, body = self.call("/analyzer/events")
+        self.assertTrue(body["available"])
+        self.assertEqual(body["data"]["events"], {})
+
     def test_without_environment_it_is_unavailable_and_says_how_to_install(self):
         self.api.python = os.path.join(self.dir, "nada", "python")
         status, body = self.call("/strategies/{}/vectorbt".format(C27))
