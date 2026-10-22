@@ -1,0 +1,19 @@
+e2e/screens.pw.ts
+  s_fb3472b380ad7c::t_02d28d85581d73 161-187,213,222-226,248,256
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "99957c483676a1c5dc3b80b11c42771c101df93e",
+  "prompts": {},
+  "sessions": {
+    "s_fb3472b380ad7c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "0b673426-81c4-4c90-a0b6-044955a234e7",
+        "model": "claude-sonnet-5-5"
+      },
+      "human_author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
