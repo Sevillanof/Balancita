@@ -136,6 +136,37 @@ Tres herramientas sobre datos de práctica. Todas dejan la misma advertencia: lo
 - Criterio **«prometedora en práctica»**: simple y declarado, no es un veredicto. Hace falta al menos 100 operaciones, media neta mayor que 0 y que más de la mitad de las vecinas de la grilla también tengan media neta mayor que 0.
 - Ninguna variante queda aprobada por esta tarjeta. La decisión es de la compuerta.
 
+## Explorar cualquier estrategia (`explore`)
+
+El laboratorio ya no es solo de C27. `explore` corre **cualquier** estrategia de reglas (`balancita-strategy.v1`, `kind: rules` o `regime_adapter`) sobre los datasets de práctica y deja un reporte en lenguaje simple: qué funciona y qué falla. El formato completo, para el front, está en [`docs/vectorbt-exploration-api.md`](../../docs/vectorbt-exploration-api.md).
+
+```bash
+.venv-vectorbt/bin/python -m research.vectorbt.explore --strategy c27-breakout-perp-v1 --mode diagnostic
+.venv-vectorbt/bin/python -m research.vectorbt.explore --strategy c27-breakout-perp-v1 --mode variants --vary stop_atr --values 1,1.5,2,2.5
+```
+
+(Cada comando va en una línea.) Hace falta tener exportados los datasets de práctica de los productos de `config/strategy-gate.json` (ver «Exportar datos de práctica»).
+
+- **`diagnostic`**: la estrategia tal cual, sobre los productos y la ventana de la compuerta (nunca velas desde `holdout_from`). El reporte trae totales, desglose por producto, por forma de salida (objetivo, stop, regla propia, tiempo) y por lado, y las listas `works` y `fails` con frases simples generadas a partir de los números.
+- **`variants`**: varía **una sola cosa** (un parámetro de `params`, o una constante numérica de una condición por su ruta) sobre una lista de **hasta 12 valores**. Cada corrida, también las fallidas, queda en el registro de intentos **antes** de escribir el informe, y el reporte incluye el ranking (por resultado neto, con empate por entradas por día) y el contador de intentos de la familia.
+- **Progreso**: una línea JSON por avance en stdout, `{"progress": 0-100, "phase": "...", "detail": "..."}`. Avanza con el trabajo hecho.
+- **Salida**: `data/research-vectorbt/explorations/<id>/report.json` y `report.md`. Todo es una **hipótesis**; el aviso estándar va en el reporte.
+
+Cómo está armado:
+
+| Módulo | Qué hace |
+| --- | --- |
+| `generic_signals.py` | Evaluador vectorizado (numpy / Numba, float64) de una spec: `evaluate_spec(spec, market)` devuelve un `Plan` con las señales, los niveles de stop y objetivo, los niveles congelados y la regla de salida compilada. `Market.from_dataset(...)` / `Market.from_candles(...)`. Lo que no puede reproducir lanza `UnsupportedSpec` con un mensaje en español. |
+| `generic_sim.py` | `simulate_plan(plan, market)`: las operaciones con `vectorbt.Portfolio.from_signals`, con motivo de salida, bp bruto y bp neto (comisiones y costos del motor, funding real, costo del stop). |
+| `exploration_report.py` | Números del reporte y reglas de las frases en lenguaje simple. |
+| `explore.py` | La línea de comandos y `run_exploration(...)`. |
+
+**Qué soporta.** Todos los nodos y operandos del lenguaje cerrado de specs (`cmp`, `available`, `regime_in`, `not`, `all`, `any`, `and`; `1m.`, `1m_previous.`, `5m.`, `position.` + parámetros y `mul`), los indicadores `ema`, `sma`, `rsi`, `atr`, `bollinger_*`, `donchian_*`, `prior_volume_mean`, `logret` y `logvol` con los períodos declarados, el régimen con histéresis, las puertas, los niveles `risk` (también `vol` en escala logarítmica), el filtro de costo mínimo y las salidas con niveles congelados. Paridad con el motor probada en C25, C26, C27, C28, C29 y C30. **No soporta** C32 (`5m.fundpct`, el percentil de funding): el reporte sale con `status: "unsupported"` y el motivo. Detalle en el documento de formato.
+
+**Paridad.** `tests/test_generic_parity.py`: 0 diferencias de señal y de niveles contra `propose_spec`, barra por barra, y las operaciones contra `Book`. La única diferencia de operaciones es la conocida (una vela que solo toca el nivel). Las entradas son siempre el cierre de la vela de la señal, como en el motor.
+
+**Tiempos.** Un año de velas 1m sintéticas (525.600 velas) con C28, un producto: unos 17 a 19 segundos, de los cuales unos 12 son la compilación del simulador, que se paga una vez por proceso.
+
 ## Ciclo de vida
 
 Esta tabla resume los estados del **ciclo de investigación**. No son los estados del registro S (`draft`, `shadow`, `active`, `retired`).
@@ -182,5 +213,5 @@ Esta tabla resume los estados del **ciclo de investigación**. No son los estado
   - **Selección.** Elegir una corrida para la compuerta (`Ledger.record_selection`) agrega una fila nueva con estado `selection`; la fila elegida no se toca.
   - **Conexión.** `strategy_gate.evaluate` suma a `attempts` las variantes distintas de la familia (`research_trials`, solo `sqlite3`). El Sharpe desinflado usa esa suma y el informe dice «intentos: N (de la compuerta) + M (variantes del laboratorio)». Opción `--research-ledger`; con la carpeta de datos por defecto lee `data/research-vectorbt/ledger.sqlite`, y si no existe suma 0.
   - **Obligación para F5.** Todo barrido tiene que registrar cada corrida con `record_run`, incluso las que fallan o no operan. `optimize` la cumple.
-- **Botón «Investigar con VectorBT» en `/estrategias`** (opcional, F5 de UX del documento). Hoy el barrido se corre solo por línea de comandos.
+- **Botón «Investigar con VectorBT» en `/estrategias`** (opcional). El laboratorio ya tiene el contrato para el front (`explore`, ver arriba); falta la pantalla.
 - **Corrida real sobre toda la ventana de práctica con funding.** Las pruebas usan velas sintéticas. Falta exportar `PF_XBTUSD` con funding (sin `--no-funding`) y correr `optimize`, `feature_study` y `summarize` sobre `data/research-vectorbt/practice/PF_XBTUSD`.
