@@ -10,6 +10,7 @@ import type {
   AnalyzerCell,
   AnalyzerResponse,
 } from '../infrastructure/analyzer-api.ts'
+import { dayText } from '../domain/vectorbt-format.ts'
 import ModalFrame from './ModalFrame.tsx'
 import './AnalyzerModal.css'
 
@@ -29,10 +30,15 @@ const productName = (product: string) =>
   SHORT[product] ?? product.replace(/^PF_/, '').replace(/USD$/, '')
 
 const NUMBER = new Intl.NumberFormat('es-ES', {
+  useGrouping: 'always',
   minimumFractionDigits: 2,
   maximumFractionDigits: 2,
 })
-const WHOLE = new Intl.NumberFormat('es-ES', { maximumFractionDigits: 0 })
+const WHOLE = new Intl.NumberFormat('es-ES', {
+  maximumFractionDigits: 0,
+  useGrouping: 'always',
+})
+const RATIO = new Intl.NumberFormat('es-ES', { maximumFractionDigits: 1 })
 const PERCENT = new Intl.NumberFormat('es-ES', { maximumFractionDigits: 0 })
 
 /** USD con signo explícito; sin decimales cuando ya es grande. */
@@ -45,6 +51,14 @@ function usd(value: number, signed = true): string {
   if (rounded === 0) return `${text} USD`
   const sign = rounded < 0 ? '−' : signed ? '+' : ''
   return `${sign}${text} USD`
+}
+
+/** El fin de la ventana es exclusivo: el último día con datos es el anterior. */
+function lastDayOf(endExclusive: string): string {
+  const time = Date.parse(endExclusive)
+  return Number.isNaN(time)
+    ? endExclusive
+    : new Date(time - 86_400_000).toISOString()
 }
 
 const rowKey = (cell: AnalyzerCell) =>
@@ -248,8 +262,8 @@ export default function AnalyzerModal({ api, onClose }: Props) {
       {data && layout && summary && (
         <>
           <p className="smodal__hint">
-            Son hipótesis con datos de práctica del {data.window.from} al{' '}
-            {data.window.to}, no una aprobación.
+            Son hipótesis con datos de práctica del {dayText(data.window.from)}{' '}
+            al {dayText(lastDayOf(data.window.to))}, no una aprobación.
           </p>
 
           <div className="analyzer__controls">
@@ -474,8 +488,10 @@ export default function AnalyzerModal({ api, onClose }: Props) {
                   <dd data-testid="detail-liquidated">{detail.liquidations}</dd>
                   <dt>Caída máxima</dt>
                   <dd>
-                    {usd(-detail.maxDrawdownUsd)} (
-                    {PERCENT.format(detail.maxDrawdownPct)} % de la entrada)
+                    {usd(-detail.maxDrawdownUsd)} (acumulada en varias
+                    operaciones seguidas:{' '}
+                    {RATIO.format(detail.maxDrawdownPct / 100)} veces la
+                    entrada)
                   </dd>
                   <dt>Peor operación</dt>
                   <dd>{usd(detail.worstUsd)}</dd>

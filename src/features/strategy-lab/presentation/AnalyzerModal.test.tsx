@@ -35,7 +35,7 @@ describe('Analizador de señales', () => {
       screen.getByRole('dialog', { name: 'Analizador de señales' }),
     ).toBeInTheDocument()
     expect(screen.getByText(/no una aprobación/)).toHaveTextContent(
-      '2026-01-01 al 2026-04-19',
+      '1-ene-2026 al 18-abr-2026',
     )
     const summary = screen.getByTestId('analyzer-summary')
     expect(summary).toHaveTextContent('Con 1× y 100 USD')
@@ -149,5 +149,14 @@ describe('Analizador de señales', () => {
     expect(screen.getByRole('button', { name: 'Cerrar' })).toHaveFocus()
     await user.keyboard('{Escape}')
     expect(onClose).toHaveBeenCalled()
+  })
+  it('separa los miles siempre y explica la caída máxima acumulada', async () => {
+    const user = userEvent.setup()
+    await open(apiOf({ available: true, data: fullAnalyzerData() }))
+    await user.click(leverage('10×'))
+    await user.click(screen.getByRole('button', { name: '5.000' }))
+    const text = document.body.textContent ?? ''
+    expect(text).not.toMatch(/\d{4,}\s?USD/)
+    expect(text).toContain('veces la entrada')
   })
 })
