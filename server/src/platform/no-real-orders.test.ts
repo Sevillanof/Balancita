@@ -79,14 +79,16 @@ describe('no real orders (server)', () => {
       /(?<!searchParams)\.(?:post|put|patch|delete)\(\s*['"`/]/,
       /method:\s*['"](?:POST|PUT|PATCH|DELETE)/i,
     ]
-    // the only write there is, to the local strategies API and not an order: the strategy gate client
-    // (start/cancel a backtest run, which touches no market)
+    // the only writes there are, to the local strategies API and not orders: the strategy gate client
+    // (start/cancel a backtest run) and the VectorBT client (start/cancel a research exploration, create a
+    // draft variant); neither touches a market
     const writers = files.filter((file) => {
       const text = readFileSync(file, 'utf8')
       return verbs.some((verb) => verb.test(text))
     })
     expect(writers.map((file) => relative(frontendSrc, file)).sort()).toEqual([
       join('features', 'strategy-lab', 'infrastructure', 'gate-api.ts'),
+      join('features', 'strategy-lab', 'infrastructure', 'vectorbt-api.ts'),
     ])
     for (const writer of writers)
       expect(readFileSync(writer, 'utf8')).not.toMatch(/kraken/i)
