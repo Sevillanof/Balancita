@@ -15,6 +15,9 @@ import json
 import os
 import time
 import urllib.request
+from . import system_trust
+
+system_trust.install()
 
 HOUR_MS = 3_600_000
 CONFIG_PATH = os.path.join(os.path.dirname(__file__), "..", "..", "config", "carry-strategies.json")

@@ -9,6 +9,9 @@ import os
 import sqlite3
 import time
 import urllib.request
+from . import system_trust
+
+system_trust.install()
 
 MINUTE_MS = 60_000
 HOUR_MS = 3_600_000

@@ -19,6 +19,9 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from decimal import Decimal
+from . import system_trust
+
+system_trust.install()
 
 BASE_URL = "https://futures.kraken.com/api/history/v3/market/{}/executions"
 PAGE = 1000
