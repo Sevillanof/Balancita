@@ -25,6 +25,10 @@
   width: min(760px, 100%);
 }
 
+.smodal--xwide {
+  width: min(1120px, 100%);
+}
+
 .smodal h2,
 .smodal h3,
 .smodal p {

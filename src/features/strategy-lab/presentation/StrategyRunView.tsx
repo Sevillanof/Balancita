@@ -40,6 +40,11 @@ import type { StrategyApi } from '../infrastructure/strategy-api.ts'
 import { installCommands } from '../domain/vectorbt-format.ts'
 import RunProgress from './RunProgress.tsx'
 import VectorbtModal from './VectorbtModal.tsx'
+import AnalyzerModal from './AnalyzerModal.tsx'
+import {
+  analyzerApi,
+  type AnalyzerApi,
+} from '../infrastructure/analyzer-api.ts'
 import VectorbtProgress from './VectorbtProgress.tsx'
 import VectorbtReportPanel from './VectorbtReportPanel.tsx'
 import VectorbtVariantLink from './VectorbtVariantLink.tsx'
@@ -88,6 +93,8 @@ type Props = {
   visual?: RunVisualApi
   /** «Explorar con VectorBT» (rutas `/strategies/:id/vectorbt`). */
   vectorbt?: VectorbtApi
+  /** «Analizador de señales» (`/analyzer/events`): solo lectura. */
+  analyzer?: AnalyzerApi
   /** Reads the strategy's spec (what can be varied) and, for a variant, where it came from. */
   registry?: Pick<StrategyApi, 'detail'>
   /** `rules` or not: VectorBT only explores strategies of rules. Unknown (absent) is treated as rules. */
@@ -111,6 +118,7 @@ export default function StrategyRunView({
   gate = gateApi,
   visual = runVisualApi,
   vectorbt = vectorbtApi,
+  analyzer = analyzerApi,
   registry,
   kind,
   onVariantStarted,
@@ -393,6 +401,7 @@ export default function StrategyRunView({
   const vbtState = vbt.state
   const vbtRunning = vbtState?.running ?? null
   const [vbtModal, setVbtModal] = useState(false)
+  const [analyzerOpen, setAnalyzerOpen] = useState(false)
   const [cancelling, setCancelling] = useState(false)
   const [vbtProblem, setVbtProblem] = useState<string | null>(null)
   const [confirming, setConfirming] = useState<string | null>(null)
@@ -536,6 +545,9 @@ export default function StrategyRunView({
               title={vbtWhy ?? 'Probar la estrategia rápido con VectorBT'}
             >
               {vbtRunning ? 'Exploración en curso…' : 'Explorar con VectorBT'}
+            </button>
+            <button type="button" onClick={() => setAnalyzerOpen(true)}>
+              Analizador de señales
             </button>
           </div>
         </div>
@@ -817,6 +829,9 @@ export default function StrategyRunView({
           onLaunch={launchExploration}
           onClose={() => setVbtModal(false)}
         />
+      )}
+      {analyzerOpen && (
+        <AnalyzerModal api={analyzer} onClose={() => setAnalyzerOpen(false)} />
       )}
     </section>
   )
