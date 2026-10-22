@@ -48,19 +48,19 @@ describe('vectorbtApi', () => {
   })
 
   it('cancels, confirms and compares through the exploration routes', async () => {
-    const fetcher = vi.fn(async (url: string) =>
-      url.includes('/compare')
-        ? reply(200, comparison())
-        : url.endsWith('/confirm')
-          ? reply(200, {
-              strategy_id: 'x2-v2',
-              version: 1,
-              title: 'T',
-              state: 'draft',
-              already: false,
-            })
-          : reply(200, { exploration_id: 'e1', cancel_requested: true }),
-    )
+    const fetcher = vi.fn(async (url: string, init?: RequestInit) => {
+      void init
+      if (url.includes('/compare')) return reply(200, comparison())
+      if (url.endsWith('/confirm'))
+        return reply(200, {
+          strategy_id: 'x2-v2',
+          version: 1,
+          title: 'T',
+          state: 'draft',
+          already: false,
+        })
+      return reply(200, { exploration_id: 'e1', cancel_requested: true })
+    })
     vi.stubGlobal('fetch', fetcher)
     await vectorbtApi.cancel('x2', 'e 1')
     expect(fetcher.mock.calls[0]![0]).toBe(

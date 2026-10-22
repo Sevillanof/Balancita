@@ -14,16 +14,33 @@ import type { RunSummary } from '../infrastructure/run-visual-api.ts'
 
 vi.mock('./StrategyRunView.tsx', () => ({
   default: ({
+    strategyId,
     strategyName,
+    kind,
     onModify,
     onCreate,
+    onVariantStarted,
   }: {
+    strategyId: string
     strategyName: string
+    kind?: string
     onModify?: () => void
     onCreate?: () => void
+    onVariantStarted?: (id: string, note: string) => void
   }) => (
-    <div data-testid="run-view">
+    <div data-testid="run-view" data-id={strategyId} data-kind={kind}>
       {strategyName}
+      <button
+        type="button"
+        onClick={() =>
+          onVariantStarted?.(
+            'c40',
+            'Se creó «C40 · z=4» como borrador y se está probando.',
+          )
+        }
+      >
+        Variante lista
+      </button>
       <button type="button" onClick={onModify} disabled={!onModify}>
         Modificar
       </button>
@@ -317,6 +334,21 @@ describe('Borrar', () => {
     expect(await within(dialog).findByText(/Primero apagala/)).toBeVisible()
     expect(within(dialog).queryByRole('button', { name: 'Aceptar' })).toBeNull()
     expect(api.deleteStrategy).not.toHaveBeenCalled()
+  })
+})
+
+describe('Explorar con VectorBT', () => {
+  it('pasa el tipo de estrategia y, al crear una variante, la selecciona y avisa con la nota', async () => {
+    const api = fakeApi()
+    renderPage(api)
+    const user = userEvent.setup()
+    const view = await screen.findByTestId('run-view')
+    expect(view).toHaveAttribute('data-kind', 'rules')
+    await user.click(screen.getByRole('button', { name: 'Variante lista' }))
+    expect(
+      await screen.findByText(/Se creó «C40 · z=4» como borrador/),
+    ).toBeVisible()
+    await waitFor(() => expect(api.inventory).toHaveBeenCalledTimes(2))
   })
 })
 
