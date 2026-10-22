@@ -97,6 +97,7 @@ export default function AppStatusChips({
     <HealthIndicator
       data={b1?.data ?? null}
       error={b1?.error ?? null}
+      receivedAt={b1?.receivedAt ?? null}
       applicable={b1 !== undefined}
       flow={{ level: flow.level, text: SHORT_LABELS[flow.level], mode: paper }}
       extra={

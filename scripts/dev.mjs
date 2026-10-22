@@ -25,7 +25,7 @@ import {
   restartDelayMs,
   signalChild,
 } from './dev-provider-env.mjs'
-import { readPs, summarizeResources } from './dev-resources.mjs'
+import { collectResources } from './dev-resources.mjs'
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 // <root>/.env.local and <root>/.env feed the dev children; the real
@@ -205,7 +205,7 @@ async function sampleResources() {
   for (const { name, child } of children)
     if (child.exitCode === null && child.pid !== undefined)
       groups[name] = child.pid
-  resources = summarizeResources({ rows: await readPs(), groups })
+  resources = await collectResources({ groups })
   writeHealth()
 }
 if (useGroups) {

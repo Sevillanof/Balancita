@@ -1,9 +1,9 @@
-/* eslint-disable @typescript-eslint/no-explicit-any -- loosely typed JSON fixtures */
-import { render, screen, within } from '@testing-library/react'
+import { fireEvent, render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import healthDegraded from '../../docs/mission-control/b1/ejemplo-degradado.json'
 import AppStatusChips from './AppStatusChips.tsx'
+import { decodeHealth } from '../features/observability/infrastructure/observability-api.ts'
 
 function json(body: unknown) {
   return new Response(JSON.stringify(body), {
@@ -14,6 +14,7 @@ function json(body: unknown) {
 describe('AppStatusChips', () => {
   afterEach(() => {
     vi.unstubAllGlobals()
+    vi.useRealTimers()
   })
 
   it('reads the quote time the live gateway reports in /health', async () => {
@@ -37,27 +38,36 @@ describe('AppStatusChips', () => {
     expect(screen.queryByText('Sin precio recibido todavía')).toBeNull()
   })
 
-  it('is one chip: B1 health first, flow and PAPER as details, inspector on click', async () => {
+  it('is one chip: B1 health first, flow and PAPER as details, inspector on click', () => {
+    vi.useFakeTimers({ now: 1_791_000_240_000 })
     const override = { connected: false, processes: null, quoteAgeMs: null }
+    const receivedAt = Date.now()
+    const data = decodeHealth({
+      ...healthDegraded, generated_at_ms: receivedAt - 10_000,
+    })
     render(
       <AppStatusChips
         apiBase="/api-live"
         showUsage={false}
         override={override}
-        b1={{ data: healthDegraded as any, error: null }}
+        b1={{ data, receivedAt, error: null }}
       />,
     )
     const chip = screen.getByTestId('health-indicator')
     expect(chip).toHaveTextContent('Salud: 5 con problemas')
+    expect(chip).not.toHaveTextContent('lectura anterior')
     expect(within(chip).getByTestId('flow-status')).toHaveTextContent(
       'Flujo sin conexión',
     )
     expect(chip).toHaveTextContent('PAPER')
     expect(screen.getAllByTestId('health-indicator')).toHaveLength(1)
-    await userEvent.click(chip)
+    fireEvent.click(chip)
     const dialog = screen.getByRole('dialog', { name: 'Salud del sistema' })
     expect(within(dialog).getByText('FLUJO DESCONECTADO')).toBeInTheDocument()
     expect(within(dialog).getAllByRole('heading', { level: 3 })).toHaveLength(6)
+    expect(within(dialog).getByText(/Generación:/)).toHaveTextContent(
+      'hace 10 s · Recepción: hace 0 s',
+    )
   })
 
   it('without a B1 read says «sin datos», never healthy; where B1 does not apply it says so', async () => {

@@ -1,15 +1,17 @@
-import { readFileSync, readdirSync, statSync } from 'node:fs'
+import {
+  closeSync, constants, fstatSync, lstatSync,
+  openSync, opendirSync, readSync, statSync,
+} from 'node:fs'
 import { join } from 'node:path'
-import { DatabaseSync } from 'node:sqlite'
 
 type Row = Record<string, unknown>
 
 export interface SystemUsageOptions {
   /** JSON written by the dev supervisor: `processes` health and `resources`. */
   readonly healthPath?: string
-  /** Folder with the live SQLite files (their size is the saved data). */
+  /** Only this directory is inventoried; file bytes are not logical data used. */
   readonly dataDir?: string
-  /** Qwen's decisions DB (opened read-only). */
+  /** Legacy option: not opened; historical aggregates have no bounded source. */
   readonly decisionsDbPath?: string
   /** Summary JSON of C31, where Qwen decides exits. */
   readonly qwenExitSummaryPath?: string
@@ -23,15 +25,29 @@ export interface SystemUsage {
   report(): Row
 }
 
-const HOUR_MS = 3_600_000
+const SAMPLE_MAX_AGE_MS = 15_000
+const SUPERVISOR_MAX_AGE_MS = 30_000
+const JSON_MAX_BYTES = 128 * 1024
 
 function readJson(path: string | undefined): Row | null {
   if (!path) return null
+  let fd: number | undefined
   try {
-    const value: unknown = JSON.parse(readFileSync(path, 'utf8'))
-    return value && typeof value === 'object' ? (value as Row) : null
+    fd = openSync(
+      path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
+    )
+    const stat = fstatSync(fd)
+    if (!stat.isFile() || stat.size > JSON_MAX_BYTES) return null
+    const buffer = Buffer.alloc(JSON_MAX_BYTES + 1)
+    const length = readSync(fd, buffer, 0, buffer.length, 0)
+    if (length > JSON_MAX_BYTES) return null
+    const value: unknown = JSON.parse(buffer.subarray(0, length).toString('utf8'))
+    return value && typeof value === 'object' && !Array.isArray(value)
+      ? (value as Row) : null
   } catch {
     return null
+  } finally {
+    if (fd !== undefined) closeSync(fd)
   }
 }
 
@@ -39,26 +55,113 @@ function num(value: unknown): number | null {
   return typeof value === 'number' && Number.isFinite(value) ? value : null
 }
 
-/** Sum of the files in `dir` (SQLite, WAL and JSON), in bytes; null if unreadable. */
-export function folderBytes(dir: string | undefined): number | null {
-  if (!dir) return null
-  let total = 0
+/** Streaming enumeration: no full listing/sort, no symlink traversal or DB reads. */
+function storageInventory(dir: string | undefined, now: number) {
+  const bytes = { sqlite_main: 0, wal: 0, shm: 0, log: 0, other: 0 }
+  let visited = 0
+  let symlinks = 0
+  let errors = 0
+  let reason: string | null = dir ? null : 'not_configured'
+  let readable = false
   const walk = (path: string, depth: number): void => {
-    for (const entry of readdirSync(path, { withFileTypes: true })) {
-      const full = join(path, entry.name)
-      if (entry.isDirectory()) {
-        if (depth < 3) walk(full, depth + 1)
-      } else if (entry.isFile()) {
-        total += statSync(full).size
+    const directory = opendirSync(path)
+    try {
+      for (let entry = directory.readSync(); entry; entry = directory.readSync()) {
+        if (visited >= 1_000) {
+          reason = 'entry_limit'
+          break
+        }
+        visited++
+        const full = join(path, entry.name)
+        try {
+          const stat = lstatSync(full)
+          if (stat.isSymbolicLink()) {
+            symlinks++
+            continue
+          }
+          if (stat.isDirectory()) {
+            if (entry.name === 'models') continue
+            if (depth < 3) walk(full, depth + 1)
+            else reason ??= 'depth_limit'
+          } else if (stat.isFile()) {
+            const name = entry.name.toLowerCase()
+            const category = name.endsWith('-wal') ? 'wal'
+              : name.endsWith('-shm') ? 'shm'
+              : /\.(sqlite|sqlite3|db)$/.test(name) ? 'sqlite_main'
+              : /\.(log|jsonl)(\.\d+)?$/.test(name) ? 'log' : 'other'
+            bytes[category] += stat.size
+          }
+        } catch {
+          errors++
+          reason ??= 'io_error'
+        }
+        if (reason === 'entry_limit') break
       }
+    } finally {
+      directory.closeSync()
     }
   }
-  try {
-    walk(dir, 0)
-    return total
-  } catch {
-    return null
+  if (dir) {
+    try {
+      if (!lstatSync(dir).isDirectory()) throw new Error('not_directory')
+      // Opening the root must succeed before any bytes can be evidence.
+      const root = opendirSync(dir)
+      root.closeSync()
+      readable = true
+      walk(dir, 0)
+    } catch {
+      errors++
+      reason = 'io_error'
+      readable = false
+    }
   }
+  const total = readable
+    ? Object.values(bytes).reduce((sum, size) => sum + size, 0) : null
+  return {
+    status: !readable ? 'unavailable' : reason ? 'partial' : 'ok',
+    reason,
+    sampled_at_ms: readable ? now : null,
+    complete: readable && reason === null,
+    scope: 'configured_data_directory',
+    excludes: ['models', 'other_roots', 'symlinks'],
+    byte_basis: 'file_sizes_not_logical_data_used; partial_totals_are_lower_bounds',
+    max_entries: 1_000,
+    max_depth: 3,
+    visited_entries: visited,
+    symlinks_skipped: symlinks,
+    error_count: errors,
+    bytes: readable ? bytes : null,
+    total_bytes: total,
+  }
+}
+
+/** Legacy total exists only when the bounded inventory is complete. */
+export function folderBytes(dir: string | undefined): number | null {
+  const storage = storageInventory(dir, Date.now())
+  return storage.complete ? storage.total_bytes : null
+}
+
+function resourceReason(
+  health: Row | null, resources: Row | null, now: number,
+): string | null {
+  if (!resources) return 'missing_source'
+  if (resources.status === undefined) return 'legacy_metadata'
+  const updated = num(health?.updated_at_ms)
+  if (updated === null || updated < 0 || updated > now)
+    return 'supervisor_invalid_time'
+  if (now - updated > SUPERVISOR_MAX_AGE_MS) return 'supervisor_stale'
+  if (resources.status !== 'ok')
+    return ['timeout', 'malformed_output'].includes(String(resources.reason))
+      ? String(resources.reason) : 'collector_error'
+  const sampled = num(resources.sampled_at_ms)
+  if (sampled === null || sampled < 0 || sampled > now)
+    return 'sample_invalid_time'
+  if (now - sampled > SAMPLE_MAX_AGE_MS) return 'sample_stale'
+  if ([resources.total_cpu_pct, resources.total_rss_mb].some(
+    (value) => num(value) === null || Number(value) < 0,
+  ))
+    return 'malformed_output'
+  return null
 }
 
 /** Kronos summary `decisions`: `[mode, count, traded]` rows; the forward count. */
@@ -77,35 +180,10 @@ function fileMtimeMs(path: string | undefined): number | null {
   }
 }
 
-function decisionStats(path: string | undefined, now: number): Row | null {
-  if (!path) return null
-  let db: DatabaseSync | undefined
-  try {
-    db = new DatabaseSync(path, { readOnly: true })
-    const row = db
-      .prepare(
-        `SELECT COUNT(*) AS total,
-                SUM(written_at >= ?) AS last_hour,
-                (SELECT AVG(latency_ms) FROM (SELECT latency_ms FROM paper_futures_llm_decisions ORDER BY written_at DESC LIMIT 20)) AS latency_ms
-           FROM paper_futures_llm_decisions`,
-      )
-      .get(now - HOUR_MS) as Row
-    return {
-      total: num(row.total) ?? 0,
-      last_hour: num(row.last_hour) ?? 0,
-      avg_latency_ms: num(row.latency_ms),
-    }
-  } catch {
-    return null
-  } finally {
-    db?.close()
-  }
-}
-
 /**
  * What the machine pays for the app: CPU and memory of the dev processes
- * (sampled by the dev supervisor), size of the saved data, how much Qwen is
- * asked and the Kronos forward run. Cheap and cached; every piece degrades
+ * (sampled by the dev supervisor), bounded file inventory and summary JSON.
+ * No historical decision queries. Cached; every piece degrades
  * to null when its source is missing.
  */
 export function createSystemUsage(options: SystemUsageOptions): SystemUsage {
@@ -115,11 +193,24 @@ export function createSystemUsage(options: SystemUsageOptions): SystemUsage {
   return {
     report() {
       const now = clock()
-      if (cached && now - cached.at < cacheMs) return cached.body
+      if (
+        cached && now >= cached.at && now - cached.at < cacheMs &&
+        ((cached.body.status !== 'ok' && cached.body.processes === null) ||
+          now - Number(cached.body.supervisor_updated_at_ms) <= SUPERVISOR_MAX_AGE_MS) &&
+        (cached.body.status !== 'ok' ||
+          now - Number(cached.body.sampled_at_ms) <= SAMPLE_MAX_AGE_MS)
+      )
+        return { ...cached.body, at_ms: now }
       const health = readJson(options.healthPath)
-      const resources = (health?.resources ?? null) as Row | null
-      const processes = (health?.processes ?? null) as Row | null
-      const bytes = folderBytes(options.dataDir)
+      const source = (health?.resources ?? null) as Row | null
+      const reason = resourceReason(health, source, now)
+      const resources = reason === null ? source : null
+      const updated = num(health?.updated_at_ms)
+      const processes = updated !== null && updated >= 0 && updated <= now &&
+        now - updated <= SUPERVISOR_MAX_AGE_MS
+          ? (health?.processes ?? null) as Row | null : null
+      const storage = storageInventory(options.dataDir, now)
+      const bytes = storage.complete ? storage.total_bytes : null
       const exit = readJson(options.qwenExitSummaryPath)
       const exitDecisions = (exit?.exit_decisions ?? null) as Row | null
       const kronos = readJson(options.kronosSummaryPath)
@@ -127,6 +218,20 @@ export function createSystemUsage(options: SystemUsageOptions): SystemUsage {
       const body: Row = {
         schema: 'system-usage.v1',
         at_ms: now,
+        cached_at_ms: now,
+        cache_ms: cacheMs,
+        status: reason === null ? 'ok' : 'unavailable',
+        reason,
+        attempted_at_ms: num(source?.attempted_at_ms),
+        completed_at_ms: num(source?.completed_at_ms),
+        supervisor_updated_at_ms: updated,
+        scope: {
+          cpu_basis: 'one_core_percent',
+          memory_basis: 'summed_rss_mib_not_unique_or_gpu',
+          total_scope: 'unique_pids_in_supervised_groups_or_kronos',
+          group_scope: 'process_group_membership_may_overlap_not_ownership',
+        },
+        storage,
         cpu_pct: num(resources?.total_cpu_pct),
         rss_mb: num(resources?.total_rss_mb),
         sampled_at_ms: num(resources?.sampled_at_ms),
@@ -145,13 +250,16 @@ export function createSystemUsage(options: SystemUsageOptions): SystemUsage {
             (((resources?.processes ?? {}) as Row).llm as Row | undefined)
               ?.cpu_pct,
           ),
-          decisions: decisionStats(options.decisionsDbPath, now),
-          exit_decisions: exitDecisions
-            ? (num(exitDecisions.hold) ?? 0) + (num(exitDecisions.close) ?? 0)
-            : null,
+          decisions: null,
+          decisions_status: 'unavailable',
+          decisions_reason: 'no_bounded_source',
+          exit_decisions:
+            num(exitDecisions?.hold) !== null && num(exitDecisions?.close) !== null
+              ? Number(exitDecisions?.hold) + Number(exitDecisions?.close) : null,
         },
         kronos: {
-          running: kronosProcess ? Boolean(kronosProcess.running) : null,
+          running: typeof kronosProcess?.running === 'boolean'
+            ? kronosProcess.running : null,
           cpu_pct: num(kronosProcess?.cpu_pct),
           rss_mb: num(kronosProcess?.rss_mb),
           trades: num(

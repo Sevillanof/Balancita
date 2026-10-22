@@ -88,7 +88,7 @@ export function latestDecision(
  * necessary bound, never the proof: see `decisionStanding`.
  */
 export const CURRENT_MAX_AGE_MS = 180_000
-const CLOCK_SKEW_MS = 5_000
+export const CLOCK_SKEW_MS = 5_000
 
 /**
  * What B1 says about the verdict source for one product: the status the

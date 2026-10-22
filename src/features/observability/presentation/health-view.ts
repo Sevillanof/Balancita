@@ -4,6 +4,40 @@ import type {
   HealthStatus,
 } from '../infrastructure/observability-api.ts'
 
+import { B1_MAX_AGE_MS, CLOCK_SKEW_MS } from './latest-decision.ts'
+
+/** Presentation only: a new receipt cannot rejuvenate a cached generation. */
+export function reportTiming(
+  now: number,
+  receivedAt: number | null | undefined,
+  generatedAt: number,
+) {
+  const generationAge =
+    Number.isFinite(now) && Number.isFinite(generatedAt)
+      ? now - generatedAt
+      : null
+  const receiptAge =
+    receivedAt != null && Number.isFinite(receivedAt) && Number.isFinite(now)
+      ? now - receivedAt
+      : null
+  const unverified =
+    generationAge === null || receiptAge === null || receivedAt == null ||
+    generationAge < -CLOCK_SKEW_MS || receiptAge < -CLOCK_SKEW_MS ||
+    generatedAt - receivedAt > CLOCK_SKEW_MS
+  const state = unverified
+    ? 'unverified'
+    : generationAge > B1_MAX_AGE_MS || receiptAge > B1_MAX_AGE_MS
+      ? 'stale'
+      : 'fresh'
+  return {
+    state,
+    generationAge,
+    receiptAge,
+    // Preserve the base evidence age, then add elapsed time since generation.
+    reference: unverified ? null : generatedAt + Math.max(0, generationAge),
+  }
+}
+
 export const TONE: Record<HealthStatus, StatusTone> = {
   ok: 'ok',
   warning: 'warn',

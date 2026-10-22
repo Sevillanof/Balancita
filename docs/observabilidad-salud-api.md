@@ -65,6 +65,29 @@ Ejemplos reales (generados por las pruebas con datos de fixture): `docs/mission-
 Ejemplos: [saludable (global `unknown` por Riesgo)](mission-control/b1/ejemplo-saludable.json),
 [degradado](mission-control/b1/ejemplo-degradado.json), [sin datos](mission-control/b1/ejemplo-sin-datos.json).
 
+## Frescura en el inspector Salud
+
+La cabecera y el inspector conservan el último informe si falla una actualización, pero lo marcan como
+**lectura anterior**: sus estados, conteos y motivos siguen siendo evidencia previa, no un diagnóstico actual.
+Sin informe, un error sigue siendo «sin datos». Una lectura nueva y fresca elimina esa calificación.
+
+- **Generación** es `generated_at_ms` del gateway; **recepción** es la hora del navegador al completar la última
+  lectura correcta. Se muestran sus edades por separado y avanzan cada segundo, incluso con el inspector cerrado.
+- La presentación exige ambas edades ≤ **90 s** (`B1_MAX_AGE_MS`); recibir otra vez un informe de caché antiguo no
+  rejuvenece su generación. Es una política de la interfaz, no un cambio de los umbrales por componente de abajo.
+- Se toleran **5 s** de desfase (`CLOCK_SKEW_MS`). Una generación más de 5 s posterior a su recepción original,
+  un retroceso de reloj mayor que ese margen o tiempos ausentes/no finitos dejan la frescura sin verificar.
+  Esperar no valida una generación futura respecto de su recepción. No permite saber qué máquina tiene el reloj mal;
+  las fechas futuras no se presentan como «hace 0 s».
+- La edad de cada fuente conserva su base relativa a la generación del informe y suma el tiempo transcurrido desde
+  esa generación, incluido el retraso hasta la recepción. Recibir de nuevo la misma generación de caché no reinicia
+  la edad de sus fuentes. Si el reloj no es verificable, su edad tampoco lo es.
+- Los seis componentes, estados, reglas y razones proceden del backend sin reinterpretarlos. «Ninguna estrategia
+  debe estar actualizándose» (conjunto esperado vacío conocido) no significa lo mismo que no poder leer ese conjunto
+  o su fuente: se muestra la explicación recibida, sin convertir `unknown` en salud ni inventar una causa.
+
+El reloj de presentación no hace solicitudes ni sondeos adicionales ni recorre bases o historiales.
+
 ## Evidencia y umbrales por componente
 
 Los umbrales salen de las cadencias reales del código; ninguno es un número «razonable» sin origen.
@@ -121,7 +144,8 @@ desde la activación). Pasado ese plazo, o si el proceso está caído (`down`), 
   `SEARCH … autoindex (product_id=? AND interval_ms=? AND bucket_start>?)`, huecos `SEARCH … detected_at>?`, verdicts
   `SEARCH … COVERING INDEX (product_id=? AND bucket_start>?)`. El último evento de cualquier feed usa `ORDER BY rowid DESC LIMIT 1`.
 - Caché de 15 s en el proceso del gateway (misma idea que `scores`): como mucho una computación cada 15 s sin importar cuántos
-  clientes consulten. El front no está conectado a este endpoint todavía; cuando lo esté no debe consultar más seguido que eso.
+  clientes consulten. El front ya lee este endpoint cada 30 s mientras la pestaña está visible; abrir el inspector no
+  añade consultas. El reloj de edades de 1 s solo actualiza la presentación.
 - No se agregan procesos: es una ruta más del gateway existente. No se toca el WebSocket, la captura, estrategias, decisiones ni contabilidad.
 - `strategy_events` se agrupa completo por estrategia y versión: crece con los cambios de estado del registro (una fila por
   activación o baja), no con las operaciones.
