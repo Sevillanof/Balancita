@@ -12,6 +12,7 @@ import type {
   VbtVariant,
   VectorbtApi,
 } from '../infrastructure/vectorbt-api.ts'
+import { explorationMarkdown } from '../domain/vectorbt-markdown.ts'
 import VectorbtCompare from './VectorbtCompare.tsx'
 
 /** Only the first rows of the ranking can be taken to the simulator. */
@@ -62,10 +63,23 @@ export default function VectorbtReportPanel({
 }: Props) {
   const [open, setOpen] = useState(true)
   const [comparing, setComparing] = useState<string | null>(null)
+  const [copied, setCopied] = useState<'ok' | 'fail' | null>(null)
   const report = exploration.report
   if (!report) return null
   const windowText = `${dayText(report.window.from)} a ${dayText(report.window.to)}`
   const tried = attempts ?? report.attempts_in_family
+
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(
+        explorationMarkdown(exploration, attempts),
+      )
+      setCopied('ok')
+    } catch {
+      setCopied('fail')
+    }
+    setTimeout(() => setCopied(null), 2500)
+  }
 
   return (
     <section
@@ -88,6 +102,13 @@ export default function VectorbtReportPanel({
             ))}
           </select>
         )}
+        <button type="button" onClick={() => void copy()}>
+          {copied === 'ok'
+            ? 'Copiado ✓'
+            : copied === 'fail'
+              ? 'No se pudo copiar'
+              : 'Copiar en Markdown'}
+        </button>
         <button
           type="button"
           aria-expanded={open}
