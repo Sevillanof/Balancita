@@ -82,6 +82,7 @@ class GateApi:
         self.wait_s = wait_s
         self.products = products
         self._launch_lock = threading.Lock()
+        self.busy_hook = None   # () -> Spanish reason or None: another CPU-heavy job (VectorBT) is running
 
     # ------------------------------------------------------------------ read-only DB
 
@@ -209,6 +210,9 @@ class GateApi:
             if running is not None:
                 raise GateApiError("busy", "Ya hay una prueba en curso ({}). Esperá a que termine o cancelala."
                                    .format(running["strategy_id"]), 409)
+            other = self.busy_hook() if self.busy_hook else None
+            if other:
+                raise GateApiError("busy", other, 409)
             log_path = os.path.join(self.data_dir, "logs", "launch-{}.log".format(int(time.time() * 1000)))
             child = self.spawn(args, env, ROOT, log_path)
             deadline = time.time() + self.wait_s

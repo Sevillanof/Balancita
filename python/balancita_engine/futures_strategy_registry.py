@@ -47,6 +47,7 @@ from .futures_strategy_plan import all_plans, load_freeze
 from .futures_strategy_reliability import load_reliability, reliability_for
 from .futures_purged import cscv_pbo
 from .futures_strategy_gate_api import GateApi, GateApiError
+from .futures_strategy_vectorbt_api import VectorbtApi
 from . import strategy_purge
 from .futures_strategy_lifecycle import Lifecycle, LifecycleError
 from .futures_strategy_backtest import MIN_TRADES, load_verdict_rows, run_backtest
@@ -647,7 +648,8 @@ class StrategyService:
                  market_db_path=None, config_dir=None, forward_db_path=None, forward_summary_path=None,
                  decisions_db_path=None, gate_data_dir=None, purge_dir=None, specs_dir=None,
                  forward_registration_path=None, freeze_path=None, qwen_exit_config=None, qwen_practice_dir=None,
-                 kronos_dir=None, qwen_exit_dir=None, account_db_path=None):
+                 kronos_dir=None, qwen_exit_dir=None, account_db_path=None, vectorbt_dir=None, vectorbt_python=None,
+                 vectorbt_spawn=None):
         self.config_dir = config_dir
         self.forward_db_path = forward_db_path
         self.forward_summary_path = forward_summary_path or os.environ.get("STRATEGY_FORWARD_PATH")
@@ -661,6 +663,9 @@ class StrategyService:
         self._cache = {}
         self._results = {}
         self.gate = GateApi(registry, data_dir=gate_data_dir, kronos_dir=kronos_dir, qwen_exit_dir=qwen_exit_dir)
+        self.vectorbt = VectorbtApi(registry, self.gate, data_dir=vectorbt_dir, python=vectorbt_python,
+                                    spawn=vectorbt_spawn)
+        self.gate.busy_hook = self.vectorbt.busy_message
         self.lifecycle = Lifecycle(registry, self.gate, forward_db_path=forward_db_path, purge_dir=purge_dir,
                                    consumers=("forward",) if forward_db_path else (),
                                    specs_dir=specs_dir, forward_registration_path=forward_registration_path,
@@ -1018,11 +1023,35 @@ def make_handler(service):
                 return gate.runs(parts[1], int(version) if version and version.isdigit() else None)
             return None
 
+        def _vectorbt(self, method):
+            """VectorBT exploration routes of a strategy; ``None`` when the path is not one of them."""
+            url = urlparse(self.path)
+            parts = [p for p in url.path.split("/") if p]
+            if parts[:1] == ["api-strategies"]:
+                parts = parts[1:]
+            vectorbt = getattr(service, "vectorbt", None)
+            if vectorbt is None or len(parts) < 3 or parts[0] != "strategies" or parts[2] != "vectorbt":
+                return None
+            if len(parts) == 3 and method == "GET":
+                return vectorbt.status(parts[1])
+            if len(parts) == 3 and method == "POST":
+                return vectorbt.launch(parts[1], self._body())
+            if len(parts) == 5 and method == "POST" and parts[4] == "cancel":
+                return vectorbt.cancel(parts[1], parts[3])
+            if len(parts) == 5 and method == "POST" and parts[4] == "confirm":
+                return vectorbt.confirm(parts[1], parts[3], self._body())
+            if len(parts) == 5 and method == "GET" and parts[4] == "compare":
+                query = {k: v[-1] for k, v in parse_qs(url.query).items()}
+                return vectorbt.compare(parts[1], parts[3], query.get("value"), query.get("run_id"))
+            return None
+
         def _handle(self, method):
             try:
                 out = self._gate(method)
                 if out is True:
                     return
+                if out is None:
+                    out = self._vectorbt(method)
                 self._send(200, out if out is not None else self._dispatch(method))
             except (GateApiError, LifecycleError) as error:
                 self._send(error.status, {"error": error.code, "detail": error.detail})
@@ -1056,6 +1085,8 @@ def main(argv=None):
                                             "(default: <strategies db folder>/purge)")
     parser.add_argument("--account-db", help="D's account DB (retired, history): rewritten, chain intact, when a "
                                              "deleted strategy has rows in it")
+    parser.add_argument("--vectorbt-dir", help="VectorBT lab data folder (default: data/research-vectorbt or "
+                                               "$BALANCITA_VECTORBT_DIR); the interpreter is $BALANCITA_VECTORBT_PYTHON")
     parser.add_argument("--kronos-dir", help="folder with kronos.sqlite (the gate judges Kronos by its saved trades)")
     parser.add_argument("--qwen-exit-dir", help="folder with qwen-exit.sqlite (the gate judges Qwen by its saved trades)")
     parser.add_argument("--qwen-practice-dir", help="folder with the offline Qwen practice files "
@@ -1086,7 +1117,7 @@ def main(argv=None):
                               qwen_practice_dir=args.qwen_practice_dir or os.path.join(
                                   os.path.dirname(config_root), "data", "qwen-practice"),
                               kronos_dir=args.kronos_dir, qwen_exit_dir=args.qwen_exit_dir,
-                              account_db_path=args.account_db)
+                              account_db_path=args.account_db, vectorbt_dir=args.vectorbt_dir)
     server = ThreadingHTTPServer(("127.0.0.1", args.port), make_handler(service))
     print("[strategies] registry {} on http://127.0.0.1:{}".format(args.strategies_db, args.port), flush=True)
     try:
