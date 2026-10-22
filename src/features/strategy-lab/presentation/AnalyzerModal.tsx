@@ -249,7 +249,7 @@ export default function AnalyzerModal({ api, onClose }: Props) {
         <>
           <p className="smodal__hint">
             Son hipótesis con datos de práctica del {data.window.from} al{' '}
-            {data.window.to}, no una aprobación. Nada de esto manda órdenes.
+            {data.window.to}, no una aprobación.
           </p>
 
           <div className="analyzer__controls">
