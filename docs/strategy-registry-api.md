@@ -34,3 +34,62 @@ Strategies are `balancita-strategy.v1` specs (`python/balancita_engine/futures_s
 The backtest replays the spec over stored verdicts (same official candles as the Terminal) as one independent paper book per strategy: D's sizing and cost-buffer rule, taker fees, no slippage or funding. The first 70% of the period is in sample, the rest out of sample. Every distinct spec backtested counts as one trial.
 
 Las estrategias de `config/strategy-freeze.json` (C25-C31 y Kronos) se pueden editar como borrador o copiar a una nueva, pero activar una versión posterior a la v1 devuelve 409 `frozen` hasta las 100 operaciones forward. Cada entrada de `strategies` lleva `frozen`.
+
+## Exploraciones con VectorBT (`futures_strategy_vectorbt_api.py`)
+
+Lanzar y seguir exploraciones del laboratorio VectorBT desde el front, y compararlas con el simulador. Todo lo que sale de acá es una **hipótesis** sobre datos de práctica: no aprueba nada, no activa nada y no toca la reserva (2026-04-19), forward, captura ni `gate.sqlite`. El contrato del reporte es `docs/vectorbt-exploration-api.md`.
+
+El motor no importa VectorBT, numpy ni pandas: cada exploración es un **subproceso aparte** (`futures_strategy_vectorbt_runner`, sesión propia, sigue aunque S o la petición se vayan) que corre con el Python de `.venv-vectorbt`: `$BALANCITA_VECTORBT_PYTHON`, por defecto `<raíz>/.venv-vectorbt/bin/python`. Datos en `--vectorbt-dir` (o `$BALANCITA_VECTORBT_DIR`, por defecto `data/research-vectorbt`).
+
+Archivos por exploración en `<dir>/explorations/<id>/`: `job.json` (lo escribe la API: pedido, pid, cancelación, vínculos variante → estrategia), `spec.json` (la spec explorada), `progress.json` (lo escribe el subproceso), `report.json` y `report.md` (los escribe el laboratorio), `runner.log`. Un proceso muerto sin reporte se informa como `failed`, igual que la compuerta.
+
+Errores: `{error, detail}` con `detail` en español, igual que las rutas de la compuerta.
+
+| Ruta                                                                        | Devuelve / hace                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| --------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET /api-strategies/strategies/:id/vectorbt`                               | `{strategy_id, available, reason, running, busy_with, explorations[], attempts_in_family}`. `available: false` + `reason` («Falta instalar el entorno de VectorBT: …comandos») si falta el entorno. `running`: la exploración en curso de esta estrategia o `null`; `busy_with`: `{exploration_id, strategy_id}` si la que corre es de otra. `explorations`: las 30 más recientes primero. `attempts_in_family`: variantes distintas de la familia en el registro de intentos (`null` si no se pudo leer).                                      |
+| `POST /api-strategies/strategies/:id/vectorbt`                              | Body `{mode: "diagnostic"}` o `{mode: "variants", vary, values: [≤12]}`. `vary`: nombre de un parámetro (`stop_atr`) o ruta de una constante numérica de una condición (`rules.checks[2].node.right`). Devuelve `{exploration_id, pid}`. Si faltan los datasets de práctica de los productos de la compuerta, el subproceso los baja antes (`research.vectorbt.export_practice --fetch`, se guardan en caché) con la fase «Descargando datos» y el detalle «Descargando velas de Kraken (ETH 2/3)»; ocupa el primer 45 % de la barra.           |
+| `POST /api-strategies/strategies/:id/vectorbt/:eid/cancel`                  | `{exploration_id, cancel_requested: true}`. Termina el grupo de procesos. 409 `not_running` si ya terminó.                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| `POST /api-strategies/strategies/:id/vectorbt/:eid/confirm`                 | Body `{value}` (una variante del ranking). Crea la variante como **estrategia nueva en borrador** del mismo linaje (`<familia>-vN` siguiente, título «<título> · <param>=<valor>», `origin: "vectorbt"`, padre = la original) con la misma función que usa el laboratorio (`spec_variation.apply_value`) sobre la spec explorada. Devuelve `{strategy_id, version, title, state: "draft", already}`; repetir el valor devuelve la misma (`already: true`). Para ponerla a prueba, el front usa el flujo normal: `POST /strategies/:newid/gate`. |
+| `GET /api-strategies/strategies/:id/vectorbt/:eid/compare?value=…&run_id=N` | VectorBT frente al simulador para esa variante (ver abajo). `run_id` es una corrida **de práctica terminada** de la estrategia creada con `confirm` (para el valor base, de la original); sin `run_id` toma la última.                                                                                                                                                                                                                                                                                                                          |
+
+Errores del lanzamiento: 400 (`invalid_mode`, `invalid_body`, `invalid_vary`, `invalid_values`: máximo 12 valores, números), 404 (no existe la estrategia), 422 `unsupported_kind` (solo reglas), 503 `vectorbt_unavailable`, 409 `busy` (otra exploración en curso, o una prueba de la compuerta: comparten procesador, y mientras VectorBT corre `POST /strategies/:id/gate` también devuelve 409 `busy`). De `confirm`: 409 `not_ready`, `is_base`, `variant_failed`, `duplicate_spec`; 404 `unknown_value`. De `compare`: 409 `not_confirmed`, `invalid_run`, `artifact_not_ready`; 404 `run_not_found`.
+
+### Una exploración (`explorations[]`)
+
+```json
+{
+  "id": "c27-breakout-perp-v1-20261022-101500",
+  "strategy_id": "c27-breakout-perp-v1",
+  "mode": "variants",
+  "vary": "stop_atr",
+  "values": ["1", "2"],
+  "status": "running | done | failed | unsupported | cancelled",
+  "progress": 37.5,
+  "phase": "Probando variantes",
+  "detail": "stop_atr = 2 en PF_XBTUSD",
+  "eta": 240,
+  "created_at": 1792000000000,
+  "finished_at": null,
+  "report": null,
+  "confirmed": { "2": "c27-breakout-perp-v2" }
+}
+```
+
+`created_at` y `finished_at` en milisegundos; `eta` en segundos (`null` si no se puede estimar). `report` es el `report.json` completo cuando `status` es `done` o `unsupported` (en este último `detail` trae el motivo). Fases: `Preparando`, `Descargando datos`, `Cargando datos`, `Probando la estrategia`, `Preparando el simulador`, `Probando variantes`, `Armando el informe`, `Listo`; en un fallo, `detail` es el motivo.
+
+### Comparación (`compare`)
+
+```json
+{"exploration_id": "…", "strategy_id": "c27-breakout-perp-v2", "run_id": 12, "value": "2", "label": "stop_atr = 2",
+ "is_base": false, "products": ["PF_XBTUSD"], "cost_model_version": "…",
+ "window": {"vectorbt": {"from": "…", "to": "…"}, "simulator": {"from": "2025-10-16", "to": "2026-04-19"}},
+ "vectorbt":  {"trades", "entries_per_day", "gross_bp_mean", "net_bp_mean", "cost_bp_mean", "funding_bp_mean",
+               "hit_rate", "funding_complete_share", "stop_share", "raw_signals", "skipped_by_cost"},
+ "simulator": {"trades", "entries_per_day", "gross_bp_mean", "net_bp_mean", "cost_bp_mean", "funding_bp_mean",
+               "hit_rate", "funding_complete_share", "stop_share"},
+ "difference": {"trades", "entries_per_day", "gross_bp_mean", "net_bp_mean", "cost_bp_mean", "funding_bp_mean", "hit_rate"},
+ "explanation": ["frases en español simple…"], "warning": "…"}
+```
+
+Los dos lados se miden igual: **neto = bruto − costos − funding** (pb por operación; funding y costos positivos restan). Del lado VectorBT, `cost_bp_mean = bruto − neto − funding` (comisiones, costo de ejecución y el costo del stop que el laboratorio ya resta aparte). Del lado simulador, `net_bp` y el funding salen de las operaciones guardadas de la corrida; el costo es el del modelo de costos del motor (comisión taker de ida y vuelta, costo de ejecución de cada pata, el del stop en las salidas por stop, ninguno en las de objetivo) y el bruto se reconstruye como `neto + funding + costos`. Así la diferencia de neto es exactamente `Δbruto − Δcostos − Δfunding`, y `explanation[]` reparte la diferencia con esos números. El funding desconocido del simulador no cuenta como cero (se excluye del promedio). Lo que no se puede atribuir (cruce de niveles y orden dentro de la vela frente a operaciones distintas) se dice como tal: el laboratorio no guarda sus operaciones una por una. Si los productos o las ventanas difieren, una frase lo avisa. Informes viejos sin las cifras extra de la variante dejan esos campos en `null`.

@@ -64,3 +64,12 @@ def load_1m(directory, manifest):
     o, h, l, c, v = (np.array(table[name].to_numpy(), dtype=np.float64)
                      for name in ("open", "high", "low", "close", "volume_btc"))
     return index, o, h, l, c, v
+
+
+def load_candles(directory, manifest, resolution):
+    """Index (ms) and float64 OHLCV arrays of the ``resolution`` table (``1m`` or ``5m``)."""
+    table = pq.read_table(os.path.join(directory, "{}_{}.parquet".format(manifest["product_id"], resolution)))
+    index = np.array(table["bucket_start_ms"].to_pylist(), dtype=np.int64)
+    o, h, l, c, v = (np.array(table[name].to_numpy(), dtype=np.float64)
+                     for name in ("open", "high", "low", "close", "volume_btc"))
+    return index, o, h, l, c, v

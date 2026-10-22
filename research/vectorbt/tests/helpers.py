@@ -27,6 +27,29 @@ def synthetic_minutes(count, seed=7, start_ms=START_MS, start_price=90_000):
     return rows
 
 
+def synthetic_regimes(count, seed=7, start_ms=START_MS, start_price=90_000, scale=1.0):
+    """A random walk that alternates trending and ranging stretches (so trend and range regimes, and long and short
+    momentum, all appear), with integer prices and volume bursts. A weak pull toward the start price keeps it from collapsing."""
+    rng = random.Random(seed)
+    price, rows, drift, left = start_price, [], 0.0, 0
+    for i in range(count):
+        if left <= 0:
+            left = rng.randint(300, 2500)
+            drift = rng.choice([-1, 0, 0, 1]) * rng.uniform(2.0, 7.0)
+        left -= 1
+        step = (drift + rng.gauss(0, 14 if drift == 0 else 11)) * scale - 0.002 * (price - start_price)
+        if rng.random() < 0.015:
+            step *= 5
+        close = max(1000, int(round(price + step)))
+        high = max(price, close) + int(abs(rng.gauss(0, 5)) * scale)
+        low = min(price, close) - int(abs(rng.gauss(0, 5)) * scale)
+        volume = rng.lognormvariate(0.5, 0.6) * (5 if rng.random() < 0.05 else 1)
+        rows.append({"bucket_start": start_ms + i * MINUTE_MS, "open": str(price), "high": str(high),
+                     "low": str(low), "close": str(close), "volume_btc": "{:.4f}".format(volume)})
+        price = close
+    return rows
+
+
 def five_minutes(minutes):
     out = []
     for k in range(0, len(minutes) - len(minutes) % 5, 5):
