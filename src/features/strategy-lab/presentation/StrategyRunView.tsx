@@ -2,7 +2,11 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import ApprovedTerminalChart from '../../trading-view/presentation/ApprovedTerminalChart.tsx'
 import { amount } from '../../../shared/finance/format.ts'
 import { signedAmount } from '../domain/strategy-format.ts'
-import { untriedStages, type MarketStage } from '../domain/market-stages.ts'
+import {
+  nextStage,
+  untriedStages,
+  type MarketStage,
+} from '../domain/market-stages.ts'
 import { STAGES, deriveStage } from '../domain/run-stage.ts'
 import {
   priceLinesOf,
@@ -26,7 +30,22 @@ import {
   type RunVisualApi,
   type RunVisualSummary,
 } from '../infrastructure/run-visual-api.ts'
+import {
+  vectorbtApi,
+  type VbtExploration,
+  type VbtVariant,
+  type VectorbtApi,
+} from '../infrastructure/vectorbt-api.ts'
+import type { StrategyApi } from '../infrastructure/strategy-api.ts'
+import { installCommands } from '../domain/vectorbt-format.ts'
+import RunProgress from './RunProgress.tsx'
+import VectorbtModal from './VectorbtModal.tsx'
+import VectorbtProgress from './VectorbtProgress.tsx'
+import VectorbtReportPanel from './VectorbtReportPanel.tsx'
+import VectorbtVariantLink from './VectorbtVariantLink.tsx'
+import { useVectorbt } from './use-vectorbt.ts'
 import './StrategyRunView.css'
+import './VectorbtPanel.css'
 
 const STAGE_LABEL = [
   'En hipótesis',
@@ -67,6 +86,14 @@ type Props = {
   version: number | string
   gate?: GateApi
   visual?: RunVisualApi
+  /** «Explorar con VectorBT» (rutas `/strategies/:id/vectorbt`). */
+  vectorbt?: VectorbtApi
+  /** Reads the strategy's spec (what can be varied) and, for a variant, where it came from. */
+  registry?: Pick<StrategyApi, 'detail'>
+  /** `rules` or not: VectorBT only explores strategies of rules. Unknown (absent) is treated as rules. */
+  kind?: string
+  /** A variant was created and its test started: the page selects it and shows the note. */
+  onVariantStarted?: (id: string, note: string) => void
   /** «Modificar» / «Crear»: lead to the laboratory's editor; absent = disabled. */
   onModify?: () => void
   onCreate?: () => void
@@ -83,6 +110,10 @@ export default function StrategyRunView({
   version,
   gate = gateApi,
   visual = runVisualApi,
+  vectorbt = vectorbtApi,
+  registry,
+  kind,
+  onVariantStarted,
   onModify,
   onCreate,
 }: Props) {
@@ -357,6 +388,100 @@ export default function StrategyRunView({
   // Retired strategies of the old engine are not in the gate's registry.
   const unknownToGate = overviewError?.startsWith('No existe') ?? false
 
+  // --- Explorar con VectorBT ---
+  const vbt = useVectorbt(strategyId, vectorbt)
+  const vbtState = vbt.state
+  const vbtRunning = vbtState?.running ?? null
+  const [vbtModal, setVbtModal] = useState(false)
+  const [cancelling, setCancelling] = useState(false)
+  const [vbtProblem, setVbtProblem] = useState<string | null>(null)
+  const [confirming, setConfirming] = useState<string | null>(null)
+  const [pickedId, setPickedId] = useState<string | null>(null)
+  const [copied, setCopied] = useState(false)
+  const loadSpec = useCallback(async () => {
+    if (!registry) throw new Error('Esta pantalla no puede leer la estrategia.')
+    return (await registry.detail(strategyId)).spec
+  }, [registry, strategyId])
+  const reports = (vbtState?.explorations ?? []).filter(
+    (item) => item.report !== null,
+  )
+  const shown = reports.find((item) => item.id === pickedId) ?? reports[0]
+  const lastFailed = (vbtState?.explorations ?? [])[0]
+  const vbtWhy: string | null = (() => {
+    if (kind !== undefined && kind !== 'rules')
+      return 'VectorBT solo explora estrategias de reglas.'
+    if (vbt.error) return `No se pudo consultar VectorBT: ${vbt.error}`
+    if (!vbtState) return 'Consultando si VectorBT está disponible…'
+    if (!vbtState.available) return 'VectorBT no está instalado en este equipo.'
+    if (vbtRunning) return null
+    if (vbtState.busy_with)
+      return `Hay otra exploración de VectorBT en curso (${vbtState.busy_with.strategy_id}). Esperá a que termine.`
+    if (running || series)
+      return 'Hay una prueba en curso: comparte el procesador con VectorBT. Esperá a que termine.'
+    return null
+  })()
+  const vbtDisabled = vbtWhy !== null || vbtRunning !== null
+  const commands = installCommands(vbtState?.reason ?? '')
+
+  const launchExploration = async (
+    request: Parameters<VectorbtApi['launch']>[1],
+  ) => {
+    await vectorbt.launch(strategyId, request)
+    setVbtModal(false)
+    setVbtProblem(null)
+    setPickedId(null)
+    vbt.refresh()
+  }
+  const cancelExploration = async () => {
+    if (!vbtRunning) return
+    setCancelling(true)
+    try {
+      await vectorbt.cancel(strategyId, vbtRunning.id)
+    } catch (error) {
+      setVbtProblem(message(error))
+    } finally {
+      setCancelling(false)
+      vbt.refresh()
+    }
+  }
+  /** Creates the draft variant, then runs the usual Testear on it and hands the screen over to it. */
+  const confirmVariant = async (
+    exploration: VbtExploration,
+    row: VbtVariant,
+  ) => {
+    setConfirming(row.value)
+    setVbtProblem(null)
+    try {
+      const made = await vectorbt.confirm(strategyId, exploration.id, row.value)
+      const stage = nextStage([])
+      let note = `Se creó «${made.title}» como borrador y se está probando.`
+      if (made.already)
+        note = `«${made.title}» ya estaba creada como borrador; se la vuelve a probar.`
+      try {
+        await gate.start(
+          made.strategy_id,
+          stage ? { from: stage.from, to: stage.to } : {},
+        )
+      } catch (error) {
+        note = `Se creó «${made.title}» como borrador, pero no se pudo empezar la prueba: ${message(error)} Probala con Testear.`
+      }
+      if (mounted.current) {
+        vbt.refresh()
+        onVariantStarted?.(made.strategy_id, note)
+      }
+    } catch (error) {
+      if (mounted.current) setVbtProblem(message(error))
+    } finally {
+      if (mounted.current) setConfirming(null)
+    }
+  }
+  const copyCommands = () => {
+    void navigator.clipboard
+      ?.writeText(commands.join('\n'))
+      .then(() => setCopied(true))
+      .catch(() => setCopied(false))
+  }
+
   return (
     <section
       className="runview"
@@ -389,11 +514,28 @@ export default function StrategyRunView({
             <button
               type="button"
               onClick={() => setPanelOpen((open) => !open)}
-              disabled={testing || running != null || untried.length === 0}
-              title={testNote}
+              disabled={
+                testing ||
+                running != null ||
+                vbtRunning != null ||
+                untried.length === 0
+              }
+              title={
+                vbtRunning
+                  ? 'Hay una exploración de VectorBT en curso: esperá a que termine.'
+                  : testNote
+              }
               aria-expanded={panelOpen}
             >
               {running || series ? 'Prueba en curso…' : 'Testear'}
+            </button>
+            <button
+              type="button"
+              onClick={() => setVbtModal(true)}
+              disabled={vbtDisabled}
+              title={vbtWhy ?? 'Probar la estrategia rápido con VectorBT'}
+            >
+              {vbtRunning ? 'Exploración en curso…' : 'Explorar con VectorBT'}
             </button>
           </div>
         </div>
@@ -434,6 +576,26 @@ export default function StrategyRunView({
           {testError}
         </p>
       )}
+      {vbtWhy && vbtState && (
+        <p className="runview__hint" data-testid="vbt-why">
+          {vbtWhy}
+        </p>
+      )}
+      {vbtState && !vbtState.available && vbtState.reason && (
+        <details className="vbt-install" data-testid="vbt-install">
+          <summary>Cómo instalar VectorBT</summary>
+          <p className="runview__hint">{vbtState.reason}</p>
+          <pre aria-label="Comandos de instalación">{commands.join('\n')}</pre>
+          <button type="button" onClick={copyCommands}>
+            {copied ? 'Copiado' : 'Copiar comandos'}
+          </button>
+        </details>
+      )}
+      {vbtProblem && !shown && (
+        <p role="alert" className="runview__warn">
+          {vbtProblem}
+        </p>
+      )}
 
       <ol className="runview__stages" aria-label="Etapa de la estrategia">
         {STAGES.map((name, index) => (
@@ -449,37 +611,12 @@ export default function StrategyRunView({
         ))}
       </ol>
       {(series || busy) && (
-        <div
-          className="runview__progress"
-          role="progressbar"
-          aria-label="Progreso de las pruebas"
-          aria-valuemin={0}
-          aria-valuemax={100}
-          aria-valuenow={overallPercent}
-          aria-valuetext={`${progressLabel} · ${overallPercent} %`}
+        <RunProgress
+          label="Progreso de las pruebas"
+          segments={{ done: doneTests, total: totalTests, live: livePercent }}
+          percent={overallPercent}
+          valueText={`${progressLabel} · ${overallPercent} %`}
         >
-          <ol className="runview__progress-steps">
-            {Array.from({ length: totalTests }, (_, index) => (
-              <li
-                key={index}
-                className="runview__progress-step"
-                data-state={
-                  index < doneTests
-                    ? 'done'
-                    : index === doneTests
-                      ? 'current'
-                      : 'todo'
-                }
-              >
-                <span
-                  className="runview__progress-fill"
-                  style={{
-                    width: `${index < doneTests ? 100 : index === doneTests ? livePercent : 0}%`,
-                  }}
-                />
-              </li>
-            ))}
-          </ol>
           <p className="runview__progress-text">
             <span>
               {progressLabel} · {overallPercent} %
@@ -496,8 +633,32 @@ export default function StrategyRunView({
               </button>
             )}
           </p>
-        </div>
+        </RunProgress>
       )}
+      {vbtRunning && (
+        <VectorbtProgress
+          exploration={vbtRunning}
+          cancelling={cancelling}
+          onCancel={() => void cancelExploration()}
+        />
+      )}
+      {!vbtRunning &&
+        lastFailed &&
+        (lastFailed.status === 'failed' ||
+          lastFailed.status === 'cancelled') && (
+          <p className="runview__hint" data-testid="vbt-last-failed">
+            {lastFailed.status === 'cancelled'
+              ? 'La última exploración con VectorBT se canceló.'
+              : `La última exploración con VectorBT no terminó: ${lastFailed.detail}`}
+          </p>
+        )}
+      <VectorbtVariantLink
+        key={strategyId}
+        api={vectorbt}
+        registry={registry}
+        strategyId={strategyId}
+        hasPractice={finished.length > 0}
+      />
       {overviewError && !unknownToGate && (
         <p role="alert" className="runview__warn">
           No se pudieron leer las pruebas: {overviewError}
@@ -546,6 +707,19 @@ export default function StrategyRunView({
           tone={null}
         />
       </div>
+      {shown && (
+        <VectorbtReportPanel
+          key={shown.id}
+          api={vectorbt}
+          exploration={shown}
+          choices={reports}
+          onChoose={setPickedId}
+          attempts={vbtState?.attempts_in_family ?? null}
+          onConfirm={confirmVariant}
+          confirming={confirming}
+          problem={vbtProblem}
+        />
+      )}
       <div className="runview__chart-card">
         <div className="runview__chart-head">
           <h4>
@@ -635,6 +809,15 @@ export default function StrategyRunView({
           </>
         )}
       </div>
+      {vbtModal && vbtState && (
+        <VectorbtModal
+          strategyName={titleOf(strategyName)}
+          attempts={vbtState.attempts_in_family}
+          loadSpec={loadSpec}
+          onLaunch={launchExploration}
+          onClose={() => setVbtModal(false)}
+        />
+      )}
     </section>
   )
 }

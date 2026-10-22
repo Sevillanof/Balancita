@@ -309,6 +309,9 @@ export default function StrategiesPage({
             strategyId={selected.id}
             strategyName={selected.name}
             version={selected.version}
+            kind={selected.kind}
+            registry={api}
+            onVariantStarted={(id, note) => done(id, note)}
             onModify={
               editable(selected)
                 ? () => setModal({ kind: 'modify', id: selected.id })
