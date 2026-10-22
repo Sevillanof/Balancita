@@ -1,0 +1,50 @@
+docs/observabilidad-salud-api.md
+  h_2f68313623be98 68-90,147-148
+odd/tasks/health-observability.md
+  h_2f68313623be98 1-89
+scripts/dev-resources.mjs
+  h_2f68313623be98 4-20,24-26,35,38-52,54,62,64-65,68-70,72-76,78-79,82-86,88,92-93,95,98-109,113-163
+scripts/dev-resources.node-test.mjs
+  h_2f68313623be98 3-4,41-60,68-184
+scripts/dev.mjs
+  h_2f68313623be98 28,208
+server/src/features/live-gateway/observability-health.test.ts
+  h_2f68313623be98 779-799
+server/src/features/live-gateway/observability-health.ts
+  h_2f68313623be98 356-362
+server/src/features/live-gateway/system-usage.test.ts
+  h_2f68313623be98 1,5,15,38,41-42,71,80-81,84,87-88,104,106-211,216-223
+server/src/features/live-gateway/system-usage.ts
+  h_2f68313623be98 1-4,12,14,28-30,34,36-46,49-50,58-65,67-98,100-101,104-116,118-164,185-186,196-203,205-213,221-234,253-258,261-262
+src/app/AppStatusChips.test.tsx
+  h_2f68313623be98 1,6,17,41-42,44-47,53,58,64,68-70
+src/app/AppStatusChips.tsx
+  h_2f68313623be98 100
+src/app/SystemUsageChip.test.tsx
+  h_2f68313623be98 1-103
+src/app/SystemUsageChip.tsx
+  h_2f68313623be98 9-10,12,14-36,38-39,42,44,47-48,53
+src/app/system-usage.test.ts
+  h_2f68313623be98 1-71
+src/app/system-usage.ts
+  h_2f68313623be98 21-27,29-68,71-73,75-85
+src/features/observability/presentation/HealthIndicator.tsx
+  h_2f68313623be98 8-15,24,79-83,108-110,117-119,152-155,160-161,192-197,215,239-243,266,272-289,305-308,325-326,354-356
+src/features/observability/presentation/Observability.test.tsx
+  h_2f68313623be98 2-9,18-19,88,181-191,212-213,238-240,242,251-260,267-420
+src/features/observability/presentation/health-view.ts
+  h_2f68313623be98 7-40
+src/features/observability/presentation/latest-decision.ts
+  h_2f68313623be98 91
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "e53e2b0593c3fb476168ef28cd4b85a88ea80c7f",
+  "prompts": {},
+  "humans": {
+    "h_2f68313623be98": {
+      "author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
