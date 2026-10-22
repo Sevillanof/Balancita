@@ -409,6 +409,21 @@ describe('reporte de VectorBT', () => {
     expect(within(report).getByText('Qué funciona')).toBeInTheDocument()
   })
 
+  it('copia el reporte en Markdown', async () => {
+    const user = userEvent.setup()
+    mount(fakeVectorbt(vbtState({ explorations: [exploration()] })))
+    const report = await screen.findByTestId('vbt-report')
+    await user.click(
+      within(report).getByRole('button', { name: 'Copiar en Markdown' }),
+    )
+    expect(await navigator.clipboard.readText()).toContain(
+      '# Reporte de VectorBT: X2 Ejemplo',
+    )
+    expect(
+      within(report).getByRole('button', { name: 'Copiado ✓' }),
+    ).toBeInTheDocument()
+  })
+
   it('una estrategia no soportada muestra el motivo sin dramatismo', async () => {
     const unsupported = exploration({
       status: 'unsupported',
