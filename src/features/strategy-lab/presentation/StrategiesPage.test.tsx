@@ -160,6 +160,26 @@ function fakeApi(state = 'draft') {
       operational: { state, basis: 'registry', since_ms: null, reason: null },
     }),
     exampleRow({
+      id: 'c27-retirada',
+      name: 'C27 Retirada',
+      operational: {
+        state: 'closed',
+        basis: 'config',
+        since_ms: null,
+        reason: null,
+      },
+    }),
+    exampleRow({
+      id: 'c99-sin-registro',
+      name: 'C99 Sin registro',
+      operational: {
+        state: 'unverified',
+        basis: 'none',
+        since_ms: null,
+        reason: null,
+      },
+    }),
+    exampleRow({
       id: 'kronos-small-1h-h4-v1',
       name: 'Kronos',
       kind: 'model',
@@ -220,6 +240,21 @@ function renderPage(api: StrategyApi) {
 }
 
 beforeEach(() => vi.clearAllMocks())
+
+describe('StrategiesPage list', () => {
+  it('lists only what exists: no retired and no unknown strategies, Kronos stays', async () => {
+    renderPage(fakeApi())
+    const list = await screen.findByRole('navigation', {
+      name: 'Lista de estrategias',
+    })
+    await waitFor(() =>
+      expect(within(list).getByText('C40 Ruptura')).toBeVisible(),
+    )
+    expect(within(list).getByText('Kronos')).toBeVisible()
+    expect(within(list).queryByText('C27 Retirada')).toBeNull()
+    expect(within(list).queryByText('C99 Sin registro')).toBeNull()
+  })
+})
 
 describe('StrategiesPage menu', () => {
   it('offers detalles, modificar and borrar on a strategy of rules', async () => {
