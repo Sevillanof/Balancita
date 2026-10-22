@@ -271,14 +271,13 @@ export default function HealthIndicator({
   extra,
 }: HealthRead & { applicable?: boolean; flow?: FlowFace; extra?: ReactNode }) {
   const [open, setOpen] = useState(false)
-  const [, setClockTick] = useState(0)
-  const now = Date.now()
+  const [now, setNow] = useState(Date.now)
   const hasReport = data !== null
+  // The clock always runs so `now` is never older than a tick when a report arrives.
   useEffect(() => {
-    if (!hasReport) return
-    const timer = setInterval(() => setClockTick((tick) => tick + 1), 1_000)
+    const timer = setInterval(() => setNow(Date.now()), 1_000)
     return () => clearInterval(timer)
-  }, [hasReport])
+  }, [])
   const timing = data ? reportTiming(now, receivedAt, data.generatedAtMs) : null
   const qualification = !data
     ? null

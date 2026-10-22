@@ -13,7 +13,6 @@ export default function SystemUsageChip({ apiBase }: { apiBase: string }) {
   }>()
   const [now, setNow] = useState(Date.now)
   useEffect(() => {
-    setResult(undefined)
     let cancelled = false
     let sequence = 0
     let controller: AbortController | undefined
