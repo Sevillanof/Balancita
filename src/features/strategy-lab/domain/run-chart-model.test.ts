@@ -1,13 +1,18 @@
 import { describe, expect, it } from 'vitest'
 import {
+  MAX_OVERVIEW_MARKS,
   MAX_SINGLE_DISCARDS,
   discardReasonText,
+  fullViewText,
   holdText,
   isDiscardId,
   priceLinesOf,
+  resolutionFor,
+  resolutionSeconds,
   toChartCandles,
   toDiscardMarkers,
   toMarkers,
+  toOverviewMarkers,
   tradeOfMarker,
   windowAround,
 } from './run-chart-model.ts'
@@ -160,5 +165,97 @@ describe('run chart model', () => {
     })
     expect(holdText(75 * 60_000)).toBe('1 h 15 min')
     expect(holdText(12 * 60_000)).toBe('12 min')
+  })
+})
+
+describe('whole stretch of a run', () => {
+  const DAY = 24 * 60 * 60_000
+  const START = Date.UTC(2026, 0, 1)
+  const END = Date.UTC(2026, 3, 18)
+
+  it('picks a resolution that keeps the stretch under about 2.700 candles', () => {
+    expect(resolutionFor(6 * 60 * 60_000)).toBe('1m')
+    expect(resolutionFor(2 * DAY)).toBe('5m')
+    expect(resolutionFor(7 * DAY)).toBe('5m')
+    expect(resolutionFor(20 * DAY)).toBe('15m')
+    expect(resolutionFor(90 * DAY)).toBe('1h')
+    expect(resolutionFor(END - START)).toBe('1h')
+    expect(resolutionFor(365 * DAY)).toBe('4h')
+    expect(resolutionFor(3 * 365 * DAY)).toBe('1d')
+    expect(resolutionSeconds('4h')).toBe(14_400)
+    expect(resolutionSeconds('raro')).toBe(60)
+  })
+
+  it('says what the chart shows, with the last day of the stretch', () => {
+    expect(fullViewText('1h', START, END)).toBe(
+      'Velas de 1 hora · tramo completo (1-ene-2026 a 17-abr-2026)',
+    )
+  })
+
+  const many = (n: number): RunTrade[] =>
+    Array.from({ length: n }, (_, i) => {
+      const entry = START + Math.floor((i / n) * (END - START - DAY))
+      return {
+        ...trade,
+        trade_id: `9-${i}`,
+        side: i % 2 === 0 ? 'LONG' : 'SHORT',
+        entry_time_ms: entry,
+        entry_bucket_ms: entry,
+        exit_time_ms: entry + 30 * 60_000,
+        exit_bucket_ms: entry + 29 * 60_000,
+        exit_reason: i % 3 === 0 ? 'stop' : 'target',
+      }
+    })
+
+  it('draws one mark per entry and exit while there are few', () => {
+    const markers = toOverviewMarkers(many(20), [], { from: START, to: END })
+    expect(markers).toHaveLength(40)
+    expect(markers.some((m) => m.label === 'L')).toBe(true)
+    expect(markers.some((m) => m.label === '× stop')).toBe(true)
+  })
+
+  it('groups 1.400 trades with their discards under the limit the chart can paint, losing none', () => {
+    const trades = many(1400)
+    const signals: RunSignal[] = Array.from({ length: 300 }, (_, i) => ({
+      bucket_ms: START + i * 8 * 60 * 60_000,
+      side: 'LONG',
+      outcome: 'rejected_stale_data',
+      reason_code: null,
+    }))
+    const markers = toOverviewMarkers(trades, signals, { from: START, to: END })
+    expect(markers.length).toBeGreaterThan(0)
+    expect(markers.length).toBeLessThanOrEqual(MAX_OVERVIEW_MARKS)
+    const count = (match: (id: string) => boolean) =>
+      markers
+        .filter((m) => match(m.id))
+        .reduce((sum, m) => sum + (m.count ?? 1), 0)
+    expect(count((id) => id.startsWith('g:entry'))).toBe(1400)
+    expect(count((id) => id.startsWith('g:exit'))).toBe(1400)
+    expect(count(isDiscardId)).toBe(300)
+    expect(new Set(markers.map((m) => m.id)).size).toBe(markers.length)
+    const longs = markers.find((m) => m.id.startsWith('g:entry-long'))!
+    expect(longs.label).toMatch(/^L\+\d+$/)
+    expect(longs.memberIds!.length).toBe(longs.count)
+    expect(markers.find((m) => m.id.startsWith('g:exit'))!.detail).toMatch(
+      /^\+\d+ salidas: .*(Stop|Objetivo)/,
+    )
+  })
+
+  it('leaves out the signals ignored for an open position and the accepted ones', () => {
+    const signals: RunSignal[] = [
+      {
+        bucket_ms: START + 1,
+        side: 'LONG',
+        outcome: 'position_open',
+        reason_code: null,
+      },
+      {
+        bucket_ms: START + 2,
+        side: 'LONG',
+        outcome: 'accepted',
+        reason_code: null,
+      },
+    ]
+    expect(toOverviewMarkers([], signals, { from: START, to: END })).toEqual([])
   })
 })

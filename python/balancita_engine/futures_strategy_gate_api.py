@@ -7,6 +7,7 @@ to ``runs.pid`` (``strategy_gate.cancel_run``).
 """
 
 import datetime
+import decimal
 import gzip
 import hashlib
 import json
@@ -34,6 +35,9 @@ MINUTE_MS = 60_000
 PRODUCT = re.compile(r"^[A-Za-z0-9_]{3,32}$")
 MAX_WINDOW_MS = 3 * 24 * 60 * MINUTE_MS      # at most 3 days of 1m candles (4320) per request
 DEFAULT_WINDOW_MS = 6 * 60 * MINUTE_MS
+RESOLUTIONS = {"1m": MINUTE_MS, "5m": 5 * MINUTE_MS, "15m": 15 * MINUTE_MS, "1h": 60 * MINUTE_MS,
+               "4h": 240 * MINUTE_MS, "1d": 1440 * MINUTE_MS}
+MAX_AGGREGATED_CANDLES = 6000               # for resolutions above 1m the cap counts candles, not milliseconds
 CONTEXT_MS = 2 * 60 * MINUTE_MS             # candles shown around the anchor trade
 MAX_TRADES_PAGE = 500
 MAX_DECISIONS = 2000                        # signals returned per request; ``truncated`` says when more exist
@@ -406,7 +410,16 @@ class GateApi:
                 "cost_model_version": manifest["cost_model_version"], "summary": manifest.get("summary"),
                 "label": "Histórico Kraken · ejecuciones paper simuladas"}
 
-    def _window(self, manifest, trades, start, end):
+    @staticmethod
+    def _resolution(value):
+        if value is None or value == "":
+            return "1m"
+        if not isinstance(value, str) or value not in RESOLUTIONS:
+            raise GateApiError("invalid_resolution", "La resolución debe ser una de: {}.".format(
+                ", ".join(RESOLUTIONS)))
+        return value
+
+    def _window(self, manifest, trades, start, end, max_ms=MAX_WINDOW_MS):
         lo, hi = manifest["range_start_ms"], manifest["range_end_ms_exclusive"]
         if start is None and end is None:
             if trades:       # around the newest closed trade of this product
@@ -419,41 +432,82 @@ class GateApi:
         elif start is None:
             start = end - DEFAULT_WINDOW_MS
         start, end = max(start, lo), min(end, hi)
-        if end - start > MAX_WINDOW_MS:
-            end = start + MAX_WINDOW_MS
+        if end - start > max_ms:
+            end = start + max_ms
         if end <= start:
             raise GateApiError("invalid_window", "La ventana pedida queda fuera de la prueba.")
         return start // MINUTE_MS * MINUTE_MS, end
 
-    def _read_candles(self, product, start, end):
+    def _read_candles(self, product, start, end, step_ms=MINUTE_MS):
+        """Rows ``(t,o,h,l,c,v)`` of the window; above 1m the stored 1m candles are folded in one pass.
+
+        Returns ``(rows, minutes)``: ``minutes`` is how many 1m candles existed (rows of a bucket count each minute).
+        """
         path = os.path.join(self.data_dir, "cache", "candles-{}.sqlite".format(product))
         if not os.path.isfile(path):
             raise GateApiError("data_missing", "No hay velas guardadas de {} para esa prueba.".format(product), 404)
         db = sqlite3.connect("file:{}?mode=ro".format(path), uri=True, timeout=10)
         try:
-            return db.execute("SELECT t,o,h,l,c,v FROM candles WHERE res='1m' AND t>=? AND t<? ORDER BY t",
-                              (start, end)).fetchall()
+            cursor = db.execute("SELECT t,o,h,l,c,v FROM candles WHERE res='1m' AND t>=? AND t<? ORDER BY t",
+                                (start, end))
+            if step_ms == MINUTE_MS:
+                rows = cursor.fetchall()
+                return rows, len(rows)
+            return self._fold(cursor, step_ms)
         except sqlite3.OperationalError:
             raise GateApiError("data_missing", "No hay velas guardadas de {} para esa prueba.".format(product), 404)
         finally:
             db.close()
 
-    def candles(self, run_id, product, start=None, end=None):
+    @staticmethod
+    def _fold(cursor, step_ms):
+        """open = first, high = max, low = min, close = last, volume = sum; buckets are UTC multiples of the step."""
+        out, minutes, bucket, acc = [], 0, None, None
+
+        def flush():
+            if acc is not None:
+                out.append((bucket, acc[0], acc[1][1], acc[2][1], acc[3], format(acc[4], "f")))
+
+        for t, o, h, l, c, v in cursor:
+            minutes += 1
+            key = t // step_ms * step_ms
+            try:
+                high, low, vol = decimal.Decimal(h), decimal.Decimal(l), decimal.Decimal(v)
+            except decimal.InvalidOperation:
+                raise GateApiError("data_missing", "Las velas guardadas de esa prueba no se pueden leer.", 409)
+            if key != bucket:
+                flush()
+                bucket, acc = key, [o, (high, h), (low, l), c, vol]
+                continue
+            if high > acc[1][0]:
+                acc[1] = (high, h)
+            if low < acc[2][0]:
+                acc[2] = (low, l)
+            acc[3] = c
+            acc[4] += vol
+        flush()
+        return out, minutes
+
+    def candles(self, run_id, product, start=None, end=None, resolution=None):
         """The 1m candles Kraken published inside a finished run's range (never outside it), as the gate cached them.
 
-        Missing minutes are NOT filled: ``missing_minutes`` counts them and the chart shows the gap.
+        Missing minutes are NOT filled: ``missing_minutes`` counts them and the chart shows the gap. ``resolution``
+        (1m by default) folds the 1m candles into bigger ones; a bigger candle exists if it has at least one minute.
         """
         row, manifest, folder = self._artifact(run_id)
         product = self._product_of(manifest, product)
+        resolution = self._resolution(resolution)
+        step = RESOLUTIONS[resolution]
         mine = [t for t in self._stored_trades(folder, manifest) if t["product_id"] == product]
-        start, end = self._window(manifest, mine, self._ms(start, "from"), self._ms(end, "to"))
-        rows = self._read_candles(product, start, end)
+        cap = MAX_WINDOW_MS if step == MINUTE_MS else MAX_AGGREGATED_CANDLES * step
+        start, end = self._window(manifest, mine, self._ms(start, "from"), self._ms(end, "to"), cap)
+        rows, minutes = self._read_candles(product, start, end, step)
         expected = (end - start + MINUTE_MS - 1) // MINUTE_MS
-        return {"run_id": row["id"], "product": product, "resolution": "1m", "from_ms": start, "to_ms": end,
+        return {"run_id": row["id"], "product": product, "resolution": resolution, "from_ms": start, "to_ms": end,
                 "range_start_ms": manifest["range_start_ms"], "range_end_ms": manifest["range_end_ms_exclusive"],
                 "candles": [{"time_ms": t, "open": o, "high": h, "low": l, "close": c, "volume": v}
                             for t, o, h, l, c, v in rows],
-                "missing_minutes": max(0, expected - len(rows)),
+                "missing_minutes": max(0, expected - minutes),
                 "label": "Histórico Kraken · ejecuciones paper simuladas"}
 
     def trades(self, run_id, product, start=None, end=None, cursor=None, limit=None):
@@ -493,13 +547,17 @@ class GateApi:
         except ValueError:
             raise GateApiError("artifact_not_ready", "No se pudo leer el detalle de decisiones guardado.", 409)
 
-    def decisions(self, run_id, product, start=None, end=None):
+    def decisions(self, run_id, product, start=None, end=None, only=None):
         """Signals (LONG/SHORT proposals) of a run for one product with what became of each, read from its trace.
 
         Read-only. A run saved without the trace answers ``captured: false`` and invents nothing. The window keeps
         the signals whose candle starts inside ``[from, to)``; at most ``MAX_DECISIONS`` come back (oldest first).
         ``counts`` are the run-wide counters of that product (including the WAIT/ABSTAIN proposals, which are not rows).
+        ``only=discards`` returns just the real rejections (outcome ``rejected*``); ``ignored_position_open`` always
+        counts the signals of the window dropped because a position was already open, so they can be told, not drawn.
         """
+        if only not in (None, "", "discards"):
+            raise GateApiError("invalid_filter", "El filtro 'only' solo admite 'discards'.")
         row, manifest, folder = self._artifact(run_id)
         product = self._product_of(manifest, product)
         start, end = self._ms(start, "from"), self._ms(end, "to")
@@ -517,9 +575,13 @@ class GateApi:
                        and isinstance(line.get("bucket_ms"), int) and lo <= line["bucket_ms"] < hi),
                       key=lambda line: line["bucket_ms"])
         keep = ("bucket_ms", "side", "outcome", "reason_code")
+        ignored = sum(1 for line in mine if line.get("outcome") == "position_open")
+        if only == "discards":
+            mine = [line for line in mine if str(line.get("outcome") or "").startswith("rejected")]
         return {"run_id": row["id"], "product": product, "captured": True,
                 "signals": [{key: line.get(key) for key in keep} for line in mine[:MAX_DECISIONS]],
-                "counts": counts, "total": len(mine), "truncated": len(mine) > MAX_DECISIONS}
+                "counts": counts, "ignored_position_open": ignored, "total": len(mine),
+                "truncated": len(mine) > MAX_DECISIONS}
 
     def cancel(self, run_id):
         number = self._run_id(run_id)
