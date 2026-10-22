@@ -1,0 +1,19 @@
+src/features/observability/presentation/HealthIndicator.tsx
+  s_fb3472b380ad7c::t_496e274a24c99c 274,276,278,280
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "2876819cd063f29f370f561ecc7446d43431b1bf",
+  "prompts": {},
+  "sessions": {
+    "s_fb3472b380ad7c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "0b673426-81c4-4c90-a0b6-044955a234e7",
+        "model": "claude-sonnet-5-5"
+      },
+      "human_author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
