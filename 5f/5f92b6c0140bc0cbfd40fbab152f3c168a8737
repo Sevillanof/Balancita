@@ -1,0 +1,23 @@
+src/features/strategy-lab/domain/vectorbt-markdown.ts
+  s_cf4791834aa1b2::t_585b1c3c42ec0e 1-180
+src/features/strategy-lab/presentation/StrategyRunView.vectorbt.test.tsx
+  s_cf4791834aa1b2::t_4019dc29e77b36 412-437
+src/features/strategy-lab/presentation/VectorbtReportPanel.tsx
+  s_cf4791834aa1b2::t_ba9d0c799913a3 9,66,69-74,106-112
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "5f5f92b6c0140bc0cbfd40fbab152f3c168a8737",
+  "prompts": {},
+  "sessions": {
+    "s_cf4791834aa1b2": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "0f9a9a8b-7bc4-4c17-9a89-73781184e709",
+        "model": "claude-sonnet-5-5"
+      },
+      "human_author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
