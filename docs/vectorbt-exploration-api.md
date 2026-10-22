@@ -96,6 +96,7 @@ Ordenadas por `net_bp_mean` de mayor a menor y, en empate, por `entries_per_day`
 `{rank, value, label, is_base, trades, entries_per_day, net_bp_mean, gross_bp_mean, hit_rate, status, error, trial_id}`
 
 - `value`: el valor probado, como texto (`"2"`, `"1.5"`). `label`: `"stop_atr = 2"`. `is_base`: es el valor que la spec ya tiene (esa corrida reutiliza el diagnóstico).
+- Solo en las filas `ok`, para la comparación con el simulador: `funding_bp_mean` (funding real medio, pb; positivo resta), `funding_complete_share`, `stop_share` (parte de operaciones cerradas por stop) y `signals` (`{raw, skipped_by_cost}`). `diagnostic.totals` y cada `by_*` traen también `funding_bp_mean`.
 - `status`: `ok`, `no_trades` (no operó) o `error` (falló: el motivo está en `error`; un valor que la spec no admite cuenta como error).
 - `trial_id`: id de la corrida en el registro de intentos. **Cada** valor, también los fallidos, tiene su fila antes de escribirse el reporte.
 

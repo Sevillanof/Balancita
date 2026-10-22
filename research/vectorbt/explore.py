@@ -23,7 +23,6 @@ import re
 import sys
 import time
 from datetime import datetime, timezone
-from decimal import Decimal, InvalidOperation
 
 from . import data_contract as contract
 from . import exploration_report as rep
@@ -32,7 +31,9 @@ from .engine import ROOT, futures_costs
 from .generic_signals import FeatureStore, Market, UnsupportedSpec, evaluate_spec
 from .generic_sim import simulate_plan
 from balancita_engine.canonical import canonical_hash
+from balancita_engine import spec_variation
 from balancita_engine.futures_spec_strategy import SpecError, load_spec, validate_spec
+from balancita_engine.spec_variation import VariationError
 
 MAX_VALUES = 12
 DEFAULT_DATASETS = os.path.join(ROOT, "data", "research-vectorbt", "practice")
@@ -58,95 +59,22 @@ class Progress:
 
 
 # ----------------------------------------------------------------------------------------------- variations
-def normalize_value(value):
-    """A number as a short decimal string (``2``, ``1.5``); anything else is refused."""
-    try:
-        number = Decimal(str(value).strip())
-    except InvalidOperation:
-        raise contract.ContractError("«{}» no es un número".format(value)) from None
-    if not number.is_finite():
-        raise contract.ContractError("«{}» no es un número finito".format(value))
-    text = format(number.normalize(), "f")
-    return "0" if text in ("-0", "") else text
+# The logic lives in the engine (stdlib only) so the registry API applies exactly the same change; here the errors become
+# the lab's ``ContractError``.
+def _lab(function):
+    def wrapped(*args, **kwargs):
+        try:
+            return function(*args, **kwargs)
+        except VariationError as error:
+            raise contract.ContractError(str(error)) from None
+    wrapped.__name__, wrapped.__doc__ = function.__name__, function.__doc__
+    return wrapped
 
 
-def _walk(spec, path):
-    """The container and key/index of the leaf at ``path`` (``rules.checks[2].node.right.mul[1]``; ``checks[name]`` too)."""
-    node, container, key, trail = spec, None, None, []
-    for piece in path.split("."):
-        match = re.fullmatch(r"([A-Za-z0-9_]+)((?:\[[^\]]+\])*)", piece)
-        if match is None:
-            raise contract.ContractError("la ruta «{}» no se entiende (usá, por ejemplo, rules.checks[2].node.right)".format(path))
-        steps = [match.group(1)] + re.findall(r"\[([^\]]+)\]", match.group(2))
-        for step in steps:
-            container, key = node, None
-            if isinstance(node, dict):
-                if step not in node:
-                    raise contract.ContractError("la ruta «{}» no existe en la spec (falta «{}»)".format(path, step))
-                key = step
-            elif isinstance(node, list):
-                if step.lstrip("-").isdigit():
-                    index = int(step)
-                else:
-                    found = [i for i, item in enumerate(node) if isinstance(item, dict) and item.get("name") == step]
-                    if not found:
-                        raise contract.ContractError("la ruta «{}» no existe en la spec (no hay «{}»)".format(path, step))
-                    index = found[0]
-                if not -len(node) <= index < len(node):
-                    raise contract.ContractError("la ruta «{}» no existe en la spec (índice {})".format(path, step))
-                key = index
-            else:
-                raise contract.ContractError("la ruta «{}» entra en un valor que no tiene partes".format(path))
-            node = node[key]
-            trail.append(node)
-    return container, key, trail
-
-
-def describe_variation(spec, vary):
-    """What ``vary`` points at: a parameter or a numeric constant of a condition. Returns kind, label, current value."""
-    if re.fullmatch(r"[A-Za-z0-9_]+", vary):
-        if vary not in spec.get("params", {}):
-            raise contract.ContractError("«{}» no es un parámetro de la estrategia (tiene: {})".format(
-                vary, ", ".join(sorted(spec.get("params", {}))) or "ninguno"))
-        return {"kind": "param", "name": vary, "label": vary, "base_value": normalize_value(spec["params"][vary])}
-    container, key, trail = _walk(spec, vary)
-    leaf = container[key]
-    if not isinstance(leaf, str) or leaf.startswith("$"):
-        raise contract.ContractError("«{}» no es una constante numérica (si es un parámetro, variá el parámetro por su "
-                                     "nombre)".format(vary))
-    try:
-        base = normalize_value(leaf)
-    except contract.ContractError:
-        raise contract.ContractError("«{}» vale «{}», que no es una constante numérica".format(vary, leaf)) from None
-    codes = [n["cmp"] for n in trail if isinstance(n, dict) and isinstance(n.get("cmp"), str)]
-    label = "{} ({})".format(codes[-1], vary) if codes else vary
-    return {"kind": "condition", "name": vary, "label": label, "base_value": base}
-
-
-def apply_value(spec, variation, value):
-    """A NEW spec with the one value changed; the input is never modified."""
-    out = copy.deepcopy(spec)
-    if variation["kind"] == "param":
-        out["params"][variation["name"]] = value
-    else:
-        container, key, _ = _walk(out, variation["name"])
-        container[key] = value
-    out["id"] = spec["id"]
-    return out
-
-
-def check_values(values):
-    if not values:
-        raise contract.ContractError("hay que dar al menos un valor para variar")
-    normalized = []
-    for value in values:
-        text = normalize_value(value)
-        if text not in normalized:
-            normalized.append(text)
-    if len(normalized) > MAX_VALUES:
-        raise contract.ContractError("se pidieron {} valores y el máximo es {}: la lista no se amplía sola".format(
-            len(normalized), MAX_VALUES))
-    return normalized
+normalize_value = _lab(spec_variation.normalize_value)
+describe_variation = _lab(spec_variation.describe_variation)
+apply_value = _lab(spec_variation.apply_value)
+check_values = _lab(spec_variation.check_values)
 
 
 # ------------------------------------------------------------------------------------------------- the run
@@ -240,7 +168,11 @@ def _variant_row(value, label, is_base, result, days, error=None):
     stats = rep.group_stats(trades)
     per_day = sum(rep.entries_per_day(sum(1 for t in trades if t["product"] == p), d) for p, d in days.items())
     return dict(base, trades=stats["trades"], entries_per_day=per_day, net_bp_mean=stats["net_bp_mean"],
-                gross_bp_mean=stats["gross_bp_mean"], hit_rate=stats["hit_rate"], status="ok", error=None)
+                gross_bp_mean=stats["gross_bp_mean"], hit_rate=stats["hit_rate"], status="ok", error=None,
+                # Extra figures for the side-by-side with the simulator (registry API ``compare``).
+                funding_bp_mean=stats["funding_bp_mean"], funding_complete_share=stats["funding_complete_share"],
+                stop_share=sum(1 for t in trades if t["exit_reason"] == "stop") / len(trades),
+                signals=dict(result["signals"]))
 
 
 def _rank(rows):

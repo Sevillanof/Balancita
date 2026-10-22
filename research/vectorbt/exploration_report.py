@@ -72,12 +72,14 @@ def rule_lead(codes):
 def group_stats(trades):
     n = len(trades)
     if n == 0:
-        return {"trades": 0, "gross_bp_mean": None, "net_bp_mean": None, "hit_rate": None, "funding_complete_share": None}
+        return {"trades": 0, "gross_bp_mean": None, "net_bp_mean": None, "hit_rate": None, "funding_complete_share": None,
+                "funding_bp_mean": None}
     return {"trades": n,
             "gross_bp_mean": statistics.fmean(t["gross_bp"] for t in trades),
             "net_bp_mean": statistics.fmean(t["net_bp"] for t in trades),
             "hit_rate": sum(1 for t in trades if t["net_bp"] > 0) / n,
-            "funding_complete_share": sum(1 for t in trades if t["funding_complete"]) / n}
+            "funding_complete_share": sum(1 for t in trades if t["funding_complete"]) / n,
+            "funding_bp_mean": statistics.fmean(t["funding_bp"] for t in trades)}
 
 
 def entries_per_day(trade_count, days):
