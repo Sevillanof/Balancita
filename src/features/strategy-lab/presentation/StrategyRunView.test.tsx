@@ -501,8 +501,8 @@ describe('StrategyRunView stage tabs', () => {
     renderView(gateWith(threeOfFive()), visualWith())
     await screen.findByTestId('chart')
     const tabs = within(
-      screen.getByRole('tablist', { name: 'Tramos probados' }),
-    ).getAllByRole('tab')
+      screen.getByRole('group', { name: 'Tramos probados' }),
+    ).getAllByRole('button')
     expect(tabs.map((tab) => tab.textContent)).toEqual([
       'ene–mar 2025',
       'abr–jun 2025',
@@ -529,17 +529,15 @@ describe('StrategyRunView stage tabs', () => {
     await screen.findByTestId('chart')
     expect(visual.summary).toHaveBeenCalledTimes(1)
     expect(visual.summary).toHaveBeenCalledWith(12)
-    expect(screen.getByRole('tab', { name: 'oct–dic 2025' })).toHaveAttribute(
-      'aria-selected',
-      'true',
-    )
-    await user.click(screen.getByRole('tab', { name: 'abr–jun 2025' }))
+    expect(
+      screen.getByRole('button', { name: 'oct–dic 2025' }),
+    ).toHaveAttribute('aria-pressed', 'true')
+    await user.click(screen.getByRole('button', { name: 'abr–jun 2025' }))
     await waitFor(() => expect(visual.summary).toHaveBeenLastCalledWith(11))
     await screen.findByText(/Prueba mostrada · Práctica #11/)
-    expect(screen.getByRole('tab', { name: 'abr–jun 2025' })).toHaveAttribute(
-      'aria-selected',
-      'true',
-    )
+    expect(
+      screen.getByRole('button', { name: 'abr–jun 2025' }),
+    ).toHaveAttribute('aria-pressed', 'true')
     expect(vi.mocked(visual.trades)).toHaveBeenLastCalledWith(
       11,
       'PF_XBTUSD',
@@ -553,7 +551,7 @@ describe('StrategyRunView stage tabs', () => {
     const visual = visualWith()
     renderView(gateWith(threeOfFive()), visual)
     await screen.findByTestId('chart')
-    await user.click(screen.getByRole('tab', { name: /jul–sep 2025/ }))
+    await user.click(screen.getByRole('button', { name: /jul–sep 2025/ }))
     expect(visual.summary).toHaveBeenCalledTimes(1)
   })
 
@@ -592,19 +590,18 @@ describe('StrategyRunView stage tabs', () => {
       const visual = visualWith()
       renderView(gate, visual)
       await screen.findByTestId('chart')
-      await user.click(screen.getByRole('tab', { name: 'ene–mar 2025' }))
+      await user.click(screen.getByRole('button', { name: 'ene–mar 2025' }))
       await waitFor(() => expect(visual.summary).toHaveBeenLastCalledWith(10))
       await vi.advanceTimersByTimeAsync(31_000)
       await waitFor(() =>
         expect(
-          screen.getByRole('tab', { name: 'jul–sep 2025' }),
+          screen.getByRole('button', { name: 'jul–sep 2025' }),
         ).not.toBeDisabled(),
       )
       expect(visual.summary).toHaveBeenLastCalledWith(10)
-      expect(screen.getByRole('tab', { name: 'ene–mar 2025' })).toHaveAttribute(
-        'aria-selected',
-        'true',
-      )
+      expect(
+        screen.getByRole('button', { name: 'ene–mar 2025' }),
+      ).toHaveAttribute('aria-pressed', 'true')
       expect(screen.getByTestId('stage-count')).toHaveTextContent(
         '3 de 5 tramos probados',
       )
@@ -648,8 +645,10 @@ describe('StrategyRunView stage tabs', () => {
     )
     await screen.findByTestId('chart')
     expect(
-      screen.getByRole('tab', { name: 'Prueba #24 · 01/02/2025–20/02/2025' }),
-    ).toHaveAttribute('aria-selected', 'true')
+      screen.getByRole('button', {
+        name: 'Prueba #24 · 01/02/2025–20/02/2025',
+      }),
+    ).toHaveAttribute('aria-pressed', 'true')
     expect(screen.getByTestId('stage-count')).toHaveTextContent(
       '0 de 5 tramos probados',
     )
@@ -666,7 +665,7 @@ describe('StrategyRunView stage tabs', () => {
     })
     renderView(gateWith(threeOfFive()), visual)
     await screen.findByTestId('chart')
-    await user.click(screen.getByRole('tab', { name: 'ene–mar 2025' }))
+    await user.click(screen.getByRole('button', { name: 'ene–mar 2025' }))
     expect(await screen.findByTestId('run-empty')).toHaveTextContent(
       'Esa prueba no guardó sus operaciones',
     )

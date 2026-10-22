@@ -848,15 +848,14 @@ export default function StrategyRunView({
           <div className="runview__tabs-wrap">
             <div
               className="runview__tabs"
-              role="tablist"
+              role="group"
               aria-label="Tramos probados"
             >
               {fallbackRun && (
                 <button
                   type="button"
-                  role="tab"
                   className="runview__tab"
-                  aria-selected={true}
+                  aria-pressed={true}
                 >
                   {fallbackLabel}
                 </button>
@@ -871,9 +870,8 @@ export default function StrategyRunView({
                   <button
                     key={tab.stage.from}
                     type="button"
-                    role="tab"
                     className="runview__tab"
-                    aria-selected={shownNow}
+                    aria-pressed={shownNow}
                     disabled={tab.run === null}
                     data-untested={tab.run === null ? 'true' : undefined}
                     onClick={() => {

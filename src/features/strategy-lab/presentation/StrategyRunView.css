@@ -156,7 +156,7 @@
   cursor: pointer;
 }
 
-.runview__tab[aria-selected='true'] {
+.runview__tab[aria-pressed='true'] {
   border-color: var(--mc-text-2);
   background: var(--mc-surface-2, var(--mc-surface-1));
   font-weight: 600;
