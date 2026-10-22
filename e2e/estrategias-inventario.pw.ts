@@ -226,7 +226,7 @@ test('Estrategias is only the list of names and the last test of the chosen one'
   await page.goto('/estrategias')
   const list = page.getByRole('navigation', { name: 'Lista de estrategias' })
   // Every strategy is in the list, retired ones included (10 + the 6 retired).
-  await expect(list.getByRole('button')).toHaveCount(10)
+  await expect(list.locator('li[data-id]')).toHaveCount(10)
   await expect(list.getByRole('button', { name: /^C27/ })).toBeVisible()
   await expect(page.getByRole('tablist')).toHaveCount(0)
 
@@ -241,6 +241,27 @@ test('Estrategias is only the list of names and the last test of the chosen one'
   await list.getByRole('button', { name: /^C27/ }).click()
   await expect(page.getByTestId('run-view')).toHaveAccessibleName(/C27/)
   await shot(page, '1-estrategias')
+
+  // Each name has its menu: detalles opens a modal on this same screen.
+  await list.getByRole('button', { name: /^Opciones de C29/ }).click()
+  await expect(page.getByRole('menuitem')).toContainText([
+    'Detalles',
+    'Modificar',
+    'Activar en paper',
+    'Borrar',
+  ])
+  await page.getByRole('menuitem', { name: 'Detalles' }).click()
+  await expect(
+    page.getByRole('dialog', { name: /^Detalles de C29/ }),
+  ).toBeVisible()
+  await page.keyboard.press('Escape')
+  await expect(page.getByRole('dialog')).toHaveCount(0)
+  // Crear opens its modal here too, not another screen.
+  await page.getByRole('button', { name: 'Crear' }).click()
+  await expect(
+    page.getByRole('dialog', { name: 'Crear estrategia' }),
+  ).toBeVisible()
+  await page.keyboard.press('Escape')
 
   // Nothing else is on the screen.
   await expect(page.getByText('Nueva estrategia')).toHaveCount(0)

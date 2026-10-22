@@ -869,6 +869,8 @@ class ArtifactTests(Base):
                          (result["overall"]["n"], result["overall"]["mean_bp"], result["percentile"], out["verdict"]))
         self.assertEqual(summary["folds"], CFG["practice_folds"])
         self.assertEqual(summary["min_trades"], CFG["rules"]["min_trades"])
+        self.assertEqual([r["id"] for r in summary["rules"]], [r["id"] for r in result["rules"]])
+        self.assertEqual([r["ok"] for r in summary["rules"]], [r["ok"] for r in result["rules"]])
         self.assertEqual(manifest["range_end_ms_exclusive"], HOLDOUT)
         self.assertEqual([t["trade_id"] for t in trades], ["{}-{}".format(out["run_id"], i + 1) for i in range(len(trades))])
         self.assertTrue(all(t["execution_type"] == "simulated" and t["signal_time_ms"] is None for t in trades))

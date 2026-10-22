@@ -1199,7 +1199,10 @@ def run_summary(result, cfg):
             "min_positive_fold_share": cfg["rules"]["min_positive_fold_share"],
             "percentile": result["percentile"], "min_percentile": cfg["rules"]["min_percentile_vs_random"],
             "funding_share": result["funding_share"], "funding_status": result["funding_status"],
-            "open_at_end": None, "contaminated": bool(result.get("contaminated"))}
+            "open_at_end": None, "contaminated": bool(result.get("contaminated")),
+            # Every rule with what it asked and what it got: the screen says which failed and why (older runs lack it).
+            "rules": [{"id": r["id"], "label": r["label"], "value": r["value"], "threshold": r["threshold"],
+                       "ok": r["ok"]} for r in result["rules"]]}
 
 
 ARTIFACT_SCHEMA = "balancita.gate-run-artifact.v1"

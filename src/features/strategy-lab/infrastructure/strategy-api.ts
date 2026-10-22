@@ -358,7 +358,9 @@ export interface DeletePreview {
   /** Paper trades that are kept (ADR 0001: append-only ledgers). */
   ledger_kept: boolean
   warnings: string[]
-  /** True while something else (Qwen) still needs it. */
+  /** Running in the paper (active or in observation): it has to be switched off first. */
+  operating?: boolean
+  /** True while something else (Qwen, or running in the paper) still needs it. */
   blocked: boolean
 }
 
@@ -401,6 +403,8 @@ export interface StrategyApi {
     state: StrategyState,
     paperNow?: boolean,
   ): Promise<StrategyEntry & { gates: Gate[] }>
+  /** Changes only the title: the versions, the tests and the exam stay as they are. */
+  rename(id: string, title: string): Promise<StrategyEntry>
   /** What deleting the strategy would remove, for the confirmation dialog. */
   deletePreview(id: string): Promise<DeletePreview>
   /** Deletes everything about the strategy. `confirm` is its name (or id) typed back. */
@@ -482,6 +486,8 @@ export function httpStrategyApi(
         state,
         ...(paperNow ? { paper_now: true } : {}),
       }),
+    rename: (id, title) =>
+      request(`/strategies/${encodeURIComponent(id)}/rename`, { title }),
     deletePreview: (id) =>
       request(`/strategies/${encodeURIComponent(id)}/delete-preview`),
     deleteStrategy: async (id, confirm) => {

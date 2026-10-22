@@ -78,3 +78,69 @@
 .strategies__dot[data-state='inactive'] {
   background: var(--mc-short);
 }
+
+.strategies__list li {
+  position: relative;
+  display: flex;
+  align-items: stretch;
+  gap: 2px;
+}
+
+.strategies__pick {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.strategies__list .strategies__more {
+  flex: none;
+  width: 28px;
+  justify-content: center;
+  padding: 0;
+  font-size: 16px;
+  line-height: 1;
+}
+
+.strategies__list .strategies__menu {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  z-index: 20;
+  display: grid;
+  gap: 0;
+  min-width: 160px;
+  margin: 2px 0 0;
+  padding: 4px;
+  border: 1px solid var(--mc-border);
+  border-radius: var(--mc-radius);
+  background: var(--mc-surface-1);
+  box-shadow: 0 6px 18px rgb(0 0 0 / 35%);
+  list-style: none;
+}
+
+.strategies__menu li {
+  display: block;
+}
+
+.strategies__list .strategies__menu button {
+  color: var(--mc-text);
+}
+
+.strategies__list .strategies__menu button:hover {
+  background: var(--mc-surface-2, var(--mc-canvas));
+}
+
+.strategies__list .strategies__menu button[data-danger='true'] {
+  color: var(--mc-short);
+}
+
+.strategies__notice {
+  margin: 0 0 12px;
+  padding: 8px 12px;
+  border: 1px solid var(--mc-border);
+  border-radius: var(--mc-radius);
+  font-size: 13px;
+}
+
+.strategies__notice[data-tone='warn'] {
+  border-color: var(--mc-warn);
+}

@@ -156,6 +156,25 @@ class RegistryTests(unittest.TestCase):
         again = self.registry.save(spec, "new", new_name="Z35 otra vez")
         self.assertNotEqual(again["id"], saved["id"])
 
+    def test_a_rename_changes_only_the_title_and_goes_with_the_delete(self):
+        spec = copy.deepcopy(SPECS["c29-momentum-perp-v1"])
+        spec["params"]["z_min"] = "3.6"
+        saved = self.registry.save(spec, "new", new_name="Z36")
+        renamed = self.registry.rename(saved["id"], "  Mi   título nuevo ")
+        self.assertEqual((renamed["name"], renamed["version"], renamed["spec_hash"]),
+                         ("Mi título nuevo", 1, saved["spec_hash"]))
+        detail = self.registry.detail(saved["id"])
+        self.assertEqual((detail["name"], len(detail["versions"])), ("Mi título nuevo", 1))
+        self.assertEqual(detail["spec"]["name"], "Z36")  # the frozen version is untouched
+        with self.assertRaises(RegistryError) as raised:
+            self.registry.rename(saved["id"], "   ")
+        self.assertEqual(raised.exception.code, "invalid_title")
+        with self.assertRaises(RegistryError) as raised:
+            self.registry.rename("no-existe", "X")
+        self.assertEqual(raised.exception.status, 404)
+        self.registry.hard_delete(saved["id"])
+        self.assertEqual(self.registry.db.execute("SELECT COUNT(*) FROM strategy_titles").fetchone()[0], 0)
+
     def test_forward_candidates_follow_the_registry_states(self):
         spec = copy.deepcopy(SPECS["c29-momentum-perp-v1"])
         spec["params"]["z_min"] = "3.2"

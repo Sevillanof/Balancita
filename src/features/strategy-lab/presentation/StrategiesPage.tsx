@@ -2,9 +2,16 @@ import { useEffect, useState } from 'react'
 import { DataState } from '../../../shared/mission-control/index.ts'
 import type {
   InventoryStrategy,
+  PurgeStatus,
   StrategyApi,
 } from '../infrastructure/strategy-api.ts'
 import { operationalLabel } from '../domain/strategy-labels.ts'
+import DeleteStrategyDialog from './DeleteStrategyDialog.tsx'
+import ActivationDialog from './ActivationDialog.tsx'
+import PurgeNotice from './PurgeNotice.tsx'
+import StrategyDetailsModal from './StrategyDetailsModal.tsx'
+import { describeFailure } from './describe-failure.ts'
+import StrategyEditorModal from './StrategyEditorModal.tsx'
 import StrategyRunView from './StrategyRunView.tsx'
 import './StrategiesPage.css'
 
@@ -15,14 +22,25 @@ type Props = {
   /** Selected strategy, kept by the parent. */
   selectedId?: string | null
   onSelect?: (id: string) => void
-  /** «Modificar» / «Crear»: both lead to the laboratory's editor. */
-  onModify?: (id: string) => void
-  onCreate?: () => void
 }
 
+type Modal =
+  | { kind: 'create' }
+  | { kind: 'modify'; id: string }
+  | { kind: 'details'; id: string }
+  | { kind: 'delete'; id: string }
+  | { kind: 'activate'; id: string; passed: boolean | null }
+
+/** Qwen and Kronos act in the paper from code: they are tested but never edited or deleted here. */
+const editable = (row: InventoryStrategy) => row.kind === 'rules'
+const operating = (row: InventoryStrategy) =>
+  row.operational.state === 'active' || row.operational.state === 'shadow'
+
 /**
- * Estrategias: a plain list of strategy names on the left and, on the right,
- * the last test of the chosen one (stage, four figures, real candles).
+ * Estrategias: a plain list of strategy names on the left (each with a menu:
+ * detalles, modificar, borrar) and, on the right, the last test of the chosen
+ * one (stage, four figures, real candles). Create / modify / details / delete
+ * open as modals on this same screen.
  */
 export default function StrategiesPage({
   api,
@@ -30,12 +48,19 @@ export default function StrategiesPage({
   reload,
   selectedId: keptId = null,
   onSelect,
-  onModify,
-  onCreate,
 }: Props) {
   const [rows, setRows] = useState<InventoryStrategy[] | null>(null)
   const [failure, setFailure] = useState<string | null>(null)
   const [localId, setLocalId] = useState<string | null>(null)
+  const [refresh, setRefresh] = useState(0)
+  const [menuId, setMenuId] = useState<string | null>(null)
+  const [modal, setModal] = useState<Modal | null>(null)
+  const [notice, setNotice] = useState<string | null>(null)
+  const [problem, setProblem] = useState<string | null>(null)
+  const [purge, setPurge] = useState<{
+    name: string
+    status: PurgeStatus
+  } | null>(null)
 
   useEffect(() => {
     if (!api?.inventory) return
@@ -54,7 +79,36 @@ export default function StrategiesPage({
     return () => {
       active = false
     }
-  }, [api, reload])
+  }, [api, reload, refresh])
+
+  useEffect(() => {
+    if (menuId === null) return
+    const close = () => setMenuId(null)
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') close()
+    }
+    window.addEventListener('click', close)
+    window.addEventListener('keydown', onKey)
+    return () => {
+      window.removeEventListener('click', close)
+      window.removeEventListener('keydown', onKey)
+    }
+  }, [menuId])
+
+  useEffect(() => {
+    if (!api || !purge || purge.status.state === 'done') return
+    const id = purge.status.purge_id
+    if (!id) return
+    const timer = setInterval(() => {
+      void api
+        .purgeStatus(id)
+        .then((status) =>
+          setPurge((current) => (current ? { ...current, status } : current)),
+        )
+        .catch(() => undefined)
+    }, 2000)
+    return () => clearInterval(timer)
+  }, [api, purge])
 
   if (connectError)
     return (
@@ -98,6 +152,46 @@ export default function StrategiesPage({
     setLocalId(id)
     onSelect?.(id)
   }
+  const rowOf = (id: string) => rows.find((row) => row.id === id) ?? null
+  const done = (id: string, text: string) => {
+    setModal(null)
+    setProblem(null)
+    setNotice(text)
+    pick(id)
+    setRefresh((value) => value + 1)
+  }
+
+  const startActivation = async (row: InventoryStrategy) => {
+    setModal({ kind: 'activate', id: row.id, passed: null })
+    const passed = api.gatePassed
+      ? await api.gatePassed(row.id, row.version).catch(() => false)
+      : false
+    setModal({ kind: 'activate', id: row.id, passed })
+  }
+  const switchOff = async (row: InventoryStrategy) => {
+    try {
+      const detail = await api.detail(row.id)
+      await api.setState(
+        row.id,
+        detail.active_version ?? detail.version,
+        'retired',
+      )
+      done(row.id, `«${row.name}» quedó apagada.`)
+    } catch (error) {
+      setProblem(describeFailure(error))
+    }
+  }
+  const activate = async (row: InventoryStrategy) => {
+    try {
+      await api.setState(row.id, row.version, 'active', true)
+      done(row.id, `«${row.name}» quedó activa en el paper.`)
+    } catch (error) {
+      setModal(null)
+      setProblem(describeFailure(error))
+    }
+  }
+
+  const open = modal && modal.kind !== 'create' ? rowOf(modal.id) : null
   return (
     <section className="strategies" aria-label="Estrategias">
       <nav className="strategies__list" aria-label="Lista de estrategias">
@@ -107,6 +201,7 @@ export default function StrategiesPage({
             <li key={row.id} data-id={row.id}>
               <button
                 type="button"
+                className="strategies__pick"
                 aria-current={row.id === selected?.id ? 'true' : undefined}
                 onClick={() => pick(row.id)}
               >
@@ -118,26 +213,150 @@ export default function StrategiesPage({
                   aria-hidden="true"
                 />
               </button>
+              <button
+                type="button"
+                className="strategies__more"
+                aria-label={`Opciones de ${row.name}`}
+                aria-haspopup="menu"
+                aria-expanded={menuId === row.id}
+                onClick={(event) => {
+                  event.stopPropagation()
+                  setMenuId(menuId === row.id ? null : row.id)
+                }}
+              >
+                ⋮
+              </button>
+              {menuId === row.id && (
+                <ul className="strategies__menu" role="menu">
+                  <li role="none">
+                    <button
+                      type="button"
+                      role="menuitem"
+                      onClick={() => setModal({ kind: 'details', id: row.id })}
+                    >
+                      Detalles
+                    </button>
+                  </li>
+                  {editable(row) && (
+                    <>
+                      <li role="none">
+                        <button
+                          type="button"
+                          role="menuitem"
+                          onClick={() =>
+                            setModal({ kind: 'modify', id: row.id })
+                          }
+                        >
+                          Modificar
+                        </button>
+                      </li>
+                      <li role="none">
+                        <button
+                          type="button"
+                          role="menuitem"
+                          onClick={() =>
+                            operating(row)
+                              ? void switchOff(row)
+                              : void startActivation(row)
+                          }
+                        >
+                          {operating(row) ? 'Apagar' : 'Activar en paper'}
+                        </button>
+                      </li>
+                      <li role="none">
+                        <button
+                          type="button"
+                          role="menuitem"
+                          data-danger="true"
+                          onClick={() =>
+                            setModal({ kind: 'delete', id: row.id })
+                          }
+                        >
+                          Borrar
+                        </button>
+                      </li>
+                    </>
+                  )}
+                </ul>
+              )}
             </li>
           ))}
         </ul>
       </nav>
       <div className="strategies__detail" data-testid="strategy-pane">
+        {notice && (
+          <p role="status" className="strategies__notice">
+            {notice}
+          </p>
+        )}
+        {problem && (
+          <p role="alert" className="strategies__notice" data-tone="warn">
+            {problem}
+          </p>
+        )}
+        {purge && <PurgeNotice name={purge.name} status={purge.status} />}
         {selected && (
           <StrategyRunView
-            key={selected.id}
+            key={`${selected.id}:${selected.version}`}
             strategyId={selected.id}
             strategyName={selected.name}
             version={selected.version}
             onModify={
-              selected.kind === 'rules' && onModify
-                ? () => onModify(selected.id)
+              editable(selected)
+                ? () => setModal({ kind: 'modify', id: selected.id })
                 : undefined
             }
-            onCreate={onCreate}
+            onCreate={() => setModal({ kind: 'create' })}
           />
         )}
       </div>
+      {modal?.kind === 'create' && (
+        <StrategyEditorModal
+          api={api}
+          strategyId={null}
+          onClose={() => setModal(null)}
+          onSaved={done}
+        />
+      )}
+      {modal?.kind === 'modify' && (
+        <StrategyEditorModal
+          api={api}
+          strategyId={modal.id}
+          onClose={() => setModal(null)}
+          onSaved={done}
+        />
+      )}
+      {modal?.kind === 'details' && open && (
+        <StrategyDetailsModal
+          api={api}
+          row={open}
+          onClose={() => setModal(null)}
+        />
+      )}
+      {modal?.kind === 'delete' && open && (
+        <DeleteStrategyDialog
+          api={api}
+          id={open.id}
+          name={open.name}
+          onClose={() => setModal(null)}
+          onDeleted={(status) => {
+            setModal(null)
+            setPurge({ name: open.name, status })
+            setNotice(null)
+            setLocalId(null)
+            setRefresh((value) => value + 1)
+          }}
+        />
+      )}
+      {modal?.kind === 'activate' && open && (
+        <ActivationDialog
+          name={open.name}
+          passed={modal.passed}
+          busy={false}
+          onConfirm={() => void activate(open)}
+          onClose={() => setModal(null)}
+        />
+      )}
     </section>
   )
 }

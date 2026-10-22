@@ -1,0 +1,181 @@
+.smodal__backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  background: rgb(0 0 0 / 55%);
+}
+
+.smodal {
+  display: grid;
+  gap: 12px;
+  width: min(560px, 100%);
+  max-height: 90vh;
+  overflow: auto;
+  padding: 18px;
+  border: 1px solid var(--mc-border);
+  border-radius: var(--mc-radius-lg);
+  background: var(--mc-surface-1);
+  color: var(--mc-text);
+}
+
+.smodal--wide {
+  width: min(760px, 100%);
+}
+
+.smodal h2,
+.smodal h3,
+.smodal p {
+  margin: 0;
+}
+
+.smodal h2 {
+  font-size: 18px;
+}
+
+.smodal h3 {
+  color: var(--mc-text-2);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.smodal__hint {
+  color: var(--mc-text-2);
+  font-size: 13px;
+}
+
+.smodal__field {
+  display: grid;
+  gap: 4px;
+  font-size: 13px;
+}
+
+.smodal__field input,
+.smodal__field textarea {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--mc-border);
+  border-radius: 6px;
+  background: var(--mc-canvas);
+  color: var(--mc-text);
+  font: inherit;
+}
+
+.smodal__field textarea {
+  min-height: 260px;
+  resize: vertical;
+  font:
+    12px/1.5 'IBM Plex Mono',
+    ui-monospace,
+    monospace;
+}
+
+.smodal__notice {
+  padding: 8px 12px;
+  border: 1px solid var(--mc-border);
+  border-radius: 6px;
+  font-size: 13px;
+}
+
+.smodal__notice[data-tone='warn'] {
+  border-color: var(--mc-warn);
+}
+
+.smodal__actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.smodal__button {
+  min-height: 36px;
+  padding: 0 14px;
+  border: 1px solid var(--mc-border);
+  border-radius: 6px;
+  background: var(--mc-surface-2, var(--mc-surface-1));
+  color: var(--mc-text);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.smodal__button[data-primary='true'] {
+  border-color: var(--mc-long);
+  background: var(--mc-long);
+  color: oklch(0.2 0.04 170);
+}
+
+.smodal__button[data-danger='true'] {
+  border-color: var(--mc-short);
+  background: var(--mc-short);
+  color: #fff;
+}
+
+.smodal__button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.smodal dl {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 4px 14px;
+  margin: 0;
+  font-size: 13px;
+}
+
+.smodal dt {
+  color: var(--mc-text-2);
+}
+
+.smodal dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.smodal ul {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding-left: 18px;
+  font-size: 13px;
+}
+
+.smodal__run {
+  display: grid;
+  gap: 4px;
+  padding: 8px 10px;
+  border: 1px solid var(--mc-border);
+  border-radius: 6px;
+  font-size: 13px;
+}
+
+.smodal__verdict[data-verdict='PASA'] {
+  color: var(--mc-long);
+}
+
+.smodal__verdict[data-verdict='NO PASA'] {
+  color: var(--mc-short);
+}
+
+.smodal__verdict[data-verdict='INCONCLUSO'] {
+  color: var(--mc-warn);
+}
+
+.smodal pre {
+  max-height: 260px;
+  margin: 0;
+  padding: 10px;
+  overflow: auto;
+  border: 1px solid var(--mc-border);
+  border-radius: 6px;
+  background: var(--mc-canvas);
+  font:
+    12px/1.5 'IBM Plex Mono',
+    ui-monospace,
+    monospace;
+}
