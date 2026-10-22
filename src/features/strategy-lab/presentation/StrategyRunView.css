@@ -403,3 +403,54 @@
   display: flex;
   gap: 8px;
 }
+
+.runview__progress {
+  display: grid;
+  gap: 6px;
+}
+
+.runview__progress-steps {
+  display: flex;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.runview__progress-step {
+  flex: 1 1 0;
+  height: 8px;
+  border-radius: 4px;
+  background: var(--mc-surface-2);
+}
+
+.runview__progress-step[data-state='done'] {
+  background: var(--mc-info);
+}
+
+.runview__progress-step[data-state='current'] {
+  background: var(--mc-info);
+  opacity: 0.45;
+  animation: runview-progress-pulse 1.4s ease-in-out infinite alternate;
+}
+
+.runview__progress-text {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 0;
+  color: var(--mc-text-3);
+  font-size: 13px;
+}
+
+@keyframes runview-progress-pulse {
+  to {
+    opacity: 0.9;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .runview__progress-step[data-state='current'] {
+    animation: none;
+  }
+}

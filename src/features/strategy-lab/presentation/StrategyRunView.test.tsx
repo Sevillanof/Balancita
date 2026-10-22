@@ -204,8 +204,12 @@ describe('StrategyRunView actions', () => {
       params: { from: '2025-01-01T00:00:00Z', to: '2025-04-01T00:00:00Z' },
     })
     const gate = gateWith(overview([tried]))
+    let release: () => void = () => undefined
+    const held = new Promise<{ run_id: number }>((resolve) => {
+      release = () => resolve({ run_id: 6 })
+    })
     vi.mocked(gate.start)
-      .mockResolvedValueOnce({ run_id: 6 })
+      .mockReturnValueOnce(held)
       .mockResolvedValueOnce({ run_id: 7 })
     // Each started test is finished by the time the screen looks again.
     vi.mocked(gate.overview).mockImplementation(async () =>
@@ -230,6 +234,10 @@ describe('StrategyRunView actions', () => {
       expect(panel).toHaveTextContent('abr–jun 2025 → jul–sep 2025'),
     )
     await user.click(within(panel).getByRole('button', { name: 'Empezar' }))
+    const bar = await screen.findByRole('progressbar')
+    expect(bar.querySelectorAll('li')).toHaveLength(2)
+    expect(bar).toHaveAttribute('aria-valuemax', '2')
+    release()
     await waitFor(() => expect(gate.start).toHaveBeenCalledTimes(2))
     expect(gate.start).toHaveBeenNthCalledWith(1, 'x2', {
       from: '2025-04-01',
