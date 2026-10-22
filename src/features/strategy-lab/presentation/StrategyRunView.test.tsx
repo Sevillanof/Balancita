@@ -236,7 +236,7 @@ describe('StrategyRunView actions', () => {
     await user.click(within(panel).getByRole('button', { name: 'Empezar' }))
     const bar = await screen.findByRole('progressbar')
     expect(bar.querySelectorAll('li')).toHaveLength(2)
-    expect(bar).toHaveAttribute('aria-valuemax', '2')
+    expect(bar).toHaveAttribute('aria-valuenow', '0')
     release()
     await waitFor(() => expect(gate.start).toHaveBeenCalledTimes(2))
     expect(gate.start).toHaveBeenNthCalledWith(1, 'x2', {
@@ -267,6 +267,22 @@ describe('StrategyRunView actions', () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+
+  it('the progress bar follows the running test', async () => {
+    const gate = gateWith({
+      ...overview([
+        run(24),
+        run(25, { status: 'running', progress: 40, phase: 'simulando' }),
+      ]),
+      running: { id: 25, strategy_id: 'x2' },
+    } as GateOverview)
+    renderView(gate, visualWith())
+    const bar = await screen.findByRole('progressbar')
+    expect(bar).toHaveAttribute('aria-valuenow', '40')
+    const fill = bar.querySelector<HTMLElement>('.runview__progress-fill')
+    expect(fill?.style.width).toBe('40%')
+    expect(bar).toHaveTextContent('simulando')
   })
 
   it('Testear is disabled while a test runs', async () => {

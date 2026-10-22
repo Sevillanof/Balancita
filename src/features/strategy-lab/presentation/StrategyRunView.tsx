@@ -121,7 +121,7 @@ export default function StrategyRunView({
   const busy = overview?.running != null
   useEffect(() => {
     if (!busy) return
-    const timer = setInterval(() => setReload((value) => value + 1), 10_000)
+    const timer = setInterval(() => setReload((value) => value + 1), 3_000)
     return () => clearInterval(timer)
   }, [busy])
 
@@ -293,6 +293,18 @@ export default function StrategyRunView({
     ? finished.find((run) => run.id === data.summary.run_id)
     : null
   const running = overview?.running ?? null
+  const activeRun = running
+    ? (overview?.runs.find((run) => run.id === running.id) ?? null)
+    : null
+  const totalTests = series?.total ?? 1
+  const doneTests = series?.done ?? 0
+  const livePercent = Math.min(Math.max(activeRun?.progress ?? 0, 0), 100)
+  const overallPercent = Math.round(
+    ((doneTests + livePercent / 100) / totalTests) * 100,
+  )
+  const progressLabel = series
+    ? `Prueba ${series.done + 1} de ${series.total} · ${series.label}`
+    : 'Prueba en curso'
   const untried = untriedStages(overview?.runs ?? [])
   const count = Math.min(Math.max(howMany, 1), Math.max(untried.length, 1))
   const plan = untried.slice(0, count)
@@ -436,34 +448,44 @@ export default function StrategyRunView({
           </li>
         ))}
       </ol>
-      {series && (
+      {(series || busy) && (
         <div
           className="runview__progress"
           role="progressbar"
-          aria-label="Progreso de las pruebas seguidas"
+          aria-label="Progreso de las pruebas"
           aria-valuemin={0}
-          aria-valuemax={series.total}
-          aria-valuenow={series.done}
-          aria-valuetext={`Prueba ${series.done + 1} de ${series.total}: ${series.label}`}
+          aria-valuemax={100}
+          aria-valuenow={overallPercent}
+          aria-valuetext={`${progressLabel} · ${overallPercent} %`}
         >
           <ol className="runview__progress-steps">
-            {Array.from({ length: series.total }, (_, index) => (
+            {Array.from({ length: totalTests }, (_, index) => (
               <li
                 key={index}
                 className="runview__progress-step"
                 data-state={
-                  index < series.done
+                  index < doneTests
                     ? 'done'
-                    : index === series.done
+                    : index === doneTests
                       ? 'current'
                       : 'todo'
                 }
-              />
+              >
+                <span
+                  className="runview__progress-fill"
+                  style={{
+                    width: `${index < doneTests ? 100 : index === doneTests ? livePercent : 0}%`,
+                  }}
+                />
+              </li>
             ))}
           </ol>
           <p className="runview__progress-text">
-            Prueba {series.done + 1} de {series.total} · {series.label}
-            {series.total > 1 && (
+            <span>
+              {progressLabel} · {overallPercent} %
+              {activeRun?.phase ? ` · ${activeRun.phase}` : ''}
+            </span>
+            {series && series.total > 1 && (
               <button
                 type="button"
                 onClick={() => {
