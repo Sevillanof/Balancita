@@ -35,6 +35,7 @@ const visual = (): RunVisualApi => ({
   summary: vi.fn(),
   candles: vi.fn(),
   trades: vi.fn(),
+  decisions: vi.fn(),
 })
 const registryWith = (detail: Partial<StrategyDetail> = {}) => ({
   detail: vi.fn(
@@ -778,6 +779,7 @@ describe('la variante creada con VectorBT', () => {
           }),
           candles: vi.fn(),
           trades: vi.fn(),
+          decisions: vi.fn(),
         }}
         vectorbt={api}
         registry={asVariant()}

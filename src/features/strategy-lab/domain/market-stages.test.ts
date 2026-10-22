@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { GateRun } from '../infrastructure/gate-api.ts'
-import { MARKET_STAGES, nextStage } from './market-stages.ts'
+import { MARKET_STAGES, nextStage, stageTabs } from './market-stages.ts'
 
 const run = (over: Partial<GateRun>): GateRun => ({
   id: 1,
@@ -50,5 +50,27 @@ describe('nextStage', () => {
   })
   it('returns null when every stretch was tried', () => {
     expect(nextStage(MARKET_STAGES.map((_, i) => on(i)))).toBeNull()
+  })
+})
+
+describe('stageTabs', () => {
+  it('gives one tab per stage in order, each with its newest finished practice run or none', () => {
+    const tabs = stageTabs([
+      on(0, { id: 3 }),
+      on(0, { id: 8 }),
+      on(1, { id: 5, status: 'failed' }),
+      on(2, { id: 6, same_version: false }),
+      on(3, { id: 7, kind: 'exam' }),
+      on(4, { id: 9 }),
+      run({ id: 10, params: { from: '2025-02-01', to: '2025-02-10' } }),
+    ])
+    expect(tabs.map((tab) => tab.stage)).toEqual([...MARKET_STAGES])
+    expect(tabs.map((tab) => tab.run?.id ?? null)).toEqual([
+      8,
+      null,
+      null,
+      null,
+      9,
+    ])
   })
 })

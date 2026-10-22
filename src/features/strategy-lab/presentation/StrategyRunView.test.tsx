@@ -8,6 +8,7 @@ import {
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 import StrategyRunView from './StrategyRunView.tsx'
+import { MARKET_STAGES } from '../domain/market-stages.ts'
 import type {
   GateApi,
   GateOverview,
@@ -28,7 +29,7 @@ vi.mock('../../trading-view/presentation/ApprovedTerminalChart.tsx', () => ({
     onSelect,
   }: {
     candles: unknown[]
-    markers: { id: string }[]
+    markers: { id: string; detail?: string; label: string }[]
     selectedId: string
     onSelect: (time: number, id?: string) => void
   }) => (
@@ -39,6 +40,24 @@ vi.mock('../../trading-view/presentation/ApprovedTerminalChart.tsx', () => ({
           marca-1
         </button>
       )}
+      {markers
+        .filter((marker) => marker.id.startsWith('d:'))
+        .map((marker) => (
+          <button
+            key={marker.id}
+            type="button"
+            data-testid="discard"
+            title={marker.detail}
+            onClick={() => onSelect(0, marker.id)}
+          >
+            {marker.label}
+          </button>
+        ))}
+      <ul data-testid="marker-details">
+        {markers.map((marker) => (
+          <li key={marker.id}>{marker.detail}</li>
+        ))}
+      </ul>
     </div>
   ),
 }))
@@ -161,9 +180,23 @@ function visualWith(overrides: Partial<RunVisualApi> = {}): RunVisualApi {
       trades: [trade(1, 'LONG', 12), trade(2, 'SHORT', -4.2)],
       next_cursor: null,
     })),
+    decisions: vi.fn(async (id: number) => ({
+      run_id: id,
+      product: 'PF_XBTUSD',
+      captured: false as const,
+      reason: 'Esta prueba se guardó sin el detalle de decisiones.',
+    })),
     ...overrides,
   }
 }
+/** Stage run: «ene–mar 2025», «abr–jun 2025»… by its index in MARKET_STAGES. */
+const stageRun = (id: number, stage: number) =>
+  run(id, {
+    params: {
+      from: MARKET_STAGES[stage]!.from,
+      to: MARKET_STAGES[stage]!.to,
+    },
+  })
 const renderView = (
   gate: GateApi,
   visual: RunVisualApi,
@@ -310,7 +343,9 @@ describe('StrategyRunView', () => {
     expect(within(kpis).getByText('2 / 5')).toBeInTheDocument()
     expect(within(kpis).getByText('Mínimo: 3 de 5')).toBeInTheDocument()
     expect(within(kpis).getByText('87 %')).toBeInTheDocument()
-    expect(screen.getByText(/Última prueba · Práctica #24/)).toBeInTheDocument()
+    expect(
+      screen.getByText(/Prueba mostrada · Práctica #24/),
+    ).toBeInTheDocument()
     expect(screen.getByText('En optimización')).toBeInTheDocument()
     expect(screen.getByText('Optimizar').closest('li')).toHaveAttribute(
       'aria-current',
@@ -346,7 +381,9 @@ describe('StrategyRunView', () => {
     )
     await screen.findByTestId('chart')
     expect(visual.summary).toHaveBeenCalledTimes(2)
-    expect(screen.getByText(/Última prueba · Práctica #23/)).toBeInTheDocument()
+    expect(
+      screen.getByText(/Prueba mostrada · Práctica #23/),
+    ).toBeInTheDocument()
     unmount()
     renderView(
       gateWith(overview([run(24)])),
@@ -453,5 +490,297 @@ describe('StrategyRunView', () => {
       visualWith(),
     )
     expect(await screen.findByText('Pasó el examen')).toBeInTheDocument()
+  })
+})
+
+describe('StrategyRunView stage tabs', () => {
+  const threeOfFive = () =>
+    overview([stageRun(10, 0), stageRun(11, 1), stageRun(12, 3)])
+
+  it('shows the 5 stages in order; the 3 tried are enabled and the 2 others are off, «sin probar»', async () => {
+    renderView(gateWith(threeOfFive()), visualWith())
+    await screen.findByTestId('chart')
+    const tabs = within(
+      screen.getByRole('tablist', { name: 'Tramos probados' }),
+    ).getAllByRole('tab')
+    expect(tabs.map((tab) => tab.textContent)).toEqual([
+      'ene–mar 2025',
+      'abr–jun 2025',
+      'jul–sep 2025 · sin probar',
+      'oct–dic 2025',
+      'ene–abr 2026 · sin probar',
+    ])
+    expect(tabs.map((tab) => (tab as HTMLButtonElement).disabled)).toEqual([
+      false,
+      false,
+      true,
+      false,
+      true,
+    ])
+    expect(screen.getByTestId('stage-count')).toHaveTextContent(
+      '3 de 5 tramos probados',
+    )
+  })
+
+  it('opens the newest tried stage by default and loads the run of a tab when it is chosen', async () => {
+    const user = userEvent.setup()
+    const visual = visualWith()
+    renderView(gateWith(threeOfFive()), visual)
+    await screen.findByTestId('chart')
+    expect(visual.summary).toHaveBeenCalledTimes(1)
+    expect(visual.summary).toHaveBeenCalledWith(12)
+    expect(screen.getByRole('tab', { name: 'oct–dic 2025' })).toHaveAttribute(
+      'aria-selected',
+      'true',
+    )
+    await user.click(screen.getByRole('tab', { name: 'abr–jun 2025' }))
+    await waitFor(() => expect(visual.summary).toHaveBeenLastCalledWith(11))
+    await screen.findByText(/Prueba mostrada · Práctica #11/)
+    expect(screen.getByRole('tab', { name: 'abr–jun 2025' })).toHaveAttribute(
+      'aria-selected',
+      'true',
+    )
+    expect(vi.mocked(visual.trades)).toHaveBeenLastCalledWith(
+      11,
+      'PF_XBTUSD',
+      expect.anything(),
+    )
+    expect(vi.mocked(visual.candles).mock.calls.at(-1)?.[0]).toBe(11)
+  })
+
+  it('does not choose an off tab', async () => {
+    const user = userEvent.setup()
+    const visual = visualWith()
+    renderView(gateWith(threeOfFive()), visual)
+    await screen.findByTestId('chart')
+    await user.click(screen.getByRole('tab', { name: /jul–sep 2025/ }))
+    expect(visual.summary).toHaveBeenCalledTimes(1)
+  })
+
+  it('a run from another content version or an exam does not make a tab', async () => {
+    renderView(
+      gateWith(
+        overview([
+          stageRun(10, 0),
+          { ...stageRun(11, 1), same_version: false },
+          { ...stageRun(12, 2), kind: 'exam' },
+        ]),
+      ),
+      visualWith(),
+    )
+    await screen.findByTestId('chart')
+    expect(screen.getByTestId('stage-count')).toHaveTextContent(
+      '1 de 5 tramos probados',
+    )
+  })
+
+  it('keeps the stage picked by hand when a newer one finishes, and follows the newest otherwise', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime })
+      const before = [stageRun(10, 0), stageRun(11, 1)]
+      const after = [...before, stageRun(12, 2)]
+      let calls = 0
+      const gate = gateWith(overview(before))
+      vi.mocked(gate.overview).mockImplementation(async () => {
+        calls += 1
+        return {
+          ...overview(calls < 4 ? before : after),
+          running: { id: 13, strategy_id: 'x2' },
+        } as GateOverview
+      })
+      const visual = visualWith()
+      renderView(gate, visual)
+      await screen.findByTestId('chart')
+      await user.click(screen.getByRole('tab', { name: 'ene–mar 2025' }))
+      await waitFor(() => expect(visual.summary).toHaveBeenLastCalledWith(10))
+      await vi.advanceTimersByTimeAsync(31_000)
+      await waitFor(() =>
+        expect(
+          screen.getByRole('tab', { name: 'jul–sep 2025' }),
+        ).not.toBeDisabled(),
+      )
+      expect(visual.summary).toHaveBeenLastCalledWith(10)
+      expect(screen.getByRole('tab', { name: 'ene–mar 2025' })).toHaveAttribute(
+        'aria-selected',
+        'true',
+      )
+      expect(screen.getByTestId('stage-count')).toHaveTextContent(
+        '3 de 5 tramos probados',
+      )
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('follows the newest finished stage while nothing was picked', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      const before = [stageRun(10, 0)]
+      const after = [...before, stageRun(11, 1)]
+      let calls = 0
+      const gate = gateWith(overview(before))
+      vi.mocked(gate.overview).mockImplementation(async () => {
+        calls += 1
+        return {
+          ...overview(calls < 3 ? before : after),
+          running: { id: 12, strategy_id: 'x2' },
+        } as GateOverview
+      })
+      const visual = visualWith()
+      renderView(gate, visual)
+      await screen.findByTestId('chart')
+      await vi.advanceTimersByTimeAsync(31_000)
+      await waitFor(() => expect(visual.summary).toHaveBeenLastCalledWith(11))
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('with no stage tried it shows the finished run as one tab with its range', async () => {
+    renderView(
+      gateWith(
+        overview([
+          run(24, { params: { from: '2025-02-01', to: '2025-02-20' } }),
+        ]),
+      ),
+      visualWith(),
+    )
+    await screen.findByTestId('chart')
+    expect(
+      screen.getByRole('tab', { name: 'Prueba #24 · 01/02/2025–20/02/2025' }),
+    ).toHaveAttribute('aria-selected', 'true')
+    expect(screen.getByTestId('stage-count')).toHaveTextContent(
+      '0 de 5 tramos probados',
+    )
+  })
+
+  it('says a picked stage saved no trades instead of showing another one', async () => {
+    const user = userEvent.setup()
+    const visual = visualWith({
+      summary: vi.fn(async (id: number) => {
+        if (id === 10)
+          throw new RunVisualError('artifact_not_ready', 'sin operaciones')
+        return summaryOf(id)
+      }),
+    })
+    renderView(gateWith(threeOfFive()), visual)
+    await screen.findByTestId('chart')
+    await user.click(screen.getByRole('tab', { name: 'ene–mar 2025' }))
+    expect(await screen.findByTestId('run-empty')).toHaveTextContent(
+      'Esa prueba no guardó sus operaciones',
+    )
+  })
+})
+
+describe('StrategyRunView decisions', () => {
+  const traced = (extra: Partial<RunVisualSummary> = {}) =>
+    visualWith({
+      summary: vi.fn(async (id: number) => ({
+        ...summaryOf(id),
+        decision_evidence: 'captured',
+        ...extra,
+      })),
+      decisions: vi.fn(async (id: number) => ({
+        run_id: id,
+        product: 'PF_XBTUSD',
+        captured: true as const,
+        signals: [
+          {
+            bucket_ms: T0 + 1 * MIN,
+            side: 'LONG' as const,
+            outcome: 'accepted',
+            reason_code: 'x',
+          },
+          {
+            bucket_ms: T0 + 2 * MIN,
+            side: 'SHORT' as const,
+            outcome: 'position_open',
+            reason_code: 'x',
+          },
+          {
+            bucket_ms: T0 + 3 * MIN,
+            side: 'LONG' as const,
+            outcome: 'rejected_target_does_not_clear_cost',
+            reason_code: 'x',
+          },
+          {
+            bucket_ms: T0 + 500 * MIN,
+            side: 'LONG' as const,
+            outcome: 'position_open',
+            reason_code: 'x',
+          },
+        ],
+        counts: {},
+        total: 4,
+        truncated: false,
+      })),
+    })
+
+  it('draws the discards of the visible window with their reason, and asks for that window only', async () => {
+    const user = userEvent.setup()
+    const visual = traced()
+    renderView(gateWith(overview([stageRun(24, 0)])), visual)
+    const chart = await screen.findByTestId('chart')
+    await waitFor(() =>
+      expect(screen.getAllByTestId('discard')).toHaveLength(2),
+    )
+    expect(visual.decisions).toHaveBeenCalledWith(24, 'PF_XBTUSD', {
+      from: T0,
+      to: T0 + 100 * MIN,
+    })
+    const details = within(screen.getByTestId('marker-details'))
+    expect(
+      details.getByText('Descarte SHORT: ya había una posición abierta'),
+    ).toBeInTheDocument()
+    expect(
+      details.getByText('Descarte LONG: el objetivo no cubría los costes'),
+    ).toBeInTheDocument()
+    // the entry taken is not a discard; entries and exits of the trades are still there
+    expect(chart).toHaveTextContent('4 marcas')
+    expect(screen.queryByTestId('run-no-decisions')).toBeNull()
+    await user.click(screen.getAllByTestId('discard')[0]!)
+    expect(screen.getByTestId('chart').dataset.selected).toMatch(/^d:/)
+  })
+
+  it('says so, without inventing anything, when the run saved no decisions', async () => {
+    const visual = visualWith()
+    renderView(gateWith(overview([stageRun(24, 0)])), visual)
+    expect(await screen.findByTestId('run-no-decisions')).toHaveTextContent(
+      'Esta prueba se guardó sin el detalle de decisiones; las entradas y salidas sí se ven.',
+    )
+    expect(visual.decisions).not.toHaveBeenCalled()
+    expect(screen.queryAllByTestId('discard')).toHaveLength(0)
+    expect(screen.getByTestId('chart')).toHaveTextContent('2 marcas')
+  })
+
+  it('says so when the server answers captured: false', async () => {
+    const visual = traced()
+    vi.mocked(visual.decisions).mockResolvedValue({
+      run_id: 24,
+      product: 'PF_XBTUSD',
+      captured: false,
+      reason: 'x',
+    })
+    renderView(gateWith(overview([stageRun(24, 0)])), visual)
+    expect(await screen.findByTestId('run-no-decisions')).toBeInTheDocument()
+    expect(screen.queryAllByTestId('discard')).toHaveLength(0)
+  })
+
+  it('shows the legend with the discard sign', async () => {
+    renderView(gateWith(overview([stageRun(24, 0)])), visualWith())
+    await screen.findByTestId('chart')
+    const legend = screen.getByRole('list', { name: 'Leyenda' })
+    expect(legend).toHaveTextContent('Salida (motivo en el detalle)')
+    expect(legend).toHaveTextContent('◦ Descarte')
+  })
+
+  it('reports a failed read of the decisions in plain words', async () => {
+    const visual = traced()
+    vi.mocked(visual.decisions).mockRejectedValue(new Error('se cayó'))
+    renderView(gateWith(overview([stageRun(24, 0)])), visual)
+    expect(await screen.findByTestId('run-decisions-error')).toHaveTextContent(
+      'No se pudo leer el detalle de decisiones: se cayó',
+    )
   })
 })
