@@ -1010,9 +1010,11 @@ def make_handler(service):
                 if parts[3] == "visual-summary":
                     return gate.visual_summary(parts[2])
                 if parts[3] == "candles":
-                    return gate.candles(parts[2], query.get("product"), query.get("from"), query.get("to"))
+                    return gate.candles(parts[2], query.get("product"), query.get("from"), query.get("to"),
+                                        query.get("resolution"))
                 if parts[3] == "decisions":
-                    return gate.decisions(parts[2], query.get("product"), query.get("from"), query.get("to"))
+                    return gate.decisions(parts[2], query.get("product"), query.get("from"), query.get("to"),
+                                          query.get("only"))
                 return gate.trades(parts[2], query.get("product"), query.get("from"), query.get("to"),
                                    query.get("cursor"), query.get("limit"))
             if method == "GET" and len(parts) == 3 and parts[:2] == ["gate", "runs"]:

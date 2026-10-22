@@ -11,14 +11,21 @@ import {
 } from '../domain/market-stages.ts'
 import { STAGES, deriveStage } from '../domain/run-stage.ts'
 import {
+  fullViewText,
   isDiscardId,
+  isGroupId,
   madridTime,
   priceLinesOf,
   markerIds,
   tradeOfMarker,
   toChartCandles,
+  resolutionFor,
+  resolutionSeconds,
+  resolutionText,
+  dayLabel,
   toDiscardMarkers,
   toMarkers,
+  toOverviewMarkers,
   windowAround,
 } from '../domain/run-chart-model.ts'
 import {
@@ -96,10 +103,17 @@ function rangeText(run: GateRun, summary?: RunVisualSummary): string {
 type Loaded = {
   summary: RunVisualSummary
   product: string
+  /** Every trade of the product loaded so far (the pages keep arriving after the chart is up). */
   trades: RunTrade[]
   total: number
+  tradesDone: boolean
+  tradesError: string | null
+  /** `full` = the whole stretch the test covered; `zoom` = 1-minute window around the chosen trade. */
+  view: 'full' | 'zoom'
   candles: RunCandles | null
   candlesError: string | null
+  /** The full view's candles, kept so that «Ver todo el tramo» does not read them again. */
+  full: { candles: RunCandles | null; error: string | null }
 }
 
 type Props = {
@@ -166,6 +180,8 @@ export default function StrategyRunView({
     error: string | null
   } | null>(null)
   const token = useRef(0)
+  /** Zoom / «Ver todo el tramo» requests: the latest one wins; the trades keep loading underneath. */
+  const viewToken = useRef(0)
   const invalidate = useCallback(() => {
     token.current += 1
   }, [])
@@ -222,48 +238,80 @@ export default function StrategyRunView({
   )
   const stage = deriveStage(overview)
 
-  /** Trades of one product (newest page first loaded in order) and the candles around the chosen one. */
+  /** Changes the loaded data only if the same load is still the current one (no stale write). */
+  const patch = useCallback(
+    (mine: number, change: (data: Loaded) => Loaded) => {
+      if (token.current !== mine) return
+      setState((current) =>
+        current.kind === 'ready'
+          ? { kind: 'ready', data: change(current.data) }
+          : current,
+      )
+    },
+    [],
+  )
+
+  /**
+   * One product of a run: the chart opens on the WHOLE stretch the test covered (candles of a resolution that
+   * keeps them about 2.700), and then all its trades keep arriving page by page without blocking the screen.
+   */
   const loadProduct = useCallback(
-    async (
-      mine: number,
-      summary: RunVisualSummary,
-      product: string,
-      keep?: string | null,
-    ) => {
-      const page = await visual.trades(summary.run_id, product, {
-        limit: TRADES_PAGE,
-      })
-      if (token.current !== mine) return
-      const chosen =
-        page.trades.find((trade) => trade.trade_id === keep) ??
-        page.trades[page.trades.length - 1] ??
-        null
-      let candles: RunCandles | null = null
-      let candlesError: string | null = null
-      try {
-        candles = await visual.candles(
-          summary.run_id,
-          product,
-          chosen ? windowAround(chosen) : {},
-        )
-      } catch (error) {
-        candlesError = message(error)
+    async (mine: number, summary: RunVisualSummary, product: string) => {
+      const range = {
+        from: summary.range_start_ms,
+        to: summary.range_end_ms,
+        resolution: resolutionFor(
+          summary.range_end_ms - summary.range_start_ms,
+        ),
       }
+      const [first, fullCandles] = await Promise.all([
+        visual.trades(summary.run_id, product, { limit: TRADES_PAGE }),
+        visual.candles(summary.run_id, product, range).then(
+          (candles) => ({ candles, error: null }),
+          (error: unknown) => ({ candles: null, error: message(error) }),
+        ),
+      ])
       if (token.current !== mine) return
-      setSelectedId(chosen?.trade_id ?? null)
+      let cursor = first.next_cursor
+      setSelectedId(null)
       setState({
         kind: 'ready',
         data: {
           summary,
           product,
-          trades: page.trades,
-          total: page.total,
-          candles,
-          candlesError,
+          trades: first.trades,
+          total: first.total,
+          tradesDone: cursor === null,
+          tradesError: null,
+          view: 'full',
+          candles: fullCandles.candles,
+          candlesError: fullCandles.error,
+          full: fullCandles,
         },
       })
+      let loadedTrades = first.trades
+      while (cursor !== null) {
+        try {
+          const page = await visual.trades(summary.run_id, product, {
+            limit: TRADES_PAGE,
+            cursor,
+          })
+          loadedTrades = [...loadedTrades, ...page.trades]
+          cursor = page.next_cursor
+          const all = loadedTrades
+          const done = cursor === null
+          patch(mine, (data) => ({ ...data, trades: all, tradesDone: done }))
+        } catch (error) {
+          patch(mine, (data) => ({
+            ...data,
+            tradesDone: true,
+            tradesError: message(error),
+          }))
+          return
+        }
+      }
     },
-    [visual],
+    [visual, patch],
   )
 
   const openRun = useCallback(
@@ -343,25 +391,35 @@ export default function StrategyRunView({
   const select = async (trade: RunTrade) => {
     if (!data) return
     setSelectedId(trade.trade_id)
-    const mine = ++token.current
+    const load = token.current
+    const mine = ++viewToken.current
+    const change = (view: Partial<Loaded>) => {
+      if (token.current !== load || viewToken.current !== mine) return
+      patch(load, (current) => ({ ...current, view: 'zoom', ...view }))
+    }
     try {
       const candles = await visual.candles(
         data.summary.run_id,
         data.product,
         windowAround(trade),
       )
-      if (token.current !== mine) return
-      setState({
-        kind: 'ready',
-        data: { ...data, candles, candlesError: null },
-      })
+      change({ candles, candlesError: null })
     } catch (error) {
-      if (token.current !== mine) return
-      setState({
-        kind: 'ready',
-        data: { ...data, candles: null, candlesError: message(error) },
-      })
+      change({ candles: null, candlesError: message(error) })
     }
+  }
+
+  /** «Ver todo el tramo»: back to the whole stretch, with the candles already read. */
+  const showAll = () => {
+    ++viewToken.current
+    setSelectedId(null)
+    setFocusId(null)
+    patch(token.current, (current) => ({
+      ...current,
+      view: 'full',
+      candles: current.full.candles,
+      candlesError: current.full.error,
+    }))
   }
 
   const selected =
@@ -380,9 +438,10 @@ export default function StrategyRunView({
   const windowFrom = data?.candles?.from_ms ?? null
   const windowTo = data?.candles?.to_ms ?? null
   const hasTrace = data?.summary.decision_evidence === 'captured'
+  const fullView = data?.view === 'full'
   const decisionKey =
     decisionRun !== null && windowFrom !== null
-      ? `${decisionRun}:${decisionProduct}:${windowFrom}:${windowTo}`
+      ? `${decisionRun}:${decisionProduct}:${windowFrom}:${windowTo}:${fullView ? 'discards' : 'all'}`
       : null
   useEffect(() => {
     if (
@@ -398,6 +457,8 @@ export default function StrategyRunView({
         const value = await visual.decisions(decisionRun, decisionProduct, {
           from: windowFrom ?? undefined,
           to: windowTo ?? undefined,
+          // The whole stretch asks only for the real discards; the ignored ones come as a count.
+          ...(fullView ? { only: 'discards' as const } : {}),
         })
         if (alive) setDecisions({ key: decisionKey, value, error: null })
       } catch (error) {
@@ -416,6 +477,7 @@ export default function StrategyRunView({
     decisionProduct,
     windowFrom,
     windowTo,
+    fullView,
   ])
   const decided =
     hasTrace && decisions !== null && decisions.key === decisionKey
@@ -426,6 +488,8 @@ export default function StrategyRunView({
   const markers = useMemo(() => {
     if (!data?.candles) return []
     const { from_ms: from, to_ms: to } = data.candles
+    if (data.view === 'full')
+      return toOverviewMarkers(data.trades, traced?.signals ?? [], { from, to })
     return [
       ...toMarkers(
         data.trades.filter(
@@ -910,6 +974,30 @@ export default function StrategyRunView({
           </h4>
           <span className="runview__chart-tags">LONG / SHORT / Salidas</span>
         </div>
+        {data?.candles && (
+          <div className="runview__scope">
+            <p className="runview__hint" data-testid="run-scope">
+              {data.view === 'full'
+                ? fullViewText(
+                    data.candles.resolution,
+                    data.summary.range_start_ms,
+                    data.summary.range_end_ms,
+                  )
+                : `Velas de ${resolutionText(data.candles.resolution)} · zoom a la operación${selected ? ` del ${dayLabel(selected.entry_time_ms)}` : ''}`}
+            </p>
+            {data.view === 'zoom' && (
+              <button type="button" className="runview__tab" onClick={showAll}>
+                Ver todo el tramo
+              </button>
+            )}
+          </div>
+        )}
+        {data?.view === 'full' && markers.some((m) => isGroupId(m.id)) && (
+          <p className="runview__hint" data-testid="run-groups-hint">
+            Las marcas con «+N» agrupan varias operaciones: al hacer clic en una
+            se abre la primera de su grupo.
+          </p>
+        )}
 
         {unknownToGate && (
           <p className="runview__empty" data-testid="run-empty">
@@ -945,12 +1033,15 @@ export default function StrategyRunView({
             ) : (
               <div className="runview__chart">
                 <ApprovedTerminalChart
+                  key={`${data.summary.run_id}:${data.product}:${data.view}`}
                   candles={chartCandles}
                   markers={markers}
                   selectedId={
                     focused ?? (selected ? markerIds(selected).entry : '')
                   }
-                  intervalSeconds={60}
+                  intervalSeconds={resolutionSeconds(
+                    data.candles?.resolution ?? '1m',
+                  )}
                   currency="USD"
                   instrument={data.product}
                   priceLines={priceLinesOf(selected)}
@@ -961,7 +1052,13 @@ export default function StrategyRunView({
                       return
                     }
                     setFocusId(null)
-                    const id = tradeOfMarker(markerId)
+                    // A group of entries or exits opens its first operation.
+                    const group = isGroupId(markerId)
+                      ? markers.find((marker) => marker.id === markerId)
+                      : undefined
+                    const id = tradeOfMarker(
+                      group ? group.memberIds?.[0] : markerId,
+                    )
                     const trade = data.trades.find((t) => t.trade_id === id)
                     if (trade) void select(trade)
                   }}
@@ -973,6 +1070,26 @@ export default function StrategyRunView({
               <p className="runview__hint" data-testid="run-gaps">
                 Faltan {data.candles.missing_minutes} velas de 1 minuto que
                 Kraken no publicó en esta ventana; no se rellenaron.
+              </p>
+            )}
+            {!data.tradesDone && (
+              <p className="runview__hint" data-testid="run-trades-loading">
+                Cargando las operaciones del tramo: {data.trades.length} de{' '}
+                {data.total}…
+              </p>
+            )}
+            {data.tradesError && (
+              <p className="runview__hint" data-testid="run-trades-error">
+                No se pudieron cargar todas las operaciones (se ven{' '}
+                {data.trades.length} de {data.total}): {data.tradesError}
+              </p>
+            )}
+            {fullView && traced && (traced.ignored_position_open ?? 0) > 0 && (
+              <p className="runview__hint" data-testid="run-ignored">
+                {traced.ignored_position_open === 1
+                  ? '1 señal ignorada porque ya había una posición abierta'
+                  : `${amount(traced.ignored_position_open ?? 0, 0)} señales ignoradas porque ya había una posición abierta`}{' '}
+                (no se dibujan).
               </p>
             )}
             {decided?.error && (

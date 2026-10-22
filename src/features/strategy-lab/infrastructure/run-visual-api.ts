@@ -116,6 +116,8 @@ export type RunDecisions =
       captured: true
       signals: RunSignal[]
       counts: Record<string, number>
+      /** Signals dropped because a position was already open (counted, not drawn, with `only=discards`). */
+      ignored_position_open?: number
       total: number
       truncated: boolean
     }
@@ -130,13 +132,14 @@ export class RunVisualError extends Error {
 }
 
 export type RunWindow = { from?: number; to?: number }
+export type CandleResolution = '1m' | '5m' | '15m' | '1h' | '4h' | '1d'
 
 export type RunVisualApi = {
   summary: (runId: number) => Promise<RunVisualSummary>
   candles: (
     runId: number,
     product: string,
-    window?: RunWindow,
+    window?: RunWindow & { resolution?: CandleResolution },
   ) => Promise<RunCandles>
   trades: (
     runId: number,
@@ -146,7 +149,7 @@ export type RunVisualApi = {
   decisions: (
     runId: number,
     product: string,
-    window?: RunWindow,
+    window?: RunWindow & { only?: 'discards' },
   ) => Promise<RunDecisions>
 }
 
@@ -180,7 +183,12 @@ export const runVisualApi: RunVisualApi = {
   async candles(runId, product, window = {}) {
     return read(
       await fetch(
-        `${base(runId)}/candles?${query({ product, from: window.from, to: window.to })}`,
+        `${base(runId)}/candles?${query({
+          product,
+          from: window.from,
+          to: window.to,
+          resolution: window.resolution,
+        })}`,
       ),
     )
   },
@@ -200,7 +208,12 @@ export const runVisualApi: RunVisualApi = {
   async decisions(runId, product, window = {}) {
     return read(
       await fetch(
-        `${base(runId)}/decisions?${query({ product, from: window.from, to: window.to })}`,
+        `${base(runId)}/decisions?${query({
+          product,
+          from: window.from,
+          to: window.to,
+          only: window.only,
+        })}`,
       ),
     )
   },

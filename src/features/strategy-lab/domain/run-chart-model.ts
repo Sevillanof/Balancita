@@ -4,6 +4,7 @@ import type {
   ApprovedChartPriceLine,
 } from '../../trading-view/presentation/ApprovedTerminalChart.tsx'
 import type {
+  CandleResolution,
   RunCandle,
   RunSignal,
   RunTrade,
@@ -256,6 +257,189 @@ export function toDiscardMarkers(
     }
   })
 }
+
+const RESOLUTIONS: Record<
+  CandleResolution,
+  { seconds: number; text: string; upTo: number }
+> = {
+  '1m': { seconds: 60, text: '1 minuto', upTo: 45 * 60 * MINUTE_MS },
+  '5m': { seconds: 300, text: '5 minutos', upTo: 9 * 24 * 60 * MINUTE_MS },
+  '15m': { seconds: 900, text: '15 minutos', upTo: 28 * 24 * 60 * MINUTE_MS },
+  '1h': { seconds: 3600, text: '1 hora', upTo: 112 * 24 * 60 * MINUTE_MS },
+  '4h': { seconds: 14400, text: '4 horas', upTo: 450 * 24 * 60 * MINUTE_MS },
+  '1d': { seconds: 86400, text: '1 día', upTo: Infinity },
+}
+
+/**
+ * Resolution for the whole stretch of a run, so that it has about 2.700 candles at most:
+ * up to 45 h → 1 min, 9 days → 5 min, 28 days → 15 min, 112 days → 1 h (3,5 months), 450 days → 4 h, more → 1 day.
+ */
+export function resolutionFor(spanMs: number): CandleResolution {
+  const order: CandleResolution[] = ['1m', '5m', '15m', '1h', '4h', '1d']
+  return order.find((key) => spanMs <= RESOLUTIONS[key].upTo) ?? '1d'
+}
+
+/** Seconds of one candle of a resolution the registry reported; an unknown word falls back to 1 minute. */
+export function resolutionSeconds(resolution: string): number {
+  return RESOLUTIONS[resolution as CandleResolution]?.seconds ?? 60
+}
+
+export const resolutionText = (resolution: string): string =>
+  RESOLUTIONS[resolution as CandleResolution]?.text ?? resolution
+
+const MONTHS = [
+  'ene',
+  'feb',
+  'mar',
+  'abr',
+  'may',
+  'jun',
+  'jul',
+  'ago',
+  'sep',
+  'oct',
+  'nov',
+  'dic',
+]
+
+/** `1-ene-2026` (UTC day, like the chart axis). */
+export function dayLabel(ms: number): string {
+  const date = new Date(ms)
+  return `${date.getUTCDate()}-${MONTHS[date.getUTCMonth()]}-${date.getUTCFullYear()}`
+}
+
+/** `Velas de 1 hora · tramo completo (1-ene-2026 a 18-abr-2026)`; the end of a run is exclusive. */
+export function fullViewText(
+  resolution: string,
+  rangeStartMs: number,
+  rangeEndMs: number,
+): string {
+  return `Velas de ${resolutionText(resolution)} · tramo completo (${dayLabel(rangeStartMs)} a ${dayLabel(rangeEndMs - 1)})`
+}
+
+/** The chart paints at most 200 marks and labels pile up: the full view groups down to about 110. */
+export const MAX_OVERVIEW_MARKS = 110
+const GROUP_BINS = [160, 120, 90, 60, 40, 24, 12, 6, 3, 1]
+
+type Kind = 'entry-long' | 'entry-short' | 'exit' | 'discard'
+type Item = { kind: Kind; ms: number; markerId: string; reason: string }
+
+/**
+ * Marks of the whole stretch of a run. With few of them, one mark each (entries L/S, exits with their reason, the
+ * discards as `toDiscardMarkers`). With too many (a run has ~1.400 trades), they are grouped by kind in time bins
+ * and labelled `L+N`, `S+N`, `×+N`, `+N`; the bins are as thin as the 110-mark limit allows. A click on a group of
+ * entries or exits opens its first trade.
+ */
+export function toOverviewMarkers(
+  trades: readonly RunTrade[],
+  signals: readonly RunSignal[],
+  window: { from: number; to: number },
+): ApprovedTerminalMarker[] {
+  const discards = signals.filter(
+    (signal) =>
+      signal.outcome !== 'accepted' &&
+      signal.outcome !== 'position_open' &&
+      signal.bucket_ms >= window.from &&
+      signal.bucket_ms < window.to,
+  )
+  if (trades.length * 2 + discards.length <= MAX_OVERVIEW_MARKS)
+    return [...toMarkers(trades), ...toDiscardMarkers(discards, window)]
+  const items: Item[] = []
+  for (const trade of trades) {
+    const ids = markerIds(trade)
+    items.push({
+      kind: trade.side === 'LONG' ? 'entry-long' : 'entry-short',
+      ms: trade.entry_time_ms,
+      markerId: ids.entry,
+      reason: '',
+    })
+    items.push({
+      kind: 'exit',
+      ms: trade.exit_time_ms - 1,
+      markerId: ids.exit,
+      reason: exitReasonText(trade.exit_reason),
+    })
+  }
+  for (const signal of discards)
+    items.push({
+      kind: 'discard',
+      ms: signal.bucket_ms,
+      markerId: discardId(signal),
+      reason: discardReasonText(signal.outcome),
+    })
+  items.sort((a, b) => a.ms - b.ms)
+  const span = Math.max(MINUTE_MS, window.to - window.from)
+  const groupBy = (bins: number) => {
+    const width = Math.ceil(span / bins)
+    const groups = new Map<string, Item[]>()
+    for (const item of items) {
+      const key = `${item.kind}:${Math.floor((item.ms - window.from) / width)}`
+      const list = groups.get(key)
+      if (list) list.push(item)
+      else groups.set(key, [item])
+    }
+    return [...groups.values()]
+  }
+  let groups = groupBy(1)
+  for (const bins of GROUP_BINS) {
+    const next = groupBy(bins)
+    if (next.length <= MAX_OVERVIEW_MARKS) {
+      groups = next
+      break
+    }
+  }
+  return groups.map((group) => groupMarker(group))
+}
+
+function groupMarker(group: readonly Item[]): ApprovedTerminalMarker {
+  const first = group[0]!
+  const n = group.length
+  const time = Math.floor(first.ms / MINUTE_MS) * 60
+  const memberIds = group.map((item) => item.markerId)
+  const reasons = () => {
+    const count = new Map<string, number>()
+    for (const item of group)
+      count.set(item.reason, (count.get(item.reason) ?? 0) + 1)
+    return [...count].map(([reason, k]) => `${k} ${reason}`)
+  }
+  if (first.kind === 'discard')
+    return {
+      id: `d:g:${first.ms}`,
+      time,
+      type: 'wait',
+      direction: 'flat',
+      label: `+${n}`,
+      detail: `+${n} descartes: ${[...reasons()].join(', ')}`,
+      count: n,
+      memberIds,
+    }
+  if (first.kind === 'exit')
+    return {
+      id: `g:exit:${first.ms}`,
+      time,
+      type: 'exit',
+      direction: 'flat',
+      label: `×+${n}`,
+      detail: `+${n} salidas: ${reasons().join(', ')}`,
+      count: n,
+      memberIds,
+    }
+  const long = first.kind === 'entry-long'
+  return {
+    id: `g:${first.kind}:${first.ms}`,
+    time,
+    type: 'entry',
+    direction: long ? 'long' : 'short',
+    label: `${long ? 'L' : 'S'}+${n}`,
+    detail: `+${n} entradas ${long ? 'LONG' : 'SHORT'}`,
+    count: n,
+    memberIds,
+  }
+}
+
+/** Id of a grouped entry/exit mark of the full view (not a trade, not a discard). */
+export const isGroupId = (id: string | undefined): boolean =>
+  id !== undefined && id.startsWith('g:')
 
 const FUNDING: Record<string, string> = {
   complete: 'Funding completo',

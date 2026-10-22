@@ -352,7 +352,7 @@ describe('StrategyRunView', () => {
       'step',
     )
     expect(await screen.findByTestId('chart')).toHaveTextContent(
-      '5 velas · 2 marcas',
+      '5 velas · 4 marcas',
     )
     expect(visual.summary).toHaveBeenCalledWith(24)
     // Only the screen of the reference: no trade table and no extra panels.
@@ -680,66 +680,92 @@ describe('StrategyRunView decisions', () => {
         decision_evidence: 'captured',
         ...extra,
       })),
-      decisions: vi.fn(async (id: number) => ({
-        run_id: id,
-        product: 'PF_XBTUSD',
-        captured: true as const,
-        signals: [
-          {
-            bucket_ms: T0 + 1 * MIN,
-            side: 'LONG' as const,
-            outcome: 'accepted',
-            reason_code: 'x',
-          },
-          {
-            bucket_ms: T0 + 2 * MIN,
-            side: 'SHORT' as const,
-            outcome: 'position_open',
-            reason_code: 'x',
-          },
-          {
-            bucket_ms: T0 + 3 * MIN,
-            side: 'LONG' as const,
-            outcome: 'rejected_target_does_not_clear_cost',
-            reason_code: 'x',
-          },
-          {
-            bucket_ms: T0 + 500 * MIN,
-            side: 'LONG' as const,
-            outcome: 'position_open',
-            reason_code: 'x',
-          },
-        ],
-        counts: {},
-        total: 4,
-        truncated: false,
-      })),
+      decisions: vi.fn(
+        async (id: number, _p: string, window?: { only?: string }) => ({
+          run_id: id,
+          product: 'PF_XBTUSD',
+          captured: true as const,
+          ignored_position_open: 2,
+          signals: [
+            {
+              bucket_ms: T0 + 1 * MIN,
+              side: 'LONG' as const,
+              outcome: 'accepted',
+              reason_code: 'x',
+            },
+            {
+              bucket_ms: T0 + 2 * MIN,
+              side: 'SHORT' as const,
+              outcome: 'position_open',
+              reason_code: 'x',
+            },
+            {
+              bucket_ms: T0 + 3 * MIN,
+              side: 'LONG' as const,
+              outcome: 'rejected_target_does_not_clear_cost',
+              reason_code: 'x',
+            },
+            {
+              bucket_ms: T0 + 500 * MIN,
+              side: 'LONG' as const,
+              outcome: 'position_open',
+              reason_code: 'x',
+            },
+          ].filter(
+            (signal) =>
+              window?.only !== 'discards' ||
+              signal.outcome.startsWith('rejected'),
+          ),
+          counts: {},
+          total: 4,
+          truncated: false,
+        }),
+      ),
     })
 
-  it('draws the discards of the visible window with their reason, and asks for that window only', async () => {
+  it('draws only the real discards on the whole stretch, tells how many were ignored, and draws them all on a zoom', async () => {
     const user = userEvent.setup()
     const visual = traced()
     renderView(gateWith(overview([stageRun(24, 0)])), visual)
     const chart = await screen.findByTestId('chart')
     await waitFor(() =>
-      expect(screen.getAllByTestId('discard')).toHaveLength(2),
+      expect(screen.getAllByTestId('discard')).toHaveLength(1),
     )
     expect(visual.decisions).toHaveBeenCalledWith(24, 'PF_XBTUSD', {
       from: T0,
       to: T0 + 100 * MIN,
+      only: 'discards',
     })
     const details = within(screen.getByTestId('marker-details'))
     expect(
-      details.getByText('Descarte SHORT: ya había una posición abierta'),
-    ).toBeInTheDocument()
-    expect(
       details.getByText('Descarte LONG: el objetivo no cubría los costes'),
     ).toBeInTheDocument()
-    // the entry taken is not a discard; entries and exits of the trades are still there
-    expect(chart).toHaveTextContent('4 marcas')
+    expect(details.queryByText(/ya había una posición abierta/)).toBeNull()
+    expect(screen.getByTestId('run-ignored')).toHaveTextContent(
+      '2 señales ignoradas porque ya había una posición abierta',
+    )
+    // 2 trades (4 marks) + the 1 real discard
+    expect(chart).toHaveTextContent('5 marcas')
     expect(screen.queryByTestId('run-no-decisions')).toBeNull()
     await user.click(screen.getAllByTestId('discard')[0]!)
     expect(screen.getByTestId('chart').dataset.selected).toMatch(/^d:/)
+
+    // A zoom to one trade brings every discard of that window, as before.
+    await user.click(screen.getByRole('button', { name: 'marca-1' }))
+    await waitFor(() =>
+      expect(visual.decisions).toHaveBeenLastCalledWith(24, 'PF_XBTUSD', {
+        from: T0,
+        to: T0 + 100 * MIN,
+      }),
+    )
+    await waitFor(() =>
+      expect(
+        within(screen.getByTestId('marker-details')).getByText(
+          'Descarte SHORT: ya había una posición abierta',
+        ),
+      ).toBeInTheDocument(),
+    )
+    expect(screen.queryByTestId('run-ignored')).toBeNull()
   })
 
   it('says so, without inventing anything, when the run saved no decisions', async () => {
@@ -750,7 +776,7 @@ describe('StrategyRunView decisions', () => {
     )
     expect(visual.decisions).not.toHaveBeenCalled()
     expect(screen.queryAllByTestId('discard')).toHaveLength(0)
-    expect(screen.getByTestId('chart')).toHaveTextContent('2 marcas')
+    expect(screen.getByTestId('chart')).toHaveTextContent('4 marcas')
   })
 
   it('says so when the server answers captured: false', async () => {
@@ -781,5 +807,191 @@ describe('StrategyRunView decisions', () => {
     expect(await screen.findByTestId('run-decisions-error')).toHaveTextContent(
       'No se pudo leer el detalle de decisiones: se cayó',
     )
+  })
+})
+
+describe('StrategyRunView whole stretch', () => {
+  const DAY = 24 * 60 * MIN
+  /** 3,5 months (1-ene to 18-abr-2026) with 1.400 invented trades, 500 per page. */
+  const START = Date.UTC(2026, 0, 1)
+  const END = Date.UTC(2026, 3, 18)
+  const many = Array.from({ length: 1400 }, (_, i) => {
+    const entry = START + Math.floor((i / 1400) * (END - START - DAY))
+    return {
+      ...trade(i, i % 2 === 0 ? 'LONG' : 'SHORT', i % 3 === 0 ? 5 : -5),
+      trade_id: `24-${i}`,
+      entry_time_ms: entry,
+      entry_bucket_ms: entry,
+      exit_time_ms: entry + 30 * MIN,
+      exit_bucket_ms: entry + 29 * MIN,
+    }
+  })
+  const pager = (list: RunTrade[]) =>
+    vi.fn(
+      async (
+        id: number,
+        _product: string,
+        options?: { cursor?: string; limit?: number },
+      ) => {
+        const offset = Number(options?.cursor ?? 0)
+        const size = options?.limit ?? 200
+        return {
+          run_id: id,
+          product: 'PF_XBTUSD',
+          total: list.length,
+          trades: list.slice(offset, offset + size),
+          next_cursor:
+            offset + size < list.length ? String(offset + size) : null,
+        }
+      },
+    )
+  const wide = (list: RunTrade[] = many) =>
+    visualWith({
+      summary: vi.fn(async (id: number) => ({
+        ...summaryOf(id),
+        range_start_ms: START,
+        range_end_ms: END,
+      })),
+      trades: pager(list),
+      candles: vi.fn(async (id: number, _p: string, window) => ({
+        ...candles(id),
+        resolution: window?.resolution ?? '1m',
+        from_ms: window?.from ?? START,
+        to_ms: window?.to ?? END,
+        missing_minutes: 0,
+        candles: Array.from({ length: 60 }, (_, i) => ({
+          time_ms: (window?.from ?? START) + i * 3_600_000,
+          open: '100',
+          high: '101',
+          low: '99',
+          close: '100.5',
+          volume: '2',
+        })),
+      })),
+    })
+  const slowSecondPage = (visual: RunVisualApi) => {
+    let release: () => void = () => undefined
+    const opened = new Promise<void>((resolve) => (release = resolve))
+    const real = vi.mocked(visual.trades).getMockImplementation()!
+    vi.mocked(visual.trades).mockImplementation(async (...args) => {
+      if (args[2]?.cursor === '500') await opened
+      return real(...args)
+    })
+    return release
+  }
+
+  it('opens on the whole stretch of the test with candles of a resolution that fits it', async () => {
+    const visual = wide()
+    renderView(gateWith(overview([stageRun(24, 0)])), visual)
+    await screen.findByTestId('chart')
+    expect(visual.candles).toHaveBeenCalledWith(24, 'PF_XBTUSD', {
+      from: START,
+      to: END,
+      resolution: '1h',
+    })
+    expect(screen.getByTestId('run-scope')).toHaveTextContent(
+      'Velas de 1 hora · tramo completo (1-ene-2026 a 17-abr-2026)',
+    )
+    expect(
+      screen.queryByRole('button', { name: 'Ver todo el tramo' }),
+    ).toBeNull()
+  })
+
+  it('loads every trade page by page and groups the marks under the chart limit', async () => {
+    const visual = wide()
+    renderView(gateWith(overview([stageRun(24, 0)])), visual)
+    await screen.findByTestId('chart')
+    await waitFor(() =>
+      expect(screen.queryByTestId('run-trades-loading')).toBeNull(),
+    )
+    const calls = vi.mocked(visual.trades).mock.calls
+    expect(calls.map((call) => call[2]?.cursor)).toEqual([
+      undefined,
+      '500',
+      '1000',
+    ])
+    const text = screen.getByTestId('chart').textContent ?? ''
+    const marks = Number(/(\d+) marcas/.exec(text)?.[1])
+    expect(marks).toBeGreaterThan(0)
+    expect(marks).toBeLessThanOrEqual(110)
+    const details = within(screen.getByTestId('marker-details'))
+    expect(
+      details.getAllByText(/^\+\d+ entradas LONG$/).length,
+    ).toBeGreaterThan(0)
+    expect(details.getAllByText(/^\+\d+ salidas: /).length).toBeGreaterThan(0)
+  })
+
+  it('shows the loading state while the later pages arrive', async () => {
+    const visual = wide()
+    const release = slowSecondPage(visual)
+    renderView(gateWith(overview([stageRun(24, 0)])), visual)
+    expect(await screen.findByTestId('run-trades-loading')).toHaveTextContent(
+      '500 de 1400',
+    )
+    expect(screen.getByTestId('chart')).toBeInTheDocument()
+    release()
+    await waitFor(() =>
+      expect(screen.queryByTestId('run-trades-loading')).toBeNull(),
+    )
+  })
+
+  it('says so when a later page fails and keeps what was loaded', async () => {
+    const visual = wide()
+    const real = vi.mocked(visual.trades).getMockImplementation()!
+    vi.mocked(visual.trades).mockImplementation(async (...args) => {
+      if (args[2]?.cursor === '500') throw new Error('se cortó')
+      return real(...args)
+    })
+    renderView(gateWith(overview([stageRun(24, 0)])), visual)
+    expect(await screen.findByTestId('run-trades-error')).toHaveTextContent(
+      'se ven 500 de 1400',
+    )
+    expect(screen.queryByTestId('run-trades-loading')).toBeNull()
+  })
+
+  it('a grouped mark opens the first operation of its group', async () => {
+    const user = userEvent.setup()
+    const visual = wide()
+    renderView(gateWith(overview([stageRun(24, 0)])), visual)
+    await screen.findByTestId('chart')
+    await waitFor(() =>
+      expect(screen.queryByTestId('run-trades-loading')).toBeNull(),
+    )
+    expect(screen.getByTestId('run-groups-hint')).toHaveTextContent('+N')
+    await user.click(screen.getByRole('button', { name: 'marca-1' }))
+    await waitFor(() =>
+      expect(screen.getByTestId('run-scope')).toHaveTextContent(
+        'Velas de 1 minuto · zoom a la operación',
+      ),
+    )
+    expect(screen.getByTestId('chart').dataset.selected).toMatch(
+      /^24-\d+:entry$/,
+    )
+    expect(screen.queryByTestId('run-groups-hint')).toBeNull()
+  })
+
+  it('zooms to one trade in 1-minute candles and «Ver todo el tramo» goes back without reading again', async () => {
+    const user = userEvent.setup()
+    const visual = wide(many.slice(0, 3))
+    renderView(gateWith(overview([stageRun(24, 0)])), visual)
+    await screen.findByTestId('chart')
+    await user.click(screen.getByRole('button', { name: 'marca-1' }))
+    await waitFor(() =>
+      expect(screen.getByTestId('run-scope')).toHaveTextContent(
+        'Velas de 1 minuto · zoom a la operación del 1-ene-2026',
+      ),
+    )
+    expect(vi.mocked(visual.candles).mock.calls.at(-1)?.[2]).toEqual({
+      from: many[0]!.entry_time_ms - 120 * MIN,
+      to: many[0]!.exit_time_ms + 120 * MIN,
+    })
+    expect(screen.getByTestId('chart').dataset.selected).toBe('24-0:entry')
+    await user.click(screen.getByRole('button', { name: 'Ver todo el tramo' }))
+    expect(screen.getByTestId('run-scope')).toHaveTextContent('tramo completo')
+    expect(screen.getByTestId('chart').dataset.selected).toBe('')
+    expect(visual.candles).toHaveBeenCalledTimes(2)
+    expect(
+      screen.queryByRole('button', { name: 'Ver todo el tramo' }),
+    ).toBeNull()
   })
 })

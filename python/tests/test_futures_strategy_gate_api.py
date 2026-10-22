@@ -364,6 +364,65 @@ class VisualApiTests(unittest.TestCase):
                          ["position_open", "rejected_target_does_not_clear_cost"])
         self.assertEqual(self.json("/gate/runs/1/decisions?product=PF_ETHUSD")[1]["total"], 1)
 
+    def test_candles_fold_into_bigger_resolutions_aligned_to_utc(self):
+        self.store()
+        hour = 60 * MINUTE
+        base = self.START // hour * hour
+        window = "&from={}&to={}".format(base, base + 4 * hour)
+        status, body = self.json("/gate/runs/1/candles?product=PF_XBTUSD&resolution=1h" + window)
+        self.assertEqual((status, body["resolution"]), (200, "1h"))
+        self.assertTrue(all(c["time_ms"] % hour == 0 for c in body["candles"]))
+        first = body["candles"][0]
+        self.assertEqual((first["open"], first["high"], first["low"], first["close"]), ("100", "101", "99", "100.5"))
+        ones = self.json("/gate/runs/1/candles?product=PF_XBTUSD" + window)[1]
+        inside = [c for c in ones["candles"] if first["time_ms"] <= c["time_ms"] < first["time_ms"] + hour]
+        self.assertEqual(float(first["volume"]), sum(float(c["volume"]) for c in inside))
+        self.assertEqual(body["missing_minutes"], ones["missing_minutes"])
+
+    def test_folded_candles_take_first_open_last_close_max_high_min_low(self):
+        self.store(candles=False)
+        cache = CandleCache(os.path.join(self.dir, "cache", "candles-PF_XBTUSD.sqlite"))
+        t0 = self.START // (5 * MINUTE) * (5 * MINUTE) + 5 * MINUTE
+        cache.db.executemany("INSERT INTO candles VALUES('1m',?,?,?,?,?,?)", [
+            (t0 + MINUTE, "10", "12", "9", "11", "1.5"), (t0 + 2 * MINUTE, "11", "15", "10", "14", "2.5"),
+            (t0 + 4 * MINUTE, "14", "14", "7", "8", "1")])
+        cache.db.commit()
+        cache.close()
+        body = self.json("/gate/runs/1/candles?product=PF_XBTUSD&resolution=5m&from={}&to={}".format(
+            t0, t0 + 10 * MINUTE))[1]
+        self.assertEqual(body["candles"], [{"time_ms": t0, "open": "10", "high": "15", "low": "7", "close": "8",
+                                            "volume": "5.0"}])
+        self.assertEqual(body["missing_minutes"], 7)
+
+    def test_aggregated_candles_are_capped_by_count_and_resolution_is_validated(self):
+        self.store()
+        old = gate_api.MAX_AGGREGATED_CANDLES
+        gate_api.MAX_AGGREGATED_CANDLES = 3
+        try:
+            body = self.json("/gate/runs/1/candles?product=PF_XBTUSD&resolution=1h&from={}".format(self.START))[1]
+        finally:
+            gate_api.MAX_AGGREGATED_CANDLES = old
+        self.assertEqual(body["to_ms"] - body["from_ms"], 3 * 60 * MINUTE)
+        for bad in ("2h", "1M", "abc"):
+            status, err = self.json("/gate/runs/1/candles?product=PF_XBTUSD&resolution=" + bad)
+            self.assertEqual((status, err["error"]), (400, "invalid_resolution"), bad)
+        default = self.json("/gate/runs/1/candles?product=PF_XBTUSD")[1]
+        self.assertEqual(default["resolution"], "1m")
+
+    def test_decisions_only_discards_keep_counts_and_report_ignored_position_open(self):
+        self.store(products=("PF_XBTUSD", "PF_ETHUSD"), traces=self.traced())
+        whole = self.json("/gate/runs/1/decisions?product=PF_XBTUSD")[1]
+        self.assertEqual(whole["ignored_position_open"], 1)
+        body = self.json("/gate/runs/1/decisions?product=PF_XBTUSD&only=discards")[1]
+        self.assertEqual([s["outcome"] for s in body["signals"]],
+                         ["rejected_target_does_not_clear_cost", "rejected_stale_data"])
+        self.assertEqual((body["ignored_position_open"], body["total"]), (1, 2))
+        self.assertEqual(body["counts"]["WAIT:entry_conditions_not_met"], 40)
+        window = "&from={}&to={}".format(self.START + 100 * MINUTE, self.START + 200 * MINUTE)
+        self.assertEqual(self.json("/gate/runs/1/decisions?product=PF_XBTUSD&only=discards" + window)[1]
+                         ["ignored_position_open"], 0)
+        self.assertEqual(self.json("/gate/runs/1/decisions?product=PF_XBTUSD&only=x")[0], 400)
+
     def test_decisions_are_capped_and_say_so(self):
         self.store(traces=self.traced())
         old = gate_api.MAX_DECISIONS
