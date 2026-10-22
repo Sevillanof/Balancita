@@ -353,7 +353,19 @@ function collectSupervisor(
     )
   }
   const age = updated === null ? null : now - updated
-  const kronos = rowOf(rowOf(health?.resources).kronos)
+  const resources = rowOf(health?.resources)
+  const sampled = num(resources.sampled_at_ms)
+  // Kronos is known only from a successful, recent resource sample and supervisor.
+  const resourcesFresh =
+    resources.status === 'ok' &&
+    age !== null &&
+    age >= 0 &&
+    age <= SUPERVISOR_OK_MS &&
+    sampled !== null &&
+    sampled >= 0 &&
+    sampled <= now &&
+    now - sampled <= 15 * SECOND
+  const kronos = resourcesFresh ? rowOf(resources.kronos) : {}
   return {
     now,
     processes,

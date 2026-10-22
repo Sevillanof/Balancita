@@ -1,5 +1,12 @@
 /* eslint-disable @typescript-eslint/no-explicit-any -- loosely typed JSON fixtures */
-import { render, screen, waitFor, within } from '@testing-library/react'
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import healthDegraded from '../../../../docs/mission-control/b1/ejemplo-degradado.json'
@@ -8,6 +15,8 @@ import activityBusy from '../../../../docs/mission-control/b2/ejemplo-con-activi
 import activityNoData from '../../../../docs/mission-control/b2/ejemplo-sin-datos.json'
 import activityQuiet from '../../../../docs/mission-control/b2/ejemplo-sin-actividad.json'
 import HealthIndicator from './HealthIndicator.tsx'
+import { decodeHealth } from '../infrastructure/observability-api.ts'
+import { reportTiming } from './health-view.ts'
 import { useHealth } from './useHealth.ts'
 import ObserverPanel from './ObserverPanel.tsx'
 import type { GatewayClock, LatestDecision } from './latest-decision.ts'
@@ -76,7 +85,7 @@ function healthWithVerdict(
 /** The indicator as the Terminal mounts it: fed by the shared B1 read. */
 function Indicator() {
   const health = useHealth()
-  return <HealthIndicator data={health.data} error={health.error} />
+  return <HealthIndicator {...health} />
 }
 
 type ObserverProps = {
@@ -169,6 +178,18 @@ describe('HealthIndicator (header)', () => {
       .getAllByText(/^(Con problemas|Sin verificar|Correctos) \(/)
       .map((node) => node.textContent)
     expect(groups).toEqual(['Con problemas (5)', 'Sin verificar (1)'])
+    for (const [i, component] of healthDegraded.components.entries()) {
+      const row = screen.getByTestId(`health-${component.id}`)
+      expect(row).toHaveAttribute('data-status', component.status)
+      expect(within(row).getByRole('heading', { level: 3 })).toHaveTextContent(
+        `${i + 1}. ${component.label}`,
+      )
+      expect(row).toHaveTextContent(component.summary)
+      for (const check of component.checks) {
+        expect(row).toHaveTextContent(check.rule)
+        if (check.detail) expect(row).toHaveTextContent(check.detail)
+      }
+    }
     // Components keep their fixed number whatever the order shown.
     expect(
       within(screen.getByTestId('health-risk')).getByRole('heading', {
@@ -189,6 +210,11 @@ describe('HealthIndicator (header)', () => {
     render(<Indicator />)
     await userEvent.click(await screen.findByTestId('health-indicator'))
     await screen.findByTestId('health-risk')
+    expect(
+      screen
+        .getAllByText(/^(Sin verificar|Correctos) \(/)
+        .map((node) => node.textContent),
+    ).toEqual(['Sin verificar (1)', 'Correctos (5)'])
     for (const component of healthHealthy.components)
       for (const limitation of component.limitations)
         expect(
@@ -213,9 +239,15 @@ describe('HealthIndicator (header)', () => {
   it('keeps the previous read but flags it when a refresh fails', async () => {
     let fail = false
     serve({
-      health: () => (fail ? json({}, 500) : json(healthDegraded)),
+      health: () =>
+        fail
+          ? json({}, 500)
+          : json({
+              ...healthDegraded,
+              generated_at_ms: Date.now() - 10_000,
+            }),
     })
-    vi.useFakeTimers({ shouldAdvanceTime: true })
+    vi.useFakeTimers({ now: NOW, shouldAdvanceTime: true })
     try {
       render(<Indicator />)
       const button = await screen.findByTestId('health-indicator')
@@ -224,9 +256,191 @@ describe('HealthIndicator (header)', () => {
       await vi.advanceTimersByTimeAsync(31_000)
       await waitFor(() => expect(button).toHaveTextContent('lectura anterior'))
       expect(button).toHaveTextContent('5 con problemas')
+      fireEvent.click(button)
+      expect(screen.getByText(/Generación:/)).toHaveTextContent(
+        'hace 41 s · Recepción: hace 31 s',
+      )
+      fail = false
+      await vi.advanceTimersByTimeAsync(30_000)
+      await waitFor(() =>
+        expect(button).not.toHaveTextContent('lectura anterior'),
+      )
+      expect(screen.getByText(/Generación:/)).toHaveTextContent(
+        'hace 11 s · Recepción: hace 1 s',
+      )
     } finally {
       vi.useRealTimers()
     }
+  })
+})
+
+describe('health presentation freshness', () => {
+  beforeEach(() => vi.useFakeTimers({ now: NOW }))
+
+  it.each([
+    ['inclusive generation limit', NOW - 90_000, NOW, NOW, 'fresh'],
+    ['old cached generation, new receipt', NOW - 90_001, NOW, NOW, 'stale'],
+    ['inclusive receipt limit', NOW - 85_000, NOW - 90_000, NOW, 'fresh'],
+    ['expired receipt', NOW - 89_000, NOW - 90_001, NOW, 'stale'],
+    ['future generation', NOW + 5_001, NOW, NOW, 'unverified'],
+    [
+      'future generation stays invalid later',
+      NOW + 5_001,
+      NOW,
+      NOW + 10_000,
+      'unverified',
+    ],
+    ['tolerated skew', NOW + 5_000, NOW, NOW, 'fresh'],
+    ['backward clock', NOW, NOW, NOW - 5_001, 'unverified'],
+    ['tolerated backward clock', NOW, NOW, NOW - 5_000, 'fresh'],
+    ['missing receipt', NOW, null, NOW, 'unverified'],
+    ['nonfinite receipt', NOW, NaN, NOW, 'unverified'],
+    ['nonfinite generation', Infinity, NOW, NOW, 'unverified'],
+    ['nonfinite clock', NOW, NOW, NaN, 'unverified'],
+  ])('%s', (_name, generated, receipt, now, state) => {
+    const timing = reportTiming(now, receipt, generated)
+    expect(timing.state).toBe(state)
+    if (state === 'unverified') expect(timing.reference).toBeNull()
+  })
+
+  it.each([
+    [1_060_000, 1_060_000, 61_000],
+    [1_070_000, 1_060_000, 71_000],
+    [1_070_000, 1_070_000, 71_000],
+  ])(
+    'keeps generation-based evidence age at now=%i, receipt=%i',
+    (now, receipt, age) => {
+      const timing = reportTiming(now, receipt, 1_000_000)
+      expect(timing.state).toBe('fresh')
+      expect(timing.reference! - 999_000).toBe(age)
+    },
+  )
+
+  it('cannot rewind evidence when a cached generation is received again', () => {
+    const data = decodeHealth(healthHealthy)
+    data.generatedAtMs = NOW - 60_000
+    data.components[0].evidence[0].lastUpdatedMs = NOW - 61_000
+    const { rerender } = render(
+      <HealthIndicator
+        data={data}
+        error={null}
+        receivedAt={data.generatedAtMs}
+      />,
+    )
+    fireEvent.click(screen.getByTestId('health-indicator'))
+    const evidence = screen.getByTestId('health-data').querySelector('dd')
+    expect(evidence).toHaveTextContent('hace 1 min')
+    act(() => vi.advanceTimersByTime(10_000))
+    expect(evidence).toHaveTextContent('hace 1 min')
+    rerender(
+      <HealthIndicator
+        data={{ ...data }}
+        error={null}
+        receivedAt={Date.now()}
+      />,
+    )
+    expect(screen.getByText(/Generación:/)).toHaveTextContent(
+      'hace 1 min · Recepción: hace 0 s',
+    )
+    expect(evidence).toHaveTextContent('hace 1 min')
+    expect(evidence).not.toHaveTextContent('hace 1 s')
+  })
+
+  it('advances all ages without requests, even closed, and cleans up the clock', () => {
+    const data = decodeHealth(healthHealthy)
+    data.generatedAtMs = NOW - 10_000
+    // Base age is 12 s plus 10 s since generation: 22 s on receipt.
+    data.components[0].evidence[0].lastUpdatedMs = NOW - 22_000
+    const fetch = vi.fn()
+    vi.stubGlobal('fetch', fetch)
+    const intervals = vi.spyOn(globalThis, 'setInterval')
+    const clearClock = vi.spyOn(globalThis, 'clearInterval')
+    const { unmount } = render(
+      <HealthIndicator data={data} error={null} receivedAt={NOW} />,
+    )
+    const button = screen.getByTestId('health-indicator')
+    fireEvent.click(button)
+    expect(screen.getByText(/Generación:/)).toHaveTextContent(
+      'hace 10 s · Recepción: hace 0 s',
+    )
+    expect(screen.getByTestId('health-data')).toHaveTextContent('hace 22 s')
+    act(() => vi.advanceTimersByTime(2_000))
+    expect(screen.getByText(/Generación:/)).toHaveTextContent(
+      'hace 12 s · Recepción: hace 2 s',
+    )
+    expect(screen.getByTestId('health-data')).toHaveTextContent('hace 24 s')
+    fireEvent.click(screen.getByRole('button', { name: 'Cerrar' }))
+    act(() => vi.advanceTimersByTime(79_000))
+    expect(button).toHaveTextContent('informe obsoleto')
+    fireEvent.click(button)
+    expect(screen.getByText(/Generación:/)).toHaveTextContent(
+      'hace 1 min · Recepción: hace 1 min',
+    )
+    expect(screen.getByTestId('health-data')).toHaveTextContent('hace 1 min')
+    expect(screen.getByRole('dialog')).toHaveTextContent('Lectura anterior')
+    expect(fetch).not.toHaveBeenCalled()
+    const clock = intervals.mock.results[0].value
+    expect(intervals.mock.calls[0][1]).toBe(1_000)
+    unmount()
+    expect(clearClock).toHaveBeenCalledWith(clock)
+    intervals.mockRestore()
+    clearClock.mockRestore()
+  })
+
+  it('qualifies an old ok, invalid clocks and missing receipts, then clears on fresh recovery', () => {
+    const data = decodeHealth(healthHealthy)
+    data.generatedAtMs = NOW
+    data.overall = {
+      status: 'ok',
+      reason: 'fixture verificada',
+      failing: [],
+      unverified: [],
+    }
+    const view = (receivedAt?: number, error: string | null = null) => (
+      <HealthIndicator data={data} receivedAt={receivedAt} error={error} />
+    )
+    const { rerender } = render(view())
+    const button = screen.getByTestId('health-indicator')
+    expect(button).toHaveTextContent('frescura/reloj sin verificar')
+    expect(button).toHaveAttribute('data-tone', 'unknown')
+    rerender(view(NOW, 'falló'))
+    expect(button).toHaveTextContent('lectura anterior')
+    expect(button).not.toHaveAttribute('data-tone', 'ok')
+    rerender(view(NOW))
+    expect(button).toHaveTextContent('Salud: correcta')
+    expect(button).not.toHaveTextContent('lectura anterior')
+    expect(button).toHaveAttribute('data-tone', 'ok')
+    act(() => vi.advanceTimersByTime(91_000))
+    rerender(view(Date.now()))
+    expect(button).toHaveTextContent('informe obsoleto')
+    expect(button).toHaveAttribute('data-tone', 'unknown')
+    data.generatedAtMs = Date.now()
+    rerender(view(Date.now()))
+    expect(button).not.toHaveTextContent('lectura anterior')
+    data.generatedAtMs = Date.now() + 6_000
+    rerender(view(Date.now()))
+    fireEvent.click(button)
+    expect(screen.getByText(/Generación:/)).toHaveTextContent('en el futuro')
+    expect(screen.getByRole('dialog')).toHaveTextContent(
+      'frescura/reloj sin verificar',
+    )
+  })
+
+  it.each([
+    'expectativas ilegibles: no se pudo leer el registro',
+    'Ninguna estrategia debe estar actualizándose',
+  ])('keeps the supplied unknown reason: %s', (reason) => {
+    const data = decodeHealth(healthHealthy)
+    data.generatedAtMs = NOW
+    data.components[2].status = 'unknown'
+    data.components[2].summary = reason
+    render(<HealthIndicator data={data} error={null} receivedAt={NOW} />)
+    fireEvent.click(screen.getByTestId('health-indicator'))
+    expect(screen.getByTestId('health-strategies')).toHaveTextContent(reason)
+    expect(screen.getByTestId('health-strategies')).toHaveAttribute(
+      'data-status',
+      'unknown',
+    )
   })
 })
 

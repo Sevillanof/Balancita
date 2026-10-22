@@ -776,6 +776,42 @@ describe('observability health', () => {
     ).toBe('unknown')
   })
 
+  it.each([
+    [0, 0, 'ok', 'running'],
+    [30_001, 0, 'ok', 'unknown'],
+    [-1, 0, 'ok', 'unknown'],
+    [0, 15_001, 'ok', 'unknown'],
+    [0, -1, 'ok', 'unknown'],
+    [0, 0, 'unavailable', 'unknown'],
+    [0, 0, undefined, 'unknown'],
+  ])(
+    'guards Kronos resource freshness (%s, %s, %s)',
+    (supervisorAge, sampleAge, status, process) => {
+      const b = box()
+      writeFileSync(
+        b.healthFile,
+        JSON.stringify({
+          updated_at_ms: NOW - supervisorAge,
+          resources: {
+            status,
+            sampled_at_ms: NOW - sampleAge,
+            kronos: { running: true },
+          },
+        }),
+      )
+      const report = createObservabilityHealth({
+        products: [],
+        processHealthPath: b.healthFile,
+        clock: () => NOW,
+      }).report()
+      expect(
+        component(report, 'strategies').items?.find(
+          (item) => item.experiment === 'kronos',
+        ),
+      ).toMatchObject({ process })
+    },
+  )
+
   it('reports Qwen without judging it, since it has no fixed cadence', () => {
     const b = box()
     seedHealthy(b)

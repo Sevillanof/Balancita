@@ -158,6 +158,33 @@ test('estrategias without the registry shows the error and no example data', asy
   await noHorizontalScroll(page)
 })
 
+/** A fresh, valid `system-usage.v1` response in the current resource format. */
+function systemUsage(cpu: number, rssMb: number, totalMb: number) {
+  const now = Date.now()
+  return {
+    schema: 'system-usage.v1',
+    status: 'ok',
+    at_ms: now,
+    cached_at_ms: now,
+    sampled_at_ms: now - 1_000,
+    supervisor_updated_at_ms: now - 1_000,
+    cpu_pct: cpu,
+    rss_mb: rssMb,
+    qwen: { running: true },
+    kronos: { running: true },
+    storage: {
+      status: 'ok',
+      scope: 'configured_data_directory',
+      complete: true,
+      sampled_at_ms: now - 1_000,
+      total_bytes: Math.round(totalMb * 1_048_576),
+      bytes: { sqlite_main: 0, wal: 0, shm: 0, log: 0, other: 0 },
+      max_entries: 1000,
+      max_depth: 3,
+    },
+  }
+}
+
 test('terminal live header shows the flow status and the usage chip', async ({
   page,
 }) => {
@@ -183,18 +210,7 @@ test('terminal live header shows the flow status and the usage chip', async ({
   )
   await page.route('**/api-live/system', (route) =>
     route.fulfill({
-      json: {
-        cpu_pct: 37.4,
-        rss_mb: 1320,
-        cores: 8,
-        data_mb: 148.2,
-        qwen: {
-          running: true,
-          decisions: { total: 900, last_hour: 12, avg_latency_ms: 1100 },
-          exit_decisions: 40,
-        },
-        kronos: { running: true, trades: 7, decisions: 30 },
-      },
+      json: systemUsage(37.4, 1320, 148),
     }),
   )
   await page.routeWebSocket(/\/api-live\/terminal\/stream/, () => {})
@@ -203,9 +219,11 @@ test('terminal live header shows the flow status and the usage chip', async ({
   await page.getByTestId('flow-status').click()
   await page.getByText('Diagnóstico del flujo, uso y modo').click()
   await expect(page.getByTestId('system-usage')).toContainText('CPU 37 %')
-  await expect(page.getByTestId('system-usage')).toContainText('DATOS 148 MB')
-  await expect(page.getByTestId('system-usage')).toContainText('QWEN 12/h')
-  await expect(page.getByTestId('system-usage')).toContainText('KRONOS 7 op.')
+  await expect(page.getByTestId('system-usage')).toContainText(
+    /DATOS 148[.,]0 MiB/,
+  )
+  await expect(page.getByTestId('system-usage')).toContainText('QWEN activo')
+  await expect(page.getByTestId('system-usage')).toContainText('KRONOS activo')
   await expect(page.getByText('FLUJO DESCONECTADO')).toBeVisible()
   await shot(page, 'terminal-flow')
   await noHorizontalScroll(page)
@@ -227,12 +245,7 @@ test('estrategias shows the same chips as the terminal when the gateway is up', 
   )
   await page.route('**/api-live/system', (route) =>
     route.fulfill({
-      json: {
-        cpu_pct: 15,
-        data_mb: 3419,
-        qwen: { running: true, decisions: { last_hour: 120 } },
-        kronos: { running: true, trades: 3 },
-      },
+      json: systemUsage(15, 900, 3419),
     }),
   )
   await page.goto('/estrategias')
@@ -240,7 +253,7 @@ test('estrategias shows the same chips as the terminal when the gateway is up', 
   await page.getByTestId('flow-status').click()
   await page.getByText('Diagnóstico del flujo, uso y modo').click()
   await expect(page.getByTestId('system-usage')).toContainText(
-    'CPU 15 % · DATOS 3419 MB · QWEN 120/h · KRONOS 3 op.',
+    /CPU 15 % · DATOS 3419[.,]0 MiB · QWEN activo · KRONOS activo/,
   )
   await expect(page.getByText('PAPER · KRAKEN')).toBeVisible()
   await shot(page, 'estrategias-chips')

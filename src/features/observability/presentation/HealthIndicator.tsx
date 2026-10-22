@@ -5,8 +5,14 @@ import {
   type HealthComponent,
   type HealthReport,
 } from '../infrastructure/observability-api.ts'
-import { LABEL, TONE, componentOrder } from './health-view.ts'
-import { momentLabel } from './format.ts'
+import { LABEL, TONE, componentOrder, reportTiming } from './health-view.ts'
+import { duration, momentLabel } from './format.ts'
+import { utcDateTime } from '../../../shared/finance/format.ts'
+
+function ageLabel(age: number | null): string {
+  if (age === null) return 'sin verificar'
+  return age < 0 ? 'en el futuro (desfase de reloj)' : `hace ${duration(age)}`
+}
 
 function ComponentRow({
   component,
@@ -15,7 +21,7 @@ function ComponentRow({
 }: {
   component: HealthComponent
   index: number
-  reference: number
+  reference: number | null
 }) {
   const failing = component.checks.filter(
     (check) => check.status === 'warning' || check.status === 'error',
@@ -70,7 +76,11 @@ function ComponentRow({
                 <dd>
                   {item.origin ?? 'Sin origen'} · {item.state}
                   {item.detail ? ` (${item.detail})` : ''} · última lectura:{' '}
-                  {momentLabel(item.lastUpdatedMs, reference)}
+                  {item.lastUpdatedMs === null
+                    ? 'Sin datos'
+                    : reference === null || item.lastUpdatedMs > reference
+                      ? `${utcDateTime(item.lastUpdatedMs)} · edad sin verificar`
+                      : momentLabel(item.lastUpdatedMs, reference)}
                 </dd>
               </div>
             ))}
@@ -95,12 +105,18 @@ function Inspector({
   report,
   error,
   applicable,
+  timing,
+  qualification,
+  tone,
   extra,
   onClose,
 }: {
   report: HealthReport | null
   error: string | null
   applicable: boolean
+  timing: ReturnType<typeof reportTiming> | null
+  qualification: string | null
+  tone: keyof typeof LABEL | 'none'
   extra?: ReactNode
   onClose: () => void
 }) {
@@ -133,13 +149,18 @@ function Inspector({
             <h2>Salud del sistema</h2>
             {report && (
               <p className="obs-inspector__meta">
-                Informe del gateway:{' '}
-                {momentLabel(report.generatedAtMs, report.generatedAtMs)}
+                Generación: {ageLabel(timing?.generationAge ?? null)} ·{' '}
+                Recepción: {ageLabel(timing?.receiptAge ?? null)} · hora
+                gateway:{' '}
+                {Number.isFinite(report.generatedAtMs)
+                  ? utcDateTime(report.generatedAtMs)
+                  : 'sin verificar'}
               </p>
             )}
           </div>
           {report && (
-            <StatusPill tone={TONE[report.overall.status]}>
+            <StatusPill tone={tone === 'none' ? 'nodata' : TONE[tone]}>
+              {qualification ? 'Lectura anterior · ' : ''}
               {LABEL[report.overall.status]}
             </StatusPill>
           )}
@@ -170,6 +191,12 @@ function Inspector({
           )}
           {applicable && report ? (
             <>
+              {qualification && (
+                <p className="obs-inspector__meta">
+                  Lectura anterior: {qualification}. Estados, conteos y motivos
+                  de abajo son evidencia previa, no una evaluación actual.
+                </p>
+              )}
               <p
                 className="obs-inspector__overall"
                 data-testid="health-overall"
@@ -187,7 +214,7 @@ function Inspector({
                         key={component.id}
                         component={component}
                         index={index}
-                        reference={report.generatedAtMs}
+                        reference={timing?.reference ?? null}
                       />
                     ))}
                   </ul>
@@ -211,7 +238,11 @@ function Inspector({
   )
 }
 
-export type HealthRead = { data: HealthReport | null; error: string | null }
+export type HealthRead = {
+  data: HealthReport | null
+  error: string | null
+  receivedAt?: number | null
+}
 
 /** What the header says about the data flow, next to the health read. */
 export type FlowFace = {
@@ -234,11 +265,28 @@ const FLOW_TONE = { ok: 'ok', warn: 'warning', bad: 'error' } as const
 export default function HealthIndicator({
   data,
   error,
+  receivedAt,
   applicable = true,
   flow,
   extra,
 }: HealthRead & { applicable?: boolean; flow?: FlowFace; extra?: ReactNode }) {
   const [open, setOpen] = useState(false)
+  const [now, setNow] = useState(Date.now)
+  // The clock always runs so `now` is never older than a tick when a report arrives.
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 1_000)
+    return () => clearInterval(timer)
+  }, [])
+  const timing = data ? reportTiming(now, receivedAt, data.generatedAtMs) : null
+  const qualification = !data
+    ? null
+    : error !== null
+      ? 'error de actualización'
+      : timing?.state === 'unverified'
+        ? 'frescura/reloj sin verificar'
+        : timing?.state === 'stale'
+          ? 'informe obsoleto'
+          : null
   const close = useCallback(() => setOpen(false), [])
   let tone: keyof typeof LABEL | 'none' = 'none'
   let text = 'Salud: sin datos'
@@ -254,6 +302,10 @@ export default function HealthIndicator({
           ? `Salud: ${unverified} sin verificar`
           : 'Salud: correcta'
     if (data.components.length > 0) text += ` · ${ok}/${data.components.length}`
+    if (qualification) {
+      text += ` (lectura anterior: ${qualification})`
+      if (tone === 'ok') tone = 'unknown'
+    }
   }
   if (!applicable) {
     tone = flow ? FLOW_TONE[flow.level] : 'none'
@@ -270,18 +322,13 @@ export default function HealthIndicator({
         data-testid="health-indicator"
         onClick={() => setOpen(true)}
         title={
-          applicable && error !== null && data
-            ? 'La última lectura falló: se muestra la anterior'
+          applicable && qualification
+            ? `Lectura anterior: ${qualification}`
             : 'Abrir el estado del sistema'
         }
       >
         <span className="obs-health__dot" aria-hidden="true" />
-        {applicable && (
-          <span>
-            {text}
-            {error !== null && data ? ' (lectura anterior)' : ''}
-          </span>
-        )}
+        {applicable && <span>{text}</span>}
         {flow && (
           <>
             <span
@@ -300,6 +347,9 @@ export default function HealthIndicator({
           report={data}
           error={error}
           applicable={applicable}
+          timing={timing}
+          qualification={qualification}
+          tone={tone}
           extra={extra}
           onClose={close}
         />
