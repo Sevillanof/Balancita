@@ -273,7 +273,7 @@ def _diag(trades_by_exit, per_day=25.0, funding=1.0):
         for k in range(count):
             trades.append({"product": PRODUCT, "side": "LONG" if k % 2 else "SHORT", "exit_reason": reason,
                            "gross_bp": gross, "net_bp": net,
-                           "funding_complete": funding > 0})
+                           "funding_bp": 0.0, "funding_complete": funding > 0})
     days = len(trades) / per_day
     return rep.build_diagnostic(trades, {PRODUCT: days}, {"raw": len(trades), "skipped_by_cost": 0},
                                 ["owner_close_crosses_frozen_donchian_mid"], 100)
