@@ -372,3 +372,34 @@
   color: var(--mc-text-2);
   font-size: 12px;
 }
+
+.runview__series {
+  display: grid;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--mc-border);
+  border-radius: var(--mc-radius);
+  background: var(--mc-canvas);
+  font-size: 13px;
+}
+
+.runview__series label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.runview__series input {
+  width: 64px;
+  padding: 4px 6px;
+  border: 1px solid var(--mc-border);
+  border-radius: 6px;
+  background: var(--mc-surface-1);
+  color: var(--mc-text);
+  font: inherit;
+}
+
+.runview__series-actions {
+  display: flex;
+  gap: 8px;
+}

@@ -225,9 +225,9 @@ test('Estrategias is only the list of names and the last test of the chosen one'
 
   await page.goto('/estrategias')
   const list = page.getByRole('navigation', { name: 'Lista de estrategias' })
-  // Every strategy is in the list, retired ones included (10 + the 6 retired).
-  await expect(list.locator('li[data-id]')).toHaveCount(10)
-  await expect(list.getByRole('button', { name: /^C27/ })).toBeVisible()
+  // Only what exists: the strategies retired from the old engine are not listed.
+  await expect(list.getByRole('button', { name: /^C30/ })).toBeVisible()
+  await expect(list.getByRole('button', { name: /^C27/ })).toHaveCount(0)
   await expect(page.getByRole('tablist')).toHaveCount(0)
 
   // The chosen strategy shows its last test: stage bar and the four figures.
@@ -238,8 +238,8 @@ test('Estrategias is only the list of names and the last test of the chosen one'
     view.getByRole('list', { name: 'Etapa de la estrategia' }),
   ).toBeVisible()
   await expect(view.getByTestId('run-kpis')).toBeVisible()
-  await list.getByRole('button', { name: /^C27/ }).click()
-  await expect(page.getByTestId('run-view')).toHaveAccessibleName(/C27/)
+  await list.getByRole('button', { name: /^C30/ }).click()
+  await expect(page.getByTestId('run-view')).toHaveAccessibleName(/C30/)
   await shot(page, '1-estrategias')
 
   // Each name has its menu: detalles opens a modal on this same screen.

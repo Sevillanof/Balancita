@@ -56,7 +56,11 @@ export type GateRequest = {
 
 export type GateApi = {
   overview: (strategyId: string) => Promise<GateOverview>
-  start: (strategyId: string, request: GateRequest) => Promise<void>
+  /** Starts a run; `run_id` is null while the server is still creating it. */
+  start: (
+    strategyId: string,
+    request: GateRequest,
+  ) => Promise<{ run_id: number | null }>
   cancel: (runId: number) => Promise<void>
   /** The Markdown text of a run's report. */
   report: (runId: number) => Promise<string>
@@ -97,6 +101,7 @@ export const gateApi: GateApi = {
       request,
     )
     if (!response.ok) throw await failure(response)
+    return (await response.json()) as { run_id: number | null }
   },
   async cancel(runId) {
     const response = await post(

@@ -1,4 +1,10 @@
-import { render, screen, waitFor, within } from '@testing-library/react'
+import {
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 import StrategyRunView from './StrategyRunView.tsx'
@@ -192,29 +198,67 @@ describe('StrategyRunView actions', () => {
     expect(screen.getByRole('button', { name: 'Crear' })).toBeDisabled()
   })
 
-  it('Testear starts a practice on the first stretch of the market not yet tried', async () => {
+  it('Testear asks how many tests in a row and runs them in distinct stretches', async () => {
     const user = userEvent.setup()
-    const gate = gateWith(
+    const tried = run(5, {
+      params: { from: '2025-01-01T00:00:00Z', to: '2025-04-01T00:00:00Z' },
+    })
+    const gate = gateWith(overview([tried]))
+    vi.mocked(gate.start)
+      .mockResolvedValueOnce({ run_id: 6 })
+      .mockResolvedValueOnce({ run_id: 7 })
+    // Each started test is finished by the time the screen looks again.
+    vi.mocked(gate.overview).mockImplementation(async () =>
       overview([
-        run(5, {
-          params: { from: '2025-01-01T00:00:00Z', to: '2025-04-01T00:00:00Z' },
-        }),
+        tried,
+        ...vi.mocked(gate.start).mock.results.map((_, index) =>
+          run(6 + index, {
+            params:
+              index === 0
+                ? { from: '2025-04-01', to: '2025-07-01' }
+                : { from: '2025-07-01', to: '2025-10-01' },
+          }),
+        ),
       ]),
     )
-    vi.mocked(gate.start).mockResolvedValue({ pending: true } as never)
     renderView(gate, visualWith())
-    const button = await screen.findByRole('button', { name: 'Testear' })
+    await user.click(await screen.findByRole('button', { name: 'Testear' }))
+    const panel = screen.getByRole('group', { name: 'Pruebas seguidas' })
+    const input = within(panel).getByLabelText('¿Cuántas pruebas seguidas?')
+    fireEvent.change(input, { target: { value: '2' } })
     await waitFor(() =>
-      expect(button).toHaveAttribute(
-        'title',
-        expect.stringContaining('abr–jun 2025'),
-      ),
+      expect(panel).toHaveTextContent('abr–jun 2025 → jul–sep 2025'),
     )
-    await user.click(button)
-    expect(gate.start).toHaveBeenCalledWith('x2', {
+    await user.click(within(panel).getByRole('button', { name: 'Empezar' }))
+    await waitFor(() => expect(gate.start).toHaveBeenCalledTimes(2))
+    expect(gate.start).toHaveBeenNthCalledWith(1, 'x2', {
       from: '2025-04-01',
       to: '2025-07-01',
     })
+    expect(gate.start).toHaveBeenNthCalledWith(2, 'x2', {
+      from: '2025-07-01',
+      to: '2025-10-01',
+    })
+  })
+
+  it('a refresh while a test runs does not reload the chart', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      const visual = visualWith()
+      const gate = gateWith({
+        ...overview([run(24)]),
+        running: { id: 25, strategy_id: 'x2' },
+      } as GateOverview)
+      renderView(gate, visual)
+      await screen.findByTestId('chart')
+      expect(visual.summary).toHaveBeenCalledTimes(1)
+      await vi.advanceTimersByTimeAsync(31_000)
+      expect(vi.mocked(gate.overview).mock.calls.length).toBeGreaterThan(1)
+      expect(visual.summary).toHaveBeenCalledTimes(1)
+      expect(screen.getByTestId('chart')).toBeInTheDocument()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('Testear is disabled while a test runs', async () => {

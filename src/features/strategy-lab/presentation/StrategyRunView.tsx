@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import ApprovedTerminalChart from '../../trading-view/presentation/ApprovedTerminalChart.tsx'
 import { amount } from '../../../shared/finance/format.ts'
 import { signedAmount } from '../domain/strategy-format.ts'
-import { nextStage } from '../domain/market-stages.ts'
+import { untriedStages, type MarketStage } from '../domain/market-stages.ts'
 import { STAGES, deriveStage } from '../domain/run-stage.ts'
 import {
   priceLinesOf,
@@ -102,6 +102,21 @@ export default function StrategyRunView({
 
   const [reload, setReload] = useState(0)
   const [testing, setTesting] = useState(false)
+  const [panelOpen, setPanelOpen] = useState(false)
+  const [howMany, setHowMany] = useState(1)
+  const [series, setSeries] = useState<{
+    done: number
+    total: number
+    label: string
+  } | null>(null)
+  const stopSeries = useRef(false)
+  const mounted = useRef(true)
+  useEffect(() => {
+    mounted.current = true
+    return () => {
+      mounted.current = false
+    }
+  }, [])
   const [testError, setTestError] = useState<string | null>(null)
   const busy = overview?.running != null
   useEffect(() => {
@@ -193,20 +208,27 @@ export default function StrategyRunView({
     [visual, loadProduct],
   )
 
-  // The newest finished run that saved its trades, unless the user picked one.
+  // The newest finished run that saved its trades. It only reloads when the set of finished runs
+  // changes: the 10 s refresh of a running test must not redraw (blink) the chart.
+  const loaded = overview !== null
+  const finishedIds = useMemo(
+    () => finished.map((run) => run.id).join(','),
+    [finished],
+  )
   useEffect(() => {
-    if (overview === null) return
+    if (!loaded) return
     const mine = ++token.current
-    const candidates = finished
+    const candidates =
+      finishedIds === '' ? [] : finishedIds.split(',').map(Number)
     void (async () => {
-      if (finished.length === 0) {
+      if (candidates.length === 0) {
         setState({ kind: 'empty', reason: 'no-runs' })
         return
       }
       setState({ kind: 'loading' })
-      for (const run of candidates) {
+      for (const runId of candidates) {
         try {
-          await openRun(mine, run.id)
+          await openRun(mine, runId)
           return
         } catch (error) {
           if (token.current !== mine) return
@@ -220,7 +242,7 @@ export default function StrategyRunView({
         setState({ kind: 'empty', reason: 'no-trades-saved' })
     })()
     return invalidate
-  }, [overview, finished, openRun, invalidate])
+  }, [loaded, finishedIds, openRun, invalidate])
 
   const data = state.kind === 'ready' ? state.data : null
 
@@ -271,24 +293,53 @@ export default function StrategyRunView({
     ? finished.find((run) => run.id === data.summary.run_id)
     : null
   const running = overview?.running ?? null
-  const stageToTest = nextStage(overview?.runs ?? [])
-  const testNote = stageToTest
-    ? `Prueba nueva en una etapa distinta del mercado: ${stageToTest.label}`
-    : 'Ya la probaste en todas las etapas del mercado'
-  const test = async () => {
-    if (!stageToTest) return
+  const untried = untriedStages(overview?.runs ?? [])
+  const count = Math.min(Math.max(howMany, 1), Math.max(untried.length, 1))
+  const plan = untried.slice(0, count)
+  const testNote =
+    untried.length > 0
+      ? 'Probar la estrategia en etapas distintas del mercado'
+      : 'Ya la probaste en todas las etapas del mercado'
+
+  /** Runs the stages one after the other; each waits for the previous test to end. */
+  const runSeries = async (stages: MarketStage[]) => {
+    stopSeries.current = false
+    setPanelOpen(false)
     setTesting(true)
     setTestError(null)
     try {
-      await gate.start(strategyId, {
-        from: stageToTest.from,
-        to: stageToTest.to,
-      })
-      setReload((value) => value + 1)
+      for (const [index, stage] of stages.entries()) {
+        if (stopSeries.current || !mounted.current) break
+        setSeries({ done: index, total: stages.length, label: stage.label })
+        const started = await gate.start(strategyId, {
+          from: stage.from,
+          to: stage.to,
+        })
+        let latest = await gate.overview(strategyId)
+        while (latest.running != null) {
+          setOverview(latest)
+          await new Promise((resolve) => setTimeout(resolve, 4000))
+          if (!mounted.current) return
+          latest = await gate.overview(strategyId)
+        }
+        setOverview(latest)
+        const mine = latest.runs.find((run) => run.id === started.run_id)
+        if (mine && mine.status !== 'done') {
+          setTestError(
+            mine.error ??
+              `La prueba de ${stage.label} no terminó (${mine.status}). Se frena la serie.`,
+          )
+          break
+        }
+      }
     } catch (error) {
-      setTestError(message(error))
+      if (mounted.current) setTestError(message(error))
     } finally {
-      setTesting(false)
+      if (mounted.current) {
+        setSeries(null)
+        setTesting(false)
+        setReload((value) => value + 1)
+      }
     }
   }
   // Retired strategies of the old engine are not in the gate's registry.
@@ -325,15 +376,65 @@ export default function StrategyRunView({
             </button>
             <button
               type="button"
-              onClick={() => void test()}
-              disabled={testing || running != null || !stageToTest}
-              title={testNote ?? undefined}
+              onClick={() => setPanelOpen((open) => !open)}
+              disabled={testing || running != null || untried.length === 0}
+              title={testNote}
+              aria-expanded={panelOpen}
             >
-              {running ? 'Prueba en curso…' : 'Testear'}
+              {running || series ? 'Prueba en curso…' : 'Testear'}
             </button>
           </div>
         </div>
       </header>
+      {panelOpen && (
+        <div
+          className="runview__series"
+          role="group"
+          aria-label="Pruebas seguidas"
+        >
+          <label>
+            ¿Cuántas pruebas seguidas?
+            <input
+              type="number"
+              min={1}
+              max={untried.length}
+              value={count}
+              onChange={(event) => setHowMany(Number(event.target.value) || 1)}
+            />
+          </label>
+          <p className="runview__hint">
+            Cada una en una etapa distinta del mercado, una después de otra:{' '}
+            {plan.map((stage) => stage.label).join(' → ')}. Quedan{' '}
+            {untried.length} etapas sin probar.
+          </p>
+          <div className="runview__series-actions">
+            <button type="button" onClick={() => void runSeries(plan)}>
+              Empezar
+            </button>
+            <button type="button" onClick={() => setPanelOpen(false)}>
+              Cancelar
+            </button>
+          </div>
+        </div>
+      )}
+      {series && (
+        <p role="status" className="runview__hint">
+          Prueba {series.done + 1} de {series.total} · {series.label}
+          {series.total > 1 && (
+            <>
+              {' '}
+              <button
+                type="button"
+                onClick={() => {
+                  stopSeries.current = true
+                }}
+              >
+                Parar después de esta
+              </button>
+            </>
+          )}
+        </p>
+      )}
       {testError && (
         <p role="alert" className="runview__warn">
           {testError}

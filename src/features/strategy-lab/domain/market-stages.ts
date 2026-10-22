@@ -17,8 +17,8 @@ export const MARKET_STAGES: readonly MarketStage[] = [
 
 const day = (stamp: string | undefined) => (stamp ?? '').slice(0, 10)
 
-/** Next stage without a (non-failed) run of this strategy's current content, or null when all were tried. */
-export function nextStage(runs: readonly GateRun[]): MarketStage | null {
+/** Stages without a (non-failed) run of this strategy's current content, in order. */
+export function untriedStages(runs: readonly GateRun[]): MarketStage[] {
   const tried = runs.filter(
     (run) =>
       run.kind === 'practice' &&
@@ -26,14 +26,17 @@ export function nextStage(runs: readonly GateRun[]): MarketStage | null {
       run.status !== 'failed' &&
       run.status !== 'cancelled',
   )
-  return (
-    MARKET_STAGES.find(
-      (stage) =>
-        !tried.some(
-          (run) =>
-            day(run.params?.from) === stage.from &&
-            day(run.params?.to) === stage.to,
-        ),
-    ) ?? null
+  return MARKET_STAGES.filter(
+    (stage) =>
+      !tried.some(
+        (run) =>
+          day(run.params?.from) === stage.from &&
+          day(run.params?.to) === stage.to,
+      ),
   )
+}
+
+/** Next stage without a run of this strategy's current content, or null when all were tried. */
+export function nextStage(runs: readonly GateRun[]): MarketStage | null {
+  return untriedStages(runs)[0] ?? null
 }

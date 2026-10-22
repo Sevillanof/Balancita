@@ -31,6 +31,14 @@ type Modal =
   | { kind: 'delete'; id: string }
   | { kind: 'activate'; id: string; passed: boolean | null }
 
+/**
+ * Only what exists: strategies retired from the old engine (`closed`) and shipped specs the registry
+ * does not know (`basis: none`) come back in the inventory but cannot be opened, edited or deleted.
+ */
+const exists = (row: InventoryStrategy) =>
+  row.operational.state !== 'closed' &&
+  !(row.kind === 'rules' && row.operational.basis === 'none')
+
 /** Qwen and Kronos act in the paper from code: they are tested but never edited or deleted here. */
 const editable = (row: InventoryStrategy) => row.kind === 'rules'
 const operating = (row: InventoryStrategy) =>
@@ -68,7 +76,7 @@ export default function StrategiesPage({
     api.inventory().then(
       (inventory) => {
         if (!active) return
-        setRows(inventory.strategies)
+        setRows(inventory.strategies.filter(exists))
         setFailure(null)
       },
       (error: unknown) => {
