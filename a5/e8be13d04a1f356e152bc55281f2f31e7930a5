@@ -1,0 +1,47 @@
+odd/tasks/health-observability.md
+  s_fb3472b380ad7c::t_22d1ce06d66814 4,8,19,23,35,51,58,69,97
+scripts/dev-resources.mjs
+  s_fb3472b380ad7c::t_7e9fd527a57715 9-21,33-35,83-86,114-117,151-155,163-168,179-187
+scripts/dev-resources.node-test.mjs
+  s_fb3472b380ad7c::t_d59f1ad4cc8d32 51-55,76-79,104-108,119-121,127-130,149-151,168-174,176-178,202-203
+server/src/features/live-gateway/observability-health.test.ts
+  s_fb3472b380ad7c::t_b6d101b42ad86a 787-813
+server/src/features/live-gateway/observability-health.ts
+  s_fb3472b380ad7c::t_4176464cc9a85c 359-367
+server/src/features/live-gateway/system-usage.test.ts
+  s_fb3472b380ad7c::t_c3dcf6afff5ee9 1-7,47-48,111-115,119-123,130-189,192-211,213-220,227-259,265-268,273-279,284-296,298-306,313-320,328-340,346-353,367-375
+server/src/features/live-gateway/system-usage.ts
+  s_fb3472b380ad7c::t_439a4ed7b00731 2-9,43-44,51-53,55-56,79-83,102-110,138-139,147-148,166-168,178-179,184-188,223-225,227-228,238-241,243-244,290-293,296-299
+src/app/AppStatusChips.test.tsx
+  s_fb3472b380ad7c::t_bc04444637aa4c 46-47
+src/app/SystemUsageChip.test.tsx
+  s_fb3472b380ad7c::t_4c1eb55a934ab3 7-14,16-17,19-23,25-33,36-39,44-46,51-58,66-72,76-78,84-90,93-95,102-108,112-117,123-135,137-139,141-146,148-150,154-159,161-163,166-169,173-190
+src/app/SystemUsageChip.tsx
+  s_fb3472b380ad7c::t_84a1ec2a33a7fd 9-13,25-27,32-33,40-44,49-51,66-70
+src/app/system-usage.test.ts
+  s_fb3472b380ad7c::t_a79b7d4f686478 6-13,21-26,32-34,39-43,45-58,62-66,70-78,83-91,98-110,118-138
+src/app/system-usage.ts
+  s_fb3472b380ad7c::t_d850c615a3c31a 31-36,39-45,49-51,54-59,70-73,76-79,82-98,111-113
+src/features/observability/presentation/HealthIndicator.tsx
+  s_fb3472b380ad7c::t_51bd06d590d29d 153-157,333
+src/features/observability/presentation/Observability.test.tsx
+  s_fb3472b380ad7c::t_75ab3bd6816405 184-186,213-217,242-248,265-267,288-291,310-317,324-328,336-340,394-397,437,441-442
+src/features/observability/presentation/health-view.ts
+  s_fb3472b380ad7c::t_7e9123674f6d60 24-28
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "a5e8be13d04a1f356e152bc55281f2f31e7930a5",
+  "prompts": {},
+  "sessions": {
+    "s_fb3472b380ad7c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "0b673426-81c4-4c90-a0b6-044955a234e7",
+        "model": "claude-sonnet-5-5"
+      },
+      "human_author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
