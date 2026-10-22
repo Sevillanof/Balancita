@@ -1,0 +1,254 @@
+.analyzer__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.analyzer__controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px 24px;
+  align-items: end;
+}
+
+.analyzer__label {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--mc-text-2);
+  font-size: 12px;
+}
+
+.analyzer__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.analyzer__chips button {
+  min-width: 44px;
+  padding: 5px 10px;
+  border: 1px solid var(--mc-border);
+  border-radius: var(--mc-radius);
+  background: transparent;
+  color: var(--mc-text);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.analyzer__chips button[aria-pressed='true'] {
+  border-color: var(--mc-long);
+  background: var(--mc-surface-2, var(--mc-surface-1));
+  font-weight: 700;
+  box-shadow: inset 0 -2px 0 var(--mc-long);
+}
+
+.analyzer__view select {
+  padding: 5px 8px;
+  border: 1px solid var(--mc-border);
+  border-radius: var(--mc-radius);
+  background: var(--mc-canvas);
+  color: var(--mc-text);
+  font: inherit;
+  font-size: 13px;
+}
+
+.analyzer__summary {
+  padding: 8px 10px;
+  border: 1px solid var(--mc-border);
+  border-radius: 6px;
+  background: var(--mc-canvas);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.analyzer__body {
+  display: grid;
+  grid-template-columns: minmax(0, 1.5fr) minmax(260px, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+
+.analyzer__gridwrap {
+  min-width: 0;
+  overflow-x: auto;
+}
+
+.analyzer__grid {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 3px;
+  font-size: 12px;
+}
+
+.analyzer__grid th {
+  padding: 2px 4px;
+  color: var(--mc-text-2);
+  font-weight: 600;
+  text-align: center;
+}
+
+.analyzer__grid tbody th {
+  min-width: 150px;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.analyzer__grid td {
+  padding: 0;
+}
+
+.analyzer__none {
+  color: var(--mc-text-2);
+  text-align: center;
+}
+
+.analyzer__cell {
+  position: relative;
+  display: grid;
+  gap: 1px;
+  width: 100%;
+  min-width: 78px;
+  padding: 5px 4px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--mc-text-2) 14%, transparent);
+  color: var(--mc-text);
+  font: inherit;
+  text-align: center;
+  cursor: pointer;
+}
+
+.analyzer__cell[data-tone='gain'] {
+  background: color-mix(
+    in srgb,
+    var(--mc-long) calc(var(--k) * 100%),
+    transparent
+  );
+}
+
+.analyzer__cell[data-tone='loss'] {
+  background: color-mix(
+    in srgb,
+    var(--mc-short) calc(var(--k) * 100%),
+    transparent
+  );
+}
+
+.analyzer__cell[aria-pressed='true'] {
+  border-color: var(--mc-text);
+}
+
+.analyzer__cell:focus-visible,
+.analyzer__chips button:focus-visible {
+  outline: 2px solid var(--mc-text);
+  outline-offset: 1px;
+}
+
+.analyzer__cell-main {
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.analyzer__cell-sub {
+  color: var(--mc-text-2);
+  font-size: 10px;
+}
+
+.analyzer__flag {
+  position: absolute;
+  top: 1px;
+  right: 3px;
+  color: var(--mc-warn);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.analyzer__legend {
+  margin-top: 6px;
+  color: var(--mc-text-2);
+  font-size: 11px;
+}
+
+.analyzer__detail {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--mc-border);
+  border-radius: 6px;
+}
+
+.analyzer__bigs {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.analyzer__bigs span {
+  display: block;
+  color: var(--mc-text-2);
+  font-size: 12px;
+}
+
+.analyzer__bigs strong {
+  font-size: 22px;
+  line-height: 1.2;
+}
+
+.analyzer__bigs strong[data-tone='gain'] {
+  color: var(--mc-long);
+}
+
+.analyzer__bigs strong[data-tone='loss'] {
+  color: var(--mc-short);
+}
+
+.analyzer__curve {
+  margin: 0;
+}
+
+.analyzer__curve svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  border: 1px solid var(--mc-border);
+  border-radius: 4px;
+  background: var(--mc-canvas);
+}
+
+.analyzer__curve figcaption {
+  margin-top: 4px;
+  color: var(--mc-text-2);
+  font-size: 11px;
+}
+
+.analyzer__zero {
+  stroke: var(--mc-text-2);
+  stroke-dasharray: 3 3;
+  stroke-width: 1;
+}
+
+.analyzer__line {
+  stroke-width: 2;
+  stroke-linejoin: round;
+}
+
+.analyzer__line[data-tone='gain'] {
+  stroke: var(--mc-long);
+}
+
+.analyzer__line[data-tone='loss'] {
+  stroke: var(--mc-short);
+}
+
+.analyzer__notes {
+  display: grid;
+  gap: 8px;
+}
+
+@media (max-width: 860px) {
+  .analyzer__body {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

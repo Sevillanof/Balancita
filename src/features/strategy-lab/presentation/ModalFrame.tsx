@@ -6,11 +6,14 @@ export default function ModalFrame({
   label,
   onClose,
   wide = false,
+  xwide = false,
   children,
 }: {
   label: string
   onClose: () => void
   wide?: boolean
+  /** Aún más ancho: pantallas con una grilla al lado de un detalle. */
+  xwide?: boolean
   children: React.ReactNode
 }) {
   useEffect(() => {
@@ -28,7 +31,13 @@ export default function ModalFrame({
       }}
     >
       <div
-        className={wide ? 'smodal smodal--wide' : 'smodal'}
+        className={
+          xwide
+            ? 'smodal smodal--xwide'
+            : wide
+              ? 'smodal smodal--wide'
+              : 'smodal'
+        }
         role="dialog"
         aria-modal="true"
         aria-label={label}
