@@ -45,25 +45,35 @@ Archivos por exploración en `<dir>/explorations/<id>/`: `job.json` (lo escribe 
 
 Errores: `{error, detail}` con `detail` en español, igual que las rutas de la compuerta.
 
-| Ruta | Devuelve / hace |
-| --- | --- |
-| `GET /api-strategies/strategies/:id/vectorbt` | `{strategy_id, available, reason, running, busy_with, explorations[], attempts_in_family}`. `available: false` + `reason` («Falta instalar el entorno de VectorBT: …comandos») si falta el entorno. `running`: la exploración en curso de esta estrategia o `null`; `busy_with`: `{exploration_id, strategy_id}` si la que corre es de otra. `explorations`: las 30 más recientes primero. `attempts_in_family`: variantes distintas de la familia en el registro de intentos (`null` si no se pudo leer). |
-| `POST /api-strategies/strategies/:id/vectorbt` | Body `{mode: "diagnostic"}` o `{mode: "variants", vary, values: [≤12]}`. `vary`: nombre de un parámetro (`stop_atr`) o ruta de una constante numérica de una condición (`rules.checks[2].node.right`). Devuelve `{exploration_id, pid}`. Si faltan los datasets de práctica de los productos de la compuerta, el subproceso los baja antes (`research.vectorbt.export_practice --fetch`, se guardan en caché) con la fase «Descargando datos» y el detalle «Descargando velas de Kraken (ETH 2/3)»; ocupa el primer 45 % de la barra. |
-| `POST /api-strategies/strategies/:id/vectorbt/:eid/cancel` | `{exploration_id, cancel_requested: true}`. Termina el grupo de procesos. 409 `not_running` si ya terminó. |
-| `POST /api-strategies/strategies/:id/vectorbt/:eid/confirm` | Body `{value}` (una variante del ranking). Crea la variante como **estrategia nueva en borrador** del mismo linaje (`<familia>-vN` siguiente, título «<título> · <param>=<valor>», `origin: "vectorbt"`, padre = la original) con la misma función que usa el laboratorio (`spec_variation.apply_value`) sobre la spec explorada. Devuelve `{strategy_id, version, title, state: "draft", already}`; repetir el valor devuelve la misma (`already: true`). Para ponerla a prueba, el front usa el flujo normal: `POST /strategies/:newid/gate`. |
-| `GET /api-strategies/strategies/:id/vectorbt/:eid/compare?value=…&run_id=N` | VectorBT frente al simulador para esa variante (ver abajo). `run_id` es una corrida **de práctica terminada** de la estrategia creada con `confirm` (para el valor base, de la original); sin `run_id` toma la última. |
+| Ruta                                                                        | Devuelve / hace                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| --------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET /api-strategies/strategies/:id/vectorbt`                               | `{strategy_id, available, reason, running, busy_with, explorations[], attempts_in_family}`. `available: false` + `reason` («Falta instalar el entorno de VectorBT: …comandos») si falta el entorno. `running`: la exploración en curso de esta estrategia o `null`; `busy_with`: `{exploration_id, strategy_id}` si la que corre es de otra. `explorations`: las 30 más recientes primero. `attempts_in_family`: variantes distintas de la familia en el registro de intentos (`null` si no se pudo leer).                                      |
+| `POST /api-strategies/strategies/:id/vectorbt`                              | Body `{mode: "diagnostic"}` o `{mode: "variants", vary, values: [≤12]}`. `vary`: nombre de un parámetro (`stop_atr`) o ruta de una constante numérica de una condición (`rules.checks[2].node.right`). Devuelve `{exploration_id, pid}`. Si faltan los datasets de práctica de los productos de la compuerta, el subproceso los baja antes (`research.vectorbt.export_practice --fetch`, se guardan en caché) con la fase «Descargando datos» y el detalle «Descargando velas de Kraken (ETH 2/3)»; ocupa el primer 45 % de la barra.           |
+| `POST /api-strategies/strategies/:id/vectorbt/:eid/cancel`                  | `{exploration_id, cancel_requested: true}`. Termina el grupo de procesos. 409 `not_running` si ya terminó.                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| `POST /api-strategies/strategies/:id/vectorbt/:eid/confirm`                 | Body `{value}` (una variante del ranking). Crea la variante como **estrategia nueva en borrador** del mismo linaje (`<familia>-vN` siguiente, título «<título> · <param>=<valor>», `origin: "vectorbt"`, padre = la original) con la misma función que usa el laboratorio (`spec_variation.apply_value`) sobre la spec explorada. Devuelve `{strategy_id, version, title, state: "draft", already}`; repetir el valor devuelve la misma (`already: true`). Para ponerla a prueba, el front usa el flujo normal: `POST /strategies/:newid/gate`. |
+| `GET /api-strategies/strategies/:id/vectorbt/:eid/compare?value=…&run_id=N` | VectorBT frente al simulador para esa variante (ver abajo). `run_id` es una corrida **de práctica terminada** de la estrategia creada con `confirm` (para el valor base, de la original); sin `run_id` toma la última.                                                                                                                                                                                                                                                                                                                          |
 
 Errores del lanzamiento: 400 (`invalid_mode`, `invalid_body`, `invalid_vary`, `invalid_values`: máximo 12 valores, números), 404 (no existe la estrategia), 422 `unsupported_kind` (solo reglas), 503 `vectorbt_unavailable`, 409 `busy` (otra exploración en curso, o una prueba de la compuerta: comparten procesador, y mientras VectorBT corre `POST /strategies/:id/gate` también devuelve 409 `busy`). De `confirm`: 409 `not_ready`, `is_base`, `variant_failed`, `duplicate_spec`; 404 `unknown_value`. De `compare`: 409 `not_confirmed`, `invalid_run`, `artifact_not_ready`; 404 `run_not_found`.
 
 ### Una exploración (`explorations[]`)
 
 ```json
-{"id": "c27-breakout-perp-v1-20261022-101500", "strategy_id": "c27-breakout-perp-v1",
- "mode": "variants", "vary": "stop_atr", "values": ["1", "2"],
- "status": "running | done | failed | unsupported | cancelled",
- "progress": 37.5, "phase": "Probando variantes", "detail": "stop_atr = 2 en PF_XBTUSD",
- "eta": 240, "created_at": 1792000000000, "finished_at": null,
- "report": null, "confirmed": {"2": "c27-breakout-perp-v2"}}
+{
+  "id": "c27-breakout-perp-v1-20261022-101500",
+  "strategy_id": "c27-breakout-perp-v1",
+  "mode": "variants",
+  "vary": "stop_atr",
+  "values": ["1", "2"],
+  "status": "running | done | failed | unsupported | cancelled",
+  "progress": 37.5,
+  "phase": "Probando variantes",
+  "detail": "stop_atr = 2 en PF_XBTUSD",
+  "eta": 240,
+  "created_at": 1792000000000,
+  "finished_at": null,
+  "report": null,
+  "confirmed": { "2": "c27-breakout-perp-v2" }
+}
 ```
 
 `created_at` y `finished_at` en milisegundos; `eta` en segundos (`null` si no se puede estimar). `report` es el `report.json` completo cuando `status` es `done` o `unsupported` (en este último `detail` trae el motivo). Fases: `Preparando`, `Descargando datos`, `Cargando datos`, `Probando la estrategia`, `Preparando el simulador`, `Probando variantes`, `Armando el informe`, `Listo`; en un fallo, `detail` es el motivo.

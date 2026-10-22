@@ -13,18 +13,18 @@ Todo lo que sale de acá es una **hipótesis** sobre datos de práctica. No apru
 
 (Se escribe en una línea.) Desde Python: `research.vectorbt.explore.run_exploration(...)`.
 
-| Opción | Qué es |
-| --- | --- |
-| `--strategy` | Id de una spec de `config/strategies/` o ruta a un archivo de spec. Desde Python también un `dict`. |
-| `--mode` | `diagnostic` (la estrategia tal cual) o `variants` (varía una sola cosa). |
-| `--vary` | Solo `variants`. Un nombre de `params` (`stop_atr`) o la ruta a una constante numérica de una condición (ver abajo). |
-| `--values` | Solo `variants`. Valores separados por coma. **Máximo 12**; con más, el comando se niega (código 2) y no escribe nada. Nunca se amplía solo. |
-| `--products` | Productos separados por coma. Por defecto `default_products` de `config/strategy-gate.json`. |
-| `--datasets-dir` | Carpeta con un dataset sellado por producto (`<dir>/<PRODUCTO>/manifest.json`). Por defecto `data/research-vectorbt/practice`. Se crean con `export_practice`. |
-| `--exploration-id` | Id de la exploración (letras, números, `.`, `-`, `_`). Por defecto `<strategy_id>-<AAAAMMDD-HHMMSS>`. Si ya existe, se niega. |
-| `--out-dir` | Por defecto `data/research-vectorbt/explorations`. |
-| `--ledger` | Registro de intentos. Por defecto `data/research-vectorbt/ledger.sqlite`. |
-| `--gate-config` | Por defecto `config/strategy-gate.json`. |
+| Opción             | Qué es                                                                                                                                                         |
+| ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--strategy`       | Id de una spec de `config/strategies/` o ruta a un archivo de spec. Desde Python también un `dict`.                                                            |
+| `--mode`           | `diagnostic` (la estrategia tal cual) o `variants` (varía una sola cosa).                                                                                      |
+| `--vary`           | Solo `variants`. Un nombre de `params` (`stop_atr`) o la ruta a una constante numérica de una condición (ver abajo).                                           |
+| `--values`         | Solo `variants`. Valores separados por coma. **Máximo 12**; con más, el comando se niega (código 2) y no escribe nada. Nunca se amplía solo.                   |
+| `--products`       | Productos separados por coma. Por defecto `default_products` de `config/strategy-gate.json`.                                                                   |
+| `--datasets-dir`   | Carpeta con un dataset sellado por producto (`<dir>/<PRODUCTO>/manifest.json`). Por defecto `data/research-vectorbt/practice`. Se crean con `export_practice`. |
+| `--exploration-id` | Id de la exploración (letras, números, `.`, `-`, `_`). Por defecto `<strategy_id>-<AAAAMMDD-HHMMSS>`. Si ya existe, se niega.                                  |
+| `--out-dir`        | Por defecto `data/research-vectorbt/explorations`.                                                                                                             |
+| `--ledger`         | Registro de intentos. Por defecto `data/research-vectorbt/ledger.sqlite`.                                                                                      |
+| `--gate-config`    | Por defecto `config/strategy-gate.json`.                                                                                                                       |
 
 **Ventana de datos.** Es la de los datasets de práctica; el laboratorio nunca lee velas desde `holdout_from` (2026-04-19). `lab_common.check_dataset` rechaza un dataset que llegue a la reserva, o cuyos archivos no coincidan con su manifiesto, antes de leer nada.
 
@@ -35,7 +35,11 @@ Todo lo que sale de acá es una **hipótesis** sobre datos de práctica. No apru
 Una línea JSON por avance:
 
 ```json
-{"progress": 37.5, "phase": "Probando variantes", "detail": "stop_atr = 2 en PF_XBTUSD"}
+{
+  "progress": 37.5,
+  "phase": "Probando variantes",
+  "detail": "stop_atr = 2 en PF_XBTUSD"
+}
 ```
 
 - `progress`: 0 a 100, nunca baja. Avanza con el trabajo hecho (cada corrida de cada producto es una parte de la barra), no por tiempos fijos.
@@ -51,26 +55,26 @@ Una línea JSON por avance:
 
 Esquema `balancita.vectorbt-exploration.v1`. Los números son `float` (pb = puntos básicos, 1 pb = 0,01 % de lo operado); un dato que no existe es `null`.
 
-| Campo | Qué es |
-| --- | --- |
-| `schema` | `"balancita.vectorbt-exploration.v1"` |
-| `exploration_id`, `mode` | Id y modo (`diagnostic` / `variants`). |
-| `status` | `"ok"` o `"unsupported"`. |
-| `strategy_id`, `strategy_name`, `family` | La estrategia y su familia (el id sin `-vN`). |
-| `spec_hash` | Hash canónico de la spec corrida. |
-| `window` | `{from, to}`: del inicio al fin (exclusivo) de los datos, UTC. Con varios productos, el más temprano y el más tardío. |
-| `products` | Productos corridos. |
-| `dataset_sha256` | Hash de los datos (con varios productos, el hash de los hashes). `datasets[]` trae cada uno: `{product, dataset_sha256, from, to}`. |
-| `generated_at` | Fecha y hora UTC de la corrida. |
-| `cost_model_version` | Versión del modelo de costos del motor. |
-| `warning` | Aviso estándar: son hipótesis, no un PASA. **Mostralo siempre.** |
-| `glossary` | `{pb, neto, bruto}`: qué significa cada palabra. |
-| `unsupported` | `null`, o `{reason}` con el motivo en español si la estrategia usa algo que el laboratorio no reproduce. |
-| `diagnostic` | Ver abajo. `null` si `status` es `unsupported`. |
-| `vary` | Solo `variants`: `{kind: "param" \| "condition", name, label, base_value}`. |
-| `variants` | Solo `variants`: lista ordenada (ver abajo). |
-| `variants_headline` | Solo `variants`: una o dos frases simples sobre el conjunto. |
-| `attempts_in_family` | Variantes distintas de la familia en el registro de intentos (`ledger.distinct_variants(family_of(id))`), contando las de esta corrida. En `diagnostic` es una lectura del registro, sin escribir. |
+| Campo                                    | Qué es                                                                                                                                                                                             |
+| ---------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `schema`                                 | `"balancita.vectorbt-exploration.v1"`                                                                                                                                                              |
+| `exploration_id`, `mode`                 | Id y modo (`diagnostic` / `variants`).                                                                                                                                                             |
+| `status`                                 | `"ok"` o `"unsupported"`.                                                                                                                                                                          |
+| `strategy_id`, `strategy_name`, `family` | La estrategia y su familia (el id sin `-vN`).                                                                                                                                                      |
+| `spec_hash`                              | Hash canónico de la spec corrida.                                                                                                                                                                  |
+| `window`                                 | `{from, to}`: del inicio al fin (exclusivo) de los datos, UTC. Con varios productos, el más temprano y el más tardío.                                                                              |
+| `products`                               | Productos corridos.                                                                                                                                                                                |
+| `dataset_sha256`                         | Hash de los datos (con varios productos, el hash de los hashes). `datasets[]` trae cada uno: `{product, dataset_sha256, from, to}`.                                                                |
+| `generated_at`                           | Fecha y hora UTC de la corrida.                                                                                                                                                                    |
+| `cost_model_version`                     | Versión del modelo de costos del motor.                                                                                                                                                            |
+| `warning`                                | Aviso estándar: son hipótesis, no un PASA. **Mostralo siempre.**                                                                                                                                   |
+| `glossary`                               | `{pb, neto, bruto}`: qué significa cada palabra.                                                                                                                                                   |
+| `unsupported`                            | `null`, o `{reason}` con el motivo en español si la estrategia usa algo que el laboratorio no reproduce.                                                                                           |
+| `diagnostic`                             | Ver abajo. `null` si `status` es `unsupported`.                                                                                                                                                    |
+| `vary`                                   | Solo `variants`: `{kind: "param" \| "condition", name, label, base_value}`.                                                                                                                        |
+| `variants`                               | Solo `variants`: lista ordenada (ver abajo).                                                                                                                                                       |
+| `variants_headline`                      | Solo `variants`: una o dos frases simples sobre el conjunto.                                                                                                                                       |
+| `attempts_in_family`                     | Variantes distintas de la familia en el registro de intentos (`ledger.distinct_variants(family_of(id))`), contando las de esta corrida. En `diagnostic` es una lectura del registro, sin escribir. |
 
 ### `diagnostic`
 
@@ -111,17 +115,17 @@ La identidad de cada variante en el registro es `{spec_hash, vary, value}`: repe
 
 Cada frase sale de una regla con un umbral escrito en `exploration_report.py`; se puede comprobar contra los números del mismo reporte. No usan jerga.
 
-| Regla | Frase |
-| --- | --- |
-| Resultado total | «En total gana +X pb por operación después de costos, en N operaciones.» o «En total pierde X pb…» |
-| Costos | Si pierde pero antes de costos gana: «Antes de costos gana X pb por operación, pero las comisiones, el costo de ejecución y el funding se llevan Y pb: queda Z pb.» Si ni antes de costos gana: «Ni antes de costos gana…» |
-| Frecuencia | Pierde y entra 5 o más veces por día: «Entra N veces por día y cada entrada paga costos…» |
+| Regla                                         | Frase                                                                                                                                                                                                                                                      |
+| --------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Resultado total                               | «En total gana +X pb por operación después de costos, en N operaciones.» o «En total pierde X pb…»                                                                                                                                                         |
+| Costos                                        | Si pierde pero antes de costos gana: «Antes de costos gana X pb por operación, pero las comisiones, el costo de ejecución y el funding se llevan Y pb: queda Z pb.» Si ni antes de costos gana: «Ni antes de costos gana…»                                 |
+| Frecuencia                                    | Pierde y entra 5 o más veces por día: «Entra N veces por día y cada entrada paga costos…»                                                                                                                                                                  |
 | Cada forma de salida con 10 o más operaciones | «Los cierres por objetivo ganan +70 pb en promedio (son el 24 % de las operaciones).» · «Los cierres por stop pierden…» · «La salida por regla propia (cruce de la media del canal) cierra el 53 % de las operaciones y siempre pierde.» (si ninguna gana) |
-| Lados | Con 30 o más operaciones por lado y signos opuestos: «Compras (LONG) ganan… / Ventas en corto (SHORT) pierden…» |
-| Productos | Con 30 o más operaciones por producto: una frase por producto; si gana en unos y en otros no: «No funciona en todos los productos…» |
-| Entradas descartadas | 30 % o más de las señales: «El X % de las entradas que detecta se descartan porque el objetivo no alcanza a cubrir el costo de operar.» |
-| Pocas operaciones | Menos que `rules.min_trades` de la compuerta (100): «Con solo N operaciones no alcanza para sacar conclusiones…» |
-| Sin operaciones | «No operó nunca…» o «Detecta N entradas pero todas se descartan…» |
+| Lados                                         | Con 30 o más operaciones por lado y signos opuestos: «Compras (LONG) ganan… / Ventas en corto (SHORT) pierden…»                                                                                                                                            |
+| Productos                                     | Con 30 o más operaciones por producto: una frase por producto; si gana en unos y en otros no: «No funciona en todos los productos…»                                                                                                                        |
+| Entradas descartadas                          | 30 % o más de las señales: «El X % de las entradas que detecta se descartan porque el objetivo no alcanza a cubrir el costo de operar.»                                                                                                                    |
+| Pocas operaciones                             | Menos que `rules.min_trades` de la compuerta (100): «Con solo N operaciones no alcanza para sacar conclusiones…»                                                                                                                                           |
+| Sin operaciones                               | «No operó nunca…» o «Detecta N entradas pero todas se descartan…»                                                                                                                                                                                          |
 
 ## Qué estrategias soporta
 
