@@ -1,0 +1,25 @@
+python/balancita_engine/gate_trace.py
+  s_a3241f23fd3c74::t_d281f908fb201a 1-256
+python/balancita_engine/strategy_gate.py
+  s_a3241f23fd3c74::t_6399e141fd52f0 69,383,386-387,393-394,403-404,442-445,450-451,1224,1263-1271,1324,1369-1370
+python/tests/test_gate_trace.py
+  s_a3241f23fd3c74::t_b715f2def58557 1-160
+python/tests/test_strategy_gate.py
+  s_a3241f23fd3c74::t_e7a35e27b85519 866
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "5c255098f6155afec10d5d85d0d540c09ce32c36",
+  "prompts": {},
+  "sessions": {
+    "s_a3241f23fd3c74": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c00ba096-4d9f-474a-8620-6d6b37ff7bb5",
+        "model": "claude-sonnet-5-5"
+      },
+      "human_author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
