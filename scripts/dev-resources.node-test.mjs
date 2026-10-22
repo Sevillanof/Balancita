@@ -48,7 +48,11 @@ describe('dev resources', () => {
     assert.equal(body.total_rss_mb, 80)
     assert.equal(body.processes.alias.cpu_pct, 4)
     assert.equal(body.kronos.cpu_pct, 4)
-    assert.deepEqual(body.group_pid_counts, { first: 2, alias: 2, kronosGroup: 1 })
+    assert.deepEqual(body.group_pid_counts, {
+      first: 2,
+      alias: 2,
+      kronosGroup: 1,
+    })
     assert.equal(body.total_pid_count, 3)
   })
 
@@ -69,7 +73,10 @@ describe('dev resources', () => {
   it('bounds ps collection and distinguishes command failures from empty output', async () => {
     const failures = [
       [new Error('private command'), 'collector_error'],
-      [Object.assign(new Error('private command'), { killed: true }), 'timeout'],
+      [
+        Object.assign(new Error('private command'), { killed: true }),
+        'timeout',
+      ],
     ]
     for (const [error, reason] of failures) {
       const sample = await readPs({
@@ -94,8 +101,11 @@ describe('dev resources', () => {
 
   it('retains one-core CPU above 100 percent without exposing unrelated rows', () => {
     const body = summarizeResources({
-      rows: parsePs('0 0 0.0 0 kernel\n100 100 250,5 1024 node\n900 900 999 100000 unrelated\n'),
-      groups: { vite: 100, absent: 999 }, cores: 8,
+      rows: parsePs(
+        '0 0 0.0 0 kernel\n100 100 250,5 1024 node\n900 900 999 100000 unrelated\n',
+      ),
+      groups: { vite: 100, absent: 999 },
+      cores: 8,
     })
     assert.equal(body.total_cpu_pct, 250.5)
     assert.equal(body.total_rss_mb, 1)
@@ -106,13 +116,18 @@ describe('dev resources', () => {
 
   it('publishes unavailable, not measured zeros, on failed collectors', async () => {
     for (const collect of [
-      async () => { throw new Error('secret command and env') },
+      async () => {
+        throw new Error('secret command and env')
+      },
       async () => ({ status: 'unavailable', reason: 'timeout' }),
       async () => ({ status: 'unavailable', reason: 'secret command and env' }),
     ]) {
       let time = 10
       const body = await resources.collectResources({
-        collect, groups: { vite: 100 }, clock: () => time++, cores: 8,
+        collect,
+        groups: { vite: 100 },
+        clock: () => time++,
+        cores: 8,
       })
       assert.equal(body.status, 'unavailable')
       assert.ok(['timeout', 'collector_error'].includes(body.reason))
@@ -131,7 +146,9 @@ describe('dev resources', () => {
     for (const rows of [[], parsePs('100 100 0.0 0 node private-argument\n')]) {
       const body = await resources.collectResources({
         collect: async () => ({ status: 'ok', rows }),
-        groups: { vite: 100 }, clock: () => 20, cores: 8,
+        groups: { vite: 100 },
+        clock: () => 20,
+        cores: 8,
       })
       assert.equal(body.status, 'ok')
       assert.equal(body.reason, null)
@@ -148,10 +165,17 @@ describe('dev resources', () => {
 
   it('rejects invalid envelopes and duplicate PID rows without publishing partial totals', async () => {
     const rows = parsePs(PS)
-    for (const sample of [null, [], { status: 'ok' }, { status: 'unknown' },
-      { status: 'ok', rows: [...rows, rows[0]] }]) {
+    for (const sample of [
+      null,
+      [],
+      { status: 'ok' },
+      { status: 'unknown' },
+      { status: 'ok', rows: [...rows, rows[0]] },
+    ]) {
       const body = await resources.collectResources({
-        collect: async () => sample, groups: {}, clock: () => 42,
+        collect: async () => sample,
+        groups: {},
+        clock: () => 42,
       })
       assert.equal(body.status, 'unavailable')
       assert.equal(body.reason, 'malformed_output')
@@ -175,7 +199,8 @@ describe('dev resources', () => {
     ]
     for (const bad of invalidRows) {
       const body = await resources.collectResources({
-        collect: async () => ({ status: 'ok', rows: [valid, bad] }), groups: { vite: 100 },
+        collect: async () => ({ status: 'ok', rows: [valid, bad] }),
+        groups: { vite: 100 },
       })
       assert.equal(body.status, 'unavailable')
       assert.equal(body.reason, 'malformed_output')

@@ -1,9 +1,11 @@
 # Trustworthy health observability
 
 ## Objective
+
 Make the existing Salud inspector faithfully report resource usage, storage scope and evidence freshness without adding product modules or changing trading behavior.
 
 ## Authorization and isolation
+
 - User authorized implementation on a separate branch and changing only gentle-ai-worker to OpenAI Sol 6.1/high.
 - Branch: `feat/health-observability`.
 - Worktree: `/Users/franco.sevillano/Documents/Projects/Balancita-worktrees/health-observability`.
@@ -14,9 +16,11 @@ Make the existing Salud inspector faithfully report resource usage, storage scop
 - No commits, push, merge or PR without explicit user authorization. Work-unit commit identities remain pending under this delivery constraint.
 
 ## Problem and rationale
+
 CPU/RSS/storage measurement exists but failed samples may look like zero, timestamps may look perpetually fresh, storage scope is incomplete, and monitoring performs history-wide work on cache misses. Unknown health must not be fabricated into healthy status. Utilization alone is not an optimization score.
 
 ## Acceptance criteria
+
 - Measured zero is distinguishable from missing/failed/stale samples.
 - CPU is identified as one-core percentage; RSS is summed resident memory, not unique physical or GPU memory.
 - Overlapping resource memberships do not inflate total accounting.
@@ -28,6 +32,7 @@ CPU/RSS/storage measurement exists but failed samples may look like zero, timest
 - Deterministic tests use injected collectors, HTTP mocks and temporary fixture files only.
 
 ## Work units
+
 - [x] H1 — Trustworthy resource sampling (functionally verified; commit/native review pending under delivery constraints).
   - Surfaces: `scripts/dev-resources.mjs`, `scripts/dev-resources.node-test.mjs`, sampling integration only in `scripts/dev.mjs`.
   - Checks: Node tests observe RED then GREEN for failed/empty samples, invalid records and overlapping groups; run existing dev-resources tests.
@@ -43,12 +48,14 @@ CPU/RSS/storage measurement exists but failed samples may look like zero, timest
   - Checks: receipt/generation age, skew, stale previous reports, existing six components/unknown explanations; frontend regression tests/typecheck.
 
 ## Runtime validation follow-up
+
 - [ ] H5a — Confirm launch prerequisites and free ports (in progress, read-only scout).
 - [ ] H5b — Start this worktree only using verified project entry point (pending; no source/config/dependency/data linking changes without resolving prerequisites).
 - [ ] H5c — Verify bounded readiness and report the exact UI URL and limitations (pending).
 - User states the previous dev has already been stopped; do not issue stop commands automatically.
 
 ## Verification and delivery
+
 - Prefer RED/GREEN/refactor with exact focused deterministic commands per work unit.
 - Node-only command: `node --test scripts/dev-resources.node-test.mjs`.
 - Server: `pnpm --dir server test src/features/live-gateway/system-usage.test.ts src/features/live-gateway/observability-health.test.ts`; `pnpm --dir server typecheck`.
@@ -59,6 +66,7 @@ CPU/RSS/storage measurement exists but failed samples may look like zero, timest
 - Review footprint heuristic: about 400 authored changed lines per unit, including tests; report coherent overage rather than compressing code or silently expanding scope.
 
 ## Evidence
+
 - Initial exploration completed read-only (task `mvjjtei4-9-g4yp`).
 - Worktree created and registered; main stayed on main with its existing untracked artifacts untouched.
 - Worker configuration changed with human consent; other roles preserved.
@@ -86,4 +94,5 @@ CPU/RSS/storage measurement exists but failed samples may look like zero, timest
 - Work-unit commits: pending explicit authorization.
 
 ## Next step
+
 Complete H5 launch preflight, start only this worktree as newly authorized, then verify bounded readiness and provide the UI URL. User already stopped previous dev. No global sync, staging, commits, publishing or merging authorized. H1–H4 functional checks complete; native review remains unavailable and browser/live validation is not yet established.

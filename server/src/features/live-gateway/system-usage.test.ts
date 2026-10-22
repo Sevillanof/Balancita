@@ -1,4 +1,10 @@
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import {
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
@@ -38,7 +44,8 @@ describe('system usage', () => {
         updated_at_ms: 7_099_999,
         processes: { llm: { status: 'running' } },
         resources: {
-          status: 'ok', reason: null,
+          status: 'ok',
+          reason: null,
           sampled_at_ms: 7_099_999,
           cores: 8,
           total_cpu_pct: 41.5,
@@ -101,89 +108,216 @@ describe('system usage', () => {
     const usage = createSystemUsage({ clock: () => now, cacheMs: 5_000 })
     const first = usage.report()
     now = 1_000
-    expect(usage.report()).toMatchObject({ ...first, at_ms: 1_000, cached_at_ms: 0 })
+    expect(usage.report()).toMatchObject({
+      ...first,
+      at_ms: 1_000,
+      cached_at_ms: 0,
+    })
     now = 6_000
     const later = usage.report()
     expect(later).not.toBe(first)
-    expect(later).toMatchObject({ at_ms: 6_000, cached_at_ms: 6_000, cache_ms: 5_000 })
+    expect(later).toMatchObject({
+      at_ms: 6_000,
+      cached_at_ms: 6_000,
+      cache_ms: 5_000,
+    })
     now = 5_999
     expect(usage.report()).toMatchObject({ at_ms: 5_999, cached_at_ms: 5_999 })
   })
 
   it.each([
     [{}, 'missing_source'],
-    [{ updated_at_ms: 100_000, resources: { sampled_at_ms: 100_000 } }, 'legacy_metadata'],
-    [{ updated_at_ms: 69_999, resources: { status: 'ok', sampled_at_ms: 100_000 } }, 'supervisor_stale'],
-    [{ updated_at_ms: 100_001, resources: { status: 'ok', sampled_at_ms: 100_000 } }, 'supervisor_invalid_time'],
-    [{ updated_at_ms: 100_000, resources: { status: 'ok', sampled_at_ms: 84_999 } }, 'sample_stale'],
-    [{ updated_at_ms: 100_000, resources: { status: 'ok', sampled_at_ms: 100_001 } }, 'sample_invalid_time'],
-    [{ updated_at_ms: 100_000, resources: { status: 'ok', sampled_at_ms: 'bad' } }, 'sample_invalid_time'],
-    [{ updated_at_ms: 100_000, resources: { status: 'ok', sampled_at_ms: 100_000, total_cpu_pct: -1 } }, 'malformed_output'],
-    [{ updated_at_ms: 100_000, resources: { status: 'unavailable', reason: 'timeout' } }, 'timeout'],
-    [{ updated_at_ms: 100_000, resources: { status: 'unavailable', reason: '/secret/path' } }, 'collector_error'],
+    [
+      { updated_at_ms: 100_000, resources: { sampled_at_ms: 100_000 } },
+      'legacy_metadata',
+    ],
+    [
+      {
+        updated_at_ms: 69_999,
+        resources: { status: 'ok', sampled_at_ms: 100_000 },
+      },
+      'supervisor_stale',
+    ],
+    [
+      {
+        updated_at_ms: 100_001,
+        resources: { status: 'ok', sampled_at_ms: 100_000 },
+      },
+      'supervisor_invalid_time',
+    ],
+    [
+      {
+        updated_at_ms: 100_000,
+        resources: { status: 'ok', sampled_at_ms: 84_999 },
+      },
+      'sample_stale',
+    ],
+    [
+      {
+        updated_at_ms: 100_000,
+        resources: { status: 'ok', sampled_at_ms: 100_001 },
+      },
+      'sample_invalid_time',
+    ],
+    [
+      {
+        updated_at_ms: 100_000,
+        resources: { status: 'ok', sampled_at_ms: 'bad' },
+      },
+      'sample_invalid_time',
+    ],
+    [
+      {
+        updated_at_ms: 100_000,
+        resources: { status: 'ok', sampled_at_ms: 100_000, total_cpu_pct: -1 },
+      },
+      'malformed_output',
+    ],
+    [
+      {
+        updated_at_ms: 100_000,
+        resources: { status: 'unavailable', reason: 'timeout' },
+      },
+      'timeout',
+    ],
+    [
+      {
+        updated_at_ms: 100_000,
+        resources: { status: 'unavailable', reason: '/secret/path' },
+      },
+      'collector_error',
+    ],
   ])('rejects unavailable evidence: %s', (health, reason) => {
     const path = join(tempDir(), 'health.json')
-    writeFileSync(path, JSON.stringify({ ...health,
-      resources: 'resources' in health ? {
-        total_cpu_pct: 5, total_rss_mb: 8,
-        processes: { llm: { cpu_pct: 2 } }, kronos: { running: true, cpu_pct: 1 },
-        ...health.resources,
-      } : undefined,
-    }))
-    const body = createSystemUsage({ healthPath: path, clock: () => 100_000 }).report()
+    writeFileSync(
+      path,
+      JSON.stringify({
+        ...health,
+        resources:
+          'resources' in health
+            ? {
+                total_cpu_pct: 5,
+                total_rss_mb: 8,
+                processes: { llm: { cpu_pct: 2 } },
+                kronos: { running: true, cpu_pct: 1 },
+                ...health.resources,
+              }
+            : undefined,
+      }),
+    )
+    const body = createSystemUsage({
+      healthPath: path,
+      clock: () => 100_000,
+    }).report()
     expect(body).toMatchObject({
-      status: 'unavailable', reason, sampled_at_ms: null,
-      cpu_pct: null, rss_mb: null, per_process: null,
-      qwen: { cpu_pct: null }, kronos: { running: null, cpu_pct: null },
+      status: 'unavailable',
+      reason,
+      sampled_at_ms: null,
+      cpu_pct: null,
+      rss_mb: null,
+      per_process: null,
+      qwen: { cpu_pct: null },
+      kronos: { running: null, cpu_pct: null },
     })
   })
 
   it('keeps a measured zero and source time distinct from response and storage times', () => {
     const dir = tempDir()
     const path = join(dir, 'health.json')
-    writeFileSync(path, JSON.stringify({
-      updated_at_ms: 99_999,
-      resources: { status: 'ok', sampled_at_ms: 85_000, attempted_at_ms: 84_999,
-        completed_at_ms: 85_000, total_cpu_pct: 0, total_rss_mb: 0 },
-    }))
-    const body = createSystemUsage({ healthPath: path, dataDir: dir, clock: () => 100_000 }).report()
-    expect(body).toMatchObject({ status: 'ok', reason: null, cpu_pct: 0, rss_mb: 0,
-      sampled_at_ms: 85_000, attempted_at_ms: 84_999, completed_at_ms: 85_000,
-      at_ms: 100_000, storage: { sampled_at_ms: 100_000, complete: true },
-      scope: { cpu_basis: 'one_core_percent', memory_basis: 'summed_rss_mib_not_unique_or_gpu' },
+    writeFileSync(
+      path,
+      JSON.stringify({
+        updated_at_ms: 99_999,
+        resources: {
+          status: 'ok',
+          sampled_at_ms: 85_000,
+          attempted_at_ms: 84_999,
+          completed_at_ms: 85_000,
+          total_cpu_pct: 0,
+          total_rss_mb: 0,
+        },
+      }),
+    )
+    const body = createSystemUsage({
+      healthPath: path,
+      dataDir: dir,
+      clock: () => 100_000,
+    }).report()
+    expect(body).toMatchObject({
+      status: 'ok',
+      reason: null,
+      cpu_pct: 0,
+      rss_mb: 0,
+      sampled_at_ms: 85_000,
+      attempted_at_ms: 84_999,
+      completed_at_ms: 85_000,
+      at_ms: 100_000,
+      storage: { sampled_at_ms: 100_000, complete: true },
+      scope: {
+        cpu_basis: 'one_core_percent',
+        memory_basis: 'summed_rss_mib_not_unique_or_gpu',
+      },
     })
     let now = 100_000
     const usage = createSystemUsage({ healthPath: path, clock: () => now })
     expect(usage.report().status).toBe('ok')
     now++
-    expect(usage.report()).toMatchObject({ status: 'unavailable', reason: 'sample_stale' })
+    expect(usage.report()).toMatchObject({
+      status: 'unavailable',
+      reason: 'sample_stale',
+    })
   })
 
   it('inventories file categories without following symlinks and discloses depth limits', () => {
     const dir = tempDir()
-    for (const name of ['a.sqlite', 'a.sqlite-wal', 'a.sqlite-shm', 'a.log', 'a.json'])
+    for (const name of [
+      'a.sqlite',
+      'a.sqlite-wal',
+      'a.sqlite-shm',
+      'a.log',
+      'a.json',
+    ])
       writeFileSync(join(dir, name), '1234')
     symlinkSync(dir, join(dir, 'link'))
     mkdirSync(join(dir, 'models'))
     writeFileSync(join(dir, 'models', 'weights.bin'), 'not inventoried')
-    const report = () => createSystemUsage({ dataDir: dir, clock: () => 123 }).report()
-    expect(report()).toMatchObject({ storage: {
-      status: 'ok', complete: true, total_bytes: 20, symlinks_skipped: 1,
-      bytes: { sqlite_main: 4, wal: 4, shm: 4, log: 4, other: 4 },
-      scope: 'configured_data_directory', excludes: ['models', 'other_roots', 'symlinks'],
-    } })
+    const report = () =>
+      createSystemUsage({ dataDir: dir, clock: () => 123 }).report()
+    expect(report()).toMatchObject({
+      storage: {
+        status: 'ok',
+        complete: true,
+        total_bytes: 20,
+        symlinks_skipped: 1,
+        bytes: { sqlite_main: 4, wal: 4, shm: 4, log: 4, other: 4 },
+        scope: 'configured_data_directory',
+        excludes: ['models', 'other_roots', 'symlinks'],
+      },
+    })
     mkdirSync(join(dir, 'one/two/three/four'), { recursive: true })
-    expect(report()).toMatchObject({ data_mb: null, storage: {
-      status: 'partial', reason: 'depth_limit', complete: false, max_depth: 3,
-    } })
+    expect(report()).toMatchObject({
+      data_mb: null,
+      storage: {
+        status: 'partial',
+        reason: 'depth_limit',
+        complete: false,
+        max_depth: 3,
+      },
+    })
   })
 
   it('stops the inventory at its entry budget, even in one wide directory', () => {
     const dir = tempDir()
     for (let i = 0; i < 1_001; i++) writeFileSync(join(dir, `${i}.log`), 'x')
     expect(createSystemUsage({ dataDir: dir }).report()).toMatchObject({
-      data_mb: null, storage: { status: 'partial', reason: 'entry_limit',
-        visited_entries: 1_000, max_entries: 1_000, complete: false },
+      data_mb: null,
+      storage: {
+        status: 'partial',
+        reason: 'entry_limit',
+        visited_entries: 1_000,
+        max_entries: 1_000,
+        complete: false,
+      },
     })
   })
 
@@ -191,20 +325,32 @@ describe('system usage', () => {
     const dir = tempDir()
     const path = join(dir, 'summary.json')
     writeFileSync(path, JSON.stringify({ exit_decisions: {} }))
-    expect(createSystemUsage({ qwenExitSummaryPath: path }).report().qwen)
-      .toMatchObject({ exit_decisions: null })
-    writeFileSync(path, JSON.stringify({ forward: { all: { trades: 7 } }, padding: 'x'.repeat(131_072) }))
-    expect(createSystemUsage({ kronosSummaryPath: path }).report().kronos)
-      .toMatchObject({ trades: null })
+    expect(
+      createSystemUsage({ qwenExitSummaryPath: path }).report().qwen,
+    ).toMatchObject({ exit_decisions: null })
+    writeFileSync(
+      path,
+      JSON.stringify({
+        forward: { all: { trades: 7 } },
+        padding: 'x'.repeat(131_072),
+      }),
+    )
+    expect(
+      createSystemUsage({ kronosSummaryPath: path }).report().kronos,
+    ).toMatchObject({ trades: null })
   })
 
   it('expires supervisor process state even when the resource sample failed', () => {
     const path = join(tempDir(), 'health.json')
     let now = 30_000
-    writeFileSync(path, JSON.stringify({
-      updated_at_ms: 0, processes: { llm: { status: 'running' } },
-      resources: { status: 'unavailable', reason: 'timeout' },
-    }))
+    writeFileSync(
+      path,
+      JSON.stringify({
+        updated_at_ms: 0,
+        processes: { llm: { status: 'running' } },
+        resources: { status: 'unavailable', reason: 'timeout' },
+      }),
+    )
     const usage = createSystemUsage({ healthPath: path, clock: () => now })
     expect(usage.report().qwen).toMatchObject({ running: true })
     now++
@@ -218,8 +364,15 @@ describe('system usage', () => {
     symlinkSync(dir, link)
     for (const dataDir of [join(dir, 'missing'), link])
       expect(createSystemUsage({ dataDir }).report()).toMatchObject({
-        data_mb: null, storage: { status: 'unavailable', reason: 'io_error',
-          complete: false, error_count: 1, bytes: null, total_bytes: null },
+        data_mb: null,
+        storage: {
+          status: 'unavailable',
+          reason: 'io_error',
+          complete: false,
+          error_count: 1,
+          bytes: null,
+          total_bytes: null,
+        },
       })
   })
 })

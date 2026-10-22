@@ -21,8 +21,11 @@ export function reportTiming(
       ? now - receivedAt
       : null
   const unverified =
-    generationAge === null || receiptAge === null || receivedAt == null ||
-    generationAge < -CLOCK_SKEW_MS || receiptAge < -CLOCK_SKEW_MS ||
+    generationAge === null ||
+    receiptAge === null ||
+    receivedAt == null ||
+    generationAge < -CLOCK_SKEW_MS ||
+    receiptAge < -CLOCK_SKEW_MS ||
     generatedAt - receivedAt > CLOCK_SKEW_MS
   const state = unverified
     ? 'unverified'

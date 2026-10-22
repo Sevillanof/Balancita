@@ -6,11 +6,19 @@ function validateRows(rows) {
   const seen = new Set()
   for (const row of rows) {
     // Kernel/system rows may legitimately have PID or PGID zero.
-    if (!row || !Number.isSafeInteger(row.pid) || row.pid < 0 ||
-        !Number.isSafeInteger(row.pgid) || row.pgid < 0 ||
-        !Number.isFinite(row.cpu) || row.cpu < 0 ||
-        !Number.isSafeInteger(row.rssKb) || row.rssKb < 0 ||
-        typeof row.command !== 'string' || seen.has(row.pid))
+    if (
+      !row ||
+      !Number.isSafeInteger(row.pid) ||
+      row.pid < 0 ||
+      !Number.isSafeInteger(row.pgid) ||
+      row.pgid < 0 ||
+      !Number.isFinite(row.cpu) ||
+      row.cpu < 0 ||
+      !Number.isSafeInteger(row.rssKb) ||
+      row.rssKb < 0 ||
+      typeof row.command !== 'string' ||
+      seen.has(row.pid)
+    )
       throw new Error('malformed_output')
     seen.add(row.pid)
   }
@@ -22,7 +30,9 @@ export function parsePs(text) {
   const rows = []
   for (const line of text.split('\n')) {
     if (!line.trim()) continue
-    const match = /^\s*(\d+)\s+(\d+)\s+(\d+(?:[.,]\d+)?)\s+(\d+)\s+(.*)$/.exec(line)
+    const match = /^\s*(\d+)\s+(\d+)\s+(\d+(?:[.,]\d+)?)\s+(\d+)\s+(.*)$/.exec(
+      line,
+    )
     if (!match) throw new Error('malformed_output')
     rows.push({
       pid: Number(match[1]),
@@ -70,7 +80,10 @@ export function summarizeResources({
     for (const row of own) included.set(row.pid, row)
   }
   // Clone to avoid stateful /g or /y patterns changing membership on each test.
-  const pattern = new RegExp(kronosPattern.source, kronosPattern.flags.replace(/[gy]/g, ''))
+  const pattern = new RegExp(
+    kronosPattern.source,
+    kronosPattern.flags.replace(/[gy]/g, ''),
+  )
   const kronos = rows.filter((row) => pattern.test(row.command))
   for (const row of kronos) included.set(row.pid, row)
   const total = metrics([...included.values()])
@@ -98,7 +111,10 @@ export function readPs({ exec = execFile } = {}) {
       { maxBuffer: 8 * 1024 * 1024, timeout: 2000 },
       (error, stdout) => {
         if (error) {
-          resolve({ status: 'unavailable', reason: error.killed ? 'timeout' : 'collector_error' })
+          resolve({
+            status: 'unavailable',
+            reason: error.killed ? 'timeout' : 'collector_error',
+          })
           return
         }
         try {
@@ -132,7 +148,11 @@ export async function collectResources({
     try {
       return {
         ...summarizeResources({
-          rows: sample.rows, groups, cores, kronosPattern, now: completedAt,
+          rows: sample.rows,
+          groups,
+          cores,
+          kronosPattern,
+          now: completedAt,
         }),
         ...times,
       }
@@ -140,9 +160,12 @@ export async function collectResources({
       sample = { status: 'unavailable', reason: 'malformed_output' }
     }
   }
-  const reason = sample?.status === 'unavailable'
-    ? (['timeout', 'malformed_output'].includes(sample.reason) ? sample.reason : 'collector_error')
-    : 'malformed_output'
+  const reason =
+    sample?.status === 'unavailable'
+      ? ['timeout', 'malformed_output'].includes(sample.reason)
+        ? sample.reason
+        : 'collector_error'
+      : 'malformed_output'
   return {
     status: 'unavailable',
     reason,
@@ -153,10 +176,15 @@ export async function collectResources({
     total_cpu_pct: null,
     total_rss_mb: null,
     total_pid_count: null,
-    group_pid_counts: Object.fromEntries(Object.keys(groups).map((name) => [name, null])),
-    processes: Object.fromEntries(Object.keys(groups).map((name) => [
-      name, { cpu_pct: null, rss_mb: null },
-    ])),
+    group_pid_counts: Object.fromEntries(
+      Object.keys(groups).map((name) => [name, null]),
+    ),
+    processes: Object.fromEntries(
+      Object.keys(groups).map((name) => [
+        name,
+        { cpu_pct: null, rss_mb: null },
+      ]),
+    ),
     // Null preserves unknown running status in legacy consumers using Boolean(running).
     kronos: null,
   }

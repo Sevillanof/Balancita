@@ -1,6 +1,12 @@
 import {
-  closeSync, constants, fstatSync, lstatSync,
-  openSync, opendirSync, readSync, statSync,
+  closeSync,
+  constants,
+  fstatSync,
+  lstatSync,
+  openSync,
+  opendirSync,
+  readSync,
+  statSync,
 } from 'node:fs'
 import { join } from 'node:path'
 
@@ -34,16 +40,20 @@ function readJson(path: string | undefined): Row | null {
   let fd: number | undefined
   try {
     fd = openSync(
-      path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
+      path,
+      constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
     )
     const stat = fstatSync(fd)
     if (!stat.isFile() || stat.size > JSON_MAX_BYTES) return null
     const buffer = Buffer.alloc(JSON_MAX_BYTES + 1)
     const length = readSync(fd, buffer, 0, buffer.length, 0)
     if (length > JSON_MAX_BYTES) return null
-    const value: unknown = JSON.parse(buffer.subarray(0, length).toString('utf8'))
+    const value: unknown = JSON.parse(
+      buffer.subarray(0, length).toString('utf8'),
+    )
     return value && typeof value === 'object' && !Array.isArray(value)
-      ? (value as Row) : null
+      ? (value as Row)
+      : null
   } catch {
     return null
   } finally {
@@ -66,7 +76,11 @@ function storageInventory(dir: string | undefined, now: number) {
   const walk = (path: string, depth: number): void => {
     const directory = opendirSync(path)
     try {
-      for (let entry = directory.readSync(); entry; entry = directory.readSync()) {
+      for (
+        let entry = directory.readSync();
+        entry;
+        entry = directory.readSync()
+      ) {
         if (visited >= 1_000) {
           reason = 'entry_limit'
           break
@@ -85,10 +99,15 @@ function storageInventory(dir: string | undefined, now: number) {
             else reason ??= 'depth_limit'
           } else if (stat.isFile()) {
             const name = entry.name.toLowerCase()
-            const category = name.endsWith('-wal') ? 'wal'
-              : name.endsWith('-shm') ? 'shm'
-              : /\.(sqlite|sqlite3|db)$/.test(name) ? 'sqlite_main'
-              : /\.(log|jsonl)(\.\d+)?$/.test(name) ? 'log' : 'other'
+            const category = name.endsWith('-wal')
+              ? 'wal'
+              : name.endsWith('-shm')
+                ? 'shm'
+                : /\.(sqlite|sqlite3|db)$/.test(name)
+                  ? 'sqlite_main'
+                  : /\.(log|jsonl)(\.\d+)?$/.test(name)
+                    ? 'log'
+                    : 'other'
             bytes[category] += stat.size
           }
         } catch {
@@ -116,7 +135,8 @@ function storageInventory(dir: string | undefined, now: number) {
     }
   }
   const total = readable
-    ? Object.values(bytes).reduce((sum, size) => sum + size, 0) : null
+    ? Object.values(bytes).reduce((sum, size) => sum + size, 0)
+    : null
   return {
     status: !readable ? 'unavailable' : reason ? 'partial' : 'ok',
     reason,
@@ -124,7 +144,8 @@ function storageInventory(dir: string | undefined, now: number) {
     complete: readable && reason === null,
     scope: 'configured_data_directory',
     excludes: ['models', 'other_roots', 'symlinks'],
-    byte_basis: 'file_sizes_not_logical_data_used; partial_totals_are_lower_bounds',
+    byte_basis:
+      'file_sizes_not_logical_data_used; partial_totals_are_lower_bounds',
     max_entries: 1_000,
     max_depth: 3,
     visited_entries: visited,
@@ -142,7 +163,9 @@ export function folderBytes(dir: string | undefined): number | null {
 }
 
 function resourceReason(
-  health: Row | null, resources: Row | null, now: number,
+  health: Row | null,
+  resources: Row | null,
+  now: number,
 ): string | null {
   if (!resources) return 'missing_source'
   if (resources.status === undefined) return 'legacy_metadata'
@@ -152,14 +175,17 @@ function resourceReason(
   if (now - updated > SUPERVISOR_MAX_AGE_MS) return 'supervisor_stale'
   if (resources.status !== 'ok')
     return ['timeout', 'malformed_output'].includes(String(resources.reason))
-      ? String(resources.reason) : 'collector_error'
+      ? String(resources.reason)
+      : 'collector_error'
   const sampled = num(resources.sampled_at_ms)
   if (sampled === null || sampled < 0 || sampled > now)
     return 'sample_invalid_time'
   if (now - sampled > SAMPLE_MAX_AGE_MS) return 'sample_stale'
-  if ([resources.total_cpu_pct, resources.total_rss_mb].some(
-    (value) => num(value) === null || Number(value) < 0,
-  ))
+  if (
+    [resources.total_cpu_pct, resources.total_rss_mb].some(
+      (value) => num(value) === null || Number(value) < 0,
+    )
+  )
     return 'malformed_output'
   return null
 }
@@ -194,9 +220,12 @@ export function createSystemUsage(options: SystemUsageOptions): SystemUsage {
     report() {
       const now = clock()
       if (
-        cached && now >= cached.at && now - cached.at < cacheMs &&
+        cached &&
+        now >= cached.at &&
+        now - cached.at < cacheMs &&
         ((cached.body.status !== 'ok' && cached.body.processes === null) ||
-          now - Number(cached.body.supervisor_updated_at_ms) <= SUPERVISOR_MAX_AGE_MS) &&
+          now - Number(cached.body.supervisor_updated_at_ms) <=
+            SUPERVISOR_MAX_AGE_MS) &&
         (cached.body.status !== 'ok' ||
           now - Number(cached.body.sampled_at_ms) <= SAMPLE_MAX_AGE_MS)
       )
@@ -206,9 +235,13 @@ export function createSystemUsage(options: SystemUsageOptions): SystemUsage {
       const reason = resourceReason(health, source, now)
       const resources = reason === null ? source : null
       const updated = num(health?.updated_at_ms)
-      const processes = updated !== null && updated >= 0 && updated <= now &&
+      const processes =
+        updated !== null &&
+        updated >= 0 &&
+        updated <= now &&
         now - updated <= SUPERVISOR_MAX_AGE_MS
-          ? (health?.processes ?? null) as Row | null : null
+          ? ((health?.processes ?? null) as Row | null)
+          : null
       const storage = storageInventory(options.dataDir, now)
       const bytes = storage.complete ? storage.total_bytes : null
       const exit = readJson(options.qwenExitSummaryPath)
@@ -254,12 +287,16 @@ export function createSystemUsage(options: SystemUsageOptions): SystemUsage {
           decisions_status: 'unavailable',
           decisions_reason: 'no_bounded_source',
           exit_decisions:
-            num(exitDecisions?.hold) !== null && num(exitDecisions?.close) !== null
-              ? Number(exitDecisions?.hold) + Number(exitDecisions?.close) : null,
+            num(exitDecisions?.hold) !== null &&
+            num(exitDecisions?.close) !== null
+              ? Number(exitDecisions?.hold) + Number(exitDecisions?.close)
+              : null,
         },
         kronos: {
-          running: typeof kronosProcess?.running === 'boolean'
-            ? kronosProcess.running : null,
+          running:
+            typeof kronosProcess?.running === 'boolean'
+              ? kronosProcess.running
+              : null,
           cpu_pct: num(kronosProcess?.cpu_pct),
           rss_mb: num(kronosProcess?.rss_mb),
           trades: num(

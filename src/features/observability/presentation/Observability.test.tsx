@@ -181,8 +181,9 @@ describe('HealthIndicator (header)', () => {
     for (const [i, component] of healthDegraded.components.entries()) {
       const row = screen.getByTestId(`health-${component.id}`)
       expect(row).toHaveAttribute('data-status', component.status)
-      expect(within(row).getByRole('heading', { level: 3 }))
-        .toHaveTextContent(`${i + 1}. ${component.label}`)
+      expect(within(row).getByRole('heading', { level: 3 })).toHaveTextContent(
+        `${i + 1}. ${component.label}`,
+      )
       expect(row).toHaveTextContent(component.summary)
       for (const check of component.checks) {
         expect(row).toHaveTextContent(check.rule)
@@ -209,8 +210,11 @@ describe('HealthIndicator (header)', () => {
     render(<Indicator />)
     await userEvent.click(await screen.findByTestId('health-indicator'))
     await screen.findByTestId('health-risk')
-    expect(screen.getAllByText(/^(Sin verificar|Correctos) \(/)
-      .map((node) => node.textContent)).toEqual(['Sin verificar (1)', 'Correctos (5)'])
+    expect(
+      screen
+        .getAllByText(/^(Sin verificar|Correctos) \(/)
+        .map((node) => node.textContent),
+    ).toEqual(['Sin verificar (1)', 'Correctos (5)'])
     for (const component of healthHealthy.components)
       for (const limitation of component.limitations)
         expect(
@@ -235,9 +239,13 @@ describe('HealthIndicator (header)', () => {
   it('keeps the previous read but flags it when a refresh fails', async () => {
     let fail = false
     serve({
-      health: () => fail ? json({}, 500) : json({
-        ...healthDegraded, generated_at_ms: Date.now() - 10_000,
-      }),
+      health: () =>
+        fail
+          ? json({}, 500)
+          : json({
+              ...healthDegraded,
+              generated_at_ms: Date.now() - 10_000,
+            }),
     })
     vi.useFakeTimers({ now: NOW, shouldAdvanceTime: true })
     try {
@@ -254,7 +262,9 @@ describe('HealthIndicator (header)', () => {
       )
       fail = false
       await vi.advanceTimersByTimeAsync(30_000)
-      await waitFor(() => expect(button).not.toHaveTextContent('lectura anterior'))
+      await waitFor(() =>
+        expect(button).not.toHaveTextContent('lectura anterior'),
+      )
       expect(screen.getByText(/Generación:/)).toHaveTextContent(
         'hace 11 s · Recepción: hace 1 s',
       )
@@ -275,7 +285,10 @@ describe('health presentation freshness', () => {
     ['future generation', NOW + 5_001, NOW, NOW, 'unverified'],
     [
       'future generation stays invalid later',
-      NOW + 5_001, NOW, NOW + 10_000, 'unverified',
+      NOW + 5_001,
+      NOW,
+      NOW + 10_000,
+      'unverified',
     ],
     ['tolerated skew', NOW + 5_000, NOW, NOW, 'fresh'],
     ['backward clock', NOW, NOW, NOW - 5_001, 'unverified'],
@@ -294,18 +307,25 @@ describe('health presentation freshness', () => {
     [1_060_000, 1_060_000, 61_000],
     [1_070_000, 1_060_000, 71_000],
     [1_070_000, 1_070_000, 71_000],
-  ])('keeps generation-based evidence age at now=%i, receipt=%i', (now, receipt, age) => {
-    const timing = reportTiming(now, receipt, 1_000_000)
-    expect(timing.state).toBe('fresh')
-    expect(timing.reference! - 999_000).toBe(age)
-  })
+  ])(
+    'keeps generation-based evidence age at now=%i, receipt=%i',
+    (now, receipt, age) => {
+      const timing = reportTiming(now, receipt, 1_000_000)
+      expect(timing.state).toBe('fresh')
+      expect(timing.reference! - 999_000).toBe(age)
+    },
+  )
 
   it('cannot rewind evidence when a cached generation is received again', () => {
     const data = decodeHealth(healthHealthy)
     data.generatedAtMs = NOW - 60_000
     data.components[0].evidence[0].lastUpdatedMs = NOW - 61_000
     const { rerender } = render(
-      <HealthIndicator data={data} error={null} receivedAt={data.generatedAtMs} />,
+      <HealthIndicator
+        data={data}
+        error={null}
+        receivedAt={data.generatedAtMs}
+      />,
     )
     fireEvent.click(screen.getByTestId('health-indicator'))
     const evidence = screen.getByTestId('health-data').querySelector('dd')
@@ -313,7 +333,11 @@ describe('health presentation freshness', () => {
     act(() => vi.advanceTimersByTime(10_000))
     expect(evidence).toHaveTextContent('hace 1 min')
     rerender(
-      <HealthIndicator data={{ ...data }} error={null} receivedAt={Date.now()} />,
+      <HealthIndicator
+        data={{ ...data }}
+        error={null}
+        receivedAt={Date.now()}
+      />,
     )
     expect(screen.getByText(/Generación:/)).toHaveTextContent(
       'hace 1 min · Recepción: hace 0 s',
@@ -367,7 +391,10 @@ describe('health presentation freshness', () => {
     const data = decodeHealth(healthHealthy)
     data.generatedAtMs = NOW
     data.overall = {
-      status: 'ok', reason: 'fixture verificada', failing: [], unverified: [],
+      status: 'ok',
+      reason: 'fixture verificada',
+      failing: [],
+      unverified: [],
     }
     const view = (receivedAt?: number, error: string | null = null) => (
       <HealthIndicator data={data} receivedAt={receivedAt} error={error} />
@@ -407,13 +434,12 @@ describe('health presentation freshness', () => {
     data.generatedAtMs = NOW
     data.components[2].status = 'unknown'
     data.components[2].summary = reason
-    render(
-      <HealthIndicator data={data} error={null} receivedAt={NOW} />,
-    )
+    render(<HealthIndicator data={data} error={null} receivedAt={NOW} />)
     fireEvent.click(screen.getByTestId('health-indicator'))
     expect(screen.getByTestId('health-strategies')).toHaveTextContent(reason)
     expect(screen.getByTestId('health-strategies')).toHaveAttribute(
-      'data-status', 'unknown',
+      'data-status',
+      'unknown',
     )
   })
 })

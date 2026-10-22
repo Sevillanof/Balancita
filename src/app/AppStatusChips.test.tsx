@@ -43,7 +43,8 @@ describe('AppStatusChips', () => {
     const override = { connected: false, processes: null, quoteAgeMs: null }
     const receivedAt = Date.now()
     const data = decodeHealth({
-      ...healthDegraded, generated_at_ms: receivedAt - 10_000,
+      ...healthDegraded,
+      generated_at_ms: receivedAt - 10_000,
     })
     render(
       <AppStatusChips

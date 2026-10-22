@@ -150,9 +150,11 @@ function Inspector({
             {report && (
               <p className="obs-inspector__meta">
                 Generación: {ageLabel(timing?.generationAge ?? null)} ·{' '}
-                Recepción: {ageLabel(timing?.receiptAge ?? null)} ·{' '}
-                hora gateway: {Number.isFinite(report.generatedAtMs)
-                  ? utcDateTime(report.generatedAtMs) : 'sin verificar'}
+                Recepción: {ageLabel(timing?.receiptAge ?? null)} · hora
+                gateway:{' '}
+                {Number.isFinite(report.generatedAtMs)
+                  ? utcDateTime(report.generatedAtMs)
+                  : 'sin verificar'}
               </p>
             )}
           </div>
@@ -328,11 +330,7 @@ export default function HealthIndicator({
         }
       >
         <span className="obs-health__dot" aria-hidden="true" />
-        {applicable && (
-          <span>
-            {text}
-          </span>
-        )}
+        {applicable && <span>{text}</span>}
         {flow && (
           <>
             <span
