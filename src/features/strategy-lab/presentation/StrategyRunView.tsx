@@ -417,24 +417,6 @@ export default function StrategyRunView({
           </div>
         </div>
       )}
-      {series && (
-        <p role="status" className="runview__hint">
-          Prueba {series.done + 1} de {series.total} · {series.label}
-          {series.total > 1 && (
-            <>
-              {' '}
-              <button
-                type="button"
-                onClick={() => {
-                  stopSeries.current = true
-                }}
-              >
-                Parar después de esta
-              </button>
-            </>
-          )}
-        </p>
-      )}
       {testError && (
         <p role="alert" className="runview__warn">
           {testError}
@@ -454,6 +436,46 @@ export default function StrategyRunView({
           </li>
         ))}
       </ol>
+      {series && (
+        <div
+          className="runview__progress"
+          role="progressbar"
+          aria-label="Progreso de las pruebas seguidas"
+          aria-valuemin={0}
+          aria-valuemax={series.total}
+          aria-valuenow={series.done}
+          aria-valuetext={`Prueba ${series.done + 1} de ${series.total}: ${series.label}`}
+        >
+          <ol className="runview__progress-steps">
+            {Array.from({ length: series.total }, (_, index) => (
+              <li
+                key={index}
+                className="runview__progress-step"
+                data-state={
+                  index < series.done
+                    ? 'done'
+                    : index === series.done
+                      ? 'current'
+                      : 'todo'
+                }
+              />
+            ))}
+          </ol>
+          <p className="runview__progress-text">
+            Prueba {series.done + 1} de {series.total} · {series.label}
+            {series.total > 1 && (
+              <button
+                type="button"
+                onClick={() => {
+                  stopSeries.current = true
+                }}
+              >
+                Parar después de esta
+              </button>
+            )}
+          </p>
+        </div>
+      )}
       {overviewError && !unknownToGate && (
         <p role="alert" className="runview__warn">
           No se pudieron leer las pruebas: {overviewError}
