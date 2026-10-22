@@ -99,6 +99,27 @@ export type RunTrades = {
   next_cursor: string | null
 }
 
+/** One LONG/SHORT proposal of the run and what became of it (`accepted` = it became a trade). */
+export type RunSignal = {
+  bucket_ms: number
+  side: 'LONG' | 'SHORT'
+  outcome: string
+  reason_code: string | null
+}
+
+/** Decisions of a run: the trace is only there when the run saved it (`captured`). */
+export type RunDecisions =
+  | { run_id: number; product: string; captured: false; reason: string }
+  | {
+      run_id: number
+      product: string
+      captured: true
+      signals: RunSignal[]
+      counts: Record<string, number>
+      total: number
+      truncated: boolean
+    }
+
 /** The server's error code (`artifact_not_ready`, `exam_not_unlocked`…) travels with the message. */
 export class RunVisualError extends Error {
   readonly code: string
@@ -122,6 +143,11 @@ export type RunVisualApi = {
     product: string,
     options?: RunWindow & { cursor?: string; limit?: number },
   ) => Promise<RunTrades>
+  decisions: (
+    runId: number,
+    product: string,
+    window?: RunWindow,
+  ) => Promise<RunDecisions>
 }
 
 async function read<T>(response: Response): Promise<T> {
@@ -168,6 +194,13 @@ export const runVisualApi: RunVisualApi = {
           cursor: options.cursor,
           limit: options.limit,
         })}`,
+      ),
+    )
+  },
+  async decisions(runId, product, window = {}) {
+    return read(
+      await fetch(
+        `${base(runId)}/decisions?${query({ product, from: window.from, to: window.to })}`,
       ),
     )
   },

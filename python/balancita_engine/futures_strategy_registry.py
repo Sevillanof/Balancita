@@ -1005,12 +1005,14 @@ def make_handler(service):
                 self.wfile.write(data)
                 return True
             if method == "GET" and len(parts) == 4 and parts[:2] == ["gate", "runs"] and parts[3] in (
-                    "visual-summary", "candles", "trades"):
+                    "visual-summary", "candles", "trades", "decisions"):
                 query = {k: v[-1] for k, v in parse_qs(url.query).items()}
                 if parts[3] == "visual-summary":
                     return gate.visual_summary(parts[2])
                 if parts[3] == "candles":
                     return gate.candles(parts[2], query.get("product"), query.get("from"), query.get("to"))
+                if parts[3] == "decisions":
+                    return gate.decisions(parts[2], query.get("product"), query.get("from"), query.get("to"))
                 return gate.trades(parts[2], query.get("product"), query.get("from"), query.get("to"),
                                    query.get("cursor"), query.get("limit"))
             if method == "GET" and len(parts) == 3 and parts[:2] == ["gate", "runs"]:

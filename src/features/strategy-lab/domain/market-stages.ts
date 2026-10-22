@@ -36,6 +36,29 @@ export function untriedStages(runs: readonly GateRun[]): MarketStage[] {
   )
 }
 
+/** One tab per market stage: the newest finished practice run of the current content in it, or `null` (not tried). */
+export type StageTab = { stage: MarketStage; run: GateRun | null }
+
+export function stageTabs(runs: readonly GateRun[]): StageTab[] {
+  const done = runs
+    .filter(
+      (run) =>
+        run.kind === 'practice' &&
+        run.status === 'done' &&
+        run.same_version !== false,
+    )
+    .sort((a, b) => b.id - a.id)
+  return MARKET_STAGES.map((stage) => ({
+    stage,
+    run:
+      done.find(
+        (run) =>
+          day(run.params?.from) === stage.from &&
+          day(run.params?.to) === stage.to,
+      ) ?? null,
+  }))
+}
+
 /** Next stage without a run of this strategy's current content, or null when all were tried. */
 export function nextStage(runs: readonly GateRun[]): MarketStage | null {
   return untriedStages(runs)[0] ?? null

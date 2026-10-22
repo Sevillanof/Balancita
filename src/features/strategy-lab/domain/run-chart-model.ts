@@ -3,7 +3,11 @@ import type {
   ApprovedTerminalMarker,
   ApprovedChartPriceLine,
 } from '../../trading-view/presentation/ApprovedTerminalChart.tsx'
-import type { RunCandle, RunTrade } from '../infrastructure/run-visual-api.ts'
+import type {
+  RunCandle,
+  RunSignal,
+  RunTrade,
+} from '../infrastructure/run-visual-api.ts'
 
 const MINUTE_MS = 60_000
 /** Candles shown on each side of a selected trade. */
@@ -80,8 +84,10 @@ export function toMarkers(
         time: exitSeconds(trade),
         type: 'exit' as const,
         direction: 'flat' as const,
-        label: '×',
-        detail: `Salida (${trade.exit_reason ?? 'sin motivo'})`,
+        label: trade.exit_reason
+          ? `× ${REASON_SHORT[trade.exit_reason] ?? ''}`.trim()
+          : '×',
+        detail: `Salida (${exitReasonText(trade.exit_reason)})`,
         positionId: trade.trade_id,
       },
     ]
@@ -145,15 +151,110 @@ export function holdText(ms: number): string {
   return rest === 0 ? `${hours} h` : `${hours} h ${rest} min`
 }
 
+/** Exit reasons the simulator books: `stop`, `target`, `time_stop`, `strategy_exit` (futures_simulator._manage). */
 const REASONS: Record<string, string> = {
   stop: 'Stop',
   target: 'Objetivo',
   time_stop: 'Tiempo cumplido',
+  strategy_exit: 'Regla de salida de la estrategia',
+}
+/** Short word painted next to the × of the exit. */
+const REASON_SHORT: Record<string, string> = {
+  stop: 'stop',
+  target: 'objetivo',
+  time_stop: 'tiempo',
+  strategy_exit: 'regla',
 }
 
 export function exitReasonText(reason: string | null): string {
   if (!reason) return 'Sin motivo registrado'
   return REASONS[reason] ?? reason
+}
+
+/**
+ * What became of a LONG/SHORT proposal that was not taken, by the trace's `outcome` (gate_trace.TracedBook):
+ * `position_open`, `rejected_stale_data`, `rejected_<reason of Book.skipped>` (`target_does_not_clear_cost`,
+ * `protective_levels_unavailable`) and `rejected_unknown`. `accepted` is an entry, not a discard.
+ */
+const DISCARDS: Record<string, string> = {
+  position_open: 'ya había una posición abierta',
+  rejected_stale_data: 'los datos estaban desactualizados',
+  rejected_target_does_not_clear_cost: 'el objetivo no cubría los costes',
+  rejected_protective_levels_unavailable:
+    'no se pudieron calcular el stop y el objetivo',
+  rejected_unknown: 'la prueba no guardó el motivo',
+}
+
+/** Spanish reason of a discard; an outcome this table does not know is said so, never guessed. */
+export function discardReasonText(outcome: string): string {
+  return DISCARDS[outcome] ?? `motivo sin traducir («${outcome}»)`
+}
+
+/** Discards of a window above this many are grouped so the chart does not fill up. */
+export const MAX_SINGLE_DISCARDS = 150
+const DISCARD_BINS = 40
+
+const discardId = (signal: RunSignal) => `d:${signal.bucket_ms}`
+
+/** Id of a discard marker (single or grouped). */
+export const isDiscardId = (id: string | undefined): boolean =>
+  id !== undefined && id.startsWith('d:')
+
+/**
+ * Neutral markers for the proposals that were NOT taken, only inside the visible window. Up to 150 they are one
+ * marker each; above that they are grouped in time bins and labelled `+N`. Uses the grey circle (`wait`) of the
+ * approved chart: no new marker type, and it cannot be mistaken for an L/S arrow or an exit.
+ */
+export function toDiscardMarkers(
+  signals: readonly RunSignal[],
+  window: { from: number; to: number },
+): ApprovedTerminalMarker[] {
+  const inside = signals
+    .filter(
+      (signal) =>
+        signal.outcome !== 'accepted' &&
+        signal.bucket_ms >= window.from &&
+        signal.bucket_ms < window.to,
+    )
+    .sort((a, b) => a.bucket_ms - b.bucket_ms)
+  const single = (signal: RunSignal): ApprovedTerminalMarker => ({
+    id: discardId(signal),
+    time: Math.floor(signal.bucket_ms / MINUTE_MS) * 60,
+    type: 'wait',
+    direction: 'flat',
+    label: '',
+    detail: `Descarte ${signal.side}: ${discardReasonText(signal.outcome)}`,
+  })
+  if (inside.length <= MAX_SINGLE_DISCARDS) return inside.map(single)
+  const width = Math.max(
+    MINUTE_MS,
+    Math.ceil((window.to - window.from) / DISCARD_BINS),
+  )
+  const bins = new Map<number, RunSignal[]>()
+  for (const signal of inside) {
+    const key = Math.floor((signal.bucket_ms - window.from) / width)
+    bins.set(key, [...(bins.get(key) ?? []), signal])
+  }
+  return [...bins.values()].map((group) => {
+    if (group.length === 1) return single(group[0]!)
+    const byReason = new Map<string, number>()
+    for (const signal of group)
+      byReason.set(
+        discardReasonText(signal.outcome),
+        (byReason.get(discardReasonText(signal.outcome)) ?? 0) + 1,
+      )
+    const parts = [...byReason].map(([reason, n]) => `${n} porque ${reason}`)
+    return {
+      id: `d:g:${group[0]!.bucket_ms}`,
+      time: Math.floor(group[0]!.bucket_ms / MINUTE_MS) * 60,
+      type: 'wait' as const,
+      direction: 'flat' as const,
+      label: `+${group.length}`,
+      detail: `+${group.length} descartes: ${parts.join(', ')}`,
+      count: group.length,
+      memberIds: group.map(discardId),
+    }
+  })
 }
 
 const FUNDING: Record<string, string> = {

@@ -36,6 +36,7 @@ MAX_WINDOW_MS = 3 * 24 * 60 * MINUTE_MS      # at most 3 days of 1m candles (432
 DEFAULT_WINDOW_MS = 6 * 60 * MINUTE_MS
 CONTEXT_MS = 2 * 60 * MINUTE_MS             # candles shown around the anchor trade
 MAX_TRADES_PAGE = 500
+MAX_DECISIONS = 2000                        # signals returned per request; ``truncated`` says when more exist
 
 
 class GateApiError(Exception):
@@ -473,6 +474,52 @@ class GateApi:
         more = offset + size < len(mine)
         return {"run_id": row["id"], "product": product, "total": len(mine), "trades": page,
                 "next_cursor": str(offset + size) if more else None}
+
+    def _stored_trace(self, folder, manifest):
+        """Lines of the run's ``trace.jsonl.gz``, checked against the checksum the manifest recorded."""
+        name = manifest.get("trace_file")
+        if not isinstance(name, str) or name != os.path.basename(name) or not name:
+            raise GateApiError("artifact_not_ready", "No se pudo leer el detalle de decisiones guardado.", 409)
+        try:
+            with open(os.path.join(folder, name), "rb") as handle:
+                raw = gzip.decompress(handle.read())
+        except (OSError, EOFError, ValueError):
+            raise GateApiError("artifact_not_ready", "No se pudo leer el detalle de decisiones guardado.", 409)
+        if hashlib.sha256(raw).hexdigest() != manifest.get("trace_sha256"):
+            raise GateApiError("artifact_not_ready",
+                               "El detalle de decisiones guardado no coincide con su suma de control.", 409)
+        try:
+            return [json.loads(line) for line in raw.decode("utf-8").splitlines() if line]
+        except ValueError:
+            raise GateApiError("artifact_not_ready", "No se pudo leer el detalle de decisiones guardado.", 409)
+
+    def decisions(self, run_id, product, start=None, end=None):
+        """Signals (LONG/SHORT proposals) of a run for one product with what became of each, read from its trace.
+
+        Read-only. A run saved without the trace answers ``captured: false`` and invents nothing. The window keeps
+        the signals whose candle starts inside ``[from, to)``; at most ``MAX_DECISIONS`` come back (oldest first).
+        ``counts`` are the run-wide counters of that product (including the WAIT/ABSTAIN proposals, which are not rows).
+        """
+        row, manifest, folder = self._artifact(run_id)
+        product = self._product_of(manifest, product)
+        start, end = self._ms(start, "from"), self._ms(end, "to")
+        if manifest.get("decision_evidence") != "captured":
+            return {"run_id": row["id"], "product": product, "captured": False,
+                    "reason": "Esta prueba se guardó sin el detalle de decisiones."}
+        lines = self._stored_trace(folder, manifest)
+        counts = {}
+        for line in lines:
+            if line.get("type") == "summary" and line.get("product_id") == product and isinstance(line.get("counts"), dict):
+                counts = line["counts"]
+        lo = -1 if start is None else start
+        hi = float("inf") if end is None else end
+        mine = sorted((line for line in lines if line.get("type") == "signal" and line.get("product_id") == product
+                       and isinstance(line.get("bucket_ms"), int) and lo <= line["bucket_ms"] < hi),
+                      key=lambda line: line["bucket_ms"])
+        keep = ("bucket_ms", "side", "outcome", "reason_code")
+        return {"run_id": row["id"], "product": product, "captured": True,
+                "signals": [{key: line.get(key) for key in keep} for line in mine[:MAX_DECISIONS]],
+                "counts": counts, "total": len(mine), "truncated": len(mine) > MAX_DECISIONS}
 
     def cancel(self, run_id):
         number = self._run_id(run_id)

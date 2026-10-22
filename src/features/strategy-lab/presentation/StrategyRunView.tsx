@@ -3,16 +3,21 @@ import ApprovedTerminalChart from '../../trading-view/presentation/ApprovedTermi
 import { amount } from '../../../shared/finance/format.ts'
 import { signedAmount } from '../domain/strategy-format.ts'
 import {
+  MARKET_STAGES,
   nextStage,
+  stageTabs,
   untriedStages,
   type MarketStage,
 } from '../domain/market-stages.ts'
 import { STAGES, deriveStage } from '../domain/run-stage.ts'
 import {
+  isDiscardId,
+  madridTime,
   priceLinesOf,
   markerIds,
   tradeOfMarker,
   toChartCandles,
+  toDiscardMarkers,
   toMarkers,
   windowAround,
 } from '../domain/run-chart-model.ts'
@@ -26,6 +31,7 @@ import {
   RunVisualError,
   runVisualApi,
   type RunCandles,
+  type RunDecisions,
   type RunTrade,
   type RunVisualApi,
   type RunVisualSummary,
@@ -74,6 +80,17 @@ const runName = (run: Pick<GateRun, 'id' | 'kind'>) =>
 const bp = (value: number | null | undefined) => {
   const text = signedAmount(value ?? null, 1)
   return text === null ? '—' : `${text} pb`
+}
+
+const dayText = (iso: string) => iso.slice(0, 10).split('-').reverse().join('/')
+
+/** « · 01/01/2025–31/03/2025» of a run (its own dates, else the range it stored), or nothing. */
+function rangeText(run: GateRun, summary?: RunVisualSummary): string {
+  const { from, to } = run.params ?? {}
+  if (from && to) return ` · ${dayText(from)}–${dayText(to)}`
+  if (summary && summary.run_id === run.id)
+    return ` · ${madridTime(summary.range_start_ms).slice(0, 10)}–${madridTime(summary.range_end_ms - 1).slice(0, 10)}`
+  return ''
 }
 
 type Loaded = {
@@ -129,11 +146,25 @@ export default function StrategyRunView({
   const [overviewError, setOverviewError] = useState<string | null>(null)
   const [state, setState] = useState<
     | { kind: 'loading' }
-    | { kind: 'empty'; reason: 'no-runs' | 'no-trades-saved' }
+    | {
+        kind: 'empty'
+        reason: 'no-runs' | 'no-trades-saved' | 'run-not-saved'
+      }
     | { kind: 'error'; text: string; code: string }
     | { kind: 'ready'; data: Loaded }
   >({ kind: 'loading' })
   const [selectedId, setSelectedId] = useState<string | null>(null)
+  /** The stage («from» date) the person chose by hand; `null` = follow the newest finished run. */
+  const [picked, setPicked] = useState<string | null>(null)
+  /** A discard marker the person clicked (its reason is then painted next to it). */
+  const [focusId, setFocusId] = useState<string | null>(null)
+  /** The run whose chart is on screen, so that picking the tab already shown reloads nothing. */
+  const shownRun = useRef<number | null>(null)
+  const [decisions, setDecisions] = useState<{
+    key: string
+    value: RunDecisions | null
+    error: string | null
+  } | null>(null)
   const token = useRef(0)
   const invalidate = useCallback(() => {
     token.current += 1
@@ -247,19 +278,39 @@ export default function StrategyRunView({
     [visual, loadProduct],
   )
 
-  // The newest finished run that saved its trades. It only reloads when the set of finished runs
-  // changes: the 10 s refresh of a running test must not redraw (blink) the chart.
-  const loaded = overview !== null
-  const finishedIds = useMemo(
-    () => finished.map((run) => run.id).join(','),
-    [finished],
+  // One tab per market stage, each one a run. By default the chart follows the newest finished run;
+  // a stage picked by hand stays. With no stage tried, the newest finished runs are shown as one tab.
+  const tabs = useMemo(() => stageTabs(overview?.runs ?? []), [overview])
+  const triedTabs = useMemo(
+    () => tabs.filter((tab) => tab.run !== null),
+    [tabs],
   )
+  const pickedTab = useMemo(
+    () =>
+      picked !== null
+        ? (triedTabs.find((tab) => tab.stage.from === picked) ?? null)
+        : null,
+    [picked, triedTabs],
+  )
+  const candidateIds = useMemo(() => {
+    if (pickedTab?.run) return [pickedTab.run.id]
+    if (triedTabs.length > 0)
+      return triedTabs.map((tab) => tab.run!.id).sort((a, b) => b - a)
+    return finished.map((run) => run.id)
+  }, [pickedTab, triedTabs, finished])
+  const manual = pickedTab !== null
+  // It only reloads when the candidates change: the 3 s / 10 s refresh of a running test must not
+  // redraw (blink) the chart.
+  const loaded = overview !== null
+  const candidateKey = candidateIds.join(',')
   useEffect(() => {
     if (!loaded) return
-    const mine = ++token.current
     const candidates =
-      finishedIds === '' ? [] : finishedIds.split(',').map(Number)
+      candidateKey === '' ? [] : candidateKey.split(',').map(Number)
+    if (candidates.length > 0 && candidates[0] === shownRun.current) return
+    const mine = ++token.current
     void (async () => {
+      shownRun.current = null
       if (candidates.length === 0) {
         setState({ kind: 'empty', reason: 'no-runs' })
         return
@@ -268,6 +319,7 @@ export default function StrategyRunView({
       for (const runId of candidates) {
         try {
           await openRun(mine, runId)
+          if (token.current === mine) shownRun.current = runId
           return
         } catch (error) {
           if (token.current !== mine) return
@@ -278,10 +330,13 @@ export default function StrategyRunView({
         }
       }
       if (token.current === mine)
-        setState({ kind: 'empty', reason: 'no-trades-saved' })
+        setState({
+          kind: 'empty',
+          reason: manual ? 'run-not-saved' : 'no-trades-saved',
+        })
     })()
     return invalidate
-  }, [loaded, finishedIds, openRun, invalidate])
+  }, [loaded, candidateKey, manual, openRun, invalidate])
 
   const data = state.kind === 'ready' ? state.data : null
 
@@ -317,20 +372,88 @@ export default function StrategyRunView({
     () => (candlesData ? toChartCandles(candlesData.candles) : []),
     [candlesData],
   )
+
+  // Decisions (every proposal and what became of it) of the visible window. Only runs that saved their
+  // trace have them; the others say so and nothing is invented.
+  const decisionRun = data?.summary.run_id ?? null
+  const decisionProduct = data?.product ?? null
+  const windowFrom = data?.candles?.from_ms ?? null
+  const windowTo = data?.candles?.to_ms ?? null
+  const hasTrace = data?.summary.decision_evidence === 'captured'
+  const decisionKey =
+    decisionRun !== null && windowFrom !== null
+      ? `${decisionRun}:${decisionProduct}:${windowFrom}:${windowTo}`
+      : null
+  useEffect(() => {
+    if (
+      !hasTrace ||
+      decisionKey === null ||
+      decisionRun === null ||
+      decisionProduct === null
+    )
+      return
+    let alive = true
+    void (async () => {
+      try {
+        const value = await visual.decisions(decisionRun, decisionProduct, {
+          from: windowFrom ?? undefined,
+          to: windowTo ?? undefined,
+        })
+        if (alive) setDecisions({ key: decisionKey, value, error: null })
+      } catch (error) {
+        if (alive)
+          setDecisions({ key: decisionKey, value: null, error: message(error) })
+      }
+    })()
+    return () => {
+      alive = false
+    }
+  }, [
+    visual,
+    hasTrace,
+    decisionKey,
+    decisionRun,
+    decisionProduct,
+    windowFrom,
+    windowTo,
+  ])
+  const decided =
+    hasTrace && decisions !== null && decisions.key === decisionKey
+      ? decisions
+      : null
+  const traced = decided?.value?.captured ? decided.value : null
+
   const markers = useMemo(() => {
     if (!data?.candles) return []
     const { from_ms: from, to_ms: to } = data.candles
-    return toMarkers(
-      data.trades.filter(
-        (trade) => trade.entry_time_ms < to && trade.exit_time_ms >= from,
+    return [
+      ...toMarkers(
+        data.trades.filter(
+          (trade) => trade.entry_time_ms < to && trade.exit_time_ms >= from,
+        ),
       ),
+      ...(traced ? toDiscardMarkers(traced.signals, { from, to }) : []),
+    ]
+  }, [data, traced])
+  const focused =
+    focusId !== null &&
+    markers.some(
+      (marker) =>
+        marker.id === focusId || (marker.memberIds?.includes(focusId) ?? false),
     )
-  }, [data])
+      ? focusId
+      : null
 
   const summary = data?.summary.summary ?? null
   const lastRun = data
     ? finished.find((run) => run.id === data.summary.run_id)
     : null
+  // No stage tried but there are finished runs: the one on screen keeps its own tab, with its range.
+  const fallbackRun =
+    triedTabs.length === 0 ? (lastRun ?? finished[0] ?? null) : null
+  const fallbackLabel = fallbackRun
+    ? `Prueba #${fallbackRun.id}${rangeText(fallbackRun, data?.summary)}`
+    : ''
   const running = overview?.running ?? null
   const activeRun = running
     ? (overview?.runs.find((run) => run.id === running.id) ?? null)
@@ -504,7 +627,7 @@ export default function StrategyRunView({
           </p>
           <p className="runview__sub">
             {lastRun
-              ? `Última prueba · ${runName(lastRun)}`
+              ? `Prueba mostrada · ${runName(lastRun)}`
               : 'Sin prueba terminada con operaciones guardadas'}
             {running && ' · hay una prueba en curso'}
           </p>
@@ -733,6 +856,52 @@ export default function StrategyRunView({
         />
       )}
       <div className="runview__chart-card">
+        {overview && !unknownToGate && (
+          <div className="runview__tabs-wrap">
+            <div
+              className="runview__tabs"
+              role="group"
+              aria-label="Tramos probados"
+            >
+              {fallbackRun && (
+                <button
+                  type="button"
+                  className="runview__tab"
+                  aria-pressed={true}
+                >
+                  {fallbackLabel}
+                </button>
+              )}
+              {tabs.map((tab) => {
+                const shownNow =
+                  tab.run !== null &&
+                  (pickedTab !== null
+                    ? pickedTab.stage.from === tab.stage.from
+                    : data?.summary.run_id === tab.run.id)
+                return (
+                  <button
+                    key={tab.stage.from}
+                    type="button"
+                    className="runview__tab"
+                    aria-pressed={shownNow}
+                    disabled={tab.run === null}
+                    data-untested={tab.run === null ? 'true' : undefined}
+                    onClick={() => {
+                      setPicked(tab.stage.from)
+                      setFocusId(null)
+                    }}
+                  >
+                    {tab.stage.label}
+                    {tab.run === null && <small> · sin probar</small>}
+                  </button>
+                )
+              })}
+            </div>
+            <p className="runview__hint" data-testid="stage-count">
+              {triedTabs.length} de {MARKET_STAGES.length} tramos probados
+            </p>
+          </div>
+        )}
         <div className="runview__chart-head">
           <h4>
             {data
@@ -754,7 +923,9 @@ export default function StrategyRunView({
           <p className="runview__empty" data-testid="run-empty">
             {state.reason === 'no-runs'
               ? 'Todavía no hay pruebas terminadas de esta estrategia.'
-              : 'Las pruebas anteriores no guardaron sus operaciones: no hay gráfico de ellas.'}
+              : state.reason === 'run-not-saved'
+                ? 'Esa prueba no guardó sus operaciones: no hay gráfico de ella.'
+                : 'Las pruebas anteriores no guardaron sus operaciones: no hay gráfico de ellas.'}
           </p>
         )}
         {state.kind === 'error' && (
@@ -776,13 +947,20 @@ export default function StrategyRunView({
                 <ApprovedTerminalChart
                   candles={chartCandles}
                   markers={markers}
-                  selectedId={selected ? markerIds(selected).entry : ''}
+                  selectedId={
+                    focused ?? (selected ? markerIds(selected).entry : '')
+                  }
                   intervalSeconds={60}
                   currency="USD"
                   instrument={data.product}
                   priceLines={priceLinesOf(selected)}
                   showVolume
                   onSelect={(_time, markerId) => {
+                    if (isDiscardId(markerId)) {
+                      setFocusId(markerId ?? null)
+                      return
+                    }
+                    setFocusId(null)
                     const id = tradeOfMarker(markerId)
                     const trade = data.trades.find((t) => t.trade_id === id)
                     if (trade) void select(trade)
@@ -795,6 +973,23 @@ export default function StrategyRunView({
               <p className="runview__hint" data-testid="run-gaps">
                 Faltan {data.candles.missing_minutes} velas de 1 minuto que
                 Kraken no publicó en esta ventana; no se rellenaron.
+              </p>
+            )}
+            {decided?.error && (
+              <p className="runview__hint" data-testid="run-decisions-error">
+                No se pudo leer el detalle de decisiones: {decided.error}
+              </p>
+            )}
+            {(!hasTrace || decided?.value?.captured === false) && (
+              <p className="runview__hint" data-testid="run-no-decisions">
+                Esta prueba se guardó sin el detalle de decisiones; las entradas
+                y salidas sí se ven.
+              </p>
+            )}
+            {traced?.truncated && (
+              <p className="runview__hint" data-testid="run-decisions-cut">
+                Hay más descartes en esta ventana de los que se muestran (los
+                primeros {traced.signals.length}).
               </p>
             )}
             {data.total === 0 && (
@@ -811,7 +1006,10 @@ export default function StrategyRunView({
                 <b className="runview__short">S</b> Entrada SHORT
               </li>
               <li>
-                <b>×</b> Salida
+                <b>×</b> Salida (motivo en el detalle)
+              </li>
+              <li>
+                <b>◦</b> Descarte
               </li>
               <li className="runview__legend-note">
                 {data.summary.label} · eje del gráfico en UTC, tablas en hora de

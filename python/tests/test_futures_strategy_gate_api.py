@@ -237,7 +237,7 @@ class VisualApiTests(unittest.TestCase):
                 "entry_price": "100.5", "exit_price": "101.0", "exit_reason": "time_stop", "net_bp": net,
                 "pnl_usd": net / 100, "funding_usd": None, "funding_status": "unknown"}
 
-    def store(self, run_id=1, kind="practice", status="done", products=("PF_XBTUSD",), candles=True):
+    def store(self, run_id=1, kind="practice", status="done", products=("PF_XBTUSD",), candles=True, traces=None):
         self.insert(kind=kind, status=status)
         meta = {"run_id": run_id, "strategy_id": "c29-test-v1", "family": "c29-test", "version_key": "k",
                 "kind": kind, "start_ms": self.START, "end_ms": self.END, "products": list(products),
@@ -252,7 +252,7 @@ class VisualApiTests(unittest.TestCase):
                   "rules": [{"id": "positive_folds", "label": "folds", "value": {"positive": 2, "total": 5},
                              "threshold": 0.6, "ok": False}]}
         cfg["rules"] = {"min_trades": 100, "min_positive_fold_share": 0.6, "min_percentile_vs_random": 95}
-        strategy_gate.write_artifact(self.dir, meta, cfg, SPEC, "h", trades, 1, result)
+        strategy_gate.write_artifact(self.dir, meta, cfg, SPEC, "h", trades, 1, result, traces=traces)
         if candles:
             cache = CandleCache(os.path.join(self.dir, "cache", "candles-PF_XBTUSD.sqlite"))
             cache.db.executemany("INSERT INTO candles VALUES('1m',?,?,?,?,?,?)",
@@ -336,6 +336,65 @@ class VisualApiTests(unittest.TestCase):
         self.store(candles=False)
         status, body = self.json("/gate/runs/1/candles?product=PF_XBTUSD")
         self.assertEqual((status, body["error"]), (404, "data_missing"))
+
+    def traced(self):
+        """A hand-built trace: 4 signals of PF_XBTUSD (one taken, three not) and one of PF_ETHUSD."""
+        def signal(minute, side, outcome):
+            return {"bucket_ms": self.START + minute * MINUTE, "side": side, "outcome": outcome,
+                    "reason_code": "breakout", "stop": "99", "target": "102"}
+        xbt = {"signals": [signal(29, "LONG", "accepted"), signal(31, "LONG", "position_open"),
+                           signal(150, "SHORT", "rejected_target_does_not_clear_cost"),
+                           signal(300, "SHORT", "rejected_stale_data")],
+               "trades": [], "counts": {"WAIT:entry_conditions_not_met": 40, "LONG:accepted": 1}}
+        eth = {"signals": [signal(10, "LONG", "accepted")], "trades": [], "counts": {}}
+        return [("PF_XBTUSD", self.START, self.END, xbt), ("PF_ETHUSD", self.START, self.END, eth)]
+
+    def test_decisions_come_from_the_trace_filtered_by_product_and_window(self):
+        self.store(products=("PF_XBTUSD", "PF_ETHUSD"), traces=self.traced())
+        self.assertEqual(self.json("/gate/runs/1/visual-summary")[1]["decision_evidence"], "captured")
+        status, body = self.json("/gate/runs/1/decisions?product=PF_XBTUSD")
+        self.assertEqual((status, body["captured"], body["total"], body["truncated"]), (200, True, 4, False))
+        self.assertEqual([s["outcome"] for s in body["signals"]],
+                         ["accepted", "position_open", "rejected_target_does_not_clear_cost", "rejected_stale_data"])
+        self.assertEqual(set(body["signals"][0]), {"bucket_ms", "side", "outcome", "reason_code"})
+        self.assertEqual(body["counts"]["WAIT:entry_conditions_not_met"], 40)
+        window = "&from={}&to={}".format(self.START + 30 * MINUTE, self.START + 200 * MINUTE)
+        inside = self.json("/gate/runs/1/decisions?product=PF_XBTUSD" + window)[1]
+        self.assertEqual([s["outcome"] for s in inside["signals"]],
+                         ["position_open", "rejected_target_does_not_clear_cost"])
+        self.assertEqual(self.json("/gate/runs/1/decisions?product=PF_ETHUSD")[1]["total"], 1)
+
+    def test_decisions_are_capped_and_say_so(self):
+        self.store(traces=self.traced())
+        old = gate_api.MAX_DECISIONS
+        gate_api.MAX_DECISIONS = 2
+        try:
+            body = self.json("/gate/runs/1/decisions?product=PF_XBTUSD")[1]
+        finally:
+            gate_api.MAX_DECISIONS = old
+        self.assertEqual((len(body["signals"]), body["total"], body["truncated"]), (2, 4, True))
+
+    def test_a_run_saved_without_trace_says_not_captured_and_invents_nothing(self):
+        self.store()
+        status, body = self.json("/gate/runs/1/decisions?product=PF_XBTUSD")
+        self.assertEqual((status, body["captured"]), (200, False))
+        self.assertIn("sin el detalle de decisiones", body["reason"])
+        self.assertNotIn("signals", body)
+
+    def test_decisions_refuse_what_trades_refuses_and_a_tampered_trace(self):
+        self.store(traces=self.traced())
+        for bad in ("product=PF_ETHUSD", "product=..%2Fx", "product=PF_XBTUSD&from=abc"):
+            self.assertEqual(self.json("/gate/runs/1/decisions?" + bad)[0], 400, bad)
+        self.assertEqual(self.json("/gate/runs/9/decisions?product=PF_XBTUSD")[1]["error"], "run_not_found")
+        with open(os.path.join(self.dir, "artifacts", "1", "trace.jsonl.gz"), "wb") as handle:
+            handle.write(gzip.compress(b'{"type":"signal","product_id":"PF_XBTUSD","bucket_ms":1}\n'))
+        status, body = self.json("/gate/runs/1/decisions?product=PF_XBTUSD")
+        self.assertEqual((status, body["error"]), (409, "artifact_not_ready"))
+
+    def test_decisions_of_an_exam_are_shut_until_it_finished(self):
+        self.store(kind="exam", status="running")
+        status, body = self.json("/gate/runs/1/decisions?product=PF_XBTUSD")
+        self.assertEqual((status, body["error"]), (409, "exam_not_unlocked"))
 
 
 if __name__ == "__main__":
