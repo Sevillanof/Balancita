@@ -863,7 +863,7 @@ class ArtifactTests(Base):
         self.assertEqual(len(trades), out["result"]["overall"]["n"])
         self.assertEqual(manifest["trades_sha256"], hashlib.sha256(raw).hexdigest())
         self.assertEqual(manifest["spec_hash"], spec_hash(SPECS["c27-breakout-perp-v1"]))
-        self.assertEqual(manifest["decision_evidence"], "not_captured")
+        self.assertEqual(manifest["decision_evidence"], "captured")   # a practice run keeps its trace (gate_trace)
         summary, result = manifest["summary"], out["result"]
         self.assertEqual((summary["trades"], summary["mean_bp"], summary["percentile"], summary["verdict"]),
                          (result["overall"]["n"], result["overall"]["mean_bp"], result["percentile"], out["verdict"]))

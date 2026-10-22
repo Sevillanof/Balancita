@@ -66,6 +66,7 @@ from .futures_products import resolve_products
 from .futures_qwen_practice import _date_ms, horizon_net_bp
 from .futures_qwen_practice_report import bootstrap_ci, metrics
 from .futures_simulator import DEFAULT_PERIODS, Book, frames, merge_periods
+from .gate_trace import TRACE_FILE, TRACE_SCHEMA, TracedBook, encode, trace_lines
 from .futures_spec_strategy import DEFAULT_SPEC_DIR, declared_indicators, load_specs, spec_hash, validate_spec
 from .futures_strategy_reliability import TRIAL_SHARPE_SD, deflated_probability
 from . import strategy_gate_models as strategy_models
@@ -379,15 +380,18 @@ def _chunk(index, fraction):
         raise Cancelled()
 
 
-def book_trades(spec, product_id, tick_size, ones, fives, funding, start_ms, end_ms, chunk):
+def book_trades(spec, product_id, tick_size, ones, fives, funding, start_ms, end_ms, chunk, trace=False):
     """The strategy's trades from ``start_ms``: one ``Book`` fed by the same ``frames`` as the live forward.
+
+    ``trace``: feed a ``TracedBook`` (same trades, plus the signals and evidence) and return it as a third item.
 
     ``ones`` / ``fives`` are already gap-filled and end below ``end_ms``. Returns ``(trades, open_at_end)``; a position
     still open at the end is NOT closed (no later price exists in this window) and is reported as ``open_at_end``.
     """
     periods = merge_periods(DEFAULT_PERIODS, declared_indicators(spec))
     context = FundingContext(funding) if funding else None
-    book = Book(spec, product_id=product_id, tick_size=tick_size, funding=funding_periods(context))
+    book = (TracedBook if trace else Book)(spec, product_id=product_id, tick_size=tick_size,
+                                           funding=funding_periods(context))
     total, count = max(1, len(ones)), 0
     for frame in frames(ones, fives, periods, context):
         if frame[0] >= start_ms:
@@ -396,6 +400,8 @@ def book_trades(spec, product_id, tick_size, ones, fives, funding, start_ms, end
         if count % CHUNK_FRAMES == 0:
             chunk(count / total)
     trades = [dict(t) for t in book.trades if t["entry_time_ms"] >= start_ms and t["exit_time_ms"] <= end_ms]
+    if trace:
+        return trades, int(book.position is not None), book.report(start_ms, end_ms)
     return trades, int(book.position is not None)
 
 
@@ -433,12 +439,16 @@ def simulate_task(job):
         raise GateError("no hay velas de {} en la ventana pedida".format(product))
     funding = [(s, r) for s, r in (job["funding"] or []) if s < end_ms]
     source = job["trade_source"] or book_trades
-    trades, open_at_end = source(job["spec"], product, job["tick"], ones, fives, funding, start_ms, end_ms,
-                                 lambda fraction: _chunk(index, fraction))
+    traced = bool(job.get("trace")) and source is book_trades
+    produced = source(job["spec"], product, job["tick"], ones, fives, funding, start_ms, end_ms,
+                      lambda fraction: _chunk(index, fraction), **({"trace": True} if traced else {}))
+    trades, open_at_end = produced[0], produced[1]
     out = {"index": index, "product": product, "label": job["label"], "open_at_end": open_at_end,
            "trades": [_compact(product, t) for t in trades],
            "full_trades": [_full(product, t) for t in trades] if job["want_closes"] else [], "candles_1m": len(ones),
            "seconds": round(time.time() - t0, 1)}
+    if traced:
+        out["trace"] = produced[2]
     if job["want_closes"]:
         base = bisect.bisect_left([c["bucket_start"] for c in ones], start_ms)
         out["closes"] = array.array("d", (float(c["close"]) for c in ones))
@@ -1211,7 +1221,7 @@ ARTIFACTS_DIR = "artifacts"
 TRADES_FILE = "trades.jsonl.gz"
 
 
-def write_artifact(data_dir, meta, cfg, spec, digest, trades, open_at_end, result=None):
+def write_artifact(data_dir, meta, cfg, spec, digest, trades, open_at_end, result=None, traces=None):
     """Publishes ``<data>/artifacts/<run_id>/`` (manifest + closed trades) once, atomically and never again.
 
     The trades are those the simulator booked for the judged run, in the order the report uses: nothing is recomputed
@@ -1250,6 +1260,15 @@ def write_artifact(data_dir, meta, cfg, spec, digest, trades, open_at_end, resul
                     "artifact_created_at_ms": _now_ms(), "summary": (dict(run_summary(result, cfg), open_at_end=int(open_at_end)) if result else None)}
         with open(os.path.join(temp, "manifest.json"), "w", encoding="utf-8") as handle:
             json.dump(manifest, handle, sort_keys=True, ensure_ascii=False, indent=1)
+        if traces:
+            # Signals, discards and per-trade evidence (``gate_trace``): written once, with its own checksum.
+            data, trace_digest = encode(trace_lines(run_id, manifest["spec_hash"], traces))
+            with open(os.path.join(temp, TRACE_FILE), "wb") as handle:
+                handle.write(data)
+            manifest.update(decision_evidence="captured", trace_file=TRACE_FILE, trace_schema=TRACE_SCHEMA,
+                            trace_sha256=trace_digest)
+            with open(os.path.join(temp, "manifest.json"), "w", encoding="utf-8") as handle:
+                json.dump(manifest, handle, sort_keys=True, ensure_ascii=False, indent=1)
         if os.path.exists(final):
             raise GateError("la corrida {} ya tiene operaciones guardadas".format(run_id))
         os.rename(temp, final)
@@ -1302,7 +1321,7 @@ def _execute(runner, db, spec, cfg, meta, product_list, provider, trade_source, 
     span = PHASE_START["simulating"] - DOWNLOAD_SHARE
     main_jobs = [{"index": i, "label": "base", "spec": spec, "product": p, "tick": t, "start_ms": start_ms,
                   "end_ms": end_ms, "provider": provider, "funding": funding[p], "trade_source": trade_source,
-                  "want_closes": True} for i, (p, t) in enumerate(product_list)]
+                  "want_closes": True, "trace": kind == "practice"} for i, (p, t) in enumerate(product_list)]
     results = _run_tasks(runner, main_jobs, workers, DOWNLOAD_SHARE, span)
     trades = sorted((t for r in results for t in r["trades"]), key=lambda t: (t["entry_ms"], t["product"], t["side"]))
     full_trades = [t for r in results for t in r["full_trades"]]
@@ -1347,7 +1366,8 @@ def _execute(runner, db, spec, cfg, meta, product_list, provider, trade_source, 
         notes.append("Atención: no se pudo leer el historial de funding de Kraken; los costos de funding no están incluidos.")
     report = build_report(meta, result, cfg, notes)
     try:
-        write_artifact(data_dir, meta, cfg, spec, digest, full_trades, open_at_end, result)
+        write_artifact(data_dir, meta, cfg, spec, digest, full_trades, open_at_end, result,
+                       traces=[(r["product"], meta["start_ms"], meta["end_ms"], r["trace"]) for r in results if r.get("trace")])
     except (OSError, GateError, TypeError, ValueError) as error:
         # The verdict is already computed and must not depend on storing the trades: a run without the folder just
         # shows no chart (the API answers "artifact_not_ready").
