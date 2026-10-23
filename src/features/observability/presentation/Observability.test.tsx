@@ -715,18 +715,17 @@ describe('ObserverPanel (right column)', () => {
     )
   })
 
-  it('lists only the Qwen book (C31) among the stored results', async () => {
+  it('lists no book of a strategy that is not approved among the stored results', async () => {
     const busy = clone(activityBusy) as any
     busy.product = 'PF_XBTUSD'
     busy.operations.experiments[0].experiment_id = 'c31-momentum-breakout-5m'
     serve({ activity: () => json(busy) })
     render(<Observer />)
     const exps = await screen.findByTestId('activity-experiments')
-    expect(exps).toHaveTextContent('c31-momentum-breakout-5m')
+    expect(exps).not.toHaveTextContent('c31-momentum-breakout-5m')
     expect(exps).not.toHaveTextContent('C30')
-    expect(within(exps).getAllByText(/Último ciclo propio/)).toHaveLength(1)
-    expect(screen.queryByText(/Último ciclo del forward/)).toBeNull()
-    expect(screen.queryByText(/posición abierta/i)).toBeNull()
+    expect(within(exps).queryAllByText(/Último ciclo propio/)).toHaveLength(0)
+    expect(screen.getByTestId('stored-total')).toHaveTextContent('0')
   })
 
   it('shows «No disponible» with the reason for a section the backend could not read', async () => {

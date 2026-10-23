@@ -73,6 +73,19 @@ else if (python.command === undefined)
   process.stdout.write(
     '[dev] llm and q need Python as well, which was not found; they will not start.\n',
   )
+// Qwen is part of the Terminal: when it cannot start, say it loudly and why.
+if (!llmEnabled && (env.DECISIONS_ENABLED ?? '').trim() !== '0') {
+  const why =
+    llama.command === undefined
+      ? llama.message
+      : python.command === undefined
+        ? 'Python was not found.'
+        : llmModel?.message
+  process.stderr.write(
+    `[dev] ATENCIÓN: Qwen NO arranca, la Terminal no tendrá decisiones. Motivo: ${why}\n` +
+      '[dev] Qué hacer: instalá llama.cpp (brew install llama.cpp), dejá un modelo Qwen3.5-4B o Qwen3-4B en formato GGUF en tu disco (o poné LLAMA_MODEL_PATH=/ruta/al/modelo.gguf en .env.local) y reiniciá pnpm dev.\n',
+  )
+}
 const liveDir = resolve(root, 'server/data/dev-live')
 mkdirSync(liveDir, { recursive: true })
 // Leftovers of an earlier `pnpm run dev` in this checkout (ports, writer

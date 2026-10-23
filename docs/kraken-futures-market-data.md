@@ -10,7 +10,7 @@ pnpm --dir server funding:backfill --db <base>          # ~1 año de funding de 
 pnpm --dir server market:prune --vacuum                 # retención: tickers 24 h, trades 7 d
 ```
 
-`DEV_ONLY=vite,capture,live,forward,strategies pnpm dev` arranca solo esos procesos (captura y seguimiento forward, sin modelo ni libros paper).
+`DEV_ONLY=vite,capture,live,forward,strategies pnpm dev` arranca esos procesos (captura y seguimiento forward, sin libros paper) y siempre Qwen (modelo, veredictos y decisiones).
 
 El mercado spot BTC-EUR está abandonado. El resto de este documento es el historial de la utilidad aislada FK-02 (octubre 2), que ya no existe como comando suelto (`capture-market.ts` se retiró).
 
