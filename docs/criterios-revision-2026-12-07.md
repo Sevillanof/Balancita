@@ -36,4 +36,4 @@ Salidas permitidas: (1) ampliar la captura a 8 productos; (2) pausar el laborato
 
 ## Enmiendas
 
-- 2026-10-23 (pedido de Fran, ADR 0001, enmienda 2026-10-23): el umbral de revisión pasa de 15 a 30 operaciones en vivo para todas las estrategias, incluidas C29, C30 y Kronos. Reemplaza también las 100 operaciones de los textos anteriores. Lo demás de este documento no cambia.
+- 2026-10-23 (pedido de Fran, ADR 0001, enmienda 2026-10-23): el umbral de revisión pasa de 15 a 30 operaciones en vivo para todas las estrategias en general. Reemplaza también las 100 operaciones de los textos anteriores. Lo demás de este documento no cambia.
