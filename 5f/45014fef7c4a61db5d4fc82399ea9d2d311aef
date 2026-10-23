@@ -1,0 +1,19 @@
+odd/tasks/tailwind-design-system.md
+  s_0043e721b5abeb::t_0c571c8452efe1 1-134
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "5f45014fef7c4a61db5d4fc82399ea9d2d311aef",
+  "prompts": {},
+  "sessions": {
+    "s_0043e721b5abeb": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "41f2963b-0bef-4b3f-b0d3-4c68097989e6",
+        "model": "unknown"
+      },
+      "human_author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
