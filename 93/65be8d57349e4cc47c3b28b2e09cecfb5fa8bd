@@ -1,0 +1,21 @@
+server/src/features/kraken-futures/futures-market-store.test.ts
+  s_0043e721b5abeb::t_f2566ec2125137 8-12,232-304
+server/src/features/kraken-futures/futures-market-store.ts
+  s_0043e721b5abeb::t_968423387c6035 173-189,2236,2268
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "9365be8d57349e4cc47c3b28b2e09cecfb5fa8bd",
+  "prompts": {},
+  "sessions": {
+    "s_0043e721b5abeb": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "41f2963b-0bef-4b3f-b0d3-4c68097989e6",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
