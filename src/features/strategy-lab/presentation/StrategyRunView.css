@@ -194,23 +194,6 @@
   gap: 8px 12px;
 }
 
-.runview__controls {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 12px;
-  color: var(--mc-text-2);
-  font-size: 13px;
-}
-
-.runview__controls select {
-  padding: 4px 8px;
-  border: 1px solid var(--mc-border-strong);
-  border-radius: var(--mc-radius);
-  color: var(--mc-text);
-  background: var(--mc-surface-1);
-  font: inherit;
-}
-
 .runview__chart {
   /* The chart reads this variable for its own height (see DemoShell.css). */
   --terminal-chart-height: clamp(380px, 56vh, 600px);
@@ -258,13 +241,6 @@
   margin-left: auto;
 }
 
-.runview__detail {
-  display: grid;
-  gap: 8px;
-  padding-top: 10px;
-  border-top: 1px solid var(--mc-border);
-}
-
 .runview__detail-head {
   display: flex;
   align-items: center;
@@ -309,18 +285,6 @@
   margin: 0;
   color: var(--mc-text);
   font-variant-numeric: tabular-nums;
-}
-
-.runview__tech summary {
-  color: var(--mc-text-2);
-  font-size: 13px;
-  cursor: pointer;
-}
-
-.runview__tech p {
-  margin: 6px 0 0;
-  color: var(--mc-text-2);
-  font-size: 12px;
 }
 
 .runview__table-wrap {

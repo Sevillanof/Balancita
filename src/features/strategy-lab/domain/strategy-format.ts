@@ -13,12 +13,6 @@ export function signedAmount(
   return `${sign}${amount(Math.abs(rounded), digits)}`
 }
 
-/** Net basis points per operation: `+24,02 pb/op`. */
-export function netBpPerOp(value: number | null | undefined): string | null {
-  const text = signedAmount(value, 2)
-  return text === null ? null : `${text} pb/op`
-}
-
 /** `+174,59 USD`. */
 export function netUsd(value: number | null | undefined): string | null {
   const text = signedAmount(value, 2)

@@ -74,10 +74,6 @@ export const RESEARCH_TONES: Record<ResearchState, StatusTone> = {
   registry_note: 'nodata',
 }
 
-export const FROZEN_LABEL = 'Congelada'
-export const FROZEN_HINT =
-  'No cambia de comportamiento hasta 100 operaciones forward (ADR 0001).'
-
 export const OPERATIONAL_BASIS_HINT: Record<string, string> = {
   registry:
     'Estado del registro de estrategias: no prueba que el proceso corra ahora',
@@ -119,16 +115,4 @@ export function researchLabel(state: string): string {
   return state in RESEARCH_LABELS
     ? RESEARCH_LABELS[state as ResearchState]
     : RESEARCH_LABELS.unmeasured
-}
-
-export function operationalTone(state: string): StatusTone {
-  return state in OPERATIONAL_TONES
-    ? OPERATIONAL_TONES[state as OperationalState]
-    : 'nodata'
-}
-
-export function researchTone(state: string): StatusTone {
-  return state in RESEARCH_TONES
-    ? RESEARCH_TONES[state as ResearchState]
-    : 'nodata'
 }
