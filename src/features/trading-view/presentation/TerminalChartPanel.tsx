@@ -363,38 +363,30 @@ export default function TerminalChartPanel({
   )
   const stats = ticker ?? remote?.ticker ?? null
   const mark = stats?.mark ?? null
-  const [hiddenStrategies, setHiddenStrategies] = useState<string[]>([])
   const lines = useMemo(() => {
     const open = chartPositions(positions, position, product ?? 'PF_XBTUSD')
-    const out = open
-      .filter(
-        (item) =>
-          typeof item.strategy_id !== 'string' ||
-          !hiddenStrategies.includes(item.strategy_id),
+    const out = open.flatMap((item, index) => {
+      const strategyId =
+        typeof item.strategy_id === 'string' ? item.strategy_id : undefined
+      // Several books: each strategy draws its own lines in its own colour.
+      const own = open.length > 1 ? strategyMarkerColor(strategyId) : undefined
+      return positionLines(
+        item,
+        own
+          ? { entry: own, stop: own, target: own }
+          : { entry: colors.info, stop: colors.down, target: colors.up },
+        open.length > 1
+          ? {
+              id: `${strategyId ?? 'book'}-${index}`,
+              code: strategyCode(strategyId),
+            }
+          : undefined,
+      ).map((line) =>
+        historicalLabel
+          ? { ...line, title: `${historicalLabel} · ${line.title}` }
+          : line,
       )
-      .flatMap((item, index) => {
-        const strategyId =
-          typeof item.strategy_id === 'string' ? item.strategy_id : undefined
-        // Several books: each strategy draws its own lines in its own colour.
-        const own =
-          open.length > 1 ? strategyMarkerColor(strategyId) : undefined
-        return positionLines(
-          item,
-          own
-            ? { entry: own, stop: own, target: own }
-            : { entry: colors.info, stop: colors.down, target: colors.up },
-          open.length > 1
-            ? {
-                id: `${strategyId ?? 'book'}-${index}`,
-                code: strategyCode(strategyId),
-              }
-            : undefined,
-        ).map((line) =>
-          historicalLabel
-            ? { ...line, title: `${historicalLabel} · ${line.title}` }
-            : line,
-        )
-      })
+    })
     if (mark != null)
       out.push({
         id: 'mark',
@@ -404,15 +396,7 @@ export default function TerminalChartPanel({
         dashed: true,
       })
     return out
-  }, [
-    positions,
-    position,
-    product,
-    mark,
-    colors,
-    hiddenStrategies,
-    historicalLabel,
-  ])
+  }, [positions, position, product, mark, colors, historicalLabel])
   const everyMarker = useMemo(() => {
     const period = {
       // Only operations inside the candles on screen: none from another period.
@@ -444,25 +428,7 @@ export default function TerminalChartPanel({
     intervalSeconds,
     historicalLabel,
   ])
-  const strategyIds = useMemo(
-    () =>
-      [
-        ...new Set(
-          everyMarker.flatMap((marker) =>
-            marker.strategyId ? [marker.strategyId] : [],
-          ),
-        ),
-      ].sort(),
-    [everyMarker],
-  )
-  const allMarkers = useMemo(
-    () =>
-      everyMarker.filter(
-        (marker) =>
-          !marker.strategyId || !hiddenStrategies.includes(marker.strategyId),
-      ),
-    [everyMarker, hiddenStrategies],
-  )
+  const allMarkers = everyMarker
   // Only a fill marker that is still on this chart can be the picked one.
   const fillId =
     pickedFill !== null &&
@@ -659,32 +625,6 @@ export default function TerminalChartPanel({
         </p>
       )}
 
-      {strategyIds.length > 0 && (
-        <div
-          className="terminal-chart__strategies"
-          role="group"
-          aria-label="Filtrar marcadores por estrategia"
-          style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}
-        >
-          {strategyIds.map((id) => {
-            const hidden = hiddenStrategies.includes(id)
-            return (
-              <button
-                key={id}
-                type="button"
-                aria-pressed={!hidden}
-                onClick={() => setHiddenStrategies((list) => toggle(list, id))}
-                style={{
-                  borderColor: strategyMarkerColor(id),
-                  opacity: hidden ? 0.45 : 1,
-                }}
-              >
-                {strategyCode(id) ?? id}
-              </button>
-            )
-          })}
-        </div>
-      )}
       {waiting ? (
         <p className="terminal-chart__loading" role="status">
           Cargando velas de {timeframeLabel}…
