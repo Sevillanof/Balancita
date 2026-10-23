@@ -188,7 +188,6 @@ async function measure(page: Page) {
     chart_canvas: await box('canvas'),
     observer: await box('[data-testid="activity-panel"]'),
     ahora: await box('[data-testid="observer-now"]'),
-    actividad: await box('[aria-label="Actividad de la ventana"]'),
     resultados: await box('[aria-label="Operaciones almacenadas"]'),
     historial: await box('[aria-label="Historial"]'),
   }
@@ -244,7 +243,7 @@ test('waiting state: health in the header, one observer column, chart protagonis
   await shot(page, 'espera-3h')
 })
 
-test('a registered directional signal is a proposal, not an operation', async ({
+test('a registered directional signal never shows as an engine proposal in the Terminal', async ({
   page,
 }) => {
   // Fixture: B2 example with activity (synthetic data, not a live read).
@@ -254,11 +253,10 @@ test('a registered directional signal is a proposal, not an operation', async ({
     example('b2/ejemplo-con-actividad.json'),
   )
   const panel = page.getByTestId('activity-panel')
-  await expect(panel).toContainText('Propuestas direccionales')
-  await expect(page.getByTestId('last-proposal')).toContainText(
-    'LONG · c25_long_pullback',
-  )
-  await expect(panel).toContainText('no son operaciones')
+  // The Terminal shows only Qwen and approved strategies: no engine card.
+  await expect(page.getByTestId('stored-total')).toBeVisible()
+  await expect(panel).not.toContainText('Propuestas direccionales')
+  await expect(page.getByTestId('last-proposal')).toHaveCount(0)
   await expectChartProtagonist(page)
   await shot(page, 'con-senal')
 })
