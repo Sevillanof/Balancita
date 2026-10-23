@@ -42,19 +42,19 @@ src/shared/design-system/theme.css   ← the ONLY token source (@theme)
 
 ## Token mapping (Mission Control → Tailwind v4 `@theme`)
 
-| Today | `@theme` variable | Utility example |
-|---|---|---|
-| `--mc-canvas` `#0a0d14` | `--color-canvas` | `bg-canvas` |
-| `--mc-surface-1` / `-2` / `-hover` | `--color-surface-1` / `-2` / `-hover` | `bg-surface-1` |
-| `--mc-border` / `-strong` / `-focus` | `--color-line` / `-strong` / `-focus` | `border-line` |
-| `--mc-long` / `--mc-short` / `--mc-warn` / `--mc-info` | `--color-long` / `short` / `warn` / `info` | `text-long`, `bg-long/10`, `border-long/25` |
-| `--mc-text` / `-2` / `-3` | `--color-ink` / `ink-2` / `ink-3` | `text-ink-2` |
-| `--mc-on-long` | `--color-on-long` | `text-on-long` |
-| `--mc-space-xs…xl` (4–24px) | `--spacing: 4px` | `p-1`=4, `p-2`=8, `p-3`=12, `p-4`=16, `p-6`=24 |
-| `--mc-radius` 4px / `-lg` 8px | `--radius-sm` / `--radius-lg` | `rounded-sm` |
-| `--mc-font` / `--mc-font-mono` | `--font-sans` / `--font-mono` | `font-mono` |
-| 11px label, 12px hint, 13px, 14px body, 16px title, 20px value | `--text-label`, `--text-hint`, `--text-note`, `--text-body`, `--text-title`, `--text-value` (each with `--line-height`) | `text-label` |
-| `--mc-shadow-popover` | `--shadow-popover` | `shadow-popover` |
+| Today                                                          | `@theme` variable                                                                                                       | Utility example                                |
+| -------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------- |
+| `--mc-canvas` `#0a0d14`                                        | `--color-canvas`                                                                                                        | `bg-canvas`                                    |
+| `--mc-surface-1` / `-2` / `-hover`                             | `--color-surface-1` / `-2` / `-hover`                                                                                   | `bg-surface-1`                                 |
+| `--mc-border` / `-strong` / `-focus`                           | `--color-line` / `-strong` / `-focus`                                                                                   | `border-line`                                  |
+| `--mc-long` / `--mc-short` / `--mc-warn` / `--mc-info`         | `--color-long` / `short` / `warn` / `info`                                                                              | `text-long`, `bg-long/10`, `border-long/25`    |
+| `--mc-text` / `-2` / `-3`                                      | `--color-ink` / `ink-2` / `ink-3`                                                                                       | `text-ink-2`                                   |
+| `--mc-on-long`                                                 | `--color-on-long`                                                                                                       | `text-on-long`                                 |
+| `--mc-space-xs…xl` (4–24px)                                    | `--spacing: 4px`                                                                                                        | `p-1`=4, `p-2`=8, `p-3`=12, `p-4`=16, `p-6`=24 |
+| `--mc-radius` 4px / `-lg` 8px                                  | `--radius-sm` / `--radius-lg`                                                                                           | `rounded-sm`                                   |
+| `--mc-font` / `--mc-font-mono`                                 | `--font-sans` / `--font-mono`                                                                                           | `font-mono`                                    |
+| 11px label, 12px hint, 13px, 14px body, 16px title, 20px value | `--text-label`, `--text-hint`, `--text-note`, `--text-body`, `--text-title`, `--text-value` (each with `--line-height`) | `text-label`                                   |
+| `--mc-shadow-popover`                                          | `--shadow-popover`                                                                                                      | `shadow-popover`                               |
 
 The status pill formula (10% fill, 25% border, full-strength text) becomes `bg-long/10 border-long/25 text-long`: Tailwind v4 builds opacity modifiers with `color-mix`, the same technique the CSS uses today.
 
@@ -62,16 +62,16 @@ The status pill formula (10% fill, 25% border, full-strength text) becomes `bg-l
 
 ## Tasks
 
-| ID | Specs | Route | Status | Commit |
-|---|---|---|---|---|
-| T1 | S1, S3, S5 | inline | pending (needs dependency approval) | — |
-| T2 | S1, S2, S5 | inline | pending | — |
-| T3 | S4 | inline | pending | — |
-| T4 | S2, S3 | inline | pending | — |
-| T5 | S1, S2, S5, S6 | inline | pending | — |
-| T6 | S1, S2, S5, S6 | inline | pending | — |
-| T7 | S1, S2, S5 | inline | pending | — |
-| T8 | S1 | inline | pending | — |
+| ID  | Specs          | Route  | Status                              | Commit |
+| --- | -------------- | ------ | ----------------------------------- | ------ |
+| T1  | S1, S3, S5     | inline | pending (needs dependency approval) | —      |
+| T2  | S1, S2, S5     | inline | pending                             | —      |
+| T3  | S4             | inline | pending                             | —      |
+| T4  | S2, S3         | inline | pending                             | —      |
+| T5  | S1, S2, S5, S6 | inline | pending                             | —      |
+| T6  | S1, S2, S5, S6 | inline | pending                             | —      |
+| T7  | S1, S2, S5     | inline | pending                             | —      |
+| T8  | S1             | inline | pending                             | —      |
 
 ### T1 — Tailwind and the single theme (no visual change)
 
