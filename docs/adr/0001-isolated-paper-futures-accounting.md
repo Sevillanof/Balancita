@@ -212,7 +212,7 @@ Two different things were mixed. **Exploring** (trying ideas in paper) must be c
 
 1. Size and leverage are **free and configurable per strategy**. This replaces the fixed 100 USD notional, the 1x leverage cap of the laboratory and the provisional-size wording of the 2026-10-16 amendment. Each strategy keeps its own book; the notional and leverage used are stored with every trade so results stay auditable. Losses are still capped by the simulated balance: a position that would leave less than zero equity is rejected, never shrunk.
 2. **Closing by time is allowed** (horizon exit). This replaces "no time-based close" of 2026-10-18. Strategies still need at least one defined closing rule before going live; a time exit counts as one.
-3. **Qwen may open and close** positions in experiments, in addition to confirming or vetoing entries. This relaxes "Qwen creates no trade" (2026-10-12, limit 1; 2026-10-18, decision 2) for experiments only. Every Qwen answer is still stored with its inputs, prompt hash and model.
+3. **Qwen may open and close** positions, in addition to confirming or vetoing entries. It operates and is shown in the Terminal view, where it trains constantly, always in paper. This relaxes "Qwen creates no trade" (2026-10-12, limit 1; 2026-10-18, decision 2). There is no separate experiments area any more. Every Qwen answer is still stored with its inputs, prompt hash and model.
 4. The shared-portfolio proposal with dynamic sizing (`docs/adr/propuesta-enmienda-dimensionamiento-dinamico.md`) stays as a reference design for one possible sizing rule. It is not adopted by this amendment.
 
 ### Review at 30 live trades
