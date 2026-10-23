@@ -5,7 +5,11 @@ import { DatabaseSync } from 'node:sqlite'
 import { createHash } from 'node:crypto'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { canonicalJson } from '../paper-futures/futures-canonical.ts'
-import { FuturesMarketStore } from './futures-market-store.ts'
+import {
+  CANDLE_REVISIONS_AFTER_SQL,
+  FuturesMarketStore,
+  TICKER_TRADE_EVENTS_AFTER_SQL,
+} from './futures-market-store.ts'
 import { parseHistoricalFundingResponse } from './historical-funding.ts'
 
 const dirs: string[] = []
@@ -223,6 +227,79 @@ describe('FuturesMarketStore', () => {
       raw.prepare('DELETE FROM paper_futures_candle_revisions').run(),
     ).toThrow(/immutable/i)
     raw.close()
+  })
+
+  it('tails candle revisions of one interval after the cursor, ascending', () => {
+    const store = new FuturesMarketStore(dbPath())
+    const revision = (intervalMs: number, bucketStart: number) =>
+      store.saveCandleRevision({
+        id: `PF_XBTUSD:${intervalMs}:${bucketStart}`,
+        intervalMs,
+        bucketStart,
+        revision: 1,
+        knownAt: bucketStart + 1,
+        isClosed: false,
+        coverage: 'observed_trades_only_no_gap_certification',
+        open: '100',
+        high: '101',
+        low: '99',
+        close: '100',
+        volumeBtc: '1',
+        tradeCount: 1,
+        sourceHash: 'a'.repeat(64),
+      })
+    revision(60_000, 0)
+    revision(300_000, 0)
+    revision(60_000, 60_000)
+    revision(60_000, 120_000)
+    revision(300_000, 300_000)
+    revision(60_000, 180_000)
+    const buckets = (rowid: number, limit = 500) =>
+      store
+        .candleRevisionsAfter(rowid, 60_000, limit)
+        .map((row) => [row.rowid, row.revision.bucket_start])
+    expect(buckets(0)).toEqual([
+      [1, 0],
+      [3, 60_000],
+      [4, 120_000],
+      [6, 180_000],
+    ])
+    expect(buckets(3)).toEqual([
+      [4, 120_000],
+      [6, 180_000],
+    ])
+    expect(buckets(0, 2)).toEqual([
+      [1, 0],
+      [3, 60_000],
+    ])
+    expect(buckets(6)).toEqual([])
+    store.close()
+  })
+
+  it('tails events and candle revisions by the rowid range, never a secondary index', () => {
+    const path = dbPath()
+    new FuturesMarketStore(path).close()
+    const db = new DatabaseSync(path, { readOnly: true })
+    const plan = (sql: string, ...params: Array<string | number>) =>
+      db
+        .prepare(`EXPLAIN QUERY PLAN ${sql}`)
+        .all(...params)
+        .map((row) => String((row as { detail: unknown }).detail))
+    for (const [table, steps] of [
+      [
+        'paper_futures_market_events',
+        plan(TICKER_TRADE_EVENTS_AFTER_SQL, 0, 'PF_XBTUSD', 500),
+      ],
+      [
+        'paper_futures_candle_revisions',
+        plan(CANDLE_REVISIONS_AFTER_SQL, 0, 60_000, 500),
+      ],
+    ] as const) {
+      expect(steps).toEqual([
+        `SEARCH ${table} USING INTEGER PRIMARY KEY (rowid>?)`,
+      ])
+    }
+    db.close()
   })
 
   it('selects only closed candle revisions known by the cutoff', () => {

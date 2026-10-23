@@ -170,6 +170,23 @@ function officialRow(row: RecordValue): OfficialStoredCandle {
   }
 }
 
+// The tails below walk the rowid range after a cursor. The unary `+` keeps
+// SQLite from choosing the product_id / interval_ms index instead: that plan
+// reads every row of the product or interval and sorts them on each poll.
+
+/** Exported so a test can check its query plan. */
+export const TICKER_TRADE_EVENTS_AFTER_SQL = `SELECT rowid AS id, normalized_json FROM paper_futures_market_events
+           WHERE rowid>? AND feed IN ('ticker','trade') AND +product_id=?
+           ORDER BY rowid LIMIT ?`
+
+/** Exported so a test can check its query plan. */
+export const CANDLE_REVISIONS_AFTER_SQL = `SELECT rowid AS id, candle_id,interval_ms,bucket_start,revision,known_at,
+             close_at,is_closed,coverage,open_price,high_price,low_price,
+             close_price,volume_btc,trade_count
+           FROM paper_futures_candle_revisions
+           WHERE rowid>? AND +interval_ms=?
+           ORDER BY rowid LIMIT ?`
+
 /** Append-only public futures evidence store; callers must supply an isolated path. */
 export class FuturesMarketStore {
   private readonly db: DatabaseSync
@@ -2216,11 +2233,7 @@ export class FuturesMarketStore {
       throw new RangeError('Tail limit must be between 1 and 5000.')
     return (
       this.db
-        .prepare(
-          `SELECT rowid AS id, normalized_json FROM paper_futures_market_events
-           WHERE rowid>? AND feed IN ('ticker','trade') AND product_id=?
-           ORDER BY rowid LIMIT ?`,
-        )
+        .prepare(TICKER_TRADE_EVENTS_AFTER_SQL)
         .all(rowid, product(productId), limit) as Array<{
         id: number
         normalized_json: string
@@ -2252,14 +2265,7 @@ export class FuturesMarketStore {
       throw new RangeError('Tail limit must be between 1 and 5000.')
     return (
       this.db
-        .prepare(
-          `SELECT rowid AS id, candle_id,interval_ms,bucket_start,revision,known_at,
-             close_at,is_closed,coverage,open_price,high_price,low_price,
-             close_price,volume_btc,trade_count
-           FROM paper_futures_candle_revisions
-           WHERE rowid>? AND interval_ms=?
-           ORDER BY rowid LIMIT ?`,
-        )
+        .prepare(CANDLE_REVISIONS_AFTER_SQL)
         .all(rowid, intervalMs, limit) as Array<Record<string, unknown>>
     ).map((row) => {
       const { id, ...revision } = row
