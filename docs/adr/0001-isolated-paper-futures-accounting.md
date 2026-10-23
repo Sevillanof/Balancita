@@ -219,6 +219,14 @@ Two different things were mixed. **Exploring** (trying ideas in paper) must be c
 
 Every strategy is **reviewed after 30 LIVE forward trades**. This replaces the review at 15 live trades (2026-10-18) and the 100-forward-trade rule of the earlier amendments, including the "not modified until 100 forward trades" freeze, which now lasts until 30 live trades. A review is a checkpoint to keep, change or stop a strategy; it is not proof of profitability. Only live trades count (rule 8 of 2026-10-18 stands).
 
+### Repealed rules
+
+This amendment expressly repeals the following. They no longer apply.
+
+- Amendment 2026-10-12, limit 3 (Qwen cannot execute or modify open positions; stops, targets and time stops run with Qwen down) and limit 4 (any Qwen failure, malformed answer or timeout is WAIT).
+- Amendment 2026-10-18, decision 2 in its part "if Qwen is down or times out, the position is not opened", and decision 4 in its part "the stop is always executed and never goes through Qwen".
+- Every rule of the earlier amendments that freezes strategies "until 100 forward trades", sets 100 forward trades as the judging point, or names specific strategies for the review (Amendments 2026-10-11, 2026-10-11 evening, 2026-10-12 and 2026-10-18, rule 7). The only review rule is the one in the next section, for all strategies in general.
+
 ### Declaring a winner
 
 A strategy or model is declared a winner only if it **wins after real costs on out-of-sample data**, corrected for the number of trials and with the evaluation rules of the Evaluation section, and the **exam reserve stays untouched** (never used to tune, select or explore). Free sizing, leverage, time exits or Qwen-driven trades never relax this bar. A result obtained with a different size or leverage is compared net of costs and funding, and with the same sizing in the control.
