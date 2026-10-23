@@ -33,7 +33,6 @@ import {
   type CandlesErrorCode,
   type ObservabilityCandles,
 } from './observability-candles.ts'
-import { readSessionBlocks } from './session-blocks-reader.ts'
 import { loadPinnedProducts } from '../kraken-futures/futures-products.ts'
 
 /** Synthetic stream id: the gateway has no engine run, only a market view. */
@@ -63,10 +62,6 @@ export interface LiveGatewayOptions {
   readonly movements?: Movements
   /** JSON written by the dev supervisor with each process's health. */
   readonly processHealthPath?: string
-  /** Derived blocks file the Supervisor publishes (#187). Read-only; absent: reported `absent`. */
-  readonly sessionBlocksPath?: string
-  /** Heartbeat of the same session: the blocks file is refused unless it comes from that run. */
-  readonly sessionHeartbeatPath?: string
   /** CPU, data size, Qwen and Kronos usage for `/api/system`. Absent: null report. */
   readonly systemUsage?: SystemUsage
   /** Read-only health of six components (B1). Absent: built from the paths above. */
@@ -333,15 +328,6 @@ export async function buildLiveGateway(
     engine: defaultView.engine.engineStatus(),
     processes: readProcessHealth(options.processHealthPath),
   }))
-  app.get('/api/paper-session/blocks', () =>
-    options.sessionBlocksPath
-      ? readSessionBlocks(
-          options.sessionBlocksPath,
-          clock(),
-          options.sessionHeartbeatPath,
-        )
-      : { state: 'absent' },
-  )
   app.get('/api/system', () => options.systemUsage?.report() ?? null)
   const observabilityHealth =
     options.observabilityHealth ??

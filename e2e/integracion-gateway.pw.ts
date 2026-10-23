@@ -1,5 +1,5 @@
 import { spawn, type ChildProcess } from 'node:child_process'
-import { mkdirSync, readFileSync, utimesSync, writeFileSync } from 'node:fs'
+import { mkdirSync, writeFileSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
 import { join } from 'node:path'
 import { expect, test, type Page } from '@playwright/test'
@@ -23,8 +23,6 @@ let gateway: ChildProcess | null = null
 // Synthetic 15 m candles seeded for B6 (see seed-gateway-sandbox.ts).
 let candles = { lastBucket: 0, holes: [] as number[] }
 let registry: ChildProcess | null = null
-// The two files the Supervisor leaves (synthetic session, #187-05): the gateway reads them from here.
-let sessionFiles = { blocks: '', heartbeat: '' }
 
 type Logged = { method: string; url: string; status: number }
 
@@ -90,12 +88,6 @@ test.beforeAll(async ({}, info) => {
     FUTURES_VERDICTS_DB_PATH: seeded.FUTURES_VERDICTS_DB_PATH,
     FUTURES_DECISIONS_DB_PATH: seeded.FUTURES_DECISIONS_DB_PATH,
   } as Record<string, string>
-  sessionFiles = {
-    blocks: join(dir, 'session-blocks.json'),
-    heartbeat: join(dir, 'session-heartbeat.json'),
-  }
-  env.PAPER_SESSION_BLOCKS_FILE = sessionFiles.blocks
-  env.PAPER_SESSION_HEARTBEAT_FILE = sessionFiles.heartbeat
   gateway = spawn('node', ['server/src/app/gateway-main.ts'], {
     env: {
       ...process.env,
@@ -537,72 +529,6 @@ test('Estrategias on the real registry S: list of names and last test', async ({
   )
   expect(failed, JSON.stringify(failed, null, 2)).toEqual([])
   expect(log.filter((entry) => entry.url.startsWith('/api-mock'))).toEqual([])
-})
-
-const SYNTHETIC_SESSION = JSON.parse(
-  readFileSync(
-    'docs/mission-control/b3/sesion-supervisor-sintetica-187.json',
-    'utf8',
-  ),
-) as Record<string, { blocks: unknown; heartbeat: unknown }>
-
-/** Leaves a pair a REAL Supervisor wrote (committed, synthetic), with the file's own age as now. */
-function placeSession(name: string) {
-  writeFileSync(
-    sessionFiles.heartbeat,
-    JSON.stringify(SYNTHETIC_SESSION[name].heartbeat),
-  )
-  writeFileSync(
-    sessionFiles.blocks,
-    JSON.stringify(SYNTHETIC_SESSION[name].blocks),
-  )
-  const now = new Date()
-  utimesSync(sessionFiles.blocks, now, now)
-}
-
-test('/sesion reads the session files through Vite and the real gateway (synthetic session, no real data)', async ({
-  page,
-  request,
-}) => {
-  // No file yet: the route says so and the page shows no data.
-  const absent = await request.get('/api-live/paper-session/blocks')
-  expect(absent.status()).toBe(200)
-  expect(await absent.json()).toEqual({ state: 'absent' })
-
-  placeSession('operating')
-  const route = await (
-    await request.get('/api-live/paper-session/blocks')
-  ).json()
-  expect(route.state).toBe('ok')
-  expect(route.document.status.phase).toBe('LIVE')
-  expect(route.document.status.liveness).not.toBe('alive')
-  const log = recordApi(page)
-  await page.goto('/sesion')
-  const status = page.getByTestId('session-status')
-  await expect(status).toHaveAttribute('data-phase', 'LIVE')
-  await expect(page.getByText(/en marcha, sin confirmar/i)).toBeVisible()
-  await expect(status).not.toContainText(/vigente|al día/i)
-
-  // The last publication failed: the old LIVE file is not shown as running.
-  placeSession('last_publication_failed')
-  await page.reload()
-  await expect(page.getByTestId('status-gateway-reason')).toContainText(
-    /no es el estado actual/,
-  )
-  await expect(page.getByText(/en marcha, sin confirmar/i)).toHaveCount(0)
-
-  // Another run's file (same session, same configuration, another start) is refused.
-  placeSession('restart_publication_failed')
-  await page.reload()
-  await expect(page.getByText('Archivo no utilizable')).toBeVisible()
-  await expect(page.getByText(/otra corrida/)).toBeVisible()
-  const session = log.filter((e) =>
-    e.url.startsWith('/api-live/paper-session/'),
-  )
-  expect(session.length).toBeGreaterThanOrEqual(3)
-  expect(session.map((e) => e.method)).toEqual(session.map(() => 'GET'))
-  expect(session.filter((e) => e.status !== 200)).toEqual([])
-  saveLog('solicitudes-sesion.json', log)
 })
 
 test('Estrategias with the registry stopped: honest state, no Carry spam', async ({
