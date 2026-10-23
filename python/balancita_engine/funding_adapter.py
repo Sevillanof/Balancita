@@ -33,13 +33,25 @@ stream ``funding:<product>``, source ``kraken-funding-definitive``).
 All thresholds below are hypotheses to validate, not approved parameters.
 """
 
+import hashlib
 import json
 import re
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 
-from .multi_signals import stable_hash
-from .paper_runner import make_event
+
+
+def stable_hash(value):
+    """SHA-256 of a JSON-serialisable value with sorted keys."""
+    return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")).hexdigest()
+
+
+def make_event(kind, payload, *, t_ms, source="synthetic", stream="main", source_offset=None, source_epoch=0, event_id=None):
+    """The event envelope (``kind`` is always ``funding`` here). ``event_id`` defaults to a hash of what it says and where it came from."""
+    event = {"kind": kind, "t_ms": int(t_ms), "source": source, "stream": stream, "source_offset": source_offset,
+             "source_epoch": source_epoch, "payload": payload}
+    event["event_id"] = event_id or stable_hash(["event.v2", kind, source, stream, source_epoch, source_offset, int(t_ms), payload])[:24]
+    return event
 
 D = Decimal
 HOUR_MS = 3_600_000
