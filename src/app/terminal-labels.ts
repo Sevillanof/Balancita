@@ -54,6 +54,7 @@ export function strategyLabel(value: unknown): string {
   if (typeof value !== 'string' || value.length === 0)
     return 'Sin estrategia seleccionada'
   const known: Record<string, string> = {
+    qwen: 'Qwen',
     'c25-pullback-perp-v1': 'C25 · retroceso (experimental)',
     'c26-reversion-perp-v1': 'C26 · reversión (experimental)',
     'c27-breakout-perp-v1': 'C27 · ruptura (experimental)',

@@ -1,4 +1,5 @@
 import { record } from '../shared/wire/decode.ts'
+import { QWEN_STRATEGY_ID } from './useQwenDecisions.ts'
 
 /**
  * Strategies the Terminal may show: only those that passed the whole cycle in
@@ -14,11 +15,12 @@ export const APPROVED_TERMINAL_STRATEGIES: readonly string[] = (
   .map((id: string) => id.trim())
   .filter((id: string) => id.length > 0)
 
-/** An engine verdict is shown only when its strategy is approved. */
+/** A verdict is shown when it is Qwen's or its strategy is approved. */
 export function isApprovedAnalysis(value: unknown): boolean {
   const analysis = record(value)
   const id =
     record(analysis.selector).strategy_id ?? analysis.selected_strategy_id
   if (APPROVED_TERMINAL_STRATEGIES.includes('*')) return true
+  if (id === QWEN_STRATEGY_ID) return true
   return typeof id === 'string' && APPROVED_TERMINAL_STRATEGIES.includes(id)
 }
