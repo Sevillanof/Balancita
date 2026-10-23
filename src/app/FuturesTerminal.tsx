@@ -23,7 +23,7 @@ import SelectedDecision from './SelectedDecision.tsx'
 import { markerGap, markerGapNote } from './terminal-markers.ts'
 import TerminalMarketChart from './TerminalMarketChart.tsx'
 import { isApprovedAnalysis } from './terminal-approved.ts'
-import { useQwenDecisions } from './useQwenDecisions.ts'
+import { qwenNotice, useQwenDecisions } from './useQwenDecisions.ts'
 import {
   analysesNotice,
   analysisAction,
@@ -94,7 +94,10 @@ export default function FuturesTerminal({
     position,
   })
   const displayedPrice = quote.price
-  const qwen = useQwenDecisions(product, bootstrap.mode === 'paper_live')
+  const { rows: qwen, source: qwenSource } = useQwenDecisions(
+    product,
+    bootstrap.mode === 'paper_live',
+  )
   const analyses = [
     ...(Array.isArray(state?.analyses)
       ? state.analyses.filter(isApprovedAnalysis)
@@ -462,17 +465,17 @@ export default function FuturesTerminal({
                     selectedId={selectedId}
                     onSelect={selectAnalysis}
                     notice={
-                      engineOff
+                      engineOff && !analyses.length
                         ? 'Motor de decisiones apagado. Solo se muestran velas y precio públicos de Kraken Futures; no hay análisis, cuenta ni operaciones simuladas.'
                         : !analyses.length && gatewayEngine
-                          ? analysesNotice(
+                          ? (analysesNotice(
                               gatewayEngineStatus,
                               gatewayEngineReason,
-                            )
-                          : null
+                            ) ?? qwenNotice(qwenSource, analyses.length))
+                          : qwenNotice(qwenSource, analyses.length)
                     }
                     selected={
-                      selectedAnalysis && !engineOff ? (
+                      selectedAnalysis ? (
                         <SelectedDecision
                           analysis={selectedAnalysis}
                           id={selectedId}

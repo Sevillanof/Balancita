@@ -460,10 +460,14 @@ const CAPTURE_ARGS = ['--experimental-strip-types', 'src/app/capture-main.ts']
  * - q (optional): Python LLM decisions Q (market + verdicts DBs read-only ->
  *   decisions DB, sole writer of the latter), started together with llm.
  */
+/** The children that make Qwen decide: they ignore DEV_ONLY. */
+export const QWEN_CHILDREN = ['verdict', 'llm', 'q', 'qwenexit']
+
 /**
  * `DEV_ONLY=vite,capture,live,forward,strategies` runs just those children (comma separated names of
  * `devChildSpecs`); unset or empty runs everything. Unknown names are ignored. Used to leave only the
- * forward measurement and the capture it reads running, without the model, paper books or news.
+ * forward measurement and the capture it reads running, without paper books or news. Qwen (see QWEN_CHILDREN)
+ * is never left out by it.
  */
 export function onlyChildSpecs(specs, env = {}) {
   const wanted = (env.DEV_ONLY ?? '')
@@ -471,7 +475,11 @@ export function onlyChildSpecs(specs, env = {}) {
     .map((name) => name.trim())
     .filter(Boolean)
   if (wanted.length === 0) return specs
-  return specs.filter((spec) => wanted.includes(spec.name))
+  // Qwen always runs: its model, verdicts, decisions and exit book are part of
+  // the Terminal. Only DECISIONS_ENABLED=0 (or a missing model) leaves it out.
+  return specs.filter(
+    (spec) => wanted.includes(spec.name) || QWEN_CHILDREN.includes(spec.name),
+  )
 }
 
 const INVALID_OFF_REASON =

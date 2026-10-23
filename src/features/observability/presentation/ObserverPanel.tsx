@@ -249,12 +249,10 @@ function Now({
   )
 }
 
-/** Only Qwen's book (C31) and approved strategies get a row in the Terminal. */
+/** Only approved strategies get a row in the Terminal (Qwen has no book here). */
 function shownBooks<T extends { experimentId: string }>(books: T[]): T[] {
-  return books.filter(
-    (book) =>
-      book.experimentId.startsWith('c31-') ||
-      APPROVED_TERMINAL_STRATEGIES.includes(book.experimentId),
+  return books.filter((book) =>
+    APPROVED_TERMINAL_STRATEGIES.includes(book.experimentId),
   )
 }
 
@@ -350,11 +348,11 @@ export default function ObserverPanel({
   return (
     <section
       className="demo-terminal__panel obs-observer"
-      aria-label="Observador del motor"
+      aria-label="Decisiones de Qwen"
       data-testid="activity-panel"
     >
       <div className="obs-observer__head">
-        <h2>Observador del motor</h2>
+        <h2>Decisiones de Qwen</h2>
         <div role="group" aria-label="Ventana de tiempo" className="obs-seg">
           {ACTIVITY_WINDOWS.map((w) => (
             <button

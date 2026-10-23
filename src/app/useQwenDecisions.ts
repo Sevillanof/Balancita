@@ -1,9 +1,11 @@
 import { useEffect, useState } from 'react'
 import { record } from '../shared/wire/decode.ts'
+import { QWEN_RUNTIME } from '../features/observability/presentation/latest-decision.ts'
 
 export const QWEN_STRATEGY_ID = 'qwen'
 const POLL_MS = 15_000
 const EMPTY: Record<string, unknown>[] = []
+const LOADING: QwenSource = { state: 'loading' }
 
 /**
  * Qwen's own decisions of one product, read from the gateway
@@ -23,6 +25,7 @@ export function qwenAnalyses(payload: unknown): Record<string, unknown>[] {
         typeof row.action === 'string',
     )
     .map((row) => ({
+      runtime_version: QWEN_RUNTIME,
       analysis_id: `qwen:${row.product}:${row.bucket_start_ms}`,
       product: row.product,
       bucket_start_ms: row.bucket_start_ms,
@@ -36,14 +39,31 @@ export function qwenAnalyses(payload: unknown): Record<string, unknown>[] {
     .sort((a, b) => Number(a.decision_time_ms) - Number(b.decision_time_ms))
 }
 
+export type QwenSource =
+  | { state: 'loading' }
+  | { state: 'ok' }
+  | { state: 'off'; reason: string }
+  | { state: 'error' }
+
+/** What the Terminal says when Qwen has no decision to show, or null. */
+export function qwenNotice(source: QwenSource, rows: number): string | null {
+  if (rows > 0 || source.state === 'loading') return null
+  if (source.state === 'off')
+    return 'Qwen no está corriendo: no hay base de decisiones. Iniciá pnpm dev con el modelo local instalado (llama.cpp con un Qwen en GGUF); si no puede arrancar, el arranque explica el motivo.'
+  if (source.state === 'error')
+    return 'No se pudieron leer las decisiones de Qwen del gateway.'
+  return 'Qwen todavía no decidió nada para este producto. Decide con cada vela de 1 minuto y salta los minutos en calma.'
+}
+
 export function useQwenDecisions(
   product: string | undefined,
   enabled: boolean,
-): Record<string, unknown>[] {
-  // Rows belong to the product they were read for: another product shows none.
+): { rows: Record<string, unknown>[]; source: QwenSource } {
+  // Reads belong to the product they were read for: another product shows none.
   const [read, setRead] = useState<{
     product: string
     rows: Record<string, unknown>[]
+    source: QwenSource
   } | null>(null)
   useEffect(() => {
     if (!enabled || !product) return
@@ -55,9 +75,19 @@ export function useQwenDecisions(
           { signal: controller.signal },
         )
         if (!response.ok) throw new Error(`HTTP ${response.status}`)
-        setRead({ product, rows: qwenAnalyses(await response.json()) })
+        const body = await response.json()
+        const status = record(body).status
+        setRead({
+          product,
+          rows: qwenAnalyses(body),
+          source:
+            status === 'ok'
+              ? { state: 'ok' }
+              : { state: 'off', reason: String(record(body).reason ?? '') },
+        })
       } catch {
-        if (!controller.signal.aborted) setRead({ product, rows: [] })
+        if (!controller.signal.aborted)
+          setRead({ product, rows: [], source: { state: 'error' } })
       }
     }
     void load()
@@ -67,5 +97,7 @@ export function useQwenDecisions(
       clearInterval(timer)
     }
   }, [product, enabled])
-  return enabled && read && read.product === product ? read.rows : EMPTY
+  return enabled && read && read.product === product
+    ? { rows: read.rows, source: read.source }
+    : { rows: EMPTY, source: LOADING }
 }

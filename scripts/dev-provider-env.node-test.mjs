@@ -55,6 +55,9 @@ describe('onlyChildSpecs', () => {
     { name: 'capture' },
     { name: 'paper' },
     { name: 'llm' },
+    { name: 'q' },
+    { name: 'verdict' },
+    { name: 'qwenexit' },
   ]
 
   it('keeps everything when DEV_ONLY is unset or empty', () => {
@@ -62,12 +65,12 @@ describe('onlyChildSpecs', () => {
     assert.deepEqual(onlyChildSpecs(specs, { DEV_ONLY: ' , ' }), specs)
   })
 
-  it('keeps only the named children and ignores unknown names', () => {
+  it('keeps only the named children and Qwen, and ignores unknown names', () => {
     assert.deepEqual(
       onlyChildSpecs(specs, { DEV_ONLY: 'vite, capture,nope' }).map(
         (s) => s.name,
       ),
-      ['vite', 'capture'],
+      ['vite', 'capture', 'llm', 'q', 'verdict', 'qwenexit'],
     )
   })
 })

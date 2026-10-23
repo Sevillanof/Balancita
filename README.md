@@ -21,7 +21,7 @@ Espacio de trading personal, local y **solo futuros perpetuos de Kraken (`PF_*`)
 - Ni las reglas de velas ni Qwen han mostrado ventaja neta tras costes. C25-C28 se dan por cerradas; C29, C30, C31 y Kronos siguen en paper hasta 100 operaciones y no se tocan mientras tanto.
 - La ejecución pasiva (maker) se simuló contra la cinta pública de Kraken y no crea ventaja: archivada.
 - Qwen decide solo en replays (brazo A/B) y como decisor de salida de C31; el reglamento está en la enmienda 2026-10-11 del [ADR 0001](docs/adr/0001-isolated-paper-futures-accounting.md).
-- `DEV_ONLY=vite,capture,live,forward,strategies pnpm dev` arranca solo los procesos que mide el seguimiento, sin modelo ni libros paper.
+- `DEV_ONLY=vite,capture,live,forward,strategies pnpm dev` arranca solo los procesos que mide el seguimiento, sin libros paper; Qwen (modelo, veredictos, decisiones y salida C31) arranca siempre, salvo `DECISIONS_ENABLED=0`.
 
 ## Arquitectura
 

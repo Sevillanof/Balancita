@@ -9,6 +9,8 @@ import type {
  * without it is not shown in AHORA: its origin cannot be proven.
  */
 export const VERDICT_RUNTIME = 'futures-verdict.v1'
+/** The same for the decisions Qwen wrote (`/api/qwen/decisions`). */
+export const QWEN_RUNTIME = 'qwen-decision.v1'
 
 /**
  * The most recent decision among the analyses the Terminal stream delivered
@@ -65,7 +67,11 @@ export function latestDecision(
         ? (analysis.selector as Record<string, unknown>)
         : {}
     const action = text(analysis.action) ?? text(selector.action)
-    if (analysis.runtime_version !== VERDICT_RUNTIME) continue
+    if (
+      analysis.runtime_version !== VERDICT_RUNTIME &&
+      analysis.runtime_version !== QWEN_RUNTIME
+    )
+      continue
     if (!Number.isSafeInteger(time) || action === null) continue
     if (best !== null && Number(time) < best.decisionTimeMs) continue
     best = {
