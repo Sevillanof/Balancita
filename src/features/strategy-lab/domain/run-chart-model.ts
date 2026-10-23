@@ -440,10 +440,3 @@ function groupMarker(group: readonly Item[]): ApprovedTerminalMarker {
 /** Id of a grouped entry/exit mark of the full view (not a trade, not a discard). */
 export const isGroupId = (id: string | undefined): boolean =>
   id !== undefined && id.startsWith('g:')
-
-const FUNDING: Record<string, string> = {
-  complete: 'Funding completo',
-  partial: 'Funding parcial',
-  unknown: 'Funding incompleto',
-}
-export const fundingText = (status: string) => FUNDING[status] ?? status

@@ -83,12 +83,3 @@ export function closedHistoryRows(
       : [],
   )
 }
-
-/**
- * Terminal market history for paper_live: the most recent closed 60 s candles
- * (official candle per bucket when known, else the latest closed observed
- * revision; max 500, ascending) from the store.
- */
-export function createLiveTerminalMarket(source: FuturesMarketStore) {
-  return toTerminalMarket(closedHistoryRows(source))
-}

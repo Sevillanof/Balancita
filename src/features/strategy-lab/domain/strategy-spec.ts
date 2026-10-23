@@ -82,8 +82,6 @@ export type CmpPath = { check: number; steps: number[] }
 
 export type EditableCondition = { path: CmpPath; node: CmpNode }
 
-export const COMPARATORS: readonly Comparator[] = ['>', '>=', '<', '<=']
-
 export const COMPARATOR_LABELS: Record<Comparator, string> = {
   '>': '>',
   '>=': '≥',
@@ -119,17 +117,6 @@ const FIELD_LABELS: Record<string, string> = {
   frozen_target: 'objetivo congelado',
   frozen_invalidation: 'invalidación congelada',
 }
-
-/** Operands the editor offers: the registry's feature catalog per scope. */
-export const FEATURE_REFS: readonly string[] = [
-  '1m',
-  '1m_previous',
-  '5m',
-].flatMap((scope) =>
-  Object.keys(FIELD_LABELS)
-    .filter((field) => !field.startsWith('frozen_'))
-    .map((field) => `${scope}.${field}`),
-)
 
 const DECIMAL = /^-?\d+(?:\.\d+)?$/
 
@@ -269,35 +256,8 @@ export function parseDecimalInput(value: string): string | null {
   return DECIMAL.test(normalized) ? normalized : null
 }
 
-/** Numbers typed as `35; 40; 45` for a parameter sweep, or null if invalid. */
-export function parseParamValues(text: string): string[] | null {
-  const parts = text
-    .split(';')
-    .map((part) => part.trim())
-    .filter((part) => part !== '')
-  if (parts.length === 0) return null
-  const values = parts.map(parseDecimalInput)
-  return values.every((value) => value !== null)
-    ? [...new Set(values as string[])]
-    : null
-}
-
 export function cloneSpec(spec: StrategySpec): StrategySpec {
   return structuredClone(spec)
-}
-
-/** Strategy number from ids like `c25-pullback-perp-v1` or `c31-mine`. */
-export function strategyNumber(id: string): number | null {
-  const match = /^c(\d+)-/.exec(id)
-  return match ? Number(match[1]) : null
-}
-
-export function rulesScopes(spec: StrategySpec): RulesScope[] {
-  if (spec.kind === 'regime_adapter')
-    return (['trend', 'range'] as const).filter(
-      (regime) => spec.branches?.[regime],
-    )
-  return ['rules']
 }
 
 export function rulesOf(
@@ -305,169 +265,6 @@ export function rulesOf(
   scope: RulesScope,
 ): Rules | undefined {
   return scope === 'rules' ? spec.rules : spec.branches?.[scope]?.rules
-}
-
-function collect(
-  node: SpecNode,
-  check: number,
-  steps: number[],
-  out: EditableCondition[],
-) {
-  if (isCmp(node)) {
-    out.push({ path: { check, steps }, node })
-    return
-  }
-  const children =
-    'and' in node
-      ? node.and
-      : 'all' in node
-        ? node.all
-        : 'any' in node
-          ? node.any
-          : null
-  children?.forEach((child, index) =>
-    collect(child, check, [...steps, index], out),
-  )
-}
-
-/** Comparisons behind the checks a side requires, in the order written. */
-export function sideConditions(
-  rules: Rules | undefined,
-  side: Side,
-): EditableCondition[] {
-  const entry = rules?.sides[side]
-  if (!rules || !entry) return []
-  const out: EditableCondition[] = []
-  rules.checks.forEach((check, index) => {
-    if (check.name === undefined || entry.requires.includes(check.name))
-      collect(check.node, index, [], out)
-  })
-  return out
-}
-
-/** Returns a copy of `spec` with the comparison at `path` patched. */
-export function patchCondition(
-  spec: StrategySpec,
-  scope: RulesScope,
-  path: CmpPath,
-  patch: Partial<Pick<CmpNode, 'left' | 'op' | 'right'>>,
-): StrategySpec {
-  const next = cloneSpec(spec)
-  const rules = rulesOf(next, scope)
-  const check = rules?.checks[path.check]
-  if (!check) return spec
-  let node: SpecNode = check.node
-  for (const step of path.steps) {
-    const children: SpecNode[] | undefined =
-      'and' in node
-        ? node.and
-        : 'all' in node
-          ? node.all
-          : 'any' in node
-            ? node.any
-            : undefined
-    if (!children?.[step]) return spec
-    node = children[step]
-  }
-  if (!isCmp(node)) return spec
-  Object.assign(node, patch)
-  return next
-}
-
-function cmpCodes(rules: Rules): Set<string> {
-  const codes = new Set<string>()
-  const walk = (node: SpecNode) => {
-    if (isCmp(node)) codes.add(node.cmp)
-    else if ('and' in node) node.and.forEach(walk)
-    else if ('all' in node) node.all.forEach(walk)
-    else if ('any' in node) node.any.forEach(walk)
-    else if ('not' in node) walk(node.not)
-  }
-  rules.checks.forEach((check) => walk(check.node))
-  return codes
-}
-
-/** Returns a copy of `spec` with one new comparison required by `side`. */
-export function addCondition(
-  spec: StrategySpec,
-  scope: RulesScope,
-  side: Side,
-): StrategySpec {
-  const next = cloneSpec(spec)
-  const rules = rulesOf(next, scope)
-  const entry = rules?.sides[side]
-  if (!rules || !entry) return spec
-  const codes = cmpCodes(rules)
-  const names = new Set(rules.checks.map((check) => check.name))
-  let n = rules.checks.length + 1
-  while (codes.has(`custom_${n}`) || names.has(`custom_${n}`)) n += 1
-  const name = `custom_${n}`
-  rules.checks.push({
-    name,
-    node: {
-      cmp: name,
-      left: '1m.candidate_close',
-      op: '>',
-      right: '1m.ema21',
-    },
-  })
-  entry.requires.push(name)
-  return next
-}
-
-/** Returns a copy of `spec` without the comparison at `path` for `side`. */
-export function removeCondition(
-  spec: StrategySpec,
-  scope: RulesScope,
-  side: Side,
-  path: CmpPath,
-): StrategySpec {
-  const next = cloneSpec(spec)
-  const rules = rulesOf(next, scope)
-  const check = rules?.checks[path.check]
-  if (!rules || !check) return spec
-  if (path.steps.length === 0) {
-    const name = check.name
-    const entry = rules.sides[side]
-    if (name !== undefined && entry) {
-      entry.requires = entry.requires.filter((item) => item !== name)
-      const stillUsed = Object.values(rules.sides).some((other) =>
-        other?.requires.includes(name),
-      )
-      if (stillUsed) return next
-    }
-    rules.checks.splice(path.check, 1)
-    return next
-  }
-  let parent: SpecNode = check.node
-  for (const step of path.steps.slice(0, -1)) {
-    const children = childrenOf(parent)
-    if (!children?.[step]) return spec
-    parent = children[step]
-  }
-  const children = childrenOf(parent)
-  const last = path.steps[path.steps.length - 1]
-  if (!children || last === undefined || !children[last]) return spec
-  children.splice(last, 1)
-  return next
-}
-
-function childrenOf(node: SpecNode): SpecNode[] | undefined {
-  return 'and' in node
-    ? node.and
-    : 'all' in node
-      ? node.all
-      : 'any' in node
-        ? node.any
-        : undefined
-}
-
-/** The decimal a risk value resolves to, through `$param` if it is one. */
-export function resolveValue(
-  value: string,
-  params: Record<string, string>,
-): string {
-  return isParam(value) ? (params[value.slice(1)] ?? value) : value
 }
 
 /** Parsed JSON or a readable error, for the import box. */
