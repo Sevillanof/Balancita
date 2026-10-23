@@ -1,6 +1,6 @@
 # ADR 0001: Isolated paper-futures accounting
 
-**Status:** Accepted for the authorized paper-futures increment. Amended 2026-10-06, 2026-10-11 and 2026-10-12 (see the amendments below). Immutable and read-only: it is consulted, never edited, except for an amendment the user requests directly.
+**Status:** Accepted for the authorized paper-futures increment. Amended 2026-10-06, 2026-10-11, 2026-10-12, 2026-10-16, 2026-10-18, 2026-10-19 and 2026-10-23 (see the amendments below). Immutable and read-only: it is consulted, never edited, except for an amendment the user requests directly.
 
 ## Decision
 
@@ -199,3 +199,38 @@ Requested directly by the user (Fran) on 2026-10-19 ("El ADR esta mal. Que no co
 3. **D's hash chain stays valid.** The owning tool removes the deleted strategy's events, renumbers the remaining ones and recomputes the chain from the first affected event, rewrites the snapshots (the deleted book's state is dropped, heads re-pointed) and the config stored in the DB, and verifies the chain before committing; the other strategies' events and book balances are unchanged (every strategy has an independent book). The deletion leaves no trace of the strategy in the DB.
 4. **Two anonymous exceptions in the strategy gate**, neither naming the strategy: an exam tombstone (hash of the exam'd content, date, verdict), so an identical re-created version cannot retake the final exam, and a counter of practice attempts per family keyed by the SHA-256 of the family name, so deleting and re-creating a family does not reset the deflated-Sharpe trial count.
 5. Deleting a shipped strategy removes its file in `config/strategies/`.
+
+## Amendment 2026-10-23: exploring is separated from declaring a winner
+
+Requested directly by the user (Fran) on 2026-10-23: the limits of the earlier amendments are too conservative to find a winning opportunity. Where it conflicts with the text above, including the amendments of 2026-10-11, 2026-10-12, 2026-10-16 and 2026-10-18, this one prevails. Everything remains paper only: no real orders, no private endpoints, no credentials.
+
+### Principle
+
+Two different things were mixed. **Exploring** (trying ideas in paper) must be cheap and free. **Declaring a winner** (trusting a result) stays strict. Limits belong to the second, not the first.
+
+### Exploring (paper)
+
+1. Size and leverage are **free and configurable per strategy**. This replaces the fixed 100 USD notional, the 1x leverage cap of the laboratory and the provisional-size wording of the 2026-10-16 amendment. Each strategy keeps its own book; the notional and leverage used are stored with every trade so results stay auditable. Losses are still capped by the simulated balance: a position that would leave less than zero equity is rejected, never shrunk.
+2. **Closing by time is allowed** (horizon exit). This replaces "no time-based close" of 2026-10-18. Strategies still need at least one defined closing rule before going live; a time exit counts as one.
+3. **Qwen may open and close** positions, in addition to confirming or vetoing entries. It operates and is shown in the Terminal view, where it trains constantly, always in paper. This relaxes "Qwen creates no trade" (2026-10-12, limit 1; 2026-10-18, decision 2). There is no separate experiments area any more. Every Qwen answer is still stored with its inputs, prompt hash and model.
+4. The shared-portfolio proposal with dynamic sizing (`docs/adr/propuesta-enmienda-dimensionamiento-dinamico.md`) stays as a reference design for one possible sizing rule. It is not adopted by this amendment.
+
+### Review at 30 live trades
+
+Every strategy is **reviewed after 30 LIVE forward trades**. This replaces the review at 15 live trades (2026-10-18) and the 100-forward-trade rule of the earlier amendments, including the "not modified until 100 forward trades" freeze, which now lasts until 30 live trades. A review is a checkpoint to keep, change or stop a strategy; it is not proof of profitability. Only live trades count (rule 8 of 2026-10-18 stands).
+
+### Repealed rules
+
+This amendment expressly repeals the following. They no longer apply.
+
+- Amendment 2026-10-12, limit 3 (Qwen cannot execute or modify open positions; stops, targets and time stops run with Qwen down) and limit 4 (any Qwen failure, malformed answer or timeout is WAIT).
+- Amendment 2026-10-18, decision 2 in its part "if Qwen is down or times out, the position is not opened", and decision 4 in its part "the stop is always executed and never goes through Qwen".
+- Every rule of the earlier amendments that freezes strategies "until 100 forward trades", sets 100 forward trades as the judging point, or names specific strategies for the review (Amendments 2026-10-11, 2026-10-11 evening, 2026-10-12 and 2026-10-18, rule 7). The only review rule is the one in the next section, for all strategies in general.
+
+### Declaring a winner
+
+A strategy or model is declared a winner only if it **wins after real costs on out-of-sample data**, corrected for the number of trials and with the evaluation rules of the Evaluation section, and the **exam reserve stays untouched** (never used to tune, select or explore). Free sizing, leverage, time exits or Qwen-driven trades never relax this bar. A result obtained with a different size or leverage is compared net of costs and funding, and with the same sizing in the control.
+
+### Unchanged
+
+Paper only without keys; exact Decimal accounting, canonical hashing and append-only storage; real per-product costs and observed funding (never inferred); each process writes only its own database; and no live trade on a late candle (15 s tolerance, `candle_late`). The complete-delete rule of 2026-10-19 stays.

@@ -22,6 +22,8 @@ import type { DecisionRow } from './terminal-decisions.ts'
 import SelectedDecision from './SelectedDecision.tsx'
 import { markerGap, markerGapNote } from './terminal-markers.ts'
 import TerminalMarketChart from './TerminalMarketChart.tsx'
+import { isApprovedAnalysis } from './terminal-approved.ts'
+import { useQwenDecisions } from './useQwenDecisions.ts'
 import {
   analysesNotice,
   analysisAction,
@@ -92,7 +94,16 @@ export default function FuturesTerminal({
     position,
   })
   const displayedPrice = quote.price
-  const analyses = Array.isArray(state?.analyses) ? state.analyses : []
+  const qwen = useQwenDecisions(product, bootstrap.mode === 'paper_live')
+  const analyses = [
+    ...(Array.isArray(state?.analyses)
+      ? state.analyses.filter(isApprovedAnalysis)
+      : []),
+    ...qwen,
+  ].sort(
+    (a, b) =>
+      Number(record(a).decision_time_ms) - Number(record(b).decision_time_ms),
+  )
   const orders = Array.isArray(state?.orders) ? state.orders : []
   const fills = Array.isArray(state?.fills) ? state.fills : []
   const selectedAnalysis =
@@ -399,8 +410,8 @@ export default function FuturesTerminal({
                 <TerminalMarketChart
                   market={market}
                   mode={bootstrap.mode}
-                  analyses={gatewayEngine ? analyses : []}
-                  selectedId={gatewayEngine ? selectedId : ''}
+                  analyses={bootstrap.mode === 'paper_live' ? analyses : []}
+                  selectedId={bootstrap.mode === 'paper_live' ? selectedId : ''}
                   onSelect={selectAnalysis}
                   apiBase={apiBase}
                   product={product}

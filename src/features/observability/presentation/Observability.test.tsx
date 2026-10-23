@@ -676,12 +676,14 @@ describe('ObserverPanel (right column)', () => {
     )
   })
 
-  it('separates evaluations, proposals and stored operations', async () => {
+  it('shows the stored operations and no engine activity', async () => {
     serve({ activity: quiet })
     render(<Observer />)
-    await screen.findByTestId('activity-discards')
-    expect(screen.getByText('Evaluaciones')).toBeInTheDocument()
-    expect(screen.getByText('Propuestas direccionales')).toBeInTheDocument()
+    await screen.findByTestId('stored-total')
+    expect(screen.queryByText('Evaluaciones')).toBeNull()
+    expect(screen.queryByText('Propuestas direccionales')).toBeNull()
+    expect(screen.queryByTestId('activity-discards')).toBeNull()
+    expect(screen.queryByTestId('last-proposal')).toBeNull()
     expect(screen.getByTestId('stored-total')).toHaveTextContent('0')
     expect(
       screen.getByText(/Una propuesta no es una operación/),
@@ -694,7 +696,7 @@ describe('ObserverPanel (right column)', () => {
   it('reads this product and the 3 h window, and asks 24 h on demand', async () => {
     const calls = serve({ activity: quiet })
     render(<Observer />)
-    await screen.findByTestId('activity-discards')
+    await screen.findByTestId('stored-total')
     expect(calls.filter((c) => c.includes('/activity')).at(-1)).toContain(
       'window=3h',
     )
@@ -713,38 +715,16 @@ describe('ObserverPanel (right column)', () => {
     )
   })
 
-  it('tells how many reasons the list holds when the backend cut it', async () => {
-    const cut = clone(activityQuiet) as any
-    cut.window = '3h'
-    cut.product = 'PF_XBTUSD'
-    cut.discards.truncated = true
-    cut.discards.distinct_reasons = 70
-    serve({ activity: () => json(cut) })
-    render(<Observer />)
-    const note = await screen.findByTestId('discards-more')
-    expect(note).toHaveTextContent('de 70')
-    expect(note).toHaveTextContent(`(${cut.discards.total})`)
-    expect(note).toHaveTextContent('los incluye todos')
-  })
-
-  it('lists the reasons as the engine wrote them, counts included', async () => {
-    serve({ activity: quiet })
-    render(<Observer />)
-    const list = await screen.findByTestId('activity-discards')
-    const first = activityQuiet.discards.by_reason[0] as any
-    expect(within(list).getByText(first.reason_code)).toBeInTheDocument()
-    expect(list).toHaveTextContent(`${first.count}×`)
-  })
-
-  it('gives each experiment its own cycle, never one timestamp for all', async () => {
+  it('lists only the Qwen book (C31) among the stored results', async () => {
     const busy = clone(activityBusy) as any
     busy.product = 'PF_XBTUSD'
+    busy.operations.experiments[0].experiment_id = 'c31-momentum-breakout-5m'
     serve({ activity: () => json(busy) })
     render(<Observer />)
     const exps = await screen.findByTestId('activity-experiments')
-    expect(screen.getByTestId('stored-total')).toHaveTextContent('1')
-    for (const id of ['C29', 'C30']) expect(exps).toHaveTextContent(id)
-    expect(within(exps).getAllByText(/Último ciclo propio/)).toHaveLength(2)
+    expect(exps).toHaveTextContent('c31-momentum-breakout-5m')
+    expect(exps).not.toHaveTextContent('C30')
+    expect(within(exps).getAllByText(/Último ciclo propio/)).toHaveLength(1)
     expect(screen.queryByText(/Último ciclo del forward/)).toBeNull()
     expect(screen.queryByText(/posición abierta/i)).toBeNull()
   })
