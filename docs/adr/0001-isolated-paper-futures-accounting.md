@@ -226,4 +226,3 @@ A strategy or model is declared a winner only if it **wins after real costs on o
 ### Unchanged
 
 Paper only without keys; exact Decimal accounting, canonical hashing and append-only storage; real per-product costs and observed funding (never inferred); the stop is always executed and never goes through Qwen; if Qwen is down or times out, nothing is opened; each process writes only its own database; and no live trade on a late candle (15 s tolerance, `candle_late`). The complete-delete rule of 2026-10-19 stays.
-
