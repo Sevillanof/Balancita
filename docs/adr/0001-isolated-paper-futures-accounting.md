@@ -217,7 +217,7 @@ Two different things were mixed. **Exploring** (trying ideas in paper) must be c
 
 ### Review at 30 live trades
 
-Every strategy, old and new, is **reviewed after 30 LIVE forward trades**. This replaces the review at 15 live trades (2026-10-18) and the 100-forward-trade rule for C29, C30 and Kronos. Their freeze ("not modified until 100 forward trades") now lasts until 30 live trades. A review is a checkpoint to keep, change or stop a strategy; it is not proof of profitability. Only live trades count (rule 8 of 2026-10-18 stands).
+Every strategy is **reviewed after 30 LIVE forward trades**. This replaces the review at 15 live trades (2026-10-18) and the 100-forward-trade rule of the earlier amendments, including the "not modified until 100 forward trades" freeze, which now lasts until 30 live trades. A review is a checkpoint to keep, change or stop a strategy; it is not proof of profitability. Only live trades count (rule 8 of 2026-10-18 stands).
 
 ### Declaring a winner
 
@@ -225,4 +225,4 @@ A strategy or model is declared a winner only if it **wins after real costs on o
 
 ### Unchanged
 
-Paper only without keys; exact Decimal accounting, canonical hashing and append-only storage; real per-product costs and observed funding (never inferred); the stop is always executed and never goes through Qwen; if Qwen is down or times out, nothing is opened; each process writes only its own database; and no live trade on a late candle (15 s tolerance, `candle_late`). The complete-delete rule of 2026-10-19 stays.
+Paper only without keys; exact Decimal accounting, canonical hashing and append-only storage; real per-product costs and observed funding (never inferred); each process writes only its own database; and no live trade on a late candle (15 s tolerance, `candle_late`). The complete-delete rule of 2026-10-19 stays.
