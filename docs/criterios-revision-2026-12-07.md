@@ -8,7 +8,7 @@ Alcance: solo paper, solo datos públicos, estrategias congeladas (C29, C30, Kro
 
 Una estrategia se marca **para revisión** solo si cumple todo:
 
-1. ≥ 15 operaciones forward en vivo cerradas (agrupadas por día y producto); es un punto de revisión, no prueba estadística (enmienda 2026-10-18 del ADR 0001; antes 100). Las sin clasificar no cuentan.
+1. ≥ 30 operaciones forward en vivo cerradas (agrupadas por día y producto); es un punto de revisión, no prueba estadística (enmienda 2026-10-23 del ADR 0001; antes 15 y, antes de eso, 100). Las sin clasificar no cuentan.
 2. Neto medio > 0 tras el modelo de costes vigente.
 3. _t_ con errores agrupados > 2.
 4. El resultado no depende de ≤ 3 operaciones (neto > 0 sin ellas).
@@ -33,3 +33,7 @@ Salidas permitidas: (1) ampliar la captura a 8 productos; (2) pausar el laborato
 ## Enmiendas
 
 (ninguna)
+
+## Enmiendas
+
+- 2026-10-23 (pedido de Fran, ADR 0001, enmienda 2026-10-23): el umbral de revisión pasa de 15 a 30 operaciones en vivo para todas las estrategias, incluidas C29, C30 y Kronos. Reemplaza también las 100 operaciones de los textos anteriores. Lo demás de este documento no cambia.

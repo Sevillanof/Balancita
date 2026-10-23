@@ -66,7 +66,7 @@ Módulo Python `balancita_engine/book_costs.py`, solo lectura de `futures-book.s
 
 `python -m balancita_engine.forward_watch report --out <dir>` (semanal y bajo demanda):
 
-- **Estrategias forward:** operaciones independientes (agrupadas por día y producto), neto medio, error estándar y _t_ con agrupamiento, número de pruebas acumuladas del registro (para DSR), fracción de operaciones `recovered`, concentración (peso de las 3 mayores), advertencia de dependencia. _Alcanzar 100 operaciones y t > 2 es una señal de revisión, no una prueba de rentabilidad._
+- **Estrategias forward:** operaciones independientes (agrupadas por día y producto), neto medio, error estándar y _t_ con agrupamiento, número de pruebas acumuladas del registro (para DSR), fracción de operaciones `recovered`, concentración (peso de las 3 mayores), advertencia de dependencia. _Alcanzar 30 operaciones en vivo (antes 100; ADR 0001, enmienda 2026-10-23) y t > 2 es una señal de revisión, no una prueba de rentabilidad._
 - **Calidad de datos:** cobertura, huecos, reconexiones, latencias, libro inválido, tamaño en disco y crecimiento.
 - **Costes:** las tres categorías de la etapa 3.
 - Reproducible: entrada fija (hash de las bases), salida determinista, `report.json` y `report.md`, versión del código y de los criterios. Idéntico resultado con los mismos datos.
@@ -110,7 +110,7 @@ Entre T0 y T2a puede archivarse **desde ya** el bid/ask que hoy se borra a las 2
 
 ## Trabajo futuro, no implementado (registrado 2026-10-12 a pedido de Fran)
 
-**Portafolio compartido de 1.000 USD** con tamaño de posición dinámico y límites de riesgo globales (hoy cada operación es de 100 USD fijos y cada estrategia lleva su libro). No se implementa ahora: exigiría tocar sizing y riesgo de las estrategias congeladas (C29-C32, Kronos) y no se toca antes de la revisión del 2026-12-07 ni de las 100 operaciones. Cuando se aborde irá como brazo aparte en paper, con ADR enmendado antes de implementarlo.
+**Portafolio compartido de 1.000 USD** con tamaño de posición dinámico y límites de riesgo globales (hoy cada operación es de 100 USD fijos y cada estrategia lleva su libro). No se implementa ahora: exigiría tocar sizing y riesgo de las estrategias congeladas (C29-C32, Kronos) y no se toca antes de la revisión del 2026-12-07 ni de las 30 operaciones en vivo (antes 100; ADR 0001, enmienda 2026-10-23). Cuando se aborde irá como brazo aparte en paper, con ADR enmendado antes de implementarlo.
 
 ## Orden de PRs acordado (2026-10-12)
 
