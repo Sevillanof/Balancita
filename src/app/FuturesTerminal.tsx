@@ -22,6 +22,7 @@ import type { DecisionRow } from './terminal-decisions.ts'
 import SelectedDecision from './SelectedDecision.tsx'
 import { markerGap, markerGapNote } from './terminal-markers.ts'
 import TerminalMarketChart from './TerminalMarketChart.tsx'
+import { isApprovedAnalysis } from './terminal-approved.ts'
 import {
   analysesNotice,
   analysisAction,
@@ -92,7 +93,9 @@ export default function FuturesTerminal({
     position,
   })
   const displayedPrice = quote.price
-  const analyses = Array.isArray(state?.analyses) ? state.analyses : []
+  const analyses = Array.isArray(state?.analyses)
+    ? state.analyses.filter(isApprovedAnalysis)
+    : []
   const orders = Array.isArray(state?.orders) ? state.orders : []
   const fills = Array.isArray(state?.fills) ? state.fills : []
   const selectedAnalysis =
