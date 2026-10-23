@@ -5,6 +5,7 @@ import {
   createQwenScores,
   qwenScoresOff,
 } from '../features/live-gateway/qwen-scores.ts'
+import { createQwenDecisions } from '../features/live-gateway/qwen-decisions.ts'
 import { createKronosScores } from '../features/live-gateway/kronos-scores.ts'
 import { createObservabilityHealth } from '../features/live-gateway/observability-health.ts'
 import { createObservabilityActivity } from '../features/live-gateway/observability-activity.ts'
@@ -95,6 +96,9 @@ async function main(): Promise<void> {
       process.env.BALANCITA_PYTHON_STATUS,
     ),
     qwenScores: qwenScoresFrom(process.env),
+    qwenDecisions: createQwenDecisions({
+      decisionsDbPath: process.env.FUTURES_DECISIONS_DB_PATH || undefined,
+    }),
     kronosScores: kronosScoresFrom(process.env),
     movements: movementsFrom(process.env),
     processHealthPath: process.env.DEV_HEALTH_FILE || undefined,
