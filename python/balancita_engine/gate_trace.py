@@ -26,9 +26,10 @@ import os
 import sys
 from decimal import Decimal
 
-from .futures_costs import fee_rate, stop_exit_bps, side_impact_bps
+from .futures_costs import COST_MODEL_VERSION, cost_model_hash, fee_rate, stop_exit_bps, side_impact_bps
 from .futures_simulator import Book
 from .futures_spec_strategy import propose_spec
+from .strategy_gate_accounting import classify
 
 TRACE_SCHEMA = "balancita.gate-trace.v1"
 TRACE_FILE = "trace.jsonl.gz"
@@ -64,7 +65,9 @@ def cost_breakdown(trade, fill, reference_entry, notional, product):
         "gross_usd": _text(gross), "entry_execution_usd": _text(entry_execution),
         "exit_execution_usd": _text(exit_execution), "fees_usd": _text(fees),
         "funding_usd": None if funding is None else _text(funding), "funding_status": trade["funding_status"],
-        "net_usd": _text(net),
+        "net_usd": _text(net),  # Observed/provisional; definitive amounts live in accounting.
+        "accounting": classify(trade, cost_model_version=COST_MODEL_VERSION),
+        "cost_model_sha256": cost_model_hash(),
         "gross_bp": _bp(gross, notional), "execution_bp": _bp(entry_execution + exit_execution, notional),
         "fees_bp": _bp(fees, notional), "funding_bp": _bp(funding, notional), "net_bp": trade["net_bp"],
         "reconciles": abs(rebuilt - net) <= D("0.0002"),
@@ -175,7 +178,10 @@ def trace_lines(run_id, spec_hash_value, per_product):
     lines = []
     for product, start_ms, end_ms, report in sorted(per_product, key=lambda item: item[0]):
         base = {"schema": TRACE_SCHEMA, "run_id": run_id, "spec_hash": spec_hash_value, "product_id": product}
-        lines.append(dict(base, type="summary", from_ms=start_ms, to_ms=end_ms, counts=report["counts"]))
+        summary = dict(base, type="summary", from_ms=start_ms, to_ms=end_ms, counts=report["counts"])
+        if "input_provenance" in report:
+            summary["input_provenance"] = report["input_provenance"]
+        lines.append(summary)
         lines.extend(dict(base, type="signal", **row) for row in report["signals"])
         lines.extend(dict(base, type="trade", **row) for row in report["trades"])
     return lines
@@ -230,6 +236,9 @@ def replay(data_dir, run_id, cache_dir, out_dir, funding="none", products=None, 
             bad = [k for k in COMPARED if str(a[k]) != str(b[k])]
             if bad:
                 differences.append("{} {}: {}".format(product, a.get("trade_id"), bad))
+        # A replay reproduces the base run: its receipt carries the base label, not the invocation's "replay".
+        if "input_provenance" in out["trace"]:
+            out["trace"]["input_provenance"] = dict(out["trace"]["input_provenance"], label="base")
         per_product.append((product, manifest["range_start_ms"], manifest["range_end_ms_exclusive"], out["trace"]))
     data, digest = encode(trace_lines(run_id, manifest["spec_hash"], per_product))
     os.makedirs(os.path.join(out_dir, str(run_id)), exist_ok=True)

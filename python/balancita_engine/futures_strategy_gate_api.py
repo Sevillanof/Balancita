@@ -20,8 +20,12 @@ import threading
 import time
 
 from .futures_products import load_pinned_products
-from .futures_spec_strategy import spec_hash
+from .futures_spec_strategy import load_specs, spec_hash
 from . import strategy_gate_models
+from . import strategy_evaluation_policy as evaluation_policy
+from . import strategy_gate_accounting as accounting
+from . import strategy_gate_splits as temporal
+from . import strategy_gate_provenance as provenance
 
 DB_NAME = "gate.sqlite"
 ROOT = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", ".."))
@@ -120,6 +124,12 @@ class GateApi:
             out["params"] = json.loads(row["params"]) if row.get("params") else None
         except (TypeError, ValueError):
             out["params"] = None
+        params = out["params"] if isinstance(out["params"], dict) else {}
+        out["evaluation_policy"] = evaluation_policy.stored(params.get("evaluation_policy"))
+        out["accounting"] = accounting.stored(params.get("accounting"))
+        out["temporal"] = temporal.stored(params.get("temporal"))
+        out["provenance"] = provenance.stored(params.get("provenance"))
+        out["audit"] = provenance.stored_audit(params.get("audit"), params.get("provenance"))
         out["has_report"] = bool(row.get("report_path"))
         if row["status"] == "running" and not _alive(row.get("pid")):
             out["status"], out["phase"] = "failed", "falló"
@@ -150,7 +160,8 @@ class GateApi:
     def _validate(self, body):
         if not isinstance(body, dict):
             raise GateApiError("invalid_body", "El pedido debe ser un objeto.")
-        extra = set(body) - {"from", "to", "products", "exam"}
+        self._mode(body.get("evaluation_mode", evaluation_policy.BASELINE_MODE))
+        extra = set(body) - {"from", "to", "products", "exam", "evaluation_mode"}
         if extra:
             raise GateApiError("invalid_body", "Campos no admitidos: {}.".format(", ".join(sorted(extra))))
         exam = body.get("exam", False)
@@ -188,11 +199,33 @@ class GateApi:
 
     # ------------------------------------------------------------------ actions
 
-    def launch(self, strategy_id, body):
+    @staticmethod
+    def _mode(mode):
+        try:
+            return evaluation_policy.require_mode(mode)
+        except ValueError as error:
+            raise GateApiError("unsupported_evaluation_mode", str(error))
+
+    def preflight(self, strategy_id, evaluation_mode=evaluation_policy.BASELINE_MODE):
+        """Read-only capability/scope check, not an exam reservation or an evidence audit."""
+        mode = self._mode(evaluation_mode)
         self._check_strategy(strategy_id)
+        recorded_model = strategy_gate_models.is_model(strategy_id)
+        # Match find_spec: shipped content wins, then the latest non-deleted registry spec.
+        spec = (strategy_gate_models.model_spec(strategy_id) if recorded_model else
+                load_specs().get(strategy_id) or self.registry.version(strategy_id)["spec"])
+        if spec.get("id") != strategy_id:
+            raise GateApiError("not_found", "La especificación no coincide con la estrategia indicada.", 404)
+        return {"strategy_id": strategy_id, "spec_hash": spec_hash(spec), "evaluation_mode": mode,
+                "supported_modes": [evaluation_policy.BASELINE_MODE],
+                "evaluation_policy": evaluation_policy.metadata(recorded_model=recorded_model)}
+
+    def launch(self, strategy_id, body):
         start, end, products, exam = self._validate(body)
+        preflight = self.preflight(strategy_id, body.get("evaluation_mode", evaluation_policy.BASELINE_MODE))
+        scope = preflight["evaluation_policy"]
         args = [self.python, "-m", "balancita_engine.strategy_gate", "--data-dir", self.data_dir, "evaluate",
-                "--strategy", strategy_id]
+                "--strategy", strategy_id, "--evaluation-mode", preflight["evaluation_mode"]]
         registry_db = getattr(self.registry, "path", None)
         if isinstance(registry_db, str) and registry_db:
             args += ["--registry-db", os.path.abspath(registry_db)]
@@ -225,16 +258,18 @@ class GateApi:
                 rows = self._query("SELECT * FROM runs WHERE pid=? AND strategy_id=? ORDER BY id DESC LIMIT 1",
                                    (child.pid, strategy_id))
                 if rows:
-                    return {"run_id": rows[0]["id"], "pid": child.pid, "pending": False}
+                    return {"run_id": rows[0]["id"], "pid": child.pid, "pending": False,
+                            "evaluation_policy": self._public(rows[0])["evaluation_policy"]}
                 code = child.poll()
                 if code is not None:
                     rows = self._query("SELECT * FROM runs WHERE pid=? AND strategy_id=? ORDER BY id DESC LIMIT 1",
                                        (child.pid, strategy_id))
                     if rows:
-                        return {"run_id": rows[0]["id"], "pid": child.pid, "pending": False}
+                        return {"run_id": rows[0]["id"], "pid": child.pid, "pending": False,
+                                "evaluation_policy": self._public(rows[0])["evaluation_policy"]}
                     raise GateApiError("gate_refused", self._refusal(log_path), 422)
                 if time.time() >= deadline:
-                    return {"run_id": None, "pid": child.pid, "pending": True}
+                    return {"run_id": None, "pid": child.pid, "pending": True, "evaluation_policy": scope}
                 time.sleep(0.1)
 
     @staticmethod
@@ -400,6 +435,12 @@ class GateApi:
         counts = {}
         for trade in trades:
             counts[trade["product_id"]] = counts.get(trade["product_id"], 0) + 1
+        summary = manifest.get("summary")
+        if isinstance(summary, dict):
+            summary = dict(summary, accounting=accounting.stored(summary.get("accounting")),
+                           temporal=temporal.stored(summary.get("temporal")),
+                           provenance=provenance.stored(summary.get("provenance")),
+                           audit=provenance.stored_audit(summary.get("audit"), summary.get("provenance")))
         return {"run": self._public(row),
                 "run_id": row["id"], "strategy_id": manifest["strategy_id"], "kind": manifest["kind"],
                 "spec_hash": manifest["spec_hash"], "products": manifest["products"],
@@ -407,7 +448,7 @@ class GateApi:
                 "range_start_ms": manifest["range_start_ms"], "range_end_ms": manifest["range_end_ms_exclusive"],
                 "source": manifest["source"], "resolution": manifest["resolution"],
                 "decision_evidence": manifest["decision_evidence"], "contaminated": manifest["contaminated"],
-                "cost_model_version": manifest["cost_model_version"], "summary": manifest.get("summary"),
+                "cost_model_version": manifest["cost_model_version"], "summary": summary,
                 "label": "Histórico Kraken · ejecuciones paper simuladas"}
 
     @staticmethod

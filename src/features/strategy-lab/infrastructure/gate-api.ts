@@ -9,6 +9,51 @@ export type GateKind = 'practice' | 'exam'
 export type GateStatus = 'running' | 'done' | 'failed' | 'cancelled'
 export type GateVerdict = 'PASA' | 'NO PASA' | 'INCONCLUSO'
 
+/** What the run measured (server-written; absent or `unclassified` on old runs). */
+export type GateEvaluationPolicy = {
+  classification?: string | null
+  account_scope?: string | null
+  notional_per_trade_usd?: string | number | null
+  qwen_open_decisions_replayed?: boolean | null
+  full_policy_validated?: boolean | null
+  reasons?: string[] | null
+}
+
+/** Observed (provisional) versus definitive result and funding coverage. */
+export type GateAccounting = {
+  state?: string | null
+  reasons?: string[] | null
+  closed_trades?: number | null
+  open_at_end?: number | null
+  observed_net_usd?: number | null
+  definitive_net_usd?: number | null
+  funding_complete_count?: number | null
+  funding_complete_share?: number | null
+  minimum_complete_share?: number | null
+  funding_eligible?: boolean | null
+  funding_time_share?: number | null
+}
+
+/** Temporal-stability evidence; `unsupported` is a limitation, not a measured failure. */
+export type GateTemporal = {
+  state?: string | null
+  reasons?: string[] | null
+  fold_count?: number | null
+  input_trades?: number | null
+  used_trades?: number | null
+  excluded_trades?: number | null
+  training_testing_walk_forward?: boolean | null
+}
+
+/** Whether the data and decision evidence of a run can be inspected later. */
+export type GateAudit = {
+  state?: string | null
+  reasons?: string[] | null
+  evidence_ready?: boolean | null
+  independently_verified?: boolean | null
+  full_policy_replay?: boolean | null
+}
+
 export type GateRun = {
   id: number
   strategy_id: string
@@ -28,6 +73,11 @@ export type GateRun = {
   params?: { from?: string; to?: string; products?: string[] } | null
   /** True when the run is of the strategy's current content (the server marks it). */
   same_version?: boolean
+  /** Scope, accounting, temporal and audit evidence: all missing on runs made before they existed. */
+  evaluation_policy?: GateEvaluationPolicy | null
+  accounting?: GateAccounting | null
+  temporal?: GateTemporal | null
+  audit?: GateAudit | null
 }
 
 export type GateExam =
