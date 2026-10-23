@@ -365,30 +365,28 @@ export default function TerminalChartPanel({
   const mark = stats?.mark ?? null
   const lines = useMemo(() => {
     const open = chartPositions(positions, position, product ?? 'PF_XBTUSD')
-    const out = open
-      .flatMap((item, index) => {
-        const strategyId =
-          typeof item.strategy_id === 'string' ? item.strategy_id : undefined
-        // Several books: each strategy draws its own lines in its own colour.
-        const own =
-          open.length > 1 ? strategyMarkerColor(strategyId) : undefined
-        return positionLines(
-          item,
-          own
-            ? { entry: own, stop: own, target: own }
-            : { entry: colors.info, stop: colors.down, target: colors.up },
-          open.length > 1
-            ? {
-                id: `${strategyId ?? 'book'}-${index}`,
-                code: strategyCode(strategyId),
-              }
-            : undefined,
-        ).map((line) =>
-          historicalLabel
-            ? { ...line, title: `${historicalLabel} · ${line.title}` }
-            : line,
-        )
-      })
+    const out = open.flatMap((item, index) => {
+      const strategyId =
+        typeof item.strategy_id === 'string' ? item.strategy_id : undefined
+      // Several books: each strategy draws its own lines in its own colour.
+      const own = open.length > 1 ? strategyMarkerColor(strategyId) : undefined
+      return positionLines(
+        item,
+        own
+          ? { entry: own, stop: own, target: own }
+          : { entry: colors.info, stop: colors.down, target: colors.up },
+        open.length > 1
+          ? {
+              id: `${strategyId ?? 'book'}-${index}`,
+              code: strategyCode(strategyId),
+            }
+          : undefined,
+      ).map((line) =>
+        historicalLabel
+          ? { ...line, title: `${historicalLabel} · ${line.title}` }
+          : line,
+      )
+    })
     if (mark != null)
       out.push({
         id: 'mark',
@@ -398,14 +396,7 @@ export default function TerminalChartPanel({
         dashed: true,
       })
     return out
-  }, [
-    positions,
-    position,
-    product,
-    mark,
-    colors,
-    historicalLabel,
-  ])
+  }, [positions, position, product, mark, colors, historicalLabel])
   const everyMarker = useMemo(() => {
     const period = {
       // Only operations inside the candles on screen: none from another period.
