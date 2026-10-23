@@ -30,15 +30,15 @@ leer datos o crear la DB.
 
 `evaluation_policy` tiene este contrato versionado:
 
-| Campo | Corrida determinista nueva |
-| --- | --- |
-| `schema` | `balancita.strategy-evaluation-policy.v1` |
-| `classification` | `baseline_only` |
-| `account_scope` | `independent_fixed_notional` |
-| `notional_per_trade_usd` | `"100"` |
-| `qwen_open_decisions_replayed` | `false` |
-| `full_policy_validated` | `false` (nunca se certifica en esta entrega) |
-| `reasons` | `deterministic_book_only`, `qwen_open_not_replayed`, `full_policy_not_supported` |
+| Campo                          | Corrida determinista nueva                                                       |
+| ------------------------------ | -------------------------------------------------------------------------------- |
+| `schema`                       | `balancita.strategy-evaluation-policy.v1`                                        |
+| `classification`               | `baseline_only`                                                                  |
+| `account_scope`                | `independent_fixed_notional`                                                     |
+| `notional_per_trade_usd`       | `"100"`                                                                          |
+| `qwen_open_decisions_replayed` | `false`                                                                          |
+| `full_policy_validated`        | `false` (nunca se certifica en esta entrega)                                     |
+| `reasons`                      | `deterministic_book_only`, `qwen_open_not_replayed`, `full_policy_not_supported` |
 
 El productor lo guarda en `runs.params.evaluation_policy` desde el inicio y en
 el `summary` del artefacto al terminar; también aparece en la respuesta de inicio,
@@ -73,16 +73,16 @@ certifica cada importe ni el total. `evaluation_policy` sigue siendo independien
 El mismo objeto `accounting` aparece en las operaciones compactas del resultado
 Python, las operaciones del artefacto/API y `costs.accounting` de la traza.
 
-| Campos | Contrato |
-| --- | --- |
-| `schema`, `state`, `reasons` | Esquema anterior; estado `complete`, `provisional` o `unclassified`; códigos de evidencia ausente/inválida. |
-| `observed_net_usd`, `observed_net_bp` | Copias numéricas finitas de `pnl_usd` y `net_bp`; `null` si la evidencia es inválida/ausente. No se reconstruye el neto. |
-| `definitive_net_usd`, `definitive_net_bp` | Mismos importes, solo con evidencia completa de funding, costes y neto; de lo contrario `null`. |
-| `funding_evidence` | `complete`, `partial`, `unknown`, `unclassified` (flags ausentes/antiguos) o `invalid`. |
-| `cost_evidence`, `cost_model_version` | `complete` solo para operaciones recién producidas por `Book`, con campos numéricos válidos y su identidad de costes; `invalid` si esos campos fallan; sin identidad, `unclassified` y versión `null`. |
-| `funding_bp` | Importe observado con su signo, relativo al nocional; `null` si falta o es inválido. Un cero medido sigue siendo `0`. |
-| `funding_covered_ms`, `funding_held_ms` | Duraciones registradas, separadas del conteo de operaciones; `null` si faltan o son inválidas. |
-| `funding_time_share` | Cubierto/retenido para evidencia temporal conocida; `null` si es desconocida, no clasificable, inválida o no hay duración positiva. |
+| Campos                                    | Contrato                                                                                                                                                                                               |
+| ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `schema`, `state`, `reasons`              | Esquema anterior; estado `complete`, `provisional` o `unclassified`; códigos de evidencia ausente/inválida.                                                                                            |
+| `observed_net_usd`, `observed_net_bp`     | Copias numéricas finitas de `pnl_usd` y `net_bp`; `null` si la evidencia es inválida/ausente. No se reconstruye el neto.                                                                               |
+| `definitive_net_usd`, `definitive_net_bp` | Mismos importes, solo con evidencia completa de funding, costes y neto; de lo contrario `null`.                                                                                                        |
+| `funding_evidence`                        | `complete`, `partial`, `unknown`, `unclassified` (flags ausentes/antiguos) o `invalid`.                                                                                                                |
+| `cost_evidence`, `cost_model_version`     | `complete` solo para operaciones recién producidas por `Book`, con campos numéricos válidos y su identidad de costes; `invalid` si esos campos fallan; sin identidad, `unclassified` y versión `null`. |
+| `funding_bp`                              | Importe observado con su signo, relativo al nocional; `null` si falta o es inválido. Un cero medido sigue siendo `0`.                                                                                  |
+| `funding_covered_ms`, `funding_held_ms`   | Duraciones registradas, separadas del conteo de operaciones; `null` si faltan o son inválidas.                                                                                                         |
+| `funding_time_share`                      | Cubierto/retenido para evidencia temporal conocida; `null` si es desconocida, no clasificable, inválida o no hay duración positiva.                                                                    |
 
 Funding definitivo exige importe finito, `funding_status=complete`,
 `funding_complete=true` y duración cubierta igual a la retenida. Un importe
@@ -105,19 +105,19 @@ al evento JSON final de CLI y al informe en español. Listas/estado exponen
 `run.accounting`; `visual-summary` expone además `summary.accounting`. El estado
 no depende de que se haya podido guardar el artefacto.
 
-| Campos del resumen | Contrato |
-| --- | --- |
-| `schema`, `state`, `scope` | Esquema anterior; `complete`, `provisional`, `unclassified`, `no_trades` o `censored`; alcance `closed_trades_only`. |
-| `metric_population` | `all_observed_closed_trades`: no excluye operaciones incompletas de medias, intervalos, drawdown, controles ni reglas. |
-| `closed_trades`, `open_at_end` | Conteos separados; una abierta al corte no se liquida artificialmente. |
-| `definitive_trades`, `provisional_trades` | Cerradas con evidencia completa y resto de cerradas, respectivamente. El resto puede incluir no clasificadas. |
-| `observed_net_usd`, `observed_net_bp` | Sumas observadas de todas las cerradas; `null` sin operaciones o si falta algún importe. Los bp sumados no son retorno sobre capital compartido. |
-| `definitive_net_usd`, `definitive_net_bp` | Totales solo si todas las cerradas son definitivas y no hay abiertas al corte; de otro modo `null`. No se ofrece un subtotal como si fuera el total. |
-| `funding_complete_count`, `funding_complete_share` | Conteo de estados declarados `complete` y fracción sobre **todas** las cerradas, como la regla original. No certifica importes ni costes. |
-| `minimum_complete_share`, `funding_eligible` | Umbral de configuración sin modificar (hoy `0.95`) y elegibilidad por ese conteo. Sin cerradas, elegibilidad y fracción son `null`. |
-| `funding_evidence_complete_count`, `cost_evidence_complete_count` | Conteos de evidencia individual realmente completa; pueden diferir del conteo de estados declarados antiguos. |
-| `funding_time_known_trades`, `funding_covered_ms`, `funding_held_ms` | Número de operaciones con fracción temporal conocida y sumas de duraciones (cada suma es `null` si falta algún dato). |
-| `funding_time_share` | Fracción ponderada por duración; `null` si alguna operación tiene cobertura desconocida o no hay duración positiva. Nunca se sustituye por el porcentaje por conteo. |
+| Campos del resumen                                                   | Contrato                                                                                                                                                             |
+| -------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `schema`, `state`, `scope`                                           | Esquema anterior; `complete`, `provisional`, `unclassified`, `no_trades` o `censored`; alcance `closed_trades_only`.                                                 |
+| `metric_population`                                                  | `all_observed_closed_trades`: no excluye operaciones incompletas de medias, intervalos, drawdown, controles ni reglas.                                               |
+| `closed_trades`, `open_at_end`                                       | Conteos separados; una abierta al corte no se liquida artificialmente.                                                                                               |
+| `definitive_trades`, `provisional_trades`                            | Cerradas con evidencia completa y resto de cerradas, respectivamente. El resto puede incluir no clasificadas.                                                        |
+| `observed_net_usd`, `observed_net_bp`                                | Sumas observadas de todas las cerradas; `null` sin operaciones o si falta algún importe. Los bp sumados no son retorno sobre capital compartido.                     |
+| `definitive_net_usd`, `definitive_net_bp`                            | Totales solo si todas las cerradas son definitivas y no hay abiertas al corte; de otro modo `null`. No se ofrece un subtotal como si fuera el total.                 |
+| `funding_complete_count`, `funding_complete_share`                   | Conteo de estados declarados `complete` y fracción sobre **todas** las cerradas, como la regla original. No certifica importes ni costes.                            |
+| `minimum_complete_share`, `funding_eligible`                         | Umbral de configuración sin modificar (hoy `0.95`) y elegibilidad por ese conteo. Sin cerradas, elegibilidad y fracción son `null`.                                  |
+| `funding_evidence_complete_count`, `cost_evidence_complete_count`    | Conteos de evidencia individual realmente completa; pueden diferir del conteo de estados declarados antiguos.                                                        |
+| `funding_time_known_trades`, `funding_covered_ms`, `funding_held_ms` | Número de operaciones con fracción temporal conocida y sumas de duraciones (cada suma es `null` si falta algún dato).                                                |
+| `funding_time_share`                                                 | Fracción ponderada por duración; `null` si alguna operación tiene cobertura desconocida o no hay duración positiva. Nunca se sustituye por el porcentaje por conteo. |
 
 Con 96 % de estados completos puede aprobar la regla del 95 % y seguir siendo
 `provisional`. `no_trades` no significa neto cero demostrado; `censored` indica
@@ -202,16 +202,16 @@ lo copian a `run.temporal`, y `visual-summary` a `summary.temporal`. El informe
 nuevo incluye método, embargo, motivos, conteos y tabla por tramo. No requiere
 que se haya podido escribir el artefacto para persistir la evidencia en la DB.
 
-| Campos | Significado |
-| --- | --- |
-| `schema`, `method`, `scope` | `balancita.strategy-gate-temporal.v1`, `purged_stability_observed_hold.v1`, `temporal_stability_only`. |
-| `state`, `reasons` | `observed`, `insufficient` (hay tramos vacíos o unitarios), `no_trades`, `censored` o `unsupported`; motivos explícitos. No son el veredicto estadístico. |
-| `from_ms`, `to_ms`, `entry_bounds`, `exit_bound`, `fold_count` | Ventana evaluada, convenciones de frontera y denominador original. |
-| `embargo_ms`, `embargo_source`, `embargo_supported`, `embargo_max_fold_share` | Duración usada, origen heredado o limitación explícita, disponibilidad y tope `0.25`. |
-| `input_trades`, `used_trades`, `excluded_trades`, `excluded_reasons` | Población recibida y separación disjunta de usadas/excluidas. Motivos: `crosses_fold_end`, `embargo`, `entry_out_of_range`, `open_at_cut`, `invalid_interval`, `unsupported_embargo`. |
-| `open_at_end` | Posiciones abiertas censuradas, separadas de las cerradas. Nunca se crean cierres sintéticos. |
-| `folds` | Por tramo: `index`, `from_ms`, `to_ms`, `usable_from_ms`, embargo aplicado, `used`, `excluded`, motivos y `sample_state` (`no_trades`, `single_trade`, `observed`). El resultado añade sus métricas habituales. |
-| `training_testing_walk_forward` | Siempre `false` para evidencia nueva. |
+| Campos                                                                        | Significado                                                                                                                                                                                                     |
+| ----------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `schema`, `method`, `scope`                                                   | `balancita.strategy-gate-temporal.v1`, `purged_stability_observed_hold.v1`, `temporal_stability_only`.                                                                                                          |
+| `state`, `reasons`                                                            | `observed`, `insufficient` (hay tramos vacíos o unitarios), `no_trades`, `censored` o `unsupported`; motivos explícitos. No son el veredicto estadístico.                                                       |
+| `from_ms`, `to_ms`, `entry_bounds`, `exit_bound`, `fold_count`                | Ventana evaluada, convenciones de frontera y denominador original.                                                                                                                                              |
+| `embargo_ms`, `embargo_source`, `embargo_supported`, `embargo_max_fold_share` | Duración usada, origen heredado o limitación explícita, disponibilidad y tope `0.25`.                                                                                                                           |
+| `input_trades`, `used_trades`, `excluded_trades`, `excluded_reasons`          | Población recibida y separación disjunta de usadas/excluidas. Motivos: `crosses_fold_end`, `embargo`, `entry_out_of_range`, `open_at_cut`, `invalid_interval`, `unsupported_embargo`.                           |
+| `open_at_end`                                                                 | Posiciones abiertas censuradas, separadas de las cerradas. Nunca se crean cierres sintéticos.                                                                                                                   |
+| `folds`                                                                       | Por tramo: `index`, `from_ms`, `to_ms`, `usable_from_ms`, embargo aplicado, `used`, `excluded`, motivos y `sample_state` (`no_trades`, `single_trade`, `observed`). El resultado añade sus métricas habituales. |
+| `training_testing_walk_forward`                                               | Siempre `false` para evidencia nueva.                                                                                                                                                                           |
 
 T5 debe mostrar muestras vacías/unitarias y límites del embargo junto a la
 estabilidad, sin presentar `observed` como certificación de generalización.
@@ -254,13 +254,13 @@ una fuente limitada (p. ej. operaciones propias sin entradas de decisión).
 
 `audit.state`:
 
-| Estado | Significado |
-| --- | --- |
-| `available` | Artefacto publicado, procedencia completa y traza de decisiones capturada. `evidence_ready=true`. |
-| `partial` | Artefacto publicado pero procedencia incompleta o sin traza. |
-| `pending` | La corrida sigue en curso. |
+| Estado        | Significado                                                                                                                               |
+| ------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| `available`   | Artefacto publicado, procedencia completa y traza de decisiones capturada. `evidence_ready=true`.                                         |
+| `partial`     | Artefacto publicado pero procedencia incompleta o sin traza.                                                                              |
+| `pending`     | La corrida sigue en curso.                                                                                                                |
 | `unavailable` | Falló o se canceló la corrida, o no se pudo guardar el artefacto (`artifact_write_failed`). PASA y las estadísticas numéricas no cambian. |
-| `unknown` | Corrida antigua o metadatos ausentes/corruptos; se valida al leer y no se reescribe. |
+| `unknown`     | Corrida antigua o metadatos ausentes/corruptos; se valida al leer y no se reescribe.                                                      |
 
 `independently_verified` y `full_policy_replay` son siempre `false`.
 El replay de una traza (`gate_trace.replay`) reproduce el recibo con la etiqueta `base`.
