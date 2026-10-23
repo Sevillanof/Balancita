@@ -35,6 +35,10 @@ export default defineConfig({
     command: 'pnpm exec vite --host 127.0.0.1 --port 5174 --strictPort',
     url: baseURL,
     reuseExistingServer: false,
+    // The e2e fixtures are engine verdicts: show every one of them.
+    env: {
+      VITE_TERMINAL_APPROVED_STRATEGIES: '*',
+    },
     timeout: 30_000,
   },
 })

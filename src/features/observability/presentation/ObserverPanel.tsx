@@ -1,10 +1,7 @@
+import { APPROVED_TERMINAL_STRATEGIES } from '../../../app/terminal-approved.ts'
 import { useCallback, useState, type ReactNode } from 'react'
 import './observability.css'
-import {
-  DataState,
-  Metric,
-  StatusPill,
-} from '../../../shared/mission-control/index.ts'
+import { DataState, StatusPill } from '../../../shared/mission-control/index.ts'
 import {
   ACTIVITY_WINDOWS,
   fetchActivity,
@@ -30,7 +27,6 @@ const WINDOW_LABELS: Record<ActivityWindow, string> = {
   '3h': '3 h',
   '24h': '24 h',
 }
-const TOP_REASONS = 3
 
 function Unavailable({ section }: { section: Section<object> }) {
   if (section.state !== 'unavailable') return null
@@ -253,79 +249,12 @@ function Now({
   )
 }
 
-function Activity({ report }: { report: ActivityReport }) {
-  const { evaluations, signals, discards } = report
-  const mine =
-    evaluations.state === 'ok' && report.product
-      ? (evaluations.byProduct.find((p) => p.product === report.product) ??
-        null)
-      : null
-  return (
-    <section className="obs-card" aria-label="Actividad de la ventana">
-      <p className="obs-card__label">
-        Actividad · {report.product ? shortProduct(report.product) : 'todos'}
-      </p>
-      <div className="obs-metrics">
-        <Metric
-          label="Evaluaciones"
-          value={
-            mine
-              ? `${mine.count} / ${mine.expected}`
-              : evaluations.state === 'ok'
-                ? evaluations.total
-                : 'Sin datos'
-          }
-          hint={
-            mine
-              ? `${mine.missing} min sin veredicto de 1 por minuto`
-              : undefined
-          }
-        />
-        <Metric
-          label="Propuestas direccionales"
-          value={signals.state === 'ok' ? signals.total : 'Sin datos'}
-          hint={
-            signals.state === 'ok'
-              ? `${signals.long} largo · ${signals.short} corto · no son operaciones`
-              : undefined
-          }
-        />
-      </div>
-      {mine?.lastSignal && (
-        <p className="obs-note" data-testid="last-proposal">
-          Última propuesta: {mine.lastSignal.action} ·{' '}
-          {mine.lastSignal.reasonCode} ·{' '}
-          {momentLabel(mine.lastSignal.bucketMs, report.generatedAtMs)}
-        </p>
-      )}
-      <p className="obs-card__label obs-card__label--sub">
-        Motivos de espera y descarte
-      </p>
-      {discards.state !== 'ok' ? (
-        <Unavailable section={discards} />
-      ) : discards.byReason.length === 0 ? (
-        <p className="obs-note">Sin descartes en la ventana.</p>
-      ) : (
-        <>
-          <ul className="obs-reasons" data-testid="activity-discards">
-            {discards.byReason.slice(0, TOP_REASONS).map((r) => (
-              <li key={`${r.action}|${r.reasonCode}`}>
-                <code>{r.reasonCode}</code>
-                <span className="obs-reasons__action">{r.action}</span>
-                <span className="obs-reasons__count">{r.count}×</span>
-              </li>
-            ))}
-          </ul>
-          {(discards.byReason.length > TOP_REASONS || discards.truncated) && (
-            <p className="obs-note" data-testid="discards-more">
-              Se muestran los {TOP_REASONS} motivos más frecuentes de{' '}
-              {discards.distinctReasons}. El total ({discards.total}) los
-              incluye todos.
-            </p>
-          )}
-        </>
-      )}
-    </section>
+/** Only Qwen's book (C31) and approved strategies get a row in the Terminal. */
+function shownBooks<T extends { experimentId: string }>(books: T[]): T[] {
+  return books.filter(
+    (book) =>
+      book.experimentId.startsWith('c31-') ||
+      APPROVED_TERMINAL_STRATEGIES.includes(book.experimentId),
   )
 }
 
@@ -333,7 +262,10 @@ function Results({ report }: { report: ActivityReport }) {
   const { operations } = report
   const stored =
     operations.state === 'ok'
-      ? operations.experiments.reduce((sum, e) => sum + e.tradesInWindow, 0)
+      ? shownBooks(operations.experiments).reduce(
+          (sum, e) => sum + e.tradesInWindow,
+          0,
+        )
       : null
   return (
     <section className="obs-card" aria-label="Operaciones almacenadas">
@@ -354,7 +286,7 @@ function Results({ report }: { report: ActivityReport }) {
             </p>
           )}
           <ul className="obs-exps" data-testid="activity-experiments">
-            {operations.experiments.map((e) => (
+            {shownBooks(operations.experiments).map((e) => (
               <li key={e.experimentId}>
                 <strong>{e.experimentId}</strong>
                 <span>
@@ -460,7 +392,6 @@ export default function ObserverPanel({
         )}
         {current ? (
           <>
-            <Activity report={current} />
             <Results report={current} />
           </>
         ) : (
