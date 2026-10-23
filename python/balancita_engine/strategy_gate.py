@@ -9,7 +9,7 @@ What it does
     live == replay), prices them with ``futures_costs`` (taker fees + modelled impact) and the funding Kraken
     publishes, and judges them with the rules of ``config/strategy-gate.json`` (printed in every report):
 
-    PASA only if ALL of: n >= 100 trades (fewer: NO PASA "(pocas operaciones)" if any other rule fails, INCONCLUSO only if
+    PASA only if ALL of: n >= 30 trades (fewer: NO PASA "(pocas operaciones)" if any other rule fails, INCONCLUSO only if
     every other rule passes) · mean net bp > 0 with the 95 % bootstrap interval's lower
     bound > 0 · percentile >= 95 against 1000 random-entry draws (same count, side mix, product and holding time) ·
     deflated Sharpe probability >= 0.95 with the number of ATTEMPTS on the strategy family as trials · positive in

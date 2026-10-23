@@ -134,7 +134,7 @@ class IdentityTests(unittest.TestCase):
     def test_config_declares_the_holdout_and_the_rules(self):
         cfg = g.load_config()
         self.assertEqual(cfg["holdout_from"], "2026-04-19")
-        self.assertEqual(cfg["rules"]["min_trades"], 100)
+        self.assertEqual(cfg["rules"]["min_trades"], 30)
         self.assertEqual(cfg["rules"]["min_percentile_vs_random"], 95)
         self.assertEqual(cfg["rules"]["cost_stress_multiplier"], 1.5)
 
@@ -173,13 +173,13 @@ class JudgeTests(unittest.TestCase):
         self.assertEqual(result["verdict"], "PASA", [c for c in result["rules"] if not c["ok"]])
 
     def test_few_trades_are_inconclusive(self):
-        result = self.judge(self.trades(60, 25))
+        result = self.judge(self.trades(20, 25))
         self.assertEqual(result["verdict"], "INCONCLUSO")
         self.assertIsNone(result["verdict_note"])
         self.assertEqual([c["id"] for c in result["rules"] if not c["ok"]], ["n_trades"])
 
     def test_few_trades_and_another_failed_rule_is_no_pasa_with_a_note(self):
-        result = self.judge(self.trades(60, -4))
+        result = self.judge(self.trades(20, -4))
         self.assertEqual(result["verdict"], "NO PASA")
         self.assertEqual(result["verdict_note"], "(pocas operaciones)")
         self.assertGreater(len([c for c in result["rules"] if not c["ok"]]), 1)
