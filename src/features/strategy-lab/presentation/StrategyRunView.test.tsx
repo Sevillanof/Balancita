@@ -995,3 +995,94 @@ describe('StrategyRunView whole stretch', () => {
     ).toBeNull()
   })
 })
+
+describe('StrategyRunView test scope', () => {
+  const baseline = {
+    classification: 'baseline_only',
+    account_scope: 'independent_fixed_notional',
+    notional_per_trade_usd: '100',
+    qwen_open_decisions_replayed: false,
+    full_policy_validated: false,
+    reasons: ['deterministic_book_only'],
+  }
+  const scopeOf = async (extra: Partial<GateRun>) => {
+    renderView(gateWith(overview([run(24, extra)])), visualWith())
+    return await screen.findByTestId('run-evaluation-scope')
+  }
+
+  it('a new run states its scope, definitive result, temporal evidence and audit', async () => {
+    const block = await scopeOf({
+      verdict: 'PASA',
+      evaluation_policy: baseline,
+      accounting: {
+        state: 'complete',
+        definitive_net_usd: 12.5,
+        funding_complete_share: 1,
+        minimum_complete_share: 0.95,
+        funding_eligible: true,
+      },
+      temporal: { state: 'observed', excluded_trades: 0 },
+      audit: { state: 'available' },
+    })
+    expect(block).toHaveTextContent(
+      'Prueba base: libro fijo de 100 USD por operación; no repite las decisiones de Qwen',
+    )
+    expect(block).toHaveTextContent('no valida la política completa')
+    expect(block).toHaveTextContent('Resultado definitivo: 12,5 USD')
+    expect(block).toHaveTextContent(
+      '100 % de las operaciones (mínimo 95 %): cumple',
+    )
+    expect(block).toHaveTextContent('Estabilidad por períodos medida')
+    expect(block).toHaveTextContent('se pueden revisar')
+    expect(block).not.toHaveTextContent('Prueba anterior')
+  })
+
+  it('an old run shows the neutral fallback and never claims validation', async () => {
+    const block = await scopeOf({ verdict: 'PASA' })
+    expect(block).toHaveTextContent('Prueba anterior: sin datos de alcance')
+    expect(block).not.toHaveTextContent('definitivo')
+    expect(block).not.toHaveTextContent('Auditoría')
+    expect(block).not.toHaveTextContent('Estabilidad')
+  })
+
+  it('an unclassified server payload also falls back without crashing', async () => {
+    const block = await scopeOf({
+      evaluation_policy: {
+        classification: 'unclassified',
+        reasons: ['missing_evaluation_policy'],
+      },
+      accounting: { state: 'unclassified' },
+      temporal: { state: 'unknown' },
+    })
+    expect(block).toHaveTextContent('Prueba anterior: sin datos de alcance')
+  })
+
+  it('partial funding is provisional and says the minimum is not met', async () => {
+    const block = await scopeOf({
+      evaluation_policy: baseline,
+      accounting: {
+        state: 'provisional',
+        observed_net_usd: 8,
+        definitive_net_usd: null,
+        funding_complete_share: 0.8,
+        minimum_complete_share: 0.95,
+        funding_eligible: false,
+      },
+    })
+    expect(block).toHaveTextContent('Resultado provisional (8 USD observado)')
+    expect(block).toHaveTextContent('todavía no es el neto definitivo')
+    expect(block).toHaveTextContent(
+      '80 % de las operaciones (mínimo 95 %): no llega al mínimo',
+    )
+    expect(block).not.toHaveTextContent('Resultado definitivo')
+  })
+
+  it('unsupported temporal evidence is a limitation, not a measured failure', async () => {
+    const block = await scopeOf({
+      evaluation_policy: baseline,
+      temporal: { state: 'unsupported', reasons: ['unsupported_embargo'] },
+    })
+    expect(block).toHaveTextContent('no evaluable')
+    expect(block).toHaveTextContent('limitación, no un fallo medido')
+  })
+})

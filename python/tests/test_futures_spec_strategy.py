@@ -12,6 +12,7 @@ from balancita_engine.futures_spec_strategy import (
 )
 from balancita_engine.futures_strategies import C25_ID, C26_ID, C27_ID, C28_ID, STRATEGY_IDS, propose
 from balancita_engine.futures_verdicts import VERDICT_CONFIG, evaluate_verdict, product_config
+from strategy_spec_fixtures import HISTORICAL_SPEC_DIR, HISTORICAL_SPEC_IDS, historical_spec
 
 MINUTE = 60_000
 FIVE = 300_000
@@ -72,13 +73,14 @@ def _random_walk(rng, minutes):
 
 
 class SpecValidationTests(unittest.TestCase):
-    def test_c25_to_c30_ship_as_valid_specs(self):
-        # C29 is a spec only: it needs 24 h of 5m history that live verdicts (200 bars) do not carry.
-        self.assertEqual(set(SPECS), set(STRATEGY_IDS) | {"c29-momentum-perp-v1", "c30-momentum-12h-perp-v1",
-                                                         "c32-funding-contrarian-24h-perp-v1"})
-        for spec in SPECS.values():
-            validate_spec(spec)
-            self.assertEqual(len(spec_hash(spec)), 64)
+    def test_available_shipped_specs_are_valid(self):
+        # Inventory follows the directory: deleted ids are not required, and new ids are allowed.
+        self.assertTrue(SPECS)
+        for strategy_id, spec in SPECS.items():
+            with self.subTest(strategy_id=strategy_id):
+                validate_spec(spec)
+                self.assertEqual(spec["id"], strategy_id)
+                self.assertEqual(len(spec_hash(spec)), 64)
 
     def test_changing_a_parameter_changes_the_hash(self):
         changed = copy.deepcopy(SPECS[C25_ID])
@@ -100,6 +102,37 @@ class SpecValidationTests(unittest.TestCase):
             mutate(spec)
             with self.assertRaises(SpecError, msg=label):
                 validate_spec(spec)
+
+
+class HistoricalSpecFixtureTests(unittest.TestCase):
+    def test_snapshots_are_valid_original_momentum_subjects(self):
+        snapshots = load_specs(HISTORICAL_SPEC_DIR)
+        self.assertEqual(set(snapshots), set(HISTORICAL_SPEC_IDS))
+        for strategy_id, bars, sqrt_bars in zip(HISTORICAL_SPEC_IDS, (72, 144), ("8.485281", "12")):
+            with self.subTest(strategy_id=strategy_id):
+                spec = historical_spec(strategy_id)
+                self.assertEqual(spec, snapshots[strategy_id])
+                validate_spec(spec)
+                self.assertEqual(len(spec_hash(spec)), 64)
+                self.assertEqual(spec["params"], {"z_min": "2.5", "sqrt_bars": sqrt_bars,
+                                                "stop_atr": "2", "target_stop_ratio": "1.5"})
+                self.assertEqual(spec["indicators"], {"logret": [bars], "logvol": [288]})
+                self.assertEqual(spec["rules"]["horizon_minutes"], 1440)
+
+    def test_loading_a_snapshot_returns_independent_nested_data(self):
+        for strategy_id in HISTORICAL_SPEC_IDS:
+            with self.subTest(strategy_id=strategy_id):
+                original = historical_spec(strategy_id)
+                changed = historical_spec(strategy_id)
+                changed["params"]["z_min"] = "3"
+                changed["indicators"]["logret"].append(999)
+                changed["rules"]["checks"][0]["node"]["all"].clear()
+                self.assertNotEqual(spec_hash(changed), spec_hash(original))
+                self.assertEqual(historical_spec(strategy_id), original)
+
+    def test_fixture_loader_does_not_fall_back_to_shipped_specs(self):
+        with self.assertRaises(ValueError):
+            historical_spec(C25_ID)
 
 
 class SpecParityTests(unittest.TestCase):

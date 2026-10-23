@@ -22,6 +22,7 @@ from balancita_engine import strategy_gate as g
 from balancita_engine.futures_costs import entry_fill
 from balancita_engine.futures_qwen_practice import horizon_net_bp
 from balancita_engine.futures_spec_strategy import load_specs, spec_hash
+from strategy_spec_fixtures import HISTORICAL_SPEC_IDS, historical_spec
 from test_futures_qwen_practice import MINUTE, T0, aggregate, synthetic
 
 DAY = 86_400_000
@@ -117,7 +118,7 @@ class Base(unittest.TestCase):
 
 class IdentityTests(unittest.TestCase):
     def test_version_key_is_id_plus_spec_hash_and_follows_content(self):
-        spec = SPECS["c29-momentum-perp-v1"]
+        spec = historical_spec()
         key, digest = g.version_key_of(spec)
         self.assertEqual(key, "c29-momentum-perp-v1:" + digest)
         self.assertEqual(len(digest), 64)
@@ -200,9 +201,23 @@ class JudgeTests(unittest.TestCase):
         self.assertIn("## ⚠️ INCONCLUSO", text)
         self.assertIn("Funding conocido", text)
         self.assertIn("0 %", text)
-        self.assertIn("Kraken solo publica funding desde el 15-oct-2025; antes de esa fecha el resultado sería optimista",
+        self.assertIn("Kraken solo publica funding desde el 15-oct-2025; antes de esa fecha el resultado está incompleto",
                       text.split("## Qué revisamos")[0])
-        self.assertIn("sin funding el resultado es optimista", text.split("## Qué revisamos")[0])
+        self.assertIn("sin funding el neto es provisional", text.split("## Qué revisamos")[0])
+
+    def test_mixed_completeness_preserves_all_metrics_and_95_percent_pass(self):
+        trades = self.with_funding(self.trades(400, 25), 0.96)
+        result = self.judge(trades)
+        self.assertEqual(result["verdict"], "PASA")
+        self.assertEqual(result["overall"]["n"], 400)
+        self.assertAlmostEqual(result["overall"]["mean_bp"], sum(t["net_bp"] for t in trades) / 400)
+        accounting = result["accounting"]
+        self.assertEqual(accounting["metric_population"], "all_observed_closed_trades")
+        self.assertTrue(accounting["funding_eligible"])
+        self.assertEqual(accounting["funding_complete_share"], 0.96)
+        self.assertIsNone(accounting["definitive_net_bp"])
+        self.assertEqual(accounting["definitive_trades"], 0)  # Legacy compact fixtures have no cost evidence.
+        self.assertIn("no convierte el neto observado en definitivo", g.build_report(META, result, CFG))
 
     def test_funding_share_threshold_is_inclusive(self):
         self.assertEqual(self.judge(self.with_funding(self.trades(400, 25), 0.96))["verdict"], "PASA")
@@ -316,7 +331,7 @@ class ControlTests(Base):
         self.assertGreaterEqual(out["result"]["percentile"], 95)
 
     def test_shipped_strategies_on_a_driftless_walk_never_pass(self):
-        # C25-C32 on data with no edge: every verdict is NO PASA or INCONCLUSO, never PASA.
+        # Current shipped specs on data with no edge: never PASA.
         provider = Provider(*driftless())
         for strategy in sorted(SPECS):
             out = run(strategy, self.dir, provider=provider)
@@ -325,17 +340,32 @@ class ControlTests(Base):
             if out["verdict"] == "NO PASA":
                 self.assertFalse(out["result"]["rules"][1]["ok"], strategy)  # no positive mean to defend
 
+    def test_historical_momentum_subjects_on_a_driftless_walk_never_pass(self):
+        provider = Provider(*driftless())
+        for strategy_id in HISTORICAL_SPEC_IDS:
+            with self.subTest(strategy_id=strategy_id):
+                out = run(strategy_id, self.dir, spec=historical_spec(strategy_id), provider=provider)
+                self.assertIn(out["verdict"], ("NO PASA", "INCONCLUSO"), strategy_id)
+                self.assertEqual(out["status"], "done")
+                if out["verdict"] == "NO PASA":
+                    self.assertFalse(out["result"]["rules"][1]["ok"], strategy_id)
+
     def test_neighbors_move_one_param_at_a_time(self):
         cfg = dict(CFG, neighbors={"enabled": True, "pct": 0.2, "max_params": 6})
-        variants = g.neighbor_specs(SPECS["c29-momentum-perp-v1"], cfg)
-        self.assertEqual(len(variants), 2 * len(SPECS["c29-momentum-perp-v1"]["params"]))
+        base = historical_spec()
+        variants = g.neighbor_specs(base, cfg)
+        self.assertEqual(len(variants), 2 * len(base["params"]))
         name, direction, value, spec = variants[0]
-        self.assertNotEqual(spec["params"][name], SPECS["c29-momentum-perp-v1"]["params"][name])
-        self.assertEqual(g.neighbor_specs(SPECS["c29-momentum-perp-v1"], CFG), [])
+        self.assertNotEqual(spec["params"][name], base["params"][name])
+        for name, direction, value, spec in variants:
+            self.assertEqual([key for key in base["params"] if spec["params"][key] != base["params"][key]], [name])
+            self.assertEqual(spec["rules"], base["rules"])
+        self.assertEqual(base, historical_spec())
+        self.assertEqual(g.neighbor_specs(base, CFG), [])
 
     def test_neighbor_run_reports_sensitivity(self):
         cfg = dict(CFG, neighbors={"enabled": True, "pct": 0.2, "max_params": 2})
-        out = run("c29-momentum-perp-v1", self.dir, cfg=cfg, neighbors=True)
+        out = run("c29-momentum-perp-v1", self.dir, spec=historical_spec(), cfg=cfg, neighbors=True)
         self.assertEqual(len(out["result"]["sensitivity"]), 4)
         with open(out["report_path"], encoding="utf-8") as handle:
             self.assertIn("Variantes con promedio positivo", handle.read())
@@ -345,7 +375,7 @@ class CouplingTests(unittest.TestCase):
     def test_c29_z_min_and_sqrt_bars_are_one_threshold(self):
         """The entry threshold is z_min * volatility * sqrt_bars: scaling either by the same factor is the same
         strategy, so the two neighbours are not independent evidence (found on the first real run)."""
-        base = SPECS["c29-momentum-perp-v1"]
+        base = historical_spec()
         trades = []
         for name in ("z_min", "sqrt_bars"):
             spec = copy.deepcopy(base)
@@ -356,14 +386,43 @@ class CouplingTests(unittest.TestCase):
         self.assertEqual(trades[0], trades[1])
 
 
+class MissingSpecTests(Base):
+    def test_missing_historical_ids_are_refused_without_fixture_fallback_or_writes(self):
+        specs_dir = os.path.join(self.dir, "specs")
+        os.mkdir(specs_dir)
+        # Test both an empty inventory and one containing an unrelated valid strategy.
+        for populated in (False, True):
+            if populated:
+                spec = SPECS["c25-pullback-perp-v1"]
+                with open(os.path.join(specs_dir, spec["id"] + ".json"), "w", encoding="utf-8") as handle:
+                    json.dump(spec, handle)
+            for strategy_id in HISTORICAL_SPEC_IDS:
+                with self.subTest(strategy_id=strategy_id, populated=populated):
+                    self.assertNotIn(strategy_id, load_specs(specs_dir))
+                    with self.assertRaises(g.GateError) as caught:
+                        g.find_spec(strategy_id, specs_dir=specs_dir)
+                    self.assertIn("estrategia desconocida: " + strategy_id, str(caught.exception))
+                    provider = Provider()
+                    with self.assertRaises(g.GateError):
+                        run(strategy_id, self.dir, specs_dir=specs_dir, provider=provider)
+                    self.assertEqual(provider.asked_to, [])
+                    self.assertFalse(os.path.exists(os.path.join(self.dir, g.DB_NAME)))
+                    self.assertFalse(os.path.exists(os.path.join(self.dir, g.ARTIFACTS_DIR)))
+
+
 class RegistrySpecTests(Base):
+    def setUp(self):
+        super().setUp()
+        self.specs_dir = os.path.join(self.dir, "specs")
+        os.mkdir(self.specs_dir)
+
     def make_registry(self):
         from balancita_engine.futures_strategy_registry import StrategyRegistry
 
         path = os.path.join(self.dir, "futures-strategies.sqlite")
         registry = StrategyRegistry(path)
         self.addCleanup(registry.close)
-        spec = copy.deepcopy(SPECS["c29-momentum-perp-v1"])
+        spec = historical_spec()
         spec.update(id="c31-momentum-breakout-5m", name="Impulso Adaptativo 5m")
         spec["params"]["z_min"] = "2.2"
         entry = registry.import_spec(spec)
@@ -372,9 +431,9 @@ class RegistrySpecTests(Base):
     def test_registry_only_strategy_is_judged_from_the_registry_row(self):
         registry, path, spec, entry = self.make_registry()
         with self.assertRaises(g.GateError) as refused:
-            run("c31-momentum-breakout-5m", self.dir)
+            run("c31-momentum-breakout-5m", self.dir, specs_dir=self.specs_dir)
         self.assertIn("estrategia desconocida", str(refused.exception))
-        out = run("c31-momentum-breakout-5m", self.dir, registry_db=path)
+        out = run("c31-momentum-breakout-5m", self.dir, specs_dir=self.specs_dir, registry_db=path)
         self.assertEqual(out["status"], "done")
         row = self.db().execute("SELECT version_key, code_hash FROM runs WHERE id=?", (out["run_id"],)).fetchone()
         self.assertEqual(row["code_hash"], entry["spec_hash"])           # the registry's own digest
@@ -388,26 +447,48 @@ class RegistrySpecTests(Base):
         self.assertEqual(g.spec_hash(loaded), entry["spec_hash"])
         direct = g.book_trades(loaded, "PF_XBTUSD", "0.5", ONES, FIVES, [], FROM, HOLDOUT, lambda f: None)[0]
         again = g.book_trades(spec, "PF_XBTUSD", "0.5", ONES, FIVES, [], FROM, HOLDOUT, lambda f: None)[0]
+        self.assertGreater(len(direct), 0)
         self.assertEqual([t["net_bp"] for t in direct], [t["net_bp"] for t in again])
 
     def test_config_spec_wins_over_a_registry_spec_with_the_same_id(self):
         registry, path, spec, entry = self.make_registry()
-        clash = copy.deepcopy(SPECS["c25-pullback-perp-v1"])
-        clash["params"] = dict(clash.get("params", {}))
-        found = g.find_spec("c25-pullback-perp-v1", registry_db=path)
-        self.assertEqual(g.spec_hash(found), g.spec_hash(SPECS["c25-pullback-perp-v1"]))
-        self.assertEqual(g.spec_hash(g.find_spec("c25-pullback-perp-v1", registry_db=None)),
-                         g.spec_hash(SPECS["c25-pullback-perp-v1"]))
+        configured = historical_spec()
+        with open(os.path.join(self.specs_dir, configured["id"] + ".json"), "w", encoding="utf-8") as handle:
+            json.dump(configured, handle)
+        clash = copy.deepcopy(configured)
+        clash["params"]["z_min"] = "3"
+        imported = registry.import_spec(clash)
+        self.assertEqual(imported["id"], configured["id"])
+        self.assertNotEqual(g.spec_hash(configured), g.spec_hash(g.registry_specs(path)[configured["id"]]))
+        found = g.find_spec(configured["id"], specs_dir=self.specs_dir, registry_db=path)
+        self.assertEqual(g.spec_hash(found), g.spec_hash(configured))
+        self.assertEqual(g.spec_hash(g.find_spec(configured["id"], specs_dir=self.specs_dir, registry_db=None)),
+                         g.spec_hash(configured))
 
     def test_deleted_and_missing_registry_rows_are_not_loaded_and_the_db_is_read_only(self):
         registry, path, spec, entry = self.make_registry()
+        # Main DB and WAL contents/mtimes must survive gate reads unchanged.
+        def snapshot():
+            files = {}
+            for filename in (path, path + "-wal"):
+                if os.path.exists(filename):
+                    with open(filename, "rb") as handle:
+                        files[filename] = (os.stat(filename).st_mtime_ns, handle.read())
+            return files
+
+        before = snapshot()
         self.assertIn("c31-momentum-breakout-5m", g.registry_specs(path))
+        self.assertEqual(snapshot(), before)
         registry.delete("c31-momentum-breakout-5m", "c31-momentum-breakout-5m")
+        before = snapshot()
         self.assertNotIn("c31-momentum-breakout-5m", g.registry_specs(path))
-        self.assertEqual(g.registry_specs(os.path.join(self.dir, "nope.sqlite")), {})
+        missing = os.path.join(self.dir, "nope.sqlite")
+        self.assertEqual(g.registry_specs(missing), {})
+        self.assertFalse(os.path.exists(missing))
         self.assertEqual(g.registry_specs(None), {})
         with self.assertRaises(g.GateError):
-            run("c31-momentum-breakout-5m", self.dir, registry_db=path)
+            run("c31-momentum-breakout-5m", self.dir, specs_dir=self.specs_dir, registry_db=path)
+        self.assertEqual(snapshot(), before)
 
     def test_cli_accepts_the_registry_db(self):
         registry, path, spec, entry = self.make_registry()
@@ -464,6 +545,161 @@ class SplitTests(Base):
         self.assertGreater(out["result"]["overall"]["n"], 0)
         self.assertGreaterEqual(out["result"]["edges"][0], HOLDOUT)
         self.assertEqual(len(out["result"]["folds"]), CFG["exam_folds"])
+
+
+class TemporalEvidenceTests(Base):
+    def temporal_judgement(self, mean=25, supported=False, clustered=False):
+        fixture = JudgeTests()
+        trades = fixture.trades(400, mean)
+        end_ms = max(t["exit_ms"] for t in trades) + 1
+        if clustered:
+            for i, trade in enumerate(trades):
+                trade.update(entry_ms=1000 + i * 3 * MINUTE, exit_ms=1000 + (i * 3 + 15) * MINUTE)
+        return g.judge(trades, fixture.series(), CFG, kind="practice", start_ms=0,
+                       end_ms=end_ms, attempts=1, products=["BTC"], seed=5, embargo_supported=supported)
+
+    def test_unsupported_temporal_evidence_alone_is_inconclusive_not_failed_or_passed(self):
+        result = self.temporal_judgement()
+        rules = g._rule_by_id(result)
+        self.assertTrue(all(r["ok"] for r in result["rules"] if r["id"] != "positive_folds"))
+        self.assertEqual(result["verdict"], "INCONCLUSO")
+        self.assertEqual(result["inconclusive_reasons"], ["temporal_unsupported"])
+        self.assertFalse(rules["positive_folds"]["ok"])
+        self.assertEqual(rules["positive_folds"]["measurement_status"], "unavailable")
+        self.assertEqual(rules["positive_folds"]["reasons"], ["unsupported_recorded_model_horizon"])
+        saved = g.run_summary(result, CFG)["rules"]
+        self.assertEqual(next(r for r in saved if r["id"] == "positive_folds"), rules["positive_folds"])
+
+    def test_unsupported_evidence_does_not_mask_measured_performance_failure(self):
+        result = self.temporal_judgement(mean=-4)
+        self.assertEqual(result["verdict"], "NO PASA")
+        rules = g._rule_by_id(result)
+        self.assertFalse(rules["mean_net_positive"]["ok"])
+        self.assertEqual(rules["positive_folds"]["measurement_status"], "unavailable")
+
+    def test_supported_stable_and_unstable_rules_remain_measured(self):
+        stable = self.temporal_judgement(supported=True)
+        unstable = self.temporal_judgement(supported=True, clustered=True)
+        self.assertEqual(stable["verdict"], "PASA")
+        self.assertEqual(unstable["verdict"], "NO PASA")
+        self.assertEqual(unstable["overall"], stable["overall"])
+        self.assertEqual(unstable["accounting"], stable["accounting"])
+        self.assertEqual(unstable["funding_share"], stable["funding_share"])
+        for result, ok in ((stable, True), (unstable, False)):
+            rule = g._rule_by_id(result)["positive_folds"]
+            self.assertEqual(rule["measurement_status"], "measured")
+            self.assertEqual(rule["ok"], ok)
+            self.assertEqual(rule["value"]["total"], CFG["practice_folds"])
+            self.assertEqual(rule["reasons"], [])
+        self.assertEqual([r["id"] for r in unstable["rules"] if not r["ok"]], ["positive_folds"])
+        self.assertEqual(g._rule_by_id(unstable)["positive_folds"]["value"]["positive"], 1)
+
+    def test_unsupported_report_does_not_claim_zero_winning_periods(self):
+        result = self.temporal_judgement()
+        text = g.build_report(META, result, CFG)
+        self.assertIn("Estabilidad temporal no evaluable", text)
+        self.assertNotIn("ganó en 0 de", text.lower())
+        self.assertIn("temporal_unsupported", result["inconclusive_reasons"])
+        self.assertNotIn("Hay muy pocas operaciones", text)
+
+    def test_purge_preserves_global_population_net_and_funding_denominator(self):
+        from test_strategy_gate_splits import trade
+        cfg = dict(CFG, practice_folds=4, random_draws=5, bootstrap_draws=5)
+        trades = [trade(1, 20, net=5), trade(90, 110, net=-40),
+                  trade(101, 120, net=15), trade(350, 400, net=20)]
+        trades[1]["funding_status"] = "partial"
+        before = copy.deepcopy(trades)
+        result = g.judge(trades, {}, cfg, kind="practice", start_ms=0, end_ms=400,
+                         attempts=1, products=["PF_XBTUSD"], seed=1, open_at_end=1)
+        self.assertEqual(trades, before)
+        self.assertEqual(result["overall"], g.summarize(trades))
+        self.assertEqual(result["overall"]["total_bp"], 0)
+        self.assertEqual(result["funding_share"], 0.75)
+        self.assertEqual(result["accounting"]["closed_trades"], 4)
+        self.assertEqual(result["accounting"]["state"], "censored")
+        self.assertEqual(result["accounting"]["funding_complete_share"], 0.75)
+        self.assertEqual(result["accounting"]["minimum_complete_share"], 0.95)
+        self.assertFalse(result["accounting"]["funding_eligible"])
+        self.assertEqual(result["temporal"]["used_trades"], 2)
+        self.assertEqual(result["temporal"]["state"], "censored")
+        self.assertEqual(result["temporal"]["open_at_end"], 1)
+        self.assertIsNone(result["folds"][1]["mean_bp"])
+        rule = g._rule_by_id(result)["positive_folds"]
+        self.assertEqual(rule["value"], {"positive": 2, "total": 4})
+        self.assertEqual(rule["threshold"], CFG["rules"]["min_positive_fold_share"])
+        self.assertFalse(rule["ok"])
+        self.assertEqual(rule["measurement_status"], "measured")
+
+    def test_purged_incomplete_trades_still_count_in_positive_funding_eligibility(self):
+        from test_strategy_gate_splits import trade
+        cfg = dict(CFG, practice_folds=4, random_draws=5, bootstrap_draws=5)
+        trades = [trade(10, 20, net=5)] * 96 + [dict(trade(90, 110, net=-10), funding_status="partial")] * 4
+        result = g.judge(trades, {}, cfg, kind="practice", start_ms=0, end_ms=400,
+                         attempts=1, products=["PF_XBTUSD"], seed=1)
+        self.assertEqual(result["overall"]["n"], 100)
+        self.assertEqual(result["overall"]["total_bp"], 440)
+        self.assertEqual(result["overall"]["mean_bp"], 4.4)
+        self.assertEqual(result["funding_share"], 0.96)
+        self.assertTrue(g._rule_by_id(result)["funding_complete"]["ok"])
+        self.assertEqual(result["accounting"]["closed_trades"], 100)
+        self.assertEqual(result["accounting"]["funding_complete_share"], 0.96)
+        self.assertTrue(result["accounting"]["funding_eligible"])
+        self.assertEqual(result["temporal"]["excluded_reasons"], {"crosses_fold_end": 4})
+
+    def test_open_at_cut_producer_keeps_censored_evidence_without_synthetic_closes(self):
+        from balancita_engine.futures_strategy_gate_api import GateApi
+        out = run("lab-open-v1", self.dir, spec=dict(SPECS["c25-pullback-perp-v1"], id="lab-open-v1"),
+                  trade_source=lambda *args: ([], 1))
+        self.assertEqual(out["result"]["overall"]["n"], 0)
+        self.assertEqual(out["temporal"]["state"], "censored")
+        self.assertEqual(out["temporal"]["open_at_end"], 1)
+        self.assertEqual(out["temporal"]["used_trades"], 0)
+        self.assertIsNone(out["temporal"]["embargo_ms"])
+        visual = GateApi(None, data_dir=self.dir).visual_summary(str(out["run_id"]))
+        self.assertEqual(visual["summary"]["temporal"], out["temporal"])
+        self.assertEqual(visual["summary"]["trades"], 0)
+
+    def test_real_book_producer_persists_temporal_evidence_through_api_and_artifact(self):
+        from balancita_engine.futures_strategy_gate_api import GateApi
+        stream = io.StringIO()
+        out = run("c27-breakout-perp-v1", self.dir, json_progress=True, stream=stream)
+        evidence = out["result"]["temporal"]
+        self.assertGreater(evidence["input_trades"], 0)
+        self.assertEqual(evidence["embargo_source"], "legacy_longest_observed_closed_hold")
+        self.assertEqual(out["temporal"], evidence)
+        self.assertEqual(json.loads(stream.getvalue().splitlines()[-1])["temporal"], evidence)
+        with self.db() as db:
+            params = json.loads(db.execute("SELECT params FROM runs WHERE id=?", (out["run_id"],)).fetchone()[0])
+        self.assertEqual(params["temporal"], evidence)
+        from types import SimpleNamespace
+        registry = SimpleNamespace(_version_row=lambda *args: {"strategy_id": "c27-breakout-perp-v1"},
+                                   _deleted=lambda *args: False)
+        api = GateApi(registry, data_dir=self.dir)
+        self.assertEqual(api.run(str(out["run_id"]))["run"]["temporal"], evidence)
+        self.assertEqual(api.runs("c27-breakout-perp-v1")["runs"][0]["temporal"], evidence)
+        self.assertEqual(api.visual_summary(str(out["run_id"]))["summary"]["temporal"], evidence)
+        with open(out["report_path"], encoding="utf-8") as handle:
+            report = handle.read()
+        self.assertIn(evidence["method"], report)
+        self.assertIn("No es entrenamiento/prueba walk-forward", report)
+
+    def test_recorded_model_routes_keep_observed_trades_without_inventing_a_horizon(self):
+        for sid, filename, table in ((g.strategy_models.QWEN_ID, "qwen-exit.sqlite", "qwen_exit_trade"),
+                                     (g.strategy_models.KRONOS_ID, "kronos.sqlite", "trade")):
+            with self.subTest(strategy=sid):
+                with sqlite3.connect(os.path.join(self.dir, filename)) as db:
+                    db.execute("CREATE TABLE {}(product_id TEXT, payload TEXT)".format(table))
+                    db.execute("INSERT INTO {} VALUES(?,?)".format(table),
+                               ("PF_XBTUSD", json.dumps(_trade("LONG", FROM + MINUTE, 15, 7))))
+                out = run(sid, self.dir, qwen_exit_dir=self.dir, kronos_dir=self.dir)
+                self.assertEqual(out["result"]["overall"]["n"], 1)
+                self.assertEqual(out["result"]["overall"]["total_bp"], 7)
+                evidence = out["temporal"]
+                self.assertEqual(evidence["state"], "unsupported")
+                self.assertIsNone(evidence["embargo_ms"])
+                self.assertEqual(evidence["embargo_source"], "unsupported_recorded_model_horizon")
+                self.assertEqual(evidence["excluded_reasons"], {"unsupported_embargo": 1})
+                self.assertFalse(g._rule_by_id(out["result"])["positive_folds"]["ok"])
 
 
 class ExamLockTests(Base):

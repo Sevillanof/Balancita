@@ -19,7 +19,7 @@ What it does
 Data split (the point of the gate)
     ``holdout_from`` (config, 2026-04-19, about the last 6 months) separates two worlds.
 
-    * PRACTICE (default): walk-forward folds over ``[from, holdout_from)``. Candles, funding and therefore signals and
+    * PRACTICE (default): purged stability folds over ``[from, holdout_from)``. Candles, funding and therefore signals and
       outcomes are only ever requested BELOW ``holdout_from`` (and filtered again inside the worker). A trade still open
       at the cut is DISCARDED, never closed with later prices ("abiertas al corte" in the report). No parameter is
       fitted, so the folds measure stability over time, not training.
@@ -71,6 +71,10 @@ from .futures_spec_strategy import DEFAULT_SPEC_DIR, declared_indicators, load_s
 from .futures_strategy_reliability import TRIAL_SHARPE_SD, deflated_probability
 from . import strategy_gate_models as strategy_models
 from . import strategy_purge
+from . import strategy_evaluation_policy as evaluation_policy
+from . import strategy_gate_accounting as accounting
+from . import strategy_gate_splits as temporal
+from . import strategy_gate_provenance as provenance
 
 SCHEMA = "balancita-strategy-gate.v1"
 ROOT = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", ".."))
@@ -85,7 +89,7 @@ PASS, FAIL, INCONCLUSIVE = "PASA", "NO PASA", "INCONCLUSO"
 PHASES = {"signals": "generando señales", "simulating": "simulando", "random": "sorteos al azar", "report": "informe"}
 # Overall percent at the start of each phase (the last one ends at 100).
 PHASE_START = {"signals": 0.0, "simulating": 60.0, "random": 80.0, "report": 96.0}
-FUNDING_NOTE = ("Kraken solo publica funding desde el 15-oct-2025; antes de esa fecha el resultado sería optimista")
+FUNDING_NOTE = ("Kraken solo publica funding desde el 15-oct-2025; antes de esa fecha el resultado está incompleto")
 DOWNLOAD_SHARE = 10.0        # percent of the "generando señales" phase spent downloading candles
 
 
@@ -380,7 +384,8 @@ def _chunk(index, fraction):
         raise Cancelled()
 
 
-def book_trades(spec, product_id, tick_size, ones, fives, funding, start_ms, end_ms, chunk, trace=False):
+def book_trades(spec, product_id, tick_size, ones, fives, funding, start_ms, end_ms, chunk, trace=False,
+                input_records=None):
     """The strategy's trades from ``start_ms``: one ``Book`` fed by the same ``frames`` as the live forward.
 
     ``trace``: feed a ``TracedBook`` (same trades, plus the signals and evidence) and return it as a third item.
@@ -389,11 +394,17 @@ def book_trades(spec, product_id, tick_size, ones, fives, funding, start_ms, end
     still open at the end is NOT closed (no later price exists in this window) and is reported as ``open_at_end``.
     """
     periods = merge_periods(DEFAULT_PERIODS, declared_indicators(spec))
-    context = FundingContext(funding) if funding else None
+    funding_rows = input_records["funding"].consume(funding) if input_records is not None else funding
+    context = FundingContext(funding_rows) if funding else None
     book = (TracedBook if trace else Book)(spec, product_id=product_id, tick_size=tick_size,
                                            funding=funding_periods(context))
     total, count = max(1, len(ones)), 0
-    for frame in frames(ones, fives, periods, context):
+    input_ones, input_fives = ones, fives
+    if input_records is not None:
+        input_ones = input_records["candles_1m"].consume(ones)
+        input_fives = input_records["candles_5m"].consume(
+            fives, before_ms=ones[-1]["bucket_start"] + MINUTE_MS, step_ms=5 * MINUTE_MS)
+    for frame in frames(input_ones, input_fives, periods, context):
         if frame[0] >= start_ms:
             book.on_frame(*frame)
         count += 1
@@ -405,23 +416,27 @@ def book_trades(spec, product_id, tick_size, ones, fives, funding, start_ms, end
     return trades, int(book.position is not None)
 
 
-def _compact(product, trade):
-    funding_usd = trade.get("funding_usd")
+def _compact(product, trade, cost_model_version=None):
+    funding_usd = accounting.number(trade.get("funding_usd"))
+    funding_bp = None if funding_usd is None else accounting.number(funding_usd / NOTIONAL_USD * 10_000)
     return {"product": product, "side": trade["side"], "entry_ms": int(trade["entry_time_ms"]),
             "exit_ms": int(trade["exit_time_ms"]), "net_bp": float(trade["net_bp"]),
-            "funding_bp": 0.0 if funding_usd is None else float(funding_usd) / NOTIONAL_USD * 10_000,
+            "funding_bp": funding_bp,
+            # Compatibility adapter ONLY for the original observed statistics, not completeness evidence.
+            "observed_funding_bp": 0.0 if funding_bp is None else funding_bp,
+            "accounting": accounting.classify(trade, cost_model_version=cost_model_version),
             "funding_status": trade.get("funding_status", "unknown"), "reason": trade.get("exit_reason", "")}
 
 
 FULL_TRADE_FIELDS = ("side", "entry_bucket_ms", "entry_time_ms", "entry_price", "stop_price", "target_price",
                      "exit_bucket_ms", "exit_time_ms", "exit_price", "exit_reason", "reason_code", "quantity",
                      "notional_usd", "net_bp", "pnl_usd", "funding_usd", "funding_status", "funding_covered_ms",
-                     "funding_held_ms")
+                     "funding_held_ms", "funding_complete")
 
 
-def _full(product, trade):
+def _full(product, trade, cost_model_version=None):
     """The closed trade as the simulator booked it (prices as text, nothing recomputed) for the run's artifact."""
-    out = {"product_id": product}
+    out = {"product_id": product, "accounting": accounting.classify(trade, cost_model_version=cost_model_version)}
     for key in FULL_TRADE_FIELDS:
         out[key] = trade.get(key)
     return out
@@ -439,21 +454,43 @@ def simulate_task(job):
         raise GateError("no hay velas de {} en la ventana pedida".format(product))
     funding = [(s, r) for s, r in (job["funding"] or []) if s < end_ms]
     source = job["trade_source"] or book_trades
-    traced = bool(job.get("trace")) and source is book_trades
+    book = source is book_trades
+    traced = bool(job.get("trace")) and book
+    observed = {key: provenance.Records("funding" if key == "funding" else "candles")
+                for key in ("candles_1m", "candles_5m", "funding")} if book else {}
+    options = {"input_records": observed, "trace": traced} if book else {}
     produced = source(job["spec"], product, job["tick"], ones, fives, funding, start_ms, end_ms,
-                      lambda fraction: _chunk(index, fraction), **({"trace": True} if traced else {}))
+                      lambda fraction: _chunk(index, fraction), **options)
     trades, open_at_end = produced[0], produced[1]
+    observed["observed_trades"] = provenance.Records("trades")
+    compact = []
+    for trade in trades:
+        observed["observed_trades"].add(trade)
+        compact.append(_compact(product, trade, COST_MODEL_VERSION if book else None))
+    # Only this producer just ran Book with today's cost model. Old/model records gain no inferred cost identity.
+    cost_version = COST_MODEL_VERSION if source is book_trades else None
     out = {"index": index, "product": product, "label": job["label"], "open_at_end": open_at_end,
-           "trades": [_compact(product, t) for t in trades],
-           "full_trades": [_full(product, t) for t in trades] if job["want_closes"] else [], "candles_1m": len(ones),
+           "trades": compact,
+           "full_trades": [_full(product, t, cost_version) for t in trades] if job["want_closes"] else [], "candles_1m": len(ones),
            "seconds": round(time.time() - t0, 1)}
     if traced:
         out["trace"] = produced[2]
     if job["want_closes"]:
         base = bisect.bisect_left([c["bucket_start"] for c in ones], start_ms)
-        out["closes"] = array.array("d", (float(c["close"]) for c in ones))
+        def closes():
+            if not book:
+                observed["control_candles_1m"] = provenance.Records("candles")
+            for candle in ones:
+                if not book:
+                    observed["control_candles_1m"].add({"bucket_start": candle["bucket_start"], "close": candle["close"]})
+                yield float(candle["close"])
+        out["closes"] = array.array("d", closes())
         out["first_ms"] = ones[0]["bucket_start"]
         out["start_index"] = base
+    out["input_provenance"] = provenance.input_receipt(
+        dict(job, spec_sha256=spec_hash(job["spec"])), {k: v.summary() for k, v in observed.items()}, book)
+    if traced:
+        out["trace"]["input_provenance"] = out["input_provenance"]
     _chunk(index, 1.0)
     return out
 
@@ -493,16 +530,12 @@ def _stable_seed(*parts):
 
 
 def fold_edges(start_ms, end_ms, folds):
-    return [start_ms + (end_ms - start_ms) * i // folds for i in range(folds + 1)]
+    return temporal.fold_edges(start_ms, end_ms, folds)
 
 
 def split_folds(trades, start_ms, end_ms, folds):
-    edges = fold_edges(start_ms, end_ms, folds)
-    out = [[] for _ in range(folds)]
-    for trade in trades:
-        slot = min(folds - 1, max(0, bisect.bisect_right(edges, trade["entry_ms"]) - 1))
-        out[slot].append(trade)
-    return out, edges
+    samples, _ = temporal.stability_samples(trades, start_ms, end_ms, folds)
+    return samples, fold_edges(start_ms, end_ms, folds)
 
 
 def random_entries_means(trades, series, *, draws, seed, tick=None):
@@ -565,7 +598,8 @@ def sharpe_per_trade(values):
 # --------------------------------------------------------------------------- the judgement
 
 
-def judge(trades, series, cfg, *, kind, start_ms, end_ms, attempts, products, seed, progress=None, neighbors=None):
+def judge(trades, series, cfg, *, kind, start_ms, end_ms, attempts, products, seed, progress=None, neighbors=None,
+          embargo_supported=True, open_at_end=0):
     """Applies the predeclared rules. Pure: same trades, same series, same seed -> same verdict.
 
     ``trades``: compact trade dicts (see ``_compact``). ``series``: per product the 1m closes for the random draws.
@@ -581,8 +615,13 @@ def judge(trades, series, cfg, *, kind, start_ms, end_ms, attempts, products, se
     ci = bootstrap_ci(values, seed=_stable_seed(seed, "ci"), draws=cfg["bootstrap_draws"],
                       level=rules["ci_level"]) if n >= 2 else (None, None)
     nfolds = cfg["practice_folds"] if kind == "practice" else cfg["exam_folds"]
-    by_fold, edges = split_folds(ordered, start_ms, end_ms, nfolds)
-    folds = [dict(summarize(f), index=i + 1, from_ms=edges[i], to_ms=edges[i + 1]) for i, f in enumerate(by_fold)]
+    by_fold, temporal_evidence = temporal.stability_samples(ordered, start_ms, end_ms, nfolds,
+        embargo_supported=embargo_supported, open_at_end=open_at_end)
+    edges = fold_edges(start_ms, end_ms, nfolds)
+    folds = [dict(summarize(f), **evidence) for f, evidence in zip(by_fold, temporal_evidence["folds"])]
+    for fold in folds:
+        if not fold["n"]:
+            fold["mean_bp"] = None  # No measured expectancy; empty folds still count in the rule denominator.
     positive_folds = sum(1 for f in folds if f["n"] and f["mean_bp"] > 0)
     per_product = {p: summarize([t for t in ordered if t["product"] == p]) for p in products}
     positive_products = sum(1 for s in per_product.values() if s["n"] and s["mean_bp"] > 0)
@@ -590,7 +629,8 @@ def judge(trades, series, cfg, *, kind, start_ms, end_ms, attempts, products, se
     mult = rules["cost_stress_multiplier"]
     stressed = [t["net_bp"] - (mult - 1.0) * trade_cost_bp(t["product"], t["reason"]) for t in ordered]
     stress_mean = statistics.fmean(stressed) if stressed else None
-    ex_funding = [t["net_bp"] + t["funding_bp"] for t in ordered]
+    # All observed closed trades, including partial nets; keep the historical comparison population.
+    ex_funding = [t["net_bp"] + (t.get("observed_funding_bp", t.get("funding_bp")) or 0.0) for t in ordered]
     observed_ex = statistics.fmean(ex_funding) if ex_funding else None
     means, skipped = random_entries_means(ordered, series, draws=cfg["random_draws"], seed=seed)
     progress(0.9)
@@ -637,6 +677,7 @@ def judge(trades, series, cfg, *, kind, start_ms, end_ms, attempts, products, se
              dsr is not None and dsr >= rules["min_deflated_probability"]),
         rule("positive_folds", "Positiva en >= {:.0f}% de los tramos".format(rules["min_positive_fold_share"] * 100),
              {"positive": positive_folds, "total": nfolds}, rules["min_positive_fold_share"],
+             temporal_evidence["embargo_supported"] and
              positive_folds >= rules["min_positive_fold_share"] * nfolds - 1e-9),
         rule("positive_products", "Positiva en >= {:.0f}% de los productos".format(
             rules["min_positive_product_share"] * 100), {"positive": positive_products, "total": len(products)},
@@ -650,10 +691,17 @@ def judge(trades, series, cfg, *, kind, start_ms, end_ms, attempts, products, se
     ]
     # Evidence rules (enough trades, known funding) can only make the verdict INCONCLUSIVE; a failed performance rule
     # is a NO PASA. Missing evidence never becomes a PASA.
-    evidence = ("n_trades", "funding_complete")
+    fold_rule = _rule_by_id({"rules": checks})["positive_folds"]
+    temporal_available = temporal_evidence["embargo_supported"]
+    fold_rule["measurement_status"] = "measured" if temporal_available else "unavailable"
+    fold_rule["reasons"] = [] if temporal_available else [temporal_evidence["embargo_source"]]
+    evidence = ("n_trades", "funding_complete") + (() if temporal_available else ("positive_folds",))
     few_trades = n < rules["min_trades"]
     performance_ok = all(c["ok"] for c in checks if c["id"] not in evidence)
     note, reasons = None, []
+    if not temporal_available:
+        reasons.append("temporal_unsupported" if temporal_evidence["state"] == "unsupported"
+                       else "temporal_unavailable")
     if few_trades:
         reasons.append("few_trades")
     if not _rule_by_id({"rules": checks})["funding_complete"]["ok"]:
@@ -668,6 +716,9 @@ def judge(trades, series, cfg, *, kind, start_ms, end_ms, attempts, products, se
         verdict = PASS
     return {"verdict": verdict, "verdict_note": note, "inconclusive_reasons": reasons if verdict == INCONCLUSIVE else [],
             "rules": checks, "overall": overall, "ci": ci, "folds": folds, "edges": edges,
+            "accounting": accounting.summarize(ordered, minimum_complete_share=rules["min_funding_complete_share"],
+                                               open_at_end=open_at_end),
+            "temporal": temporal_evidence,
             "per_product": per_product, "per_side": per_side, "baseline": baseline, "percentile": percentile,
             "deflated": dsr, "attempts": attempts, "stress_mean_bp": stress_mean, "stress_multiplier": mult,
             "funding_status": dict(funding_status), "funding_share": funding_share, "sensitivity": sens, "trial_sharpe_sd": TRIAL_SHARPE_SD,
@@ -723,7 +774,7 @@ def _factor(value):
 
 
 def _mark(ok):
-    return "✅" if ok else "❌"
+    return "⚠️" if ok is None else "✅" if ok else "❌"
 
 
 def _table(header, rows):
@@ -752,8 +803,8 @@ def _checklist(r, cfg):
                   "el resultado puede ser casualidad._".format(v["value"], rules["min_trades"])))
     v = c["mean_net_positive"]
     m = v["value"]
-    items.append((v["ok"], "**Gana dinero después de costos**: promedio {} por operación; con un 95 % de confianza el "
-                  "verdadero promedio está entre {} y {}. _Para pasar, todo ese rango debe quedar por encima de cero._"
+    items.append((v["ok"], "**Resultado después de costos observados**: promedio {} por operación; con un 95 % de confianza el "
+                  "promedio observado está entre {} y {}. _Para pasar, todo ese rango debe quedar por encima de cero._"
                   .format(_pct_bp(m["mean"], 2, True), _pct_bp(m["ci_low"], 2, True), _pct_bp(m["ci_high"], 2, True))))
     v = c["percentile_random"]
     if v["value"] is None:
@@ -769,9 +820,14 @@ def _checklist(r, cfg):
                   "exigente se vuelve._".format(_es(v["value"], 2), _es(rules["min_deflated_probability"], 2),
                                                 r["attempts"], "" if r["attempts"] == 1 else "s")))
     v = c["positive_folds"]
-    items.append((v["ok"], "**Gana de forma constante en el tiempo**: ganó en {} de {} periodos (se pide al menos el {} %). "
-                  "_Un buen resultado no debe venir de un solo mes afortunado._".format(
-                      v["value"]["positive"], v["value"]["total"], _es(rules["min_positive_fold_share"] * 100, 0))))
+    if v.get("measurement_status") == "unavailable":
+        items.append((None, "**Estabilidad temporal no evaluable**: evidencia no disponible o no soportada "
+                      "(`{}`). No es una pérdida medida ni permite aprobar.".format(
+                          ", ".join(v["reasons"]))))
+    else:
+        items.append((v["ok"], "**Gana de forma constante en el tiempo**: ganó en {} de {} periodos (se pide al menos el {} %). "
+                      "_Un buen resultado no debe venir de un solo mes afortunado._".format(
+                          v["value"]["positive"], v["value"]["total"], _es(rules["min_positive_fold_share"] * 100, 0))))
     v = c["positive_products"]
     items.append((v["ok"], "**Funciona en varios productos**: ganó en {}/{} productos (se pide al menos el {} %){}."
                   .format(v["value"]["positive"], v["value"]["total"], _es(rules["min_positive_product_share"] * 100, 0),
@@ -782,7 +838,7 @@ def _checklist(r, cfg):
                                                                       _pct_bp(v["value"], 2, True))))
     v = c["funding_complete"]
     text = ("**Funding conocido**: {} de las operaciones tienen el funding completo (se pide al menos el {} %). _Sin "
-            "funding conocido el resultado es optimista._".format(_share(v["value"]),
+            "funding conocido el neto es provisional; puede faltar un cargo o un abono._".format(_share(v["value"]),
                                                                   _es(rules["min_funding_complete_share"] * 100, 0)))
     if not v["ok"]:
         text += " " + FUNDING_NOTE + "."
@@ -797,7 +853,7 @@ def _summary_points(r, cfg):
     if ov["n"] == 0:
         return ["No hizo ninguna operación en el periodo evaluado, así que no hay nada que juzgar."]
     mean = ov["mean_bp"]
-    points.append("{} en promedio **{} por operación** después de costos ({} operaciones; resultado total {} sobre "
+    points.append("{} en promedio **{} por operación** después de costos observados ({} operaciones; resultado total {} sobre "
                   "posiciones de 100 USD).".format("Ganó" if mean > 0 else "Perdió", _pct_bp(abs(mean)), ov["n"],
                                                    _usd(ov["total_bp"])))
     pc = r["percentile"]
@@ -808,13 +864,17 @@ def _summary_points(r, cfg):
             points.append("Le fue peor que entrar al azar (peor que el {} % de los sorteos).".format(_es(100 - pc, 0)))
     f = c["positive_folds"]["value"]
     pp = c["positive_products"]["value"]
-    points.append("Ganó en {} de {} periodos de tiempo y en {}/{} productos{}.".format(
-        f["positive"], f["total"], pp["positive"], pp["total"],
-        " (un solo producto: no es robustez multi-activo)" if pp["total"] == 1 else ""))
+    if c["positive_folds"].get("measurement_status") == "unavailable":
+        points.append("Estabilidad temporal no evaluable: falta una política de embargo respaldada. "
+                      "No se midieron periodos ganadores ni perdedores.")
+    else:
+        points.append("Ganó en {} de {} periodos de tiempo y en {}/{} productos{}.".format(
+            f["positive"], f["total"], pp["positive"], pp["total"],
+            " (un solo producto: no es robustez multi-activo)" if pp["total"] == 1 else ""))
     fc = c["funding_complete"]
     funding_point = None
     if not fc["ok"]:
-        funding_point = ("Solo {} de las operaciones tienen el funding conocido: sin funding el resultado es optimista. "
+        funding_point = ("Solo {} de las operaciones tienen el funding conocido: sin funding el neto es provisional. "
                          "{}.".format(_share(fc["value"]), FUNDING_NOTE))
     if r["stress_mean_bp"] is not None:
         points.append("Con costos {} % más altos el promedio sería {} por operación ({}).".format(
@@ -840,16 +900,21 @@ def _verdict_line(r, cfg):
                          "independiente y por eso nunca puede dar PASA.")
         if "few_trades" in reasons:
             parts.append("Hay muy pocas operaciones (menos de {}) para decidir.".format(rules["min_trades"]))
+        if "temporal_unsupported" in reasons or "temporal_unavailable" in reasons:
+            parts.append("Estabilidad temporal no evaluable: la evidencia de embargo no está disponible o no está "
+                         "soportada. No es un resultado negativo medido y no permite aprobar.")
         if "funding" in reasons:
             parts.append("Falta el funding de muchas operaciones (se pide al menos el {} %). {}.".format(
                 _es(rules["min_funding_complete_share"] * 100, 0), FUNDING_NOTE))
         if not parts:
             parts.append("Hay muy pocas operaciones (menos de {}) para decidir.".format(rules["min_trades"]))
         tail = "Ninguna otra regla falló." if "contaminated" not in reasons else "Ninguna regla de resultado falló."
-        return "## ⚠️ INCONCLUSO\n\n{} {} Hace falta más historia, más productos o un periodo con funding.".format(
-            " ".join(parts), tail)
+        next_step = ("Hace falta evidencia temporal respaldada; más operaciones por sí solas no definen esa política."
+                     if "temporal_unsupported" in reasons or "temporal_unavailable" in reasons else
+                     "Hace falta más historia, más productos o un periodo con funding.")
+        return "## ⚠️ INCONCLUSO\n\n{} {} {}".format(" ".join(parts), tail, next_step)
     extra = " (pocas operaciones)" if r.get("verdict_note") else ""
-    failed = [c for c in r["rules"] if not c["ok"]]
+    failed = [c for c in r["rules"] if not c["ok"] and c.get("measurement_status") != "unavailable"]
     return "## ❌ NO PASA{}\n\nNo cumplió {} de {} reglas.{}".format(
         extra, len(failed), len(r["rules"]),
         " Además tuvo menos de {} operaciones, por eso la evidencia es escasa.".format(rules["min_trades"])
@@ -867,6 +932,36 @@ def build_report(meta, result, cfg, extra_notes=()):
     lines = ["# {}".format(name), "", "<sub>`{}` · {} · corrida #{}</sub>".format(
         meta["strategy_id"], "examen final" if exam else "práctica", meta["run_id"]), "",
         _verdict_line(r, cfg), ""]
+    scope = evaluation_policy.stored(meta.get("evaluation_policy"))
+    if scope["classification"] == "baseline_only":
+        lines += ["> **Alcance: `baseline_only`.** Libro independiente, 100 USD fijos por operación. "
+                  "No reproduce decisiones OPEN de Qwen ni valida la política completa; PASA/NO PASA "
+                  "solo describe esta prueba estadística.", ""]
+    else:
+        lines += ["> **Alcance: `unclassified`.** Esta evidencia no certifica la política completa.", ""]
+    identity = provenance.stored(r.get("provenance"))
+    evidence = provenance.stored_audit(r.get("audit"), identity)
+    lines += ["### Procedencia y artefactos", "",
+              "- Procedencia: `{}`; identidad: `{}`. Artefactos: `{}`; evidencia: `{}`.".format(
+                  identity["state"], identity["sha256"] or "n/d", evidence["artifact_state"], evidence["state"]),
+              "- Motivos: `{}`. Son registros parseados consumidos (incluido calentamiento), no bytes originales "
+              "del proveedor ni una auditoría independiente de los datos.".format(
+                  ", ".join(identity["reasons"] + evidence["reasons"]) or "ninguno"),
+              "- PASA es solo el veredicto estadístico: artefactos ausentes o procedencia parcial no autorizan "
+              "validación auditable, aprobación ni replay de la política completa.", ""]
+    acc = accounting.stored(r.get("accounting"))
+    lines += ["### Neto observado y neto definitivo", "",
+              "Las estadísticas incluyen **todas las operaciones cerradas con neto observado**, también las "
+              "provisionales. El umbral agregado de funding no convierte el neto observado en definitivo.", "",
+              "- Estado contable: `{}`; alcance: operaciones cerradas; abiertas al corte: {}.".format(
+                  acc["state"], acc.get("open_at_end", "n/d")),
+              "- Neto observado: {} bp; neto definitivo: {} bp (n/d si falta evidencia o hay abiertas al corte).".format(
+                  _es(acc["observed_net_bp"]), _es(acc["definitive_net_bp"])),
+              "- Funding completo por conteo declarado: {}; cobertura temporal conocida: {}. "
+              "Son dimensiones distintas; desconocido no significa cero.".format(
+                  _share(acc["funding_complete_share"]), _share(acc["funding_time_share"])),
+              "- La completitud exige importes, flags de funding y evidencia de costes del productor. "
+              "No se infieren costes actuales para registros antiguos ni se vuelve a descontar ejecución.", ""]
     warnings = [n for n in extra_notes if n.startswith("Atención")]
     for note in warnings:
         lines += ["> ⚠️ " + note, ""]
@@ -883,10 +978,29 @@ def build_report(meta, result, cfg, extra_notes=()):
               "(posiciones fijas de 100 USD).", ""]
     lines += _table([""] + ROW_HEADER + ["Caída máxima"], [_row("Todas", ov) + [
         _usd(-ov["max_drawdown_bp"]) if ov["n"] else "n/d"]])
+    te = temporal.stored(r.get("temporal"))
     lines += ["", "## Por periodo", "", "Cómo le fue en {} tramos consecutivos de tiempo; sirve para ver si el resultado "
-              "es estable. No se ajusta ningún parámetro.".format(len(r["folds"])), ""]
+              "es estable. No se ajusta ningún parámetro. No es entrenamiento/prueba walk-forward ni demuestra "
+              "generalización sin fugas.".format(len(r["folds"])), "",
+              "- Método: `{}`; esquema: `{}`; estado: `{}`; motivos: `{}`.".format(
+                  te["method"], te["schema"], te["state"], ", ".join(te["reasons"]) or "ninguno"),
+              "- Embargo: {} ms; fuente: `{}`; tope heredado: 25 % del ancho del tramo. "
+              "No se impone una salida nueva ni se supone un horizonte universal para modelos.".format(
+                  _es(te["embargo_ms"], 0), te["embargo_source"]),
+              "- Entradas en [desde, hasta); salida <= hasta. Se purgan los cruces y se omite el inicio "
+              "embargado de cada tramo salvo el primero. Usadas: {}; excluidas: {}; motivos: `{}`. "
+              "Abiertas al corte (censuradas): {}.".format(
+                  te.get("used_trades", "n/d"), te.get("excluded_trades", "n/d"),
+                  te.get("excluded_reasons", {}), te.get("open_at_end", "n/d")),
+              "- Los tramos vacíos siguen en el denominador; su media es n/d, no cero medido. "
+              "Un tramo con una operación no permite medir dispersión. El resultado global y el 95 % de funding "
+              "conservan todas las cerradas observadas, incluso las excluidas aquí.", ""]
     lines += _table(["Periodo", "Desde", "Hasta"] + ROW_HEADER,
                     [[f["index"], _stamp(f["from_ms"]), _stamp(f["to_ms"])] + _row("", f)[1:] for f in r["folds"]])
+    if te["folds"]:
+        lines += [""] + _table(["Periodo", "Embargo (ms)", "Usadas", "Excluidas", "Motivos", "Muestra"],
+                              [[f["index"], f["embargo_ms"], f["used"], f["excluded"],
+                                f["excluded_reasons"], f["sample_state"]] for f in te["folds"]])
     lines += ["", "## Por producto", "", "El mismo resultado separado por producto.", ""]
     lines += _table(["Producto"] + ROW_HEADER, [_row(p, s) for p, s in r["per_product"].items()])
     lines += ["", "## Compra contra venta", "", "Separado entre operaciones largas (apuesta a que sube) y cortas "
@@ -952,8 +1066,8 @@ def build_report(meta, result, cfg, extra_notes=()):
               "- **Sharpe desinflado**: el Sharpe (ganancia en relación con su irregularidad) corregido por la cantidad "
               "de variantes probadas; mide si el resultado podría ser solo suerte de tanto probar.",
               "- **Intervalo de confianza**: el rango donde, con un 95 % de seguridad, está el verdadero promedio.",
-              "- **Funding**: lo que se paga o cobra por mantener una posición abierta. Si no se conoce, el resultado "
-              "es optimista; por eso se exige conocerlo en casi todas las operaciones. Kraken solo publica el historial "
+              "- **Funding**: lo que se paga o cobra por mantener una posición abierta. Si no se conoce, el neto "
+              "es provisional (puede faltar un cargo o un abono); por eso se exige conocerlo en casi todas las operaciones. Kraken solo publica el historial "
               "de funding desde el 15-oct-2025.",
               "- **Entradas al azar**: operar la misma cantidad de veces, pero en momentos elegidos a la suerte; es la "
               "vara mínima que una estrategia debe superar.", ""]
@@ -1092,7 +1206,8 @@ def _run_tasks(runner, jobs_list, workers, base, span):
 def evaluate(strategy_id, *, kind="practice", from_date=None, to_date=None, products=None, cfg=None, data_dir=None, spec=None,
              specs_dir=None, provider=None, trade_source=None, jobs=None, neighbors=True, json_progress=False,
              on_progress=None, now_ms=None, install_signals=False, stream=None, registry_db=None,
-             kronos_dir=None, qwen_exit_dir=None, research_ledger=None, allow_contaminated=False):
+             kronos_dir=None, qwen_exit_dir=None, research_ledger=None, allow_contaminated=False,
+             evaluation_mode=evaluation_policy.BASELINE_MODE):
     """Runs the gate for one strategy. Returns ``{"run_id", "verdict", "report_path", "status"}``.
 
     ``spec`` / ``provider`` / ``trade_source`` / ``cfg`` are for tests (a spec outside the shipped directory, synthetic
@@ -1101,6 +1216,11 @@ def evaluate(strategy_id, *, kind="practice", from_date=None, to_date=None, prod
     ``allow_contaminated``: lets an exam run although the family already examined this reserve; the run is marked
     (``params.contaminated``), the report warns and the verdict can never be PASA. Raises ``GateError`` for refusals (nothing is written for an exam refusal).
     """
+    try:
+        evaluation_policy.require_mode(evaluation_mode)
+    except ValueError as error:
+        raise GateError(str(error))
+    scope = evaluation_policy.metadata(recorded_model=strategy_models.is_model(strategy_id))
     cfg = cfg or load_config()
     if research_ledger is None and data_dir is None:
         research_ledger = DEFAULT_RESEARCH_LEDGER
@@ -1145,8 +1265,13 @@ def evaluate(strategy_id, *, kind="practice", from_date=None, to_date=None, prod
         key, digest = (check_exam_allowed(db, spec, cfg, allow_contaminated) if kind == "exam" else version_key_of(spec))
         family = family_of(strategy_id)
         contaminated = bool(kind == "exam" and allow_contaminated and family_exam_on_window(db, spec, cfg) is not None)
+        gate_attempts = attempts_of(db, family) + int(kind == "practice")
+        attempts = gate_attempts + lab_variants
+        identity = provenance.start(cfg, digest, kind, start_ms, end_ms, product_list, family,
+                                    gate_attempts, lab_variants, neighbors, trade_source in (None, book_trades))
         params = {"from": _stamp(start_ms), "to": _stamp(end_ms), "products": names, "holdout_from": cfg["holdout_from"],
-                  "config_hash": config_hash(cfg), "neighbors": bool(neighbors), "cost_model": COST_MODEL_VERSION}
+                  "config_hash": config_hash(cfg), "neighbors": bool(neighbors), "cost_model": COST_MODEL_VERSION,
+                  "evaluation_policy": scope, "provenance": identity, "audit": provenance.audit(identity)}
         if contaminated:
             params["contaminated"] = True
         with db:
@@ -1159,8 +1284,6 @@ def evaluate(strategy_id, *, kind="practice", from_date=None, to_date=None, prod
             if kind == "practice":
                 db.execute("INSERT INTO attempts(family,strategy_id,version_key,run_id,at) VALUES(?,?,?,?,?)",
                            (family, strategy_id, key, run_id, _now_ms()))
-        gate_attempts = attempts_of(db, family)
-        attempts = gate_attempts + lab_variants
         with db:
             db.execute("UPDATE runs SET attempts=? WHERE id=?", (attempts, run_id))
         runner = Runner(db, run_id, data_dir, json_progress=json_progress, on_progress=on_progress, stream=stream)
@@ -1173,7 +1296,8 @@ def evaluate(strategy_id, *, kind="practice", from_date=None, to_date=None, prod
         meta = {"run_id": run_id, "strategy_id": strategy_id, "family": family, "version_key": key, "kind": kind,
                 "start_ms": start_ms, "end_ms": end_ms, "products": names, "config_hash": config_hash(cfg),
                 "name": spec.get("name") or strategy_id,
-                "gate_attempts": gate_attempts, "lab_variants": lab_variants, "contaminated": contaminated}
+                "gate_attempts": gate_attempts, "lab_variants": lab_variants, "contaminated": contaminated,
+                "evaluation_policy": scope, "provenance": identity}
         started = time.time()
         try:
             outcome = _execute(runner, db, spec, cfg, meta, product_list, provider, trade_source, jobs, neighbors,
@@ -1186,7 +1310,8 @@ def evaluate(strategy_id, *, kind="practice", from_date=None, to_date=None, prod
                 print(json.dumps({"run_id": run_id, "phase": "cancelada", "percent": runner.percent, "eta_seconds": 0,
                                   "started_at": int(runner.started * 1000), "status": "cancelled"},
                                  ensure_ascii=False), file=runner.stream, flush=True)
-            return {"run_id": run_id, "status": "cancelled", "verdict": None, "report_path": None}
+            return {"run_id": run_id, "status": "cancelled", "verdict": None, "report_path": None,
+                    "evaluation_policy": scope, **_saved_evidence(db, run_id)}
         except BaseException as error:
             _finish(db, run_id, "failed", None, None, "{}: {}".format(type(error).__name__, error), kind)
             raise
@@ -1201,7 +1326,12 @@ def run_summary(result, cfg):
     """What the strategy screen shows about a finished run, copied from the judge's output (nothing recomputed)."""
     rules = {r["id"]: r for r in result["rules"]}
     folds = rules["positive_folds"]["value"]
-    return {"verdict": result["verdict"], "verdict_note": result.get("verdict_note"),
+    return {"evaluation_policy": evaluation_policy.stored(result.get("evaluation_policy")),
+            "accounting": accounting.stored(result.get("accounting")),
+            "temporal": temporal.stored(result.get("temporal")),
+            "provenance": provenance.stored(result.get("provenance")),
+            "audit": provenance.stored_audit(result.get("audit"), result.get("provenance")),
+            "verdict": result["verdict"], "verdict_note": result.get("verdict_note"),
             "inconclusive_reasons": result.get("inconclusive_reasons", []),
             "trades": result["overall"]["n"], "min_trades": cfg["rules"]["min_trades"],
             "mean_bp": result["overall"]["mean_bp"], "ci": list(result["ci"]),
@@ -1211,8 +1341,9 @@ def run_summary(result, cfg):
             "funding_share": result["funding_share"], "funding_status": result["funding_status"],
             "open_at_end": None, "contaminated": bool(result.get("contaminated")),
             # Every rule with what it asked and what it got: the screen says which failed and why (older runs lack it).
-            "rules": [{"id": r["id"], "label": r["label"], "value": r["value"], "threshold": r["threshold"],
-                       "ok": r["ok"]} for r in result["rules"]]}
+            "rules": [{key: r[key] for key in ("id", "label", "value", "threshold", "ok",
+                                               "measurement_status", "reasons") if key in r}
+                      for r in result["rules"]]}
 
 
 ARTIFACT_SCHEMA = "balancita.gate-run-artifact.v1"
@@ -1278,7 +1409,20 @@ def write_artifact(data_dir, meta, cfg, spec, digest, trades, open_at_end, resul
     return final
 
 
+def _saved_evidence(db, run_id):
+    params = json.loads(db.execute("SELECT params FROM runs WHERE id=?", (run_id,)).fetchone()[0])
+    return {key: params.get(key) for key in ("provenance", "audit")}
+
+
 def _finish(db, run_id, status, verdict, report_path, error, kind):
+    if status in ("failed", "cancelled"):
+        params = json.loads(db.execute("SELECT params FROM runs WHERE id=?", (run_id,)).fetchone()[0])
+        identity = provenance.stored(params.get("provenance"))
+        if identity["state"] == "pending":
+            identity = provenance.finish(identity, [])
+        params.update(provenance=identity, audit=provenance.audit(identity, "unavailable", reason="run_" + status))
+        with db:
+            db.execute("UPDATE runs SET params=? WHERE id=?", (json.dumps(params, sort_keys=True), run_id))
     with db:
         db.execute("UPDATE runs SET status=?, verdict=?, report_path=?, error=?, finished_at=?, updated_at=?, "
                    "phase=CASE WHEN ?='cancelled' THEN 'cancelada' WHEN ?='failed' THEN 'falló' ELSE 'terminada' END, "
@@ -1330,7 +1474,7 @@ def _execute(runner, db, spec, cfg, meta, product_list, provider, trade_source, 
     open_at_end = sum(r["open_at_end"] for r in results)
     # --- parameter neighbors (informational)
     runner.set_phase("simulating", "vecinos de parámetros")
-    sens = None
+    sens, nres = None, []
     variants = neighbor_specs(spec, cfg) if neighbors and trade_source is None else []
     if variants:
         njobs, tags = [], []
@@ -1351,10 +1495,24 @@ def _execute(runner, db, spec, cfg, meta, product_list, provider, trade_source, 
     # --- random-entry draws and the judgement
     runner.set_phase("random", "{} sorteos".format(cfg["random_draws"]))
     result = judge(trades, series, cfg, kind=kind, start_ms=start_ms, end_ms=end_ms, attempts=attempts, products=names,
-                   seed=cfg["seed"], neighbors=sens,
+                   seed=cfg["seed"], neighbors=sens, open_at_end=open_at_end,
+                   embargo_supported=not strategy_models.is_model(meta["strategy_id"]),
                    progress=lambda f: runner.update(PHASE_START["random"] + (PHASE_START["report"] - PHASE_START["random"]) * f))
     if meta.get("contaminated"):
         apply_contamination(result)
+    result["evaluation_policy"] = meta["evaluation_policy"]
+    result["provenance"] = provenance.finish(meta["provenance"],
+        [r["input_provenance"] for r in results + nres])
+    result["audit"] = provenance.audit(result["provenance"])
+    result["accounting"] = accounting.summarize(trades,
+        minimum_complete_share=cfg["rules"]["min_funding_complete_share"], open_at_end=open_at_end)
+    # Persist independently of artifact availability; the API never recalculates historical accounting.
+    params = json.loads(db.execute("SELECT params FROM runs WHERE id=?", (run_id,)).fetchone()[0])
+    params["accounting"] = result["accounting"]
+    params["temporal"] = result["temporal"]
+    params.update(provenance=result["provenance"], audit=result["audit"])
+    with db:
+        db.execute("UPDATE runs SET params=? WHERE id=?", (json.dumps(params, sort_keys=True), run_id))
     # --- report
     runner.set_phase("report", "escribiendo el informe")
     meta["open_at_end"] = open_at_end
@@ -1364,14 +1522,21 @@ def _execute(runner, db, spec, cfg, meta, product_list, provider, trade_source, 
         notes.append(trade_source.note)
     if not any(funding.values()):
         notes.append("Atención: no se pudo leer el historial de funding de Kraken; los costos de funding no están incluidos.")
-    report = build_report(meta, result, cfg, notes)
+    traces = [(r["product"], meta["start_ms"], meta["end_ms"], r["trace"]) for r in results if r.get("trace")]
+    # This receipt is visible in the manifest only after the whole bundle's atomic publication.
+    # The DB receives it only after write_artifact returns successfully.
+    result["audit"] = provenance.audit(result["provenance"], "available", trace_captured=bool(traces))
     try:
-        write_artifact(data_dir, meta, cfg, spec, digest, full_trades, open_at_end, result,
-                       traces=[(r["product"], meta["start_ms"], meta["end_ms"], r["trace"]) for r in results if r.get("trace")])
+        write_artifact(data_dir, meta, cfg, spec, digest, full_trades, open_at_end, result, traces=traces)
     except (OSError, GateError, TypeError, ValueError) as error:
         # The verdict is already computed and must not depend on storing the trades: a run without the folder just
         # shows no chart (the API answers "artifact_not_ready").
+        result["audit"] = provenance.audit(result["provenance"], "unavailable")
         print("aviso: no se guardaron las operaciones de la corrida {}: {}".format(run_id, error), file=sys.stderr)
+    params["audit"] = result["audit"]
+    with db:
+        db.execute("UPDATE runs SET params=? WHERE id=?", (json.dumps(params, sort_keys=True), run_id))
+    report = build_report(meta, result, cfg, notes)
     reports = os.path.join(data_dir, "reports")
     os.makedirs(reports, exist_ok=True)
     path = os.path.join(reports, "{}.md".format(run_id))
@@ -1381,9 +1546,14 @@ def _execute(runner, db, spec, cfg, meta, product_list, provider, trade_source, 
     _finish(db, run_id, "done", result["verdict"], path, None, kind)
     if runner.json_progress:
         print(json.dumps({"run_id": run_id, "phase": "terminada", "percent": 100.0, "eta_seconds": 0, "started_at": int(runner.started * 1000),
-                          "status": "done", "verdict": result["verdict"], "report_path": path}, ensure_ascii=False),
+                          "status": "done", "verdict": result["verdict"], "report_path": path,
+                          "evaluation_policy": meta["evaluation_policy"], "accounting": result["accounting"],
+                          "temporal": result["temporal"], "provenance": result["provenance"],
+                          "audit": result["audit"]}, ensure_ascii=False),
               file=runner.stream, flush=True)
-    return {"run_id": run_id, "status": "done", "verdict": result["verdict"], "report_path": path, "result": result}
+    return {"run_id": run_id, "status": "done", "verdict": result["verdict"], "report_path": path, "result": result,
+            "evaluation_policy": meta["evaluation_policy"], "accounting": result["accounting"],
+            "temporal": result["temporal"], "provenance": result["provenance"], "audit": result["audit"]}
 
 
 # --------------------------------------------------------------------------- CLI
@@ -1497,6 +1667,8 @@ def _parser():
     e.add_argument("--to", dest="to_date", help="YYYY-MM-DD (solo práctica; por defecto la fecha de corte): una etapa del mercado")
     e.add_argument("--products", help="PF_XBTUSD,PF_ETHUSD,... (por defecto los de la configuración)")
     e.add_argument("--exam", action="store_true", help="examen final: solo datos desde la fecha de corte; una vez por versión")
+    e.add_argument("--evaluation-mode", default=evaluation_policy.BASELINE_MODE,
+                   help="solo baseline_only: prueba determinista, no valida la política completa")
     e.add_argument("--examen-contaminado", action="store_true", dest="allow_contaminated",
                    help="solo con --exam: rinde el examen aunque la familia ya haya usado esta reserva; queda marcado "
                         "como contaminado y nunca puede dar PASA")
@@ -1536,7 +1708,7 @@ def main(argv=None):
                        products=args.products, data_dir=args.data_dir, specs_dir=args.specs_dir, registry_db=args.registry_db, kronos_dir=args.kronos_dir,
                        qwen_exit_dir=args.qwen_exit_dir, jobs=args.jobs, research_ledger=args.research_ledger,
                        neighbors=not args.sin_vecinos, json_progress=args.json_progress, install_signals=True,
-                       allow_contaminated=args.allow_contaminated)
+                       allow_contaminated=args.allow_contaminated, evaluation_mode=args.evaluation_mode)
     except (GateError, HistoryError, ValueError) as error:
         print(str(error), file=sys.stderr)
         return 2

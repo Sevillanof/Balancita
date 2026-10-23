@@ -9,6 +9,7 @@ import {
   untriedStages,
   type MarketStage,
 } from '../domain/market-stages.ts'
+import { runScopeLines } from '../domain/run-scope.ts'
 import { STAGES, deriveStage } from '../domain/run-stage.ts'
 import {
   fullViewText,
@@ -518,6 +519,7 @@ export default function StrategyRunView({
   const fallbackLabel = fallbackRun
     ? `Prueba #${fallbackRun.id}${rangeText(fallbackRun, data?.summary)}`
     : ''
+  const scopeRun = lastRun ?? finished[0] ?? null
   const running = overview?.running ?? null
   const activeRun = running
     ? (overview?.runs.find((run) => run.id === running.id) ?? null)
@@ -906,6 +908,15 @@ export default function StrategyRunView({
           tone={null}
         />
       </div>
+      {scopeRun && (
+        <ul className="runview__scope" data-testid="run-evaluation-scope">
+          {runScopeLines(scopeRun).map((line) => (
+            <li key={line.key} data-tone={line.tone ?? undefined}>
+              {line.text}
+            </li>
+          ))}
+        </ul>
+      )}
       {shown && (
         <VectorbtReportPanel
           key={shown.id}

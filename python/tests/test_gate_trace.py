@@ -110,6 +110,28 @@ class CostTests(unittest.TestCase):
         self.assertTrue(any(e["costs"]["funding_usd"] is not None for e in book.evidence))
 
 
+    def test_complete_signed_and_zero_funding_keeps_book_settlement_once(self):
+        spec = SPECS["c27-breakout-perp-v1"]
+        end = FROM + 86_400_000
+        for rate in ("0", "0.00001", "-0.00001"):
+            with self.subTest(rate=rate):
+                rows = [(s, rate) for s in range(ONES[0]["bucket_start"] - 3_600_000, end, 3_600_000)]
+                trades, _, trace = g.book_trades(spec, "PF_XBTUSD", "0.5",
+                    [c for c in ONES if c["bucket_start"] < end],
+                    [c for c in FIVES if c["bucket_start"] < end], rows, FROM, end, lambda f: None, trace=True)
+                self.assertEqual({row["side"] for row in trades}, {"LONG", "SHORT"})
+                for trade, evidence in zip(trades, trace["trades"]):
+                    costs = evidence["costs"]
+                    acc = costs["accounting"]
+                    self.assertTrue(costs["reconciles"])
+                    self.assertEqual(acc["state"], "complete")
+                    self.assertEqual(acc["definitive_net_usd"], trade["pnl_usd"])
+                    self.assertEqual(acc["definitive_net_bp"], trade["net_bp"])
+                    sign = 1 if trade["side"] == "LONG" else -1
+                    self.assertEqual((trade["funding_usd"] > 0) - (trade["funding_usd"] < 0),
+                                     sign * ((Decimal(rate) > 0) - (Decimal(rate) < 0)))
+
+
 class ExitEvidenceTests(unittest.TestCase):
     def test_strategy_exit_keeps_the_values_the_simulator_evaluated(self):
         book = feed("c25-pullback-perp-v1", t.TracedBook)
@@ -125,6 +147,43 @@ class ExitEvidenceTests(unittest.TestCase):
 
 
 class ArtifactAndReplayTests(unittest.TestCase):
+    def test_new_accounting_survives_producer_trace_artifact_summary_and_api(self):
+        from balancita_engine.futures_strategy_gate_api import GateApi
+        with tempfile.TemporaryDirectory() as directory:
+            out = run("c27-breakout-perp-v1", directory, to_date="2025-01-10")
+            api = GateApi(None, data_dir=directory)
+            run_id = str(out["run_id"])
+            visual = api.visual_summary(run_id)
+            accounting = out["result"]["accounting"]
+            self.assertEqual(visual["summary"]["accounting"], accounting)
+            self.assertEqual(api.run(run_id)["run"]["accounting"], accounting)
+            self.assertGreater(accounting["closed_trades"], 0)
+            self.assertIsNone(accounting["definitive_net_usd"])
+            trades = api.trades(run_id, "PF_XBTUSD")["trades"]
+            self.assertTrue(trades)
+            self.assertTrue(all(t["accounting"]["cost_evidence"] == "complete" for t in trades))
+            self.assertTrue(all(t["accounting"]["definitive_net_bp"] is None for t in trades))
+            folder = os.path.join(directory, g.ARTIFACTS_DIR, run_id)
+            traces = t.read_trace(os.path.join(folder, t.TRACE_FILE))
+            evidence = [row["costs"] for row in traces if row["type"] == "trade"]
+            self.assertEqual([e["accounting"] for e in evidence], [t["accounting"] for t in trades])
+            self.assertTrue(all(e["reconciles"] for e in evidence))
+            self.assertEqual(sum(t["net_bp"] for t in trades), accounting["observed_net_bp"])
+            self.assertIn("Neto observado", api.report(run_id)[1].decode())
+
+    def test_censored_empty_run_persists_no_definitive_net(self):
+        from balancita_engine.futures_strategy_gate_api import GateApi
+        with tempfile.TemporaryDirectory() as directory:
+            out = run("c27-breakout-perp-v1", directory, to_date="2025-01-10",
+                      trade_source=lambda *args: ([], 1))
+            api = GateApi(None, data_dir=directory)
+            acc = api.visual_summary(str(out["run_id"]))["summary"]["accounting"]
+            self.assertEqual(acc["state"], "censored")
+            self.assertEqual((acc["closed_trades"], acc["open_at_end"]), (0, 1))
+            self.assertIsNone(acc["definitive_net_bp"])
+            self.assertIsNone(acc["funding_time_share"])
+            self.assertIsNone(acc["funding_eligible"])
+
     def test_practice_run_stores_a_trace_and_a_replay_reproduces_its_trades(self):
         with tempfile.TemporaryDirectory() as directory:
             out = run("c27-breakout-perp-v1", directory)

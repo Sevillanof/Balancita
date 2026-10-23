@@ -224,6 +224,106 @@ class GateApiTests(unittest.TestCase):
             self.assertEqual(self.call("/gate/runs/%d/report.md" % run)[0], 404)
 
 
+class PolicyApiTests(unittest.TestCase):
+    setUp, tearDown, spawn, call, json, insert = (GateApiTests.setUp, GateApiTests.tearDown, GateApiTests.spawn,
+                                                  GateApiTests.call, GateApiTests.json, GateApiTests.insert)
+
+    def test_preflight_is_non_consuming_and_uses_the_evaluated_spec_identity(self):
+        from unittest.mock import patch
+        from balancita_engine.futures_spec_strategy import spec_hash
+
+        self.gate.busy_hook = lambda: self.fail("preflight must not acquire execution capacity")
+        with patch.object(self.gate, "_query", side_effect=AssertionError("no gate DB reads")):
+            status, body = self.json("/strategies/c29-test-v1/gate/preflight")
+        self.assertEqual(status, 200)
+        self.assertEqual(body["strategy_id"], SPEC["id"])
+        self.assertEqual(body["spec_hash"], spec_hash(SPEC))
+        self.assertEqual(body["supported_modes"], ["baseline_only"])
+        self.assertEqual(body["evaluation_policy"]["classification"], "baseline_only")
+        self.assertFalse(body["evaluation_policy"]["full_policy_validated"])
+        self.assertEqual(self.spawned, [])
+        self.assertEqual(os.listdir(self.dir), [])
+        self.assertEqual(self.json("/strategies/missing/gate/preflight")[0], 404)
+        self.gate.registry._deleted = lambda sid: True
+        self.assertEqual(self.json("/strategies/c29-test-v1/gate/preflight")[0], 404)
+
+    def test_current_shipped_inventory_preflight_matches_gate_config_precedence(self):
+        from balancita_engine.futures_spec_strategy import load_specs, spec_hash
+
+        specs = load_specs()
+        self.assertTrue(specs)
+        for sid, spec in specs.items():
+            # A differing registry version must not change what the shipped gate evaluates.
+            registry = FakeRegistry()
+            registry._version_row = lambda strategy_id, version: {"spec": dict(spec, name="other")}
+            registry.version = lambda strategy_id: {"spec": dict(spec, name="other")}
+            api = GateApi(registry, data_dir=self.dir, spawn=self.spawn)
+            with self.subTest(strategy=sid):
+                preflight = api.preflight(sid)
+                self.assertEqual(preflight["spec_hash"], spec_hash(strategy_gate.find_spec(sid)))
+                self.assertEqual(preflight["evaluation_policy"]["classification"], "baseline_only")
+        self.assertEqual(os.listdir(self.dir), [])
+
+    def test_model_preflight_does_not_read_recorded_trades_or_claim_book_replay(self):
+        from unittest.mock import patch
+
+        with patch.object(gate_api.strategy_gate_models, "model_subject", side_effect=AssertionError("no trades")):
+            preflight = self.gate.preflight(gate_api.strategy_gate_models.QWEN_ID)
+        self.assertEqual(preflight["evaluation_policy"]["classification"], "unclassified")
+        self.assertIn("recorded_model_trades_not_policy_replay", preflight["evaluation_policy"]["reasons"])
+        self.assertEqual(os.listdir(self.dir), [])
+
+    def test_modes_and_client_certification_are_rejected_before_launch_or_exam(self):
+        for mode in ("full_policy", "", None, False, 1, [], {}):
+            status, body = self.json("/strategies/c29-test-v1/gate", {"exam": True, "evaluation_mode": mode})
+            self.assertEqual((status, body["error"]), (400, "unsupported_evaluation_mode"), mode)
+        for forged in ({"classification": "full_policy"}, {"full_policy_validated": True},
+                       {"evaluation_policy": {"classification": "full_policy"}}):
+            self.assertEqual(self.json("/strategies/c29-test-v1/gate", forged)[0], 400)
+        for query in ("evaluation_mode=full_policy", "evaluation_mode=", "evaluation_mode=garbage",
+                      "evaluation_mode=baseline_only&evaluation_mode=full_policy", "classification=full_policy"):
+            self.assertEqual(self.json("/strategies/c29-test-v1/gate/preflight?" + query)[0], 400, query)
+        self.assertEqual(self.spawned, [])
+        self.assertEqual(os.listdir(self.dir), [])
+
+    def test_default_and_explicit_baseline_start_include_metadata(self):
+        for request in ({}, {"evaluation_mode": "baseline_only"}):
+            status, body = self.json("/strategies/c29-test-v1/gate", request)
+            self.assertEqual(status, 200)
+            self.assertEqual(body["evaluation_policy"]["classification"], "baseline_only")
+            args = self.spawned[-1][0]
+            self.assertEqual(args[args.index("--evaluation-mode") + 1], "baseline_only")
+
+    def test_registered_start_returns_producer_metadata_without_reclassifying_old_rows(self):
+        from balancita_engine import strategy_evaluation_policy as policy
+
+        self.gate._running = lambda: None
+        for params, expected in (({}, "unclassified"), ({"evaluation_policy": policy.metadata()}, "baseline_only")):
+            self.insert(status="running", pid=os.getpid(), params=json.dumps(params))
+            status, body = self.json("/strategies/c29-test-v1/gate", {})
+            self.assertEqual(status, 200)
+            self.assertFalse(body["pending"])
+            self.assertEqual(body["evaluation_policy"]["classification"], expected)
+
+    def test_status_and_lists_use_stored_metadata_not_current_spec_or_params(self):
+        from balancita_engine import strategy_evaluation_policy as policy
+
+        self.insert(params=json.dumps({"evaluation_policy": policy.metadata()}), verdict="PASA")
+        self.insert(params=json.dumps({"evaluation_mode": "baseline_only"}), verdict="PASA")
+        self.insert(params="[]")
+        self.insert(params="broken")
+        self.insert(params=json.dumps({"evaluation_policy": {"classification": "full_policy"}}))
+        for number in range(1, 6):
+            run = self.json("/gate/runs/" + str(number))[1]["run"]
+            expected = "baseline_only" if number == 1 else "unclassified"
+            self.assertEqual(run["evaluation_policy"]["classification"], expected)
+            self.assertFalse(run["evaluation_policy"]["full_policy_validated"])
+        self.assertEqual(self.json("/gate/runs/1")[1]["run"]["verdict"], "PASA")
+        rows = self.json("/strategies/c29-test-v1/gate/runs")[1]["runs"]
+        self.assertEqual(rows[-1]["evaluation_policy"], policy.metadata())
+        self.assertEqual(rows[-2]["evaluation_policy"]["classification"], "unclassified")
+
+
 class VisualApiTests(unittest.TestCase):
     """Stored trades and candles of a finished run, read-only, with the exam kept shut until it was taken."""
 
@@ -272,6 +372,117 @@ class VisualApiTests(unittest.TestCase):
         self.assertEqual((body["summary"]["positive_folds"], body["summary"]["folds"]), (2, 5))
         self.assertEqual(body["decision_evidence"], "not_captured")
         self.assertEqual(body["label"], "Histórico Kraken · ejecuciones paper simuladas")
+
+    def test_old_temporal_metadata_remains_unknown_without_rewriting_history(self):
+        self.store(candles=False)
+        manifest_path = os.path.join(self.dir, "artifacts", "1", "manifest.json")
+        with open(manifest_path, encoding="utf-8") as handle:
+            before = handle.read()
+        body = self.json("/gate/runs/1/visual-summary")[1]
+        for temporal in (body["run"]["temporal"], body["summary"]["temporal"]):
+            self.assertEqual(temporal["state"], "unknown")
+            self.assertIsNone(temporal["method"])
+            self.assertIsNone(temporal["embargo_ms"])
+        with open(manifest_path, encoding="utf-8") as handle:
+            self.assertEqual(handle.read(), before)
+        self.assertEqual(self.gate.run("1")["run"]["params"], {})
+
+    def test_relabelled_temporal_evidence_is_rejected_by_persisted_api_reads(self):
+        from balancita_engine import strategy_gate_splits as temporal
+        self.store(candles=False)
+        _, payload = temporal.stability_samples([], self.START, self.END, 5, embargo_supported=False)
+        payload["state"] = "observed"
+        encoded = json.dumps({"temporal": payload}, allow_nan=False)
+        db = open_db(os.path.join(self.dir, "gate.sqlite"))
+        try:
+            with db:
+                db.execute("UPDATE runs SET params=? WHERE id=1", (encoded,))
+        finally:
+            db.close()
+        path = os.path.join(self.dir, "artifacts", "1", "manifest.json")
+        with open(path, encoding="utf-8") as handle:
+            manifest = json.load(handle)
+        manifest["summary"]["temporal"] = payload
+        with open(path, "w", encoding="utf-8") as handle:
+            json.dump(manifest, handle, allow_nan=False)
+        visual = self.json("/gate/runs/1/visual-summary")[1]
+        for saved in (self.gate.run("1")["run"]["temporal"], visual["run"]["temporal"],
+                      visual["summary"]["temporal"], self.gate.runs("c29-test-v1")["runs"][0]["temporal"]):
+            self.assertEqual(saved, temporal.stored(None))
+        with open(path, encoding="utf-8") as handle:
+            self.assertEqual(json.load(handle)["summary"]["temporal"], payload)
+        self.assertEqual(self.gate._query("SELECT params FROM runs WHERE id=1")[0]["params"], encoded)
+
+    def test_old_summary_and_run_are_unclassified_without_recertifying_costs(self):
+        self.store(candles=False)
+        body = self.json("/gate/runs/1/visual-summary")[1]
+        for acc in (body["run"]["accounting"], body["summary"]["accounting"]):
+            self.assertEqual(acc["state"], "unclassified")
+            self.assertIsNone(acc["definitive_net_bp"])
+            self.assertIsNone(acc["funding_time_share"])
+        # The old manifest's cost_model_version must not certify its individual recorded amounts.
+        self.assertEqual(body["summary"]["trades"], 3)
+        self.assertIsNone(self.json("/gate/runs/1")[1]["run"]["accounting"]["funding_eligible"])
+
+    def test_corrupt_saved_accounting_is_rejected_in_run_and_manifest_reads(self):
+        from balancita_engine import strategy_gate_accounting as accounting
+        self.store(candles=False)
+        payload = accounting.summarize([], minimum_complete_share=0.95)
+        payload.update(state="complete", observed_net_usd="invalid", definitive_net_usd="invalid",
+                       observed_net_bp=10, definitive_net_bp=10)
+        encoded = json.dumps({"accounting": payload}, allow_nan=False)
+        db = open_db(os.path.join(self.dir, "gate.sqlite"))
+        try:
+            with db:
+                db.execute("UPDATE runs SET params=? WHERE id=1", (encoded,))
+        finally:
+            db.close()
+        path = os.path.join(self.dir, "artifacts", "1", "manifest.json")
+        with open(path, encoding="utf-8") as handle:
+            manifest = json.load(handle)
+        manifest["summary"]["accounting"] = payload
+        with open(path, "w", encoding="utf-8") as handle:
+            json.dump(manifest, handle, allow_nan=False)
+        visual = self.gate.visual_summary("1")
+        for saved in (self.gate.run("1")["run"]["accounting"], visual["run"]["accounting"],
+                      visual["summary"]["accounting"],
+                      self.gate.runs("c29-test-v1")["runs"][0]["accounting"]):
+            self.assertEqual(saved, accounting.stored(None))
+        # Validation is read-only; do not repair or retro-certify the persisted evidence.
+        with open(path, encoding="utf-8") as handle:
+            self.assertEqual(json.load(handle)["summary"]["accounting"], payload)
+        self.assertEqual(json.loads(self.gate._query("SELECT params FROM runs WHERE id=1")[0]["params"]),
+                         {"accounting": payload})
+
+    def test_valid_saved_producer_states_survive_run_and_manifest_reads(self):
+        from balancita_engine import strategy_gate_accounting as accounting
+        from test_strategy_gate_accounting import trade, classified
+        self.store(candles=False)
+        complete = dict(trade(), accounting=classified())
+        unknown = dict(trade(funding_usd=None, funding_status="unknown", funding_complete=False,
+                             funding_covered_ms=0), accounting=classified(
+                                 funding_usd=None, funding_status="unknown", funding_complete=False,
+                                 funding_covered_ms=0))
+        cases = [accounting.summarize(rows, minimum_complete_share=0.95, open_at_end=opened)
+                 for rows, opened in (([complete], 0), ([unknown], 0), ([trade()], 0), ([], 0),
+                                      ([complete], 1), ([], 1))]
+        path = os.path.join(self.dir, "artifacts", "1", "manifest.json")
+        with open(path, encoding="utf-8") as handle:
+            manifest = json.load(handle)
+        db = open_db(os.path.join(self.dir, "gate.sqlite"))
+        try:
+            for payload in cases:
+                with self.subTest(state=payload["state"], closed=payload["closed_trades"]):
+                    with db:
+                        db.execute("UPDATE runs SET params=? WHERE id=1",
+                                   (json.dumps({"accounting": payload}, allow_nan=False),))
+                    manifest["summary"]["accounting"] = payload
+                    with open(path, "w", encoding="utf-8") as handle:
+                        json.dump(manifest, handle, allow_nan=False)
+                    self.assertEqual(self.gate.run("1")["run"]["accounting"], payload)
+                    self.assertEqual(self.gate.visual_summary("1")["summary"]["accounting"], payload)
+        finally:
+            db.close()
 
     def test_trades_are_paginated_filtered_by_product_and_window(self):
         self.store(products=("PF_XBTUSD", "PF_ETHUSD"))

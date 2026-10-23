@@ -1021,6 +1021,12 @@ def make_handler(service):
                 return gate.run(parts[2])
             if method == "POST" and len(parts) == 4 and parts[:2] == ["gate", "runs"] and parts[3] == "cancel":
                 return gate.cancel(parts[2])
+            if (method == "GET" and len(parts) == 4 and parts[0] == "strategies"
+                    and parts[2:] == ["gate", "preflight"]):
+                query = parse_qs(url.query, keep_blank_values=True)
+                if set(query) - {"evaluation_mode"} or any(len(v) != 1 for v in query.values()):
+                    raise GateApiError("invalid_body", "El preflight solo admite un modo de evaluación.")
+                return gate.preflight(parts[1], query.get("evaluation_mode", ["baseline_only"])[0])
             if len(parts) == 3 and parts[0] == "strategies" and parts[2] == "gate" and method == "POST":
                 return gate.launch(parts[1], self._body())
             if len(parts) == 4 and parts[0] == "strategies" and parts[2] == "gate" and parts[3] == "runs" and method == "GET":

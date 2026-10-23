@@ -453,3 +453,19 @@
   color: var(--mc-text-3);
   font-size: 13px;
 }
+
+.runview__scope {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--mc-border);
+  border-radius: var(--mc-radius-lg);
+  list-style: none;
+  color: var(--mc-text-2);
+  font-size: 13px;
+}
+
+.runview__scope [data-tone='warn'] {
+  color: var(--mc-text);
+}
