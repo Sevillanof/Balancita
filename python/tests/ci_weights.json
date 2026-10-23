@@ -13,7 +13,6 @@
   "test_cruda_corpus": 5,
   "test_cruda_medir": 2,
   "test_data_quality": 1,
-  "test_execution_timing": 1,
   "test_funding_causal": 2,
   "test_funding_recovery": 4,
   "test_futures_candles_export": 1,
@@ -65,8 +64,6 @@
   "test_indicator_catalog": 2,
   "test_kronos_funding": 1,
   "test_kronos_lab": 1,
-  "test_multi_strategy": 21,
-  "test_portfolio": 1,
   "test_real_sample": 1,
   "test_strategy_gate": 306,
   "test_strategy_lifecycle": 2
