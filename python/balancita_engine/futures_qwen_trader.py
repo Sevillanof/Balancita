@@ -67,6 +67,7 @@ CONFIG_PATH = os.path.join(ROOT, "config", "qwen-trader.json")
 CONFIG_PATH_V2 = os.path.join(ROOT, "config", "qwen-trader-v2.json")
 CONFIG_PATH_V21 = os.path.join(ROOT, "config", "qwen-trader-v2.1.json")
 CONFIG_PATH_V3 = os.path.join(ROOT, "config", "qwen-trader-v3.json")
+CONFIG_PATH_LIVE = os.path.join(ROOT, "config", "qwen-live.json")
 GATE_CONFIG_PATH = os.path.join(ROOT, "config", "strategy-gate.json")
 DATA_DIR = os.path.join(ROOT, "data", "qwen-trader")
 DEFAULT_DB = os.path.join(DATA_DIR, "practice.sqlite")
@@ -74,7 +75,9 @@ DEFAULT_DB_V2 = os.path.join(DATA_DIR, "practice-v2.sqlite")
 DEFAULT_DB_V21 = os.path.join(DATA_DIR, "practice-v2.1.sqlite")
 DEFAULT_DB_V3 = os.path.join(DATA_DIR, "practice-v3.sqlite")
 DEFAULT_EXAM_DB_V3 = os.path.join(DATA_DIR, "exam-v3.sqlite")
-VERSIONS = ("1", "2", "2.1", "3")
+DEFAULT_DB_LIVE_PRACTICE = os.path.join(DATA_DIR, "practice-live.sqlite")
+PRACTICE_VERSIONS = ("1", "2", "2.1", "3")      # the ones that have a report
+VERSIONS = PRACTICE_VERSIONS + ("live",)        # "live": the rules of the live operator (``futures_qwen_live``)
 DEFAULT_CACHE = os.path.join(DATA_DIR, "cache")
 DEFAULT_URL = "http://127.0.0.1:{}".format(llm.DEFAULT_LLAMA_PORT)
 
@@ -110,12 +113,23 @@ class DecisionError(Exception):
     """The model answered something unusable; the decision counts as 'no answer' (flat / hold)."""
 
 
+class WakeSkipped(Exception):
+    """A decider could not take this wake at all (live: model down or too slow, wake too old). ``Trader.feed`` turns it into a
+    ``skipped`` event: nothing was decided, nothing is opened or closed, and the wake is not asked again. The practice never
+    raises it."""
+
+    def __init__(self, kind, detail=""):
+        super().__init__("{}: {}".format(kind, detail) if detail else kind)
+        self.kind, self.detail = kind, detail
+
+
 # --------------------------------------------------------------------------- config and identity
 
 
 def version_paths(version):
     """``(config path, practice database)`` of a trader version. v1 stays exactly where it was; v2, v2.1 and v3 have their
-    own files."""
+    own files. ``live`` is the config of the live operator; its database here is only the one a historical replay with the
+    live rules would use (the live process has its own, see ``futures_qwen_live``)."""
     version = str(version)
     if version == "1":
         return CONFIG_PATH, DEFAULT_DB
@@ -125,7 +139,9 @@ def version_paths(version):
         return CONFIG_PATH_V21, DEFAULT_DB_V21
     if version == "3":
         return CONFIG_PATH_V3, DEFAULT_DB_V3
-    raise TraderError("versión desconocida: {!r} (1, 2, 2.1 o 3)".format(version))
+    if version == "live":
+        return CONFIG_PATH_LIVE, DEFAULT_DB_LIVE_PRACTICE
+    raise TraderError("versión desconocida: {!r} (1, 2, 2.1, 3 o live)".format(version))
 
 
 def load_config(path=None):
@@ -143,7 +159,8 @@ def config_hash(cfg):
     """Identity of everything that shapes a decision. ``entry_threshold`` is an OUTPUT of the report, not an input."""
     # ``runtime`` (concurrency, skipping the entry reason) only changes speed / what is stored, never an action: not identity.
     # ``exam`` and ``exam_lean`` (v3) only shape the ``exam`` command, which has its own identity (``futures_qwen_trader_exam``)
-    body = {k: v for k, v in cfg.items() if k not in ("entry_threshold", "note", "rules", "runtime", "exam", "exam_lean")}
+    # ``live`` (live operator) is how the process polls and budgets time, never what a decision is
+    body = {k: v for k, v in cfg.items() if k not in ("entry_threshold", "note", "rules", "runtime", "exam", "exam_lean", "live")}
     body["practice"] = {k: v for k, v in cfg["practice"].items() if k != "target_blocks"}   # how many blocks is not identity
     raw = json.dumps({"config": body, "state": STATE_VERSION, "costs": COST_MODEL_VERSION}, sort_keys=True)
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
@@ -296,7 +313,9 @@ def settle(product, position, ref_price, reason, end_ms, funding, notional=D(100
     status = "complete" if held and covered >= held else ("partial" if covered > 0 else "unknown")
     net = gross - fees - paid
     return {"exit_px": px, "net_bp": float(net / notional * 10_000), "gross_bp": float(gross / notional * 10_000),
-            "funding_bp": float(paid / notional * 10_000), "funding_status": status}
+            "funding_bp": float(paid / notional * 10_000), "funding_status": status,
+            # the same figures in exact USD (Decimal), for the live books
+            "net_usd": net, "gross_usd": gross, "fees_usd": fees, "funding_usd": paid}
 
 
 # --------------------------------------------------------------------------- questions and the decider
@@ -573,6 +592,10 @@ class Trader:
         boundary = t_ms % (every * MINUTE_MS) == 0
         if boundary:
             reasons.append("cada_{}_min".format(every) if in_position or every != 60 else "hora_cerrada")
+        if wake.get("extra_wakes", True) is False:
+            # Live operator: Qwen is asked ONLY on the boundary (every ``flat_every_min`` / ``position_every_min``). No strong
+            # move, near-stop, big-move, funding or hook wake, ever. Configs without the key keep every extra wake.
+            return reasons
         extras = []
         sigma5 = self._sigma5()
         if self._strong_move(sigma5):
@@ -650,6 +673,8 @@ class Trader:
         lines.append("Costo de entrar y salir: ~{} % del tamaño".format(
             es(float(round_trip_cost_bps(self.product)) / 100.0, 2)))
         guard = self.cfg["guardrails"]
+        if self.cfg.get("state_variant", 1) >= 3:
+            return self._state_v3(lines, t_ms, sigma5)
         if self.cfg.get("state_variant", 1) >= 2:
             return self._state_v2(lines, t_ms, sigma5)
         lines.append("Reglas fijas que no podés cambiar: stop automatico a {} x la volatilidad diaria; cierre obligatorio "
@@ -667,6 +692,39 @@ class Trader:
                          "stop: {} %. Tiempo hasta el cierre obligatorio: {}.".format(
                              "LARGO" if position.side == "LONG" else "CORTO", _hm((t_ms - position.entry_ms) / MINUTE_MS),
                              es(now["net_bp"] / 100.0, 2, True), es(to_stop * 100, 2), _hm(left / MINUTE_MS)))
+        return "\n".join(lines)
+
+    def _state_v3(self, lines, t_ms, sigma5):
+        """Tail of the state of the live operator (``state_variant`` 3): the exit facts of v2 (result after all costs, the fee
+        logic, typical moves) PLUS the fixed rules that really exist here: automatic stop and a time limit. Facts only."""
+        guard = self.cfg["guardrails"]
+        lines.append("Reglas fijas que no podés cambiar: stop automatico a {} x la volatilidad diaria (entre {} % y {} % del "
+                     "precio); cierre obligatorio a las {} h; espera de {} min despues de cerrar; tamaño fijo de {} USD; "
+                     "una sola posicion; sin limite de operaciones por dia. Solo te consultamos cada {} min.".format(
+                         es(guard["stop_sigma_24h"], 1), es(guard["min_stop_pct"] * 100, 1), es(guard["max_stop_pct"] * 100, 1),
+                         guard["max_hold_min"] // 60, guard["cooldown_min"], format(self.notional.normalize(), "f"),
+                         self.cfg["wake"]["position_every_min"]))
+        position, last = self.position, self.c[-1]
+        if position is None:
+            lines.append("Posicion: ninguna.")
+            return "\n".join(lines)
+        now = settle(self.product, position, last, "strategy_exit", t_ms, self.funding, self.notional)
+        exit_cost = float(fee_rate("taker") * 10_000 + side_impact_bps(self.product)) / 100.0
+        sign = 1.0 if position.side == "LONG" else -1.0
+        captured = sign * (last / position.entry_ref - 1.0) * 100.0
+        to_stop = (last - position.stop_px) / last if position.side == "LONG" else (position.stop_px - last) / last
+        left = position.entry_ms + position.max_hold_ms - t_ms
+        lines.append("Posicion: {} abierta hace {}.".format("LARGO" if position.side == "LONG" else "CORTO",
+                                                           _hm((t_ms - position.entry_ms) / MINUTE_MS)))
+        lines.append("Resultado si cerras ahora, ya con todos los costos: {} % ({} USD).".format(
+            es(now["net_bp"] / 100.0, 2, True), es(now["net_bp"] / 100.0 * float(self.notional) / 100.0, 2, True)))
+        lines.append("La comision de entrada ya esta pagada y ya esta en ese resultado; cerrar solo agrega la de salida "
+                     "(~{} % del tamaño).".format(es(exit_cost, 2)))
+        lines.append("Distancia al stop automatico: {} %. Tiempo hasta el cierre obligatorio: {}.".format(
+            es(to_stop * 100, 2), _hm(left / MINUTE_MS)))
+        lines.append("Movimiento tipico del precio esperable (segun la volatilidad actual): proxima 1h +-{} % | proximas "
+                     "4h +-{} %. Movimiento a favor de la posicion desde que abriste, sin costos: {} %.".format(
+                         es(sigma5 * math.sqrt(H1) * 100, 2), es(sigma5 * math.sqrt(H4) * 100, 2), es(captured, 2, True)))
         return "\n".join(lines)
 
     def _state_v2(self, lines, t_ms, sigma5):
@@ -717,7 +775,11 @@ class Trader:
             return events
         reasons = self.wake_reasons(t_ms)
         if reasons:
-            events += self._decide(t_ms, reasons)
+            try:
+                events += self._decide(t_ms, reasons)
+            except WakeSkipped as skip:
+                events.append({"type": "skipped", "t_ms": t_ms, "wake": list(reasons), "kind": skip.kind,
+                               "detail": skip.detail})
         return events
 
     def _guardrails(self, bucket, t_ms):
@@ -752,7 +814,9 @@ class Trader:
                  "funding_bp": done["funding_bp"], "funding_status": done["funding_status"], "closed_by": closed_by,
                  "hold_min": int((t_ms - position.entry_ms) // MINUTE_MS), "entry_p": position.entry_p,
                  "entry_reason": position.entry_reason, "exit_reason": exit_reason,
-                 "mfe_bp": round(position.mfe_bp, 2), "mae_bp": round(position.mae_bp, 2)}
+                 "mfe_bp": round(position.mfe_bp, 2), "mae_bp": round(position.mae_bp, 2),
+                "net_usd": str(done["net_usd"]), "gross_usd": str(done["gross_usd"]), "fees_usd": str(done["fees_usd"]),
+                "funding_usd": str(done["funding_usd"]), "qty": str(position.qty), "entry_fill": str(position.entry_px)}
         self.position = None
         self.cooldown_until = t_ms + self.cfg["guardrails"]["cooldown_min"] * MINUTE_MS
         events = []
@@ -1399,8 +1463,9 @@ def _parser():
     def common(p, version_default="2", versions=VERSIONS):
         p.add_argument("--version", default=version_default, choices=versions,
                        help="trader version (default %(default)s): 1 = stop + 24 h limit, 2 = only Qwen (or the block end) "
-                            "closes, 2.1 = v2 with the fixed prompt text first (speed only), 3 = 2.1 plus the mirror test; "
-                            "each has its own config and practice database")
+                            "closes, 2.1 = v2 with the fixed prompt text first (speed only), 3 = 2.1 plus the mirror test, "
+                            "live = the rules of the live operator replayed on history; each has its own config and "
+                            "practice database")
         p.add_argument("--config", default=None, help="default: the config of the version")
         p.add_argument("--db", default=None, help="practice database (default: practice.sqlite for v1, practice-v2.sqlite "
                                                   "for v2, in data/qwen-trader)")
@@ -1447,7 +1512,7 @@ def _parser():
     er.add_argument("--exam-db", default=DEFAULT_EXAM_DB_V3)
     er.add_argument("--out", default=os.path.join(DATA_DIR, "informe-examen-v3.md"))
     rp = sub.add_parser("report", help="Spanish markdown report (no model)")
-    common(rp, "all", VERSIONS + ("all",))
+    common(rp, "all", PRACTICE_VERSIONS + ("all",))
     rp.add_argument("--out", default=os.path.join(DATA_DIR, "informe.md"), help="report of v1")
     rp.add_argument("--out-v2", default=os.path.join(DATA_DIR, "informe-v2.md"), help="report of v2 (with v1 vs v2)")
     rp.add_argument("--out-v21", default=os.path.join(DATA_DIR, "informe-v2.1.md"), help="report of v2.1 (with v2 vs v2.1)")
@@ -1526,7 +1591,7 @@ def main(argv=None):
                              skip_entry_reason=False if args.ask_entry_reason else None)
         elif args.command == "report":
             from .futures_qwen_trader_report import build_report
-            wanted = VERSIONS if args.version == "all" else (args.version,)
+            wanted = PRACTICE_VERSIONS if args.version == "all" else (args.version,)
             paths = {v: version_paths(v) for v in wanted}
             if args.db and len(wanted) == 1:
                 paths[wanted[0]] = (paths[wanted[0]][0], args.db)

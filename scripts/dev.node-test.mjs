@@ -582,8 +582,50 @@ describe('optional LLM decision children (llm and q)', () => {
 
   it('starts llm and q after the other children when enabled', () => {
     const specs = devChildSpecs({ ...base, env: local, llm })
-    assert.deepEqual(names(specs).slice(-2), ['llm', 'q'])
+    assert.deepEqual(names(specs).slice(-3), ['llm', 'q', 'qwenlive'])
     assert.ok(names(specs).indexOf('news') < names(specs).indexOf('llm'))
+  })
+
+  it('runs the Qwen live operator with the model, on its own database, and tells the gateway where it is', () => {
+    const specs = devChildSpecs({ ...base, env: local, llm })
+    const { qwenlive, live, q } = byName(specs)
+    assert.deepEqual(qwenlive.args.slice(-4), [
+      '-m',
+      'balancita_engine.futures_qwen_live',
+      '--db',
+      './data/dev-live/qwen-live/live.sqlite',
+    ])
+    assert.equal(qwenlive.env.LLAMA_PORT, q.env.LLAMA_PORT)
+    assert.equal(qwenlive.env.PYTHONPATH, '/repo/python')
+    assert.match(
+      live.env.QWEN_LIVE_DB_PATH,
+      /\/data\/dev-live\/qwen-live\/live\.sqlite$/,
+    )
+    assert.ok(!live.env.QWEN_LIVE_DB_PATH.includes('/./'))
+  })
+
+  it('moves the live operator database with QWEN_LIVE_DB (child and gateway agree) and passes the size settings on', () => {
+    const env = {
+      ...local,
+      QWEN_LIVE_DB: '/tmp/otra/live.sqlite',
+      QWEN_LIVE_NOTIONAL_USD: '500',
+      QWEN_LIVE_LEVERAGE: '3',
+    }
+    const { qwenlive, live } = byName(devChildSpecs({ ...base, env, llm }))
+    assert.equal(qwenlive.args.at(-1), '/tmp/otra/live.sqlite')
+    assert.equal(live.env.QWEN_LIVE_DB_PATH, '/tmp/otra/live.sqlite')
+    assert.equal(qwenlive.env.QWEN_LIVE_NOTIONAL_USD, '500')
+    assert.equal(qwenlive.env.QWEN_LIVE_LEVERAGE, '3')
+  })
+
+  it('does not start the live operator when decisions are off (no llama-server is resolved)', () => {
+    // resolveLlamaServer returns no command under DECISIONS_ENABLED=0
+    const specs = devChildSpecs({
+      ...base,
+      env: { ...local, DECISIONS_ENABLED: '0' },
+      llm: null,
+    })
+    assert.ok(!names(specs).includes('qwenlive'))
   })
 
   const c31On = { off: false }
@@ -850,7 +892,7 @@ describe('optional news child (n)', () => {
 
   it('keeps news independent of llm and q: it starts before them and a stopped model does not matter', () => {
     const specs = devChildSpecs({ ...base, env: local, llm })
-    assert.deepEqual(names(specs).slice(-3), ['news', 'llm', 'q'])
+    assert.deepEqual(names(specs).slice(-4), ['news', 'llm', 'q', 'qwenlive'])
   })
 
   it('never hands the news child a remote LLM setting', () => {

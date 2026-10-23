@@ -58,6 +58,7 @@ describe('onlyChildSpecs', () => {
     { name: 'q' },
     { name: 'verdict' },
     { name: 'qwenexit' },
+    { name: 'qwenlive' },
   ]
 
   it('keeps everything when DEV_ONLY is unset or empty', () => {
@@ -70,7 +71,7 @@ describe('onlyChildSpecs', () => {
       onlyChildSpecs(specs, { DEV_ONLY: 'vite, capture,nope' }).map(
         (s) => s.name,
       ),
-      ['vite', 'capture', 'llm', 'q', 'verdict', 'qwenexit'],
+      ['vite', 'capture', 'llm', 'q', 'verdict', 'qwenexit', 'qwenlive'],
     )
   })
 })

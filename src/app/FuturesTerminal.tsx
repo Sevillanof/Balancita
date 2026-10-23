@@ -24,6 +24,7 @@ import { markerGap, markerGapNote } from './terminal-markers.ts'
 import TerminalMarketChart from './TerminalMarketChart.tsx'
 import { isApprovedAnalysis } from './terminal-approved.ts'
 import { qwenNotice, useQwenDecisions } from './useQwenDecisions.ts'
+import QwenTradesPanel from './QwenTradesPanel.tsx'
 import {
   analysesNotice,
   analysisAction,
@@ -518,6 +519,7 @@ export default function FuturesTerminal({
               )
             }
           />
+          <QwenTradesPanel product={product} enabled={liveGateway} />
           {!engineOff && (
             <div
               className="mc-terminal__secondary"

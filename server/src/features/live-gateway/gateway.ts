@@ -57,7 +57,7 @@ export interface LiveGatewayOptions {
   readonly engineUnavailableReason?: string
   /** Hits, misses and returns of Qwen's decisions. Absent: reported `off`. */
   readonly qwenScores?: QwenScores
-  /** Qwen's own decisions for the Terminal (read-only). Absent: off. */
+  /** Qwen operador en vivo: decisiones y operaciones para la Terminal (solo lectura). Absent: off. */
   readonly qwenDecisions?: QwenDecisions
   /** Kronos' forward paper decisions in Qwen's shape. Absent: reported `off`. */
   readonly kronosScores?: QwenScores
@@ -449,6 +449,18 @@ export async function buildLiveGateway(
     '/api/qwen/decisions',
     (request, reply) => {
       const result = qwenDecisions.report(
+        request.query.product ?? '',
+        request.query.limit === undefined
+          ? undefined
+          : Number(request.query.limit),
+      )
+      return result.status === 'error' ? reply.code(400).send(result) : result
+    },
+  )
+  app.get<{ Querystring: { product?: string; limit?: string } }>(
+    '/api/qwen/trades',
+    (request, reply) => {
+      const result = qwenDecisions.trades(
         request.query.product ?? '',
         request.query.limit === undefined
           ? undefined

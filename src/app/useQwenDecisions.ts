@@ -8,10 +8,12 @@ const EMPTY: Record<string, unknown>[] = []
 const LOADING: QwenSource = { state: 'loading' }
 
 /**
- * Qwen's own decisions of one product, read from the gateway
- * (`/api/qwen/decisions`), shaped like the analyses the Terminal already draws
- * (marker, history row, detail). A source that is off or fails gives none:
- * nothing is invented.
+ * Qwen operador's own decisions of one product (one every 15 minutes), read
+ * from the gateway (`/api/qwen/decisions`), shaped like the analyses the
+ * Terminal already draws (marker, history row, detail). A source that is off
+ * or fails gives none: nothing is invented. The marker sits on the candle of
+ * the instant Qwen looked at the market (`decision_time_ms`, the end of its
+ * 15 minute window), not on the window's first candle.
  */
 export function qwenAnalyses(payload: unknown): Record<string, unknown>[] {
   const body = record(payload)
@@ -28,8 +30,11 @@ export function qwenAnalyses(payload: unknown): Record<string, unknown>[] {
       runtime_version: QWEN_RUNTIME,
       analysis_id: `qwen:${row.product}:${row.bucket_start_ms}`,
       product: row.product,
-      bucket_start_ms: row.bucket_start_ms,
-      decision_time_ms: row.written_at_ms ?? row.bucket_start_ms,
+      bucket_start_ms: Number.isSafeInteger(row.decision_time_ms)
+        ? row.decision_time_ms
+        : row.bucket_start_ms,
+      decision_time_ms:
+        row.decision_time_ms ?? row.written_at_ms ?? row.bucket_start_ms,
       action: row.action,
       selected_strategy_id: QWEN_STRATEGY_ID,
       selector: { strategy_id: QWEN_STRATEGY_ID, action: row.action },
@@ -52,7 +57,7 @@ export function qwenNotice(source: QwenSource, rows: number): string | null {
     return 'Qwen no está corriendo: no hay base de decisiones. Iniciá pnpm dev con el modelo local instalado (llama.cpp con un Qwen en GGUF); si no puede arrancar, el arranque explica el motivo.'
   if (source.state === 'error')
     return 'No se pudieron leer las decisiones de Qwen del gateway.'
-  return 'Qwen todavía no decidió nada para este producto. Decide con cada vela de 1 minuto y salta los minutos en calma.'
+  return 'Qwen todavía no decidió nada para este producto. Mira el mercado cada 15 minutos y solo actúa cuando ve una ventaja clara.'
 }
 
 export function useQwenDecisions(

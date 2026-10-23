@@ -97,7 +97,7 @@ async function main(): Promise<void> {
     ),
     qwenScores: qwenScoresFrom(process.env),
     qwenDecisions: createQwenDecisions({
-      decisionsDbPath: process.env.FUTURES_DECISIONS_DB_PATH || undefined,
+      liveDbPath: process.env.QWEN_LIVE_DB_PATH || undefined,
     }),
     kronosScores: kronosScoresFrom(process.env),
     movements: movementsFrom(process.env),
