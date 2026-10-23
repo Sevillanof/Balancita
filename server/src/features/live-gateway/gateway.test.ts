@@ -204,6 +204,36 @@ describe('live market gateway', () => {
     expect(asked).toEqual(['PF_XBTUSD', 'bad'])
   })
 
+  it('serves the live operator decisions and trades, off when not configured', async () => {
+    const path = dbPath()
+    const writer = seedWriter(path, 5)
+    closers.push(() => writer.close())
+    const off = await start(path)
+    for (const route of ['decisions', 'trades'])
+      expect(
+        (await off.app.inject(`/api/qwen/${route}?product=PF_XBTUSD`)).json(),
+      ).toEqual({ status: 'off', reason: 'decisions_not_configured' })
+    const asked: string[] = []
+    const on = await start(path, {
+      qwenDecisions: {
+        report: () => ({ status: 'ok', decisions: [], skipped: [] }),
+        trades: (product, limit) => {
+          asked.push(`${product}:${limit}`)
+          return product === 'bad'
+            ? { status: 'error', reason: 'invalid_product' }
+            : { status: 'ok', trades: [] }
+        },
+      },
+    })
+    const ok = await on.app.inject('/api/qwen/trades?product=PF_XBTUSD&limit=5')
+    expect(ok.statusCode).toBe(200)
+    expect(ok.json()).toEqual({ status: 'ok', trades: [] })
+    expect(
+      (await on.app.inject('/api/qwen/trades?product=bad')).statusCode,
+    ).toBe(400)
+    expect(asked).toEqual(['PF_XBTUSD:5', 'bad:undefined'])
+  })
+
   it('serves Kronos scores and reports them off when not configured', async () => {
     const path = dbPath()
     const writer = seedWriter(path, 5)

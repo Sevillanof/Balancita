@@ -44,6 +44,7 @@ const optionalChildren = new Set([
   'llm',
   'q',
   'qwenexit',
+  'qwenlive',
 ])
 const exitLabels = {
   capture: 'Live market capture (new candles)',
@@ -57,6 +58,7 @@ const exitLabels = {
   llm: 'The llama-server model (new LLM decisions)',
   q: 'The LLM decision service (new LLM decisions)',
   qwenexit: 'The Qwen exit book C31 (new trades closed by Qwen)',
+  qwenlive: 'The Qwen live operator (new Qwen decisions and trades)',
 }
 // The optional model: never blocks startup, one [dev] line when it is skipped.
 const llama = resolveLlamaServer({ env })
@@ -82,7 +84,7 @@ if (!llmEnabled && (env.DECISIONS_ENABLED ?? '').trim() !== '0') {
         ? 'Python was not found.'
         : llmModel?.message
   process.stderr.write(
-    `[dev] ATENCIÓN: Qwen NO arranca, la Terminal no tendrá decisiones. Motivo: ${why}\n` +
+    `[dev] ATENCIÓN: Qwen NO arranca, la Terminal no tendrá decisiones ni operaciones de Qwen. Motivo: ${why}\n` +
       '[dev] Qué hacer: instalá llama.cpp (brew install llama.cpp), dejá un modelo Qwen3.5-4B o Qwen3-4B en formato GGUF en tu disco (o poné LLAMA_MODEL_PATH=/ruta/al/modelo.gguf en .env.local) y reiniciá pnpm dev.\n',
   )
 }
@@ -192,7 +194,8 @@ function launch(spec) {
       const text = chunk.toString()
       if (/EADDRINUSE|Address already in use/.test(text))
         state.sawAddrInUse = true
-      if (/is already writing/i.test(text)) state.sawLocked = true
+      if (/is already writing|ya está escribiendo/i.test(text))
+        state.sawLocked = true
       state.staleDb ??= mismatchedDb(text)
       for (const line of text.split(/(?<=\n)/))
         if (line && (verbose || !noise.some((re) => re.test(line))))

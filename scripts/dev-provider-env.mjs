@@ -460,14 +460,14 @@ const CAPTURE_ARGS = ['--experimental-strip-types', 'src/app/capture-main.ts']
  * - q (optional): Python LLM decisions Q (market + verdicts DBs read-only ->
  *   decisions DB, sole writer of the latter), started together with llm.
  */
-/** The children that make Qwen decide: they ignore DEV_ONLY. */
-export const QWEN_CHILDREN = ['verdict', 'llm', 'q', 'qwenexit']
+/** The children that make Qwen decide and operate: they ignore DEV_ONLY. */
+export const QWEN_CHILDREN = ['verdict', 'llm', 'q', 'qwenexit', 'qwenlive']
 
 /**
  * `DEV_ONLY=vite,capture,live,forward,strategies` runs just those children (comma separated names of
  * `devChildSpecs`); unset or empty runs everything. Unknown names are ignored. Used to leave only the
- * forward measurement and the capture it reads running, without paper books or news. Qwen (see QWEN_CHILDREN)
- * is never left out by it.
+ * forward measurement and the capture it reads running, without paper books or news. Qwen (see
+ * QWEN_CHILDREN) is never left out by it: only DECISIONS_ENABLED=0 (or a missing model) turns it off.
  */
 export function onlyChildSpecs(specs, env = {}) {
   const wanted = (env.DEV_ONLY ?? '')
@@ -565,6 +565,9 @@ export function devChildSpecs({
   const forwardDir = liveDb('forward')
   // C31: Qwen decides when its open positions close (own DB and summary; needs the local model).
   const qwenExitDir = liveDb('qwen-exit')
+  // Qwen operador en vivo: its own database (one process per database). QWEN_LIVE_DB moves it.
+  const qwenLiveDb =
+    (env.QWEN_LIVE_DB ?? '').trim() || liveDb('qwen-live/live.sqlite')
   const forwardPath = `${forwardDir}/forward-reliability.json`
   const kronosSummary =
     (env.KRONOS_SUMMARY_PATH ?? '').trim() ||
@@ -611,6 +614,10 @@ export function devChildSpecs({
         FUTURES_STRATEGY_SPECS_DIR: `${root}/config/strategies`,
         // Qwen's hits/misses/returns, computed read-only by Python on request.
         FUTURES_DECISIONS_DB_PATH: decisionsDb,
+        // `/api/qwen/decisions` and `/api/qwen/trades`: the live operator's base, read-only.
+        QWEN_LIVE_DB_PATH: qwenLiveDb.startsWith('./')
+          ? `${serverCwd}/${qwenLiveDb.slice(2)}`
+          : qwenLiveDb,
         // `/api/system`: size of the saved data, C31's summary and the Kronos run.
         DEV_DATA_DIR: `${serverCwd}/data/dev-live`,
         QWEN_EXIT_SUMMARY_PATH: `${serverCwd}/data/dev-live/qwen-exit/qwen-exit-summary.json`,
@@ -718,6 +725,27 @@ export function devChildSpecs({
           ...env,
           LLAMA_PORT: port,
           STRATEGY_FORWARD_PATH: forwardPath,
+          PYTHONPATH: [`${root}/python`, env.PYTHONPATH]
+            .filter(Boolean)
+            .join(delimiter),
+        },
+      },
+      {
+        // Qwen operador en vivo (paper, sin órdenes reales): decide cada 15 minutos con las velas públicas de Kraken y
+        // el mismo modelo local. Sole writer of its own database. Size, leverage and products: QWEN_LIVE_* in `.env.local`.
+        name: 'qwenlive',
+        command: python.command,
+        cwd: serverCwd,
+        args: [
+          ...python.prefixArgs,
+          '-m',
+          'balancita_engine.futures_qwen_live',
+          '--db',
+          qwenLiveDb,
+        ],
+        env: {
+          ...env,
+          LLAMA_PORT: port,
           PYTHONPATH: [`${root}/python`, env.PYTHONPATH]
             .filter(Boolean)
             .join(delimiter),

@@ -10,6 +10,7 @@ import { strategyCode } from '../features/trading-view/domain/terminal-chart-mod
 import { record } from '../shared/wire/decode.ts'
 import { candleForDecision, markerGap } from './terminal-markers.ts'
 import { analysisAction } from './terminal-labels.ts'
+import { QWEN_STRATEGY_ID } from './useQwenDecisions.ts'
 
 export default function TerminalMarketChart({
   market,
@@ -110,6 +111,18 @@ export default function TerminalMarketChart({
                 : action === 'SHORT'
                   ? 'short'
                   : undefined
+            // Qwen closing its own position: a close mark, not a wait.
+            if (action === 'CLOSE') {
+              const closing: ApprovedTerminalMarker = {
+                id,
+                time: renderTime,
+                type: 'exit',
+                label: 'C',
+                detail: 'Qwen cierra la posición',
+                strategyId: QWEN_STRATEGY_ID,
+              }
+              return [closing]
+            }
             const selector = record(analysis.selector)
             const strategyId =
               selector.strategy_id ?? analysis.selected_strategy_id

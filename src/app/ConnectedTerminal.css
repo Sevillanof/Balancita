@@ -358,6 +358,11 @@
   color: var(--mc-short, #ef4444);
 }
 
+.connected-terminal__decisions [data-action='CLOSE'] {
+  color: var(--mc-text-1, inherit);
+  font-weight: 600;
+}
+
 .connected-terminal__decisions [data-action='WAIT'] {
   color: var(--mc-text-2);
   font-weight: 500;
@@ -401,4 +406,13 @@
   height: 1px;
   overflow: hidden;
   clip-path: inset(50%);
+}
+
+.qwen-trades {
+  margin-top: 1rem;
+}
+
+.qwen-trades ul {
+  margin: 0;
+  padding-left: 1.1rem;
 }
