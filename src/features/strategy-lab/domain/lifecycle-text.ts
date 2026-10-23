@@ -15,10 +15,6 @@ export function formatActiveTime(ms: number): string {
   return `${minutes} min`
 }
 
-/** Qwen and Kronos act in the real paper and can only be removed from the code. */
-export const PROTECTED_STRATEGY_MESSAGE =
-  'Qwen y Kronos solo se pueden quitar desde el código'
-
 export function isProtectedStrategy(id: string): boolean {
   const lowered = id.toLowerCase()
   return lowered.startsWith('kronos-') || lowered.startsWith('c31-qwen')

@@ -324,25 +324,6 @@
 .obs-now .obs-card__label {
   color: var(--mc-warn);
 }
-.obs-facts {
-  display: grid;
-  gap: var(--mc-space-xs);
-  margin: var(--mc-space-sm) 0 0;
-  font-size: 12px;
-}
-.obs-facts > div {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--mc-space-sm);
-}
-.obs-facts dt {
-  color: var(--mc-text-2);
-}
-.obs-facts dd {
-  margin: 0;
-  text-align: right;
-}
 .obs-observer__body {
   display: grid;
   flex: 1 1 auto;
