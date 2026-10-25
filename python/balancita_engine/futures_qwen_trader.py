@@ -1579,6 +1579,9 @@ def _parser():
     ee.add_argument("--llama-url", default=None)
     ee.add_argument("--offline", action="store_true", help="use only the local cache: no Kraken request at all")
     ee.add_argument("--sequential", action="store_true")
+    ee.add_argument("--quick", nargs="?", const=300, type=int, default=None, metavar="N",
+                    help="quick test: only ~N photos (default 300), in its own database (exam-v3-rapida.sqlite); leaves "
+                         "rapida-v3.json for the screen. Orientative: it is not the exam")
     er = sub.add_parser("exam-report", help="v3: Spanish markdown report of the exam (no model)")
     common(er, "3", ("3",))
     er.add_argument("--exam-db", default=DEFAULT_EXAM_DB_V3)
@@ -1637,6 +1640,13 @@ def main(argv=None):
                                      holdout_ms)
             if args.sequential:
                 cfg = dict(cfg, runtime=dict(cfg.get("runtime") or {}, concurrent_orders=False))
+            if args.quick is not None:
+                from .futures_qwen_trader_exam import run_quick
+                quick_db = os.path.join(os.path.dirname(os.path.abspath(args.exam_db)), "exam-v3-rapida.sqlite")
+                state = run_quick(history, quick_db, _provider(args.llama_url), cfg, holdout_ms, snapshots=args.quick,
+                                  max_minutes=args.max_minutes)
+                print("prueba rápida: {}".format(state["state"]))
+                return
             run_exam(history, args.exam_db, _provider(args.llama_url), cfg, holdout_ms, max_minutes=args.max_minutes)
         elif args.command in ("prefetch", "practice"):
             history = History(args.cache_dir, holdout_ms, offline=getattr(args, "offline", False))

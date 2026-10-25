@@ -16,6 +16,7 @@ overlap in time, so the intervals are bootstrapped by day, not by photo.
 
 import json
 import math
+import os
 import random
 import time
 
@@ -180,6 +181,77 @@ def run_exam(history, db_path, provider, cfg, holdout_ms, *, max_minutes=55.0, c
                 "remaining": len(pending) - handled}
     finally:
         pdb.close()
+
+
+# --------------------------------------------------------------------------- the quick test
+
+QUICK_SNAPSHOTS = 300
+QUICK_STATE = "rapida-v3.json"
+QUICK_NOTE = ("Prueba rápida: solo una muestra de fotos del pasado, para filtrar cambios de prompt o modelo. Es orientativa: "
+              "no es el Examen ni sirve para dar una estrategia por ganadora.")
+
+
+def quick_cfg(cfg, snapshots=QUICK_SNAPSHOTS):
+    """The exam config with a small sample: the same photos choice (stratified by product and time bin), fewer of them."""
+    exam = dict(cfg["exam"])
+    cells = len(exam["products"]) * exam["time_bins"]
+    exam["snapshots"] = max(1, snapshots // cells) * cells
+    return dict(cfg, exam=exam)
+
+
+def quick_summary(db_path, cfg):
+    """The lean on the decision horizon, read off the sample: no verdict, only whether each signal points the right way."""
+    rows, _ = load_answers(db_path)
+    result = analyse_lean(rows, cfg)
+    h = cfg["exam_lean"]["decide_horizon_min"]
+    block = result["horizons"].get(h, {}).get("lean_num")
+    if not block:
+        return None
+    ok = {c["id"]: c["ok"] for c in result["checks"]}
+    return {"photos": result["n"], "horizon_min": h, "spearman": block["spearman"], "spearman_ci": list(block["sp_ci"]),
+            "extremes_net_bp": block["ext_net"], "extremes_ci": list(block["ext_ci"]), "vs_random_pct": block["ext_pct"],
+            "signals": {"extremes": ok.get("extremes"), "random": ok.get("random"), "spearman": ok.get("spearman")},
+            "note": QUICK_NOTE}
+
+
+def _write_state(path, state):
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as handle:
+        json.dump(state, handle, ensure_ascii=False)
+    os.replace(tmp, path)
+
+
+def run_quick(history, db_path, provider, cfg, holdout_ms, *, snapshots=QUICK_SNAPSHOTS, max_minutes=55.0,
+              clock=time.monotonic, log=print, state_path=None):
+    """Asks Qwen about a small stratified sample of the photos, in its own database (the full exam's is never touched),
+    and leaves ``{state, answered, total, summary}`` in ``state_path`` for the screen. Every run starts from scratch: a
+    changed prompt or model is exactly what it is for, and an old sample would be refused by the config identity."""
+    state_path = state_path or os.path.join(os.path.dirname(os.path.abspath(db_path)), QUICK_STATE)
+    started = int(time.time() * 1000)
+    state = {"state": "running", "pid": os.getpid(), "started_ms": started, "answered": 0, "total": snapshots, "summary": None, "error": None}
+    _write_state(state_path, state)
+    try:
+        if os.path.exists(db_path):
+            os.replace(db_path, db_path + ".anterior")
+        quick = quick_cfg(cfg, snapshots)
+
+        def tell(line):
+            log(line)
+            if line.startswith("progreso:"):
+                _write_state(state_path, dict(state, detail=line))
+
+        outcome = run_exam(history, db_path, provider, quick, holdout_ms, max_minutes=max_minutes, clock=clock, log=tell)
+        state.update(answered=outcome["answered"], total=outcome["total"])
+        if outcome["stop_reason"] == "done":
+            state.update(state="done", summary=quick_summary(db_path, quick))
+        else:
+            state.update(state="failed", error="La prueba se cortó ({}): lo hecho quedó guardado, pero no alcanza para "
+                                               "una lectura.".format(outcome["stop_reason"]))
+    except Exception as error:  # noqa: BLE001 - whatever went wrong must reach the screen
+        state.update(state="failed", error=str(error))
+    state["finished_ms"] = int(time.time() * 1000)
+    _write_state(state_path, state)
+    return state
 
 
 # --------------------------------------------------------------------------- the numbers
