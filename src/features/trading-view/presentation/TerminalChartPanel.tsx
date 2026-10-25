@@ -11,6 +11,7 @@ import {
   bollinger,
   donchian,
   ema,
+  priorDayValueArea,
   rsi,
   vwap,
 } from '../domain/chart-indicators.ts'
@@ -34,7 +35,13 @@ import {
 } from '../domain/terminal-chart-model.ts'
 import './terminal-chart-panel.css'
 
-type Overlay = 'ema9' | 'ema21' | 'bollinger' | 'donchian' | 'vwap'
+type Overlay =
+  | 'ema9'
+  | 'ema21'
+  | 'bollinger'
+  | 'donchian'
+  | 'vwap'
+  | 'valueArea'
 type Pane = 'flow' | 'oi' | 'liquidations' | 'positioning' | 'premium' | 'rsi'
 
 const OVERLAYS: ReadonlyArray<{ id: Overlay; label: string; color: string }> = [
@@ -43,6 +50,7 @@ const OVERLAYS: ReadonlyArray<{ id: Overlay; label: string; color: string }> = [
   { id: 'bollinger', label: 'Bollinger 20', color: '#b48ff0' },
   { id: 'donchian', label: 'Donchian 20', color: '#5fc4d3' },
   { id: 'vwap', label: 'VWAP diario', color: '#e98fc0' },
+  { id: 'valueArea', label: 'Área de valor (día previo)', color: '#d9a066' },
 ]
 const PANES: ReadonlyArray<{ id: Pane; label: string; live: boolean }> = [
   { id: 'flow', label: 'Compra/venta', live: true },
@@ -132,6 +140,19 @@ function overlayLines(
   }
   if (enabled.includes('vwap'))
     out.push({ id: 'vwap', color: color('vwap'), points: vwap(candles) })
+  if (enabled.includes('valueArea')) {
+    const area = priorDayValueArea(candles)
+    out.push(
+      { id: 'va-vah', color: color('valueArea'), points: area.vah },
+      {
+        id: 'va-poc',
+        color: color('valueArea'),
+        points: area.poc,
+        dashed: true,
+      },
+      { id: 'va-val', color: color('valueArea'), points: area.val },
+    )
+  }
   return out
 }
 

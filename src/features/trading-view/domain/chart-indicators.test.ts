@@ -4,7 +4,9 @@ import {
   bollinger,
   donchian,
   ema,
+  priorDayValueArea,
   rsi,
+  valueArea,
   vwap,
 } from './chart-indicators.ts'
 
@@ -63,5 +65,34 @@ describe('chart indicators', () => {
       { time: 0, open: 9, high: 13, low: 8, close: 12, volume: 6 },
       { time: 180, open: 10, high: 15, low: 9, close: 14, volume: 15 },
     ])
+  })
+})
+
+describe('valueArea', () => {
+  it('holds 70 % of the volume around the busiest price', () => {
+    const candles = [
+      { time: 0, high: 101, low: 99, close: 100, volume: 800 },
+      { time: 60, high: 110, low: 90, close: 100, volume: 100 },
+      { time: 120, high: 100.5, low: 99.5, close: 100, volume: 100 },
+    ]
+    const area = valueArea(candles, 40)!
+    expect(area.poc).toBeGreaterThan(99)
+    expect(area.poc).toBeLessThan(101)
+    expect(area.val).toBeGreaterThanOrEqual(98)
+    expect(area.vah).toBeLessThanOrEqual(102)
+  })
+  it('uses only the day before for each candle', () => {
+    const day = 86_400
+    const candles = [
+      { time: 0, high: 101, low: 99, close: 100, volume: 10 },
+      { time: day, high: 200, low: 199, close: 200, volume: 10 },
+    ]
+    const area = priorDayValueArea(candles)
+    expect(area.vah).toHaveLength(1)
+    expect(area.vah[0]!.time).toBe(day)
+    expect(area.vah[0]!.value).toBeLessThan(110)
+  })
+  it('gives nothing for a flat or empty range', () => {
+    expect(valueArea([])).toBeNull()
   })
 })

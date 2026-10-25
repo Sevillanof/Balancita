@@ -144,3 +144,93 @@ export function aggregate<T extends IndicatorCandle & { open: number }>(
   }
   return out
 }
+
+export type ValueArea = { poc: number; vah: number; val: number }
+
+/**
+ * Volume profile of `candles`: each candle's volume is spread evenly over the
+ * price bins its high-low range touches. Returns the point of control (most
+ * traded bin) and the value area (smallest run of bins around it holding
+ * `share` of the volume, grown toward the heavier neighbour).
+ */
+export function valueArea(
+  candles: readonly IndicatorCandle[],
+  bins = 48,
+  share = 0.7,
+): ValueArea | null {
+  let low = Infinity
+  let high = -Infinity
+  for (const candle of candles) {
+    low = Math.min(low, candle.low)
+    high = Math.max(high, candle.high)
+  }
+  if (!(high > low)) return null
+  const step = (high - low) / bins
+  const volume = new Array<number>(bins).fill(0)
+  const bin = (price: number) =>
+    Math.min(bins - 1, Math.max(0, Math.floor((price - low) / step)))
+  for (const candle of candles) {
+    if (!(candle.volume > 0)) continue
+    const first = bin(candle.low)
+    const last = bin(candle.high)
+    for (let index = first; index <= last; index += 1)
+      volume[index]! += candle.volume / (last - first + 1)
+  }
+  const total = volume.reduce((sum, value) => sum + value, 0)
+  if (total <= 0) return null
+  let poc = 0
+  for (let index = 1; index < bins; index += 1)
+    if (volume[index]! > volume[poc]!) poc = index
+  let lo = poc
+  let hi = poc
+  let held = volume[poc]!
+  while (held < total * share && (lo > 0 || hi < bins - 1)) {
+    const below = lo > 0 ? volume[lo - 1]! : -1
+    const above = hi < bins - 1 ? volume[hi + 1]! : -1
+    if (above >= below) {
+      hi += 1
+      held += volume[hi]!
+    } else {
+      lo -= 1
+      held += volume[lo]!
+    }
+  }
+  return {
+    poc: low + (poc + 0.5) * step,
+    vah: low + (hi + 1) * step,
+    val: low + lo * step,
+  }
+}
+
+/**
+ * Previous-session value area held flat through each UTC day: the levels of a
+ * day come only from the day before, so no line uses a candle not yet closed.
+ */
+export function priorDayValueArea(candles: readonly IndicatorCandle[]): {
+  poc: LinePoint[]
+  vah: LinePoint[]
+  val: LinePoint[]
+} {
+  const out = {
+    poc: [] as LinePoint[],
+    vah: [] as LinePoint[],
+    val: [] as LinePoint[],
+  }
+  const byDay = new Map<number, IndicatorCandle[]>()
+  for (const candle of candles) {
+    const day = Math.floor(candle.time / 86_400)
+    const list = byDay.get(day)
+    if (list) list.push(candle)
+    else byDay.set(day, [candle])
+  }
+  const levels = new Map<number, ValueArea | null>()
+  for (const [day, list] of byDay) levels.set(day, valueArea(list))
+  for (const candle of candles) {
+    const area = levels.get(Math.floor(candle.time / 86_400) - 1)
+    if (!area) continue
+    out.poc.push({ time: candle.time, value: area.poc })
+    out.vah.push({ time: candle.time, value: area.vah })
+    out.val.push({ time: candle.time, value: area.val })
+  }
+  return out
+}
