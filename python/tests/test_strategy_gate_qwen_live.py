@@ -14,7 +14,7 @@ T0 = 1_760_000_000_000 // HOUR * HOUR          # well before the holdout cut
 LIVE_T0 = 1_792_000_000_000 // HOUR * HOUR     # after it
 
 
-def photo_db(path, photos, config_hash=None):
+def photo_db(path, photos, config_hash=None, mirrored=True):
     """``photos``: (t_ms, lean, move_240); the lean is the real-numbers lean, the mirror leans the other way."""
     pdb = qt.PracticeDB(path)
     pdb.db.executescript(ex._EXAM_SQL)
@@ -25,8 +25,10 @@ def photo_db(path, photos, config_hash=None):
             pdb.db.execute("INSERT INTO exam_snapshots VALUES(?,?,?,?,?,?,?,?,?)",
                            (sid, "PF_XBTUSD", t_ms, order, "[]", "s", "m", json.dumps({"240": move, "1440": 0}), 10.0))
             pdb.db.execute("INSERT INTO exam_answers VALUES(?,?,?,?,?,?)",
-                           (sid, "ESPERAR", 0.9, "ESPERAR", 0.9, 0))
+                           (sid, "ESPERAR", 0.9, "ESPERAR" if mirrored else None, 0.9 if mirrored else None, 0))
             for step, signed in (("action", lean), ("mirror", -lean)):
+                if step == "mirror" and not mirrored:
+                    continue
                 for variant in (0, 1):
                     pdb.put_call({"key": sid, "t_ms": t_ms, "step": step, "variant": variant, "order": [0, 1, 2],
                                   "probabilities": {"LARGO": 0.5 + signed / 2, "CORTO": 0.5 - signed / 2, "ESPERAR": 0.0},
@@ -79,6 +81,13 @@ class QwenLiveTradesTests(unittest.TestCase):
         self.assertEqual([(t["side"], round(t["net_bp"], 6)) for t in got], [("LONG", 40.0), ("SHORT", 40.0)])
         self.assertEqual(got[0]["exit_time_ms"] - got[0]["entry_time_ms"], models.LIVE_HOLD_MS)
         self.assertEqual({t["funding_status"] for t in got}, {"unknown"})
+
+    def test_photos_without_the_mirror_question_are_ordered_by_the_plain_lean(self):
+        leans = [0.4, 0.1, -0.1, 0.05, -0.05, -0.4, 0.0, 0.02, -0.02, 0.01]
+        photo_db(self.exam, [(T0 + 5 * HOUR * i, lean, 50.0 if lean > 0 else -50.0) for i, lean in enumerate(leans)],
+                 mirrored=False)
+        got, _ = self.source()(None, "PF_XBTUSD", None, [], [], [], T0, T0 + 80 * HOUR, lambda f: None)
+        self.assertEqual([(t["side"], round(t["net_bp"], 6)) for t in got], [("LONG", 40.0), ("SHORT", 40.0)])
 
     def test_photos_asked_with_another_protocol_never_count(self):
         photo_db(self.exam, [(T0, 0.4, 50.0), (T0 + 6 * HOUR, -0.4, -30.0)], config_hash="otro-protocolo")

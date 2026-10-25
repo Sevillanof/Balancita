@@ -95,6 +95,11 @@ export type GateOverview = {
   runs: GateRun[]
   exam: GateExam
   running: { id: number; strategy_id: string } | null
+  /** Kronos only: its five practice tramos and its exam, cut from its own recorded operation. */
+  stages?: {
+    practice: { label: string; from: string; to: string }[]
+    exam: { label: string; from: string; to: string | null } | null
+  } | null
 }
 
 export type GateRequest = {

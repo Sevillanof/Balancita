@@ -157,7 +157,7 @@ class GateApi:
                 or self.registry._deleted(strategy_id)):
             raise GateApiError("not_found", "No existe la estrategia indicada.", 404)
 
-    def _validate(self, body):
+    def _validate(self, body, strategy_id=None):
         if not isinstance(body, dict):
             raise GateApiError("invalid_body", "El pedido debe ser un objeto.")
         self._mode(body.get("evaluation_mode", evaluation_policy.BASELINE_MODE))
@@ -165,6 +165,7 @@ class GateApi:
         if extra:
             raise GateApiError("invalid_body", "Campos no admitidos: {}.".format(", ".join(sorted(extra))))
         exam = body.get("exam", False)
+        own_window = strategy_gate_models.has_own_history(strategy_id)  # Kronos' exam is its newest tramo
         if not isinstance(exam, bool):
             raise GateApiError("invalid_exam", "El campo 'exam' debe ser verdadero o falso.")
         start = body.get("from")
@@ -175,7 +176,7 @@ class GateApi:
                 datetime.date.fromisoformat(start)
             except ValueError:
                 raise GateApiError("invalid_from", "La fecha 'desde' no es válida.")
-            if exam:
+            if exam and not own_window:
                 raise GateApiError("invalid_from", "El examen siempre usa los últimos meses: no lleva fecha 'desde'.")
         end = body.get("to")
         if end is not None:
@@ -185,7 +186,7 @@ class GateApi:
                 datetime.date.fromisoformat(end)
             except ValueError:
                 raise GateApiError("invalid_to", "La fecha 'hasta' no es válida.")
-            if exam:
+            if exam and not own_window:
                 raise GateApiError("invalid_to", "El examen no lleva fecha 'hasta'.")
         products = body.get("products")
         if products is not None:
@@ -221,7 +222,7 @@ class GateApi:
                 "evaluation_policy": evaluation_policy.metadata(recorded_model=recorded_model)}
 
     def launch(self, strategy_id, body):
-        start, end, products, exam = self._validate(body)
+        start, end, products, exam = self._validate(body, strategy_id)
         preflight = self.preflight(strategy_id, body.get("evaluation_mode", evaluation_policy.BASELINE_MODE))
         scope = preflight["evaluation_policy"]
         args = [self.python, "-m", "balancita_engine.strategy_gate", "--data-dir", self.data_dir, "evaluate",
@@ -311,7 +312,15 @@ class GateApi:
                          for row in rows],
                 "exam": self._exam(strategy_id, lock[0] if lock else None),
                 "running": self._running_public(),
+                "stages": self._own_stages(strategy_id),
                 "passed": {"practice": passed_practice, "exam": passed_exam, "any": passed_practice or passed_exam}}
+
+    def _own_stages(self, strategy_id):
+        """Kronos' five practice tramos and its exam, cut from its own recorded operation; ``None`` for the rest."""
+        if not strategy_gate_models.has_own_history(strategy_id):
+            return None
+        folder = self.kronos_dir or os.path.join(strategy_gate_models.ROOT, "data", "kronos")
+        return strategy_gate_models.kronos_stages(os.path.join(folder, "kronos.sqlite"), int(time.time() * 1000))
 
     def purge(self, strategy_id, wait_s=60.0):
         """Asks a gate process to delete everything it holds about ``strategy_id`` (it is the DB's single writer)."""

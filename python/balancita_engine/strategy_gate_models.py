@@ -10,6 +10,7 @@ window (before the cutoff) has no trades and cannot judge them; the final exam (
 recorded ones. Re-running a model over old candles needs the model itself and hours of compute, and is not done.
 """
 
+import datetime
 import json
 import os
 import sqlite3
@@ -30,6 +31,9 @@ NOTE = ("Este modelo no se puede volver a correr sobre velas viejas desde acá (
         "cálculo): se juzgan las operaciones que ya hizo y quedaron guardadas. Antes de empezar a operar no hay "
         "ninguna, así que la práctica (que termina en la fecha de corte) casi nunca tiene operaciones; el examen "
         "final sí juzga las registradas.")
+KRONOS_NOTE = ("Kronos no se puede volver a correr sobre velas viejas (necesita el modelo local y horas de cálculo): se "
+               "juzgan las operaciones que hizo en tiempo real desde que empezó a operar. Sus etapas son tramos "
+               "consecutivos de esa operación y el examen es el tramo más reciente; se pueden repetir.")
 
 
 def is_model(strategy_id):
@@ -41,6 +45,54 @@ def is_repeatable(strategy_id):
     That is safe only because the gate never feeds anything back to them: it reads what they recorded in real time
     (read-only), never asks them again, and only counts trades made by the configuration under test."""
     return strategy_id in (KRONOS_ID, QWEN_LIVE_ID)
+
+
+_MONTHS = ("ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic")
+KRONOS_STAGE_PARTS = 6      # five practice stages and, last and most recent, the exam
+
+
+def has_own_history(strategy_id):
+    """Kronos' stages are cut from its own recorded operation, not from the 2025 market windows."""
+    return strategy_id == KRONOS_ID
+
+
+def _day_label(day):
+    return "{} {}".format(day.day, _MONTHS[day.month - 1])
+
+
+def kronos_stages(db_path, now_ms, parts=KRONOS_STAGE_PARTS):
+    """Kronos' real operation (forward trades, never the backtest) cut into ``parts`` consecutive tramos of equal
+    trade count, each starting on a whole UTC day. ``{"practice": [...], "exam": {...} | None}``; the exam is the
+    newest tramo and runs to now. Empty when it has not traded."""
+    entries = []
+    if db_path and os.path.isfile(db_path):
+        db = sqlite3.connect("file:{}?mode=ro".format(db_path), uri=True, timeout=10)
+        try:
+            columns = {r[1] for r in db.execute("PRAGMA table_info(trade)")}
+            only_forward = " WHERE mode<>'backtest'" if "mode" in columns else ""
+            for (payload,) in db.execute("SELECT payload FROM trade{}".format(only_forward)):
+                trade = json.loads(payload)
+                if trade.get("net_bp") is not None:
+                    entries.append(int(trade["entry_time_ms"]))
+        except sqlite3.OperationalError:
+            entries = []
+        finally:
+            db.close()
+    if not entries:
+        return {"practice": [], "exam": None}
+    entries.sort()
+    day_of = lambda ms: datetime.datetime.fromtimestamp(ms / 1000, datetime.timezone.utc).date()
+    first, last = day_of(entries[0]), day_of(now_ms)
+    cuts = [first]
+    for i in range(1, parts):
+        day = day_of(entries[len(entries) * i // parts])
+        if day > cuts[-1]:
+            cuts.append(day)
+    ends = cuts[1:] + [last + datetime.timedelta(days=1)]
+    tramos = [{"label": "{}–{}".format(_day_label(a), _day_label(b - datetime.timedelta(days=1))),
+               "from": a.isoformat(), "to": b.isoformat()} for a, b in zip(cuts, ends)]
+    exam = dict(tramos[-1], to=None)
+    return {"practice": tramos[:-1], "exam": exam}
 
 
 def _read(path):
@@ -130,7 +182,8 @@ class RecordedTrades:
 LIVE_NOTE = ("Qwen en vivo se juzga sin llamar al modelo. Práctica (antes de la fecha de corte): las \"fotos\" del pasado "
              "que Qwen ya contestó (examen por fotos, exam-v3.sqlite): largo en el quinto más inclinado a largo y corto en el "
              "quinto más inclinado a corto, como operaciones de 4 h con costos y funding reales, una a la vez por producto. Examen (desde la fecha de corte): sus operaciones reales en paper, "
-             "cerradas; las abiertas no cuentan y Qwen sigue operando mientras tanto.")
+             "cerradas; las abiertas no cuentan y Qwen sigue operando mientras tanto. Si las fotos todavía no tienen la pregunta "
+             "espejo, se ordenan por la inclinación simple (probabilidad de largo menos la de corto), que incluye el vicio del modelo.")
 
 
 class QwenLiveTrades:
@@ -159,8 +212,11 @@ class QwenLiveTrades:
         # config are never mixed in (a changed protocol means asking every photo again).
         if meta.get("config_hash") != qt.config_hash(cfg):
             return []
-        pool = sorted((r for r in rows if r.get("lean_num") not in (None, 0) and r["moves"].get("240") is not None),
-                      key=lambda r: r["lean_num"])
+        # lean_num (the part that comes from the numbers) needs the mirrored question. While the photos have not been
+        # mirrored, the plain lean (p LARGO - p CORTO on the real numbers) orders them: weaker, and said in the report.
+        key = "lean_num" if any(r.get("lean_num") is not None for r in rows) else "lean"
+        pool = sorted((r for r in rows if r.get(key) not in (None, 0) and r["moves"].get("240") is not None),
+                      key=lambda r: r[key])
         k = max(1, int(len(pool) * share)) if pool else 0
         side_of = {r["snap_id"]: -1 for r in pool[:k]}
         side_of.update({r["snap_id"]: 1 for r in pool[len(pool) - k:]})
@@ -221,7 +277,9 @@ def model_subject(strategy_id, kronos_dir=None, qwen_exit_dir=None, qwen_live_di
     kronos_dir = kronos_dir or os.path.join(ROOT, "data", "kronos")
     qwen_exit_dir = qwen_exit_dir or os.path.join(ROOT, "data", "dev-live", "qwen-exit")
     if strategy_id == KRONOS_ID:
-        return model_spec(KRONOS_ID), RecordedTrades(os.path.join(kronos_dir, "kronos.sqlite"), "trade")
+        source = RecordedTrades(os.path.join(kronos_dir, "kronos.sqlite"), "trade")
+        source.note = KRONOS_NOTE
+        return model_spec(KRONOS_ID), source
     if strategy_id == QWEN_ID:
         return model_spec(QWEN_ID), RecordedTrades(os.path.join(qwen_exit_dir, "qwen-exit.sqlite"), "qwen_exit_trade")
     if strategy_id == QWEN_LIVE_ID:
@@ -231,4 +289,4 @@ def model_subject(strategy_id, kronos_dir=None, qwen_exit_dir=None, qwen_live_di
     raise KeyError(strategy_id)
 
 
-__all__ = ["KRONOS_ID", "QWEN_ID", "QWEN_LIVE_ID", "QwenLiveTrades", "is_model", "model_spec", "model_subject", "RecordedTrades", "strategy_purge"]
+__all__ = ["has_own_history", "kronos_stages", "KRONOS_ID", "QWEN_ID", "QWEN_LIVE_ID", "QwenLiveTrades", "is_model", "model_spec", "model_subject", "RecordedTrades", "strategy_purge"]

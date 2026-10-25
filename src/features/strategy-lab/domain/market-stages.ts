@@ -18,7 +18,10 @@ export const MARKET_STAGES: readonly MarketStage[] = [
 const day = (stamp: string | undefined) => (stamp ?? '').slice(0, 10)
 
 /** Stages without a (non-failed) run of this strategy's current content, in order. */
-export function untriedStages(runs: readonly GateRun[]): MarketStage[] {
+export function untriedStages(
+  runs: readonly GateRun[],
+  stages: readonly MarketStage[] = MARKET_STAGES,
+): MarketStage[] {
   const tried = runs.filter(
     (run) =>
       run.kind === 'practice' &&
@@ -26,7 +29,7 @@ export function untriedStages(runs: readonly GateRun[]): MarketStage[] {
       run.status !== 'failed' &&
       run.status !== 'cancelled',
   )
-  return MARKET_STAGES.filter(
+  return stages.filter(
     (stage) =>
       !tried.some(
         (run) =>
@@ -39,7 +42,10 @@ export function untriedStages(runs: readonly GateRun[]): MarketStage[] {
 /** One tab per market stage: the newest finished practice run of the current content in it, or `null` (not tried). */
 export type StageTab = { stage: MarketStage; run: GateRun | null }
 
-export function stageTabs(runs: readonly GateRun[]): StageTab[] {
+export function stageTabs(
+  runs: readonly GateRun[],
+  stages: readonly MarketStage[] = MARKET_STAGES,
+): StageTab[] {
   const done = runs
     .filter(
       (run) =>
@@ -48,7 +54,7 @@ export function stageTabs(runs: readonly GateRun[]): StageTab[] {
         run.same_version !== false,
     )
     .sort((a, b) => b.id - a.id)
-  return MARKET_STAGES.map((stage) => ({
+  return stages.map((stage) => ({
     stage,
     run:
       done.find(

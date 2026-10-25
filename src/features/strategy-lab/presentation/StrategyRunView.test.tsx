@@ -262,6 +262,44 @@ describe('StrategyRunView actions', () => {
     expect(screen.queryByRole('button', { name: 'Examen' })).toBeNull()
   })
 
+  it('Kronos stages come from its own operation and the exam runs over its newest tramo', async () => {
+    const user = userEvent.setup()
+    const practice = [
+      { label: '8 oct–10 oct', from: '2026-10-08', to: '2026-10-11' },
+      { label: '11 oct–13 oct', from: '2026-10-11', to: '2026-10-14' },
+    ]
+    const exam = { label: '14 oct–25 oct', from: '2026-10-14', to: null }
+    const gate = gateWith({ ...overview([]), stages: { practice, exam } })
+    vi.mocked(gate.start).mockResolvedValue({ run_id: 99 })
+    render(
+      <StrategyRunView
+        strategyId="kronos"
+        strategyName="Kronos"
+        version={1}
+        kind="model"
+        gate={gate}
+        visual={visualWith()}
+      />,
+    )
+    await user.click(await screen.findByRole('button', { name: 'Testear' }))
+    const panel = screen.getByRole('group', { name: 'Pruebas seguidas' })
+    await waitFor(() => expect(panel).toHaveTextContent('8 oct–10 oct'))
+    await user.click(within(panel).getByRole('button', { name: 'Empezar' }))
+    await waitFor(() =>
+      expect(gate.start).toHaveBeenCalledWith('kronos', {
+        from: '2026-10-08',
+        to: '2026-10-11',
+      }),
+    )
+    await user.click(await screen.findByRole('button', { name: 'Examen' }))
+    await waitFor(() =>
+      expect(gate.start).toHaveBeenCalledWith('kronos', {
+        exam: true,
+        from: '2026-10-14',
+      }),
+    )
+  })
+
   it('Testear asks how many tests in a row and runs them in distinct stretches', async () => {
     const user = userEvent.setup()
     const tried = run(5, {
