@@ -20,7 +20,10 @@ import os
 import random
 import time
 
+from . import futures_qwen_factors as fq
+from . import futures_qwen_ficha as fficha
 from . import futures_qwen_trader as qt
+from . import positioning_data
 from .futures_costs import round_trip_cost_bps
 
 DAY_MS, MINUTE_MS, BAR_MS = qt.DAY_MS, qt.MINUTE_MS, qt.BAR_MS
@@ -50,6 +53,9 @@ def make_photos(history, cfg, product, holdout_ms):
     if len(bars) < (holdout_ms - (start - practice["warmup_days"] * DAY_MS)) // BAR_MS * 0.98:
         raise qt.TraderError("{}: faltan velas para el examen; ejecutá `prefetch`".format(product))
     trader = qt.Trader(cfg, product, None, history.funding(product), key="exam", entry_threshold=cfg["practice_entry_threshold"])
+    ficha = bool(cfg.get("state_ficha"))
+    if ficha:                                                           # row F6: the collector's database, read-only
+        trader.positioning = positioning_data.PositioningFeed(positioning_path(cfg), product)
     for other in cfg.get("state_context") or ():                        # closes of the other assets shown in the STATE
         trader.context[other] = {int(b["bucket_start"]) + BAR_MS: float(b["close"]) for b in history.bars(
             other, start - practice["warmup_days"] * DAY_MS, holdout_ms)}
@@ -63,17 +69,26 @@ def make_photos(history, cfg, product, holdout_ms):
         reasons = trader.wake_reasons(t_ms)
         if reasons:
             trader.last_call_ms = t_ms               # the same spacing of extra wakes as the live trader
-            found.append((t_ms, reasons, trader.state_text(t_ms, reasons), trader.state_text(t_ms, reasons, mirror=True)))
+            found.append((t_ms, reasons, trader.state_text(t_ms, reasons), trader.state_text(t_ms, reasons, mirror=True),
+                          fficha.numbers(trader, t_ms) if ficha else None))
     cost = float(round_trip_cost_bps(product))
     out = []
-    for t_ms, reasons, state, mirror in found:
+    for t_ms, reasons, state, mirror, numbers in found:
         later = [closes.get(t_ms + h) for h in horizons]
         if None in later:
             continue
-        out.append({"product": product, "t_ms": t_ms, "wake": reasons, "state_text": state, "mirror_text": mirror,
-                    "moves": {str(m): (price / closes[t_ms] - 1) * 1e4 for m, price in zip(exam["horizons_min"], later)},
-                    "cost_bp": cost})
+        photo = {"product": product, "t_ms": t_ms, "wake": reasons, "state_text": state, "mirror_text": mirror,
+                 "moves": {str(m): (price / closes[t_ms] - 1) * 1e4 for m, price in zip(exam["horizons_min"], later)},
+                 "cost_bp": cost}
+        if numbers is not None:
+            photo["ficha"] = numbers                                    # the number of each line, to measure what Qwen reads
+        out.append(photo)
     return out
+
+
+def positioning_path(cfg):
+    """The collector's database: ``cfg["positioning_db"]`` (``--positioning-db``), else the one ``pnpm dev`` writes."""
+    return cfg.get("positioning_db") or positioning_data.default_path()
 
 
 def choose_photos(photos, cfg, holdout_ms):
@@ -110,6 +125,9 @@ def _store_photos(pdb, photos):
             pdb.db.execute("INSERT OR IGNORE INTO exam_snapshots VALUES(?,?,?,?,?,?,?,?,?)", (
                 snap_id(p["product"], p["t_ms"]), p["product"], p["t_ms"], order, json.dumps(p["wake"]), p["state_text"],
                 p["mirror_text"], json.dumps(p["moves"]), p["cost_bp"]))
+            if p.get("ficha") is not None:
+                pdb.db.execute("INSERT OR IGNORE INTO exam_ficha VALUES(?,?)", (snap_id(p["product"], p["t_ms"]),
+                                                                                 json.dumps(p["ficha"])))
 
 
 # --------------------------------------------------------------------------- asking
@@ -125,7 +143,8 @@ def run_exam(history, db_path, provider, cfg, holdout_ms, *, max_minutes=55.0, c
                                  getattr(provider, "base_url", "el puerto local")))
     pdb = qt.PracticeDB(db_path)
     try:
-        pdb.db.executescript(_EXAM_SQL)
+        factors = bool(cfg.get("state_ficha"))          # the factors question (``futures_qwen_factors``) instead of the letters
+        pdb.db.executescript(_EXAM_SQL + (fq.FICHA_SQL if factors else ""))
         qt.check_identity(pdb, cfg, exam_identity(cfg, holdout_ms))
         if not pdb.db.execute("SELECT 1 FROM exam_snapshots LIMIT 1").fetchone():
             photos = []
@@ -135,6 +154,11 @@ def run_exam(history, db_path, provider, cfg, holdout_ms, *, max_minutes=55.0, c
             chosen = choose_photos(photos, cfg, holdout_ms)
             _store_photos(pdb, chosen)
             log("examen: {} fotos posibles, {} elegidas al azar repartidas en el tiempo".format(len(photos), len(chosen)))
+            if factors:
+                with_f6 = sum(1 for p in chosen if (p.get("ficha") or {}).get("F6") is not None)
+                log("ficha: el renglón F6 (posicionamiento y prima) tiene datos en {} de {} fotos (base {}){}".format(
+                    with_f6, len(chosen), positioning_path(cfg), "" if with_f6 else ": no se encontró la base del colector, "
+                    "F6 dice n/d en todas"))
         total = pdb.db.execute("SELECT COUNT(*) FROM exam_snapshots").fetchone()[0]
         # still to ask: photos without an answer, and photos answered before the mirror was asked for every photo (the real
         # answers stay as they are, in ``calls``; a mirror that already failed with a model error is not retried)
@@ -147,8 +171,9 @@ def run_exam(history, db_path, provider, cfg, holdout_ms, *, max_minutes=55.0, c
         served = served_fn() if callable(served_fn) else None
         if served and served not in pdb.meta().get("served_models", []):
             pdb.set_meta("served_models", pdb.meta().get("served_models", []) + [served])
-        decider = qt.LlmDecider(provider, cfg, store=pdb, clock=clock, deadline=clock() + max_minutes * 60.0,
-                                model=served or identity.get("model_ref") or "unknown")
+        model = served or identity.get("model_ref") or "unknown"
+        decider = (fq.FactorsDecider if factors else qt.LlmDecider)(provider, cfg, store=pdb, clock=clock,
+                                                                   deadline=clock() + max_minutes * 60.0, model=model)
         questions = {}
         started, reason, handled = clock(), "done", 0
         log("examen: {} fotos, {} por preguntar, presupuesto {} min, modelo {}".format(
@@ -156,13 +181,17 @@ def run_exam(history, db_path, provider, cfg, holdout_ms, *, max_minutes=55.0, c
         if on_progress:
             on_progress(0, len(pending))
         for row in pending:
-            question = questions.setdefault(row["product"], qt.questions_for(cfg, row["product"])["flat"])
+            if factors:                                # one call per state: 8 gradients (real, then mirrored)
+                ask = lambda step, text: decider.ask(row["snap_id"], row["t_ms"], step, text)
+            else:
+                question = questions.setdefault(row["product"], qt.questions_for(cfg, row["product"])["flat"])
+                ask = lambda step, text: decider.ask(row["snap_id"], row["t_ms"], step, question, text)
             real_action, real_p, mirror_action, mirror_p = row["real_action"], row["real_p"], None, None
             try:
                 if real_action is None:
-                    real = decider.ask(row["snap_id"], row["t_ms"], "action", question, row["state_text"])
+                    real = ask("action", row["state_text"])
                     real_action, real_p = real["chosen"], real["probabilities"][real["chosen"]]
-                mirror = decider.ask(row["snap_id"], row["t_ms"], "mirror", question, row["mirror_text"])
+                mirror = ask("mirror", row["mirror_text"])
                 mirror_action, mirror_p = mirror["chosen"], mirror["probabilities"][mirror["chosen"]]
             except qt.DecisionError:
                 pass                                   # kept as it is (None): counted in the report, never retried
@@ -225,10 +254,14 @@ def quick_summary(db_path, cfg):
     if not block:
         return None
     ok = {c["id"]: c["ok"] for c in result["checks"]}
-    return {"photos": result["n"], "horizon_min": h, "spearman": block["spearman"], "spearman_ci": list(block["sp_ci"]),
-            "extremes_net_bp": block["ext_net"], "extremes_ci": list(block["ext_ci"]), "vs_random_pct": block["ext_pct"],
-            "signals": {"extremes": ok.get("extremes"), "random": ok.get("random"), "spearman": ok.get("spearman")},
-            "note": QUICK_NOTE}
+    summary = {"photos": result["n"], "horizon_min": h, "spearman": block["spearman"], "spearman_ci": list(block["sp_ci"]),
+               "extremes_net_bp": block["ext_net"], "extremes_ci": list(block["ext_ci"]), "vs_random_pct": block["ext_pct"],
+               "signals": {"extremes": ok.get("extremes"), "random": ok.get("random"), "spearman": ok.get("spearman")},
+               "note": QUICK_NOTE}
+    ficha = fq.ficha_summary(rows, cfg["exam"]["horizons_min"])        # only the factors variants have photos with gradients
+    if ficha:
+        summary["ficha"] = ficha
+    return summary
 
 
 def _write_state(path, state):
@@ -298,6 +331,7 @@ def load_answers(db_path):
         leans = {k: (v[0] / v[2], v[1] / v[2]) for k, v in sums.items() if v[2] == ORDERS_PER_QUESTION}
         rows = pdb.db.execute("SELECT s.*, a.real_action, a.real_p, a.mirror_action, a.mirror_p FROM exam_snapshots s "
                               "JOIN exam_answers a USING(snap_id) ORDER BY s.ord").fetchall()
+        factors = fq.load_photo_factors(pdb)                  # photos asked with the factors question (``ficha`` variants)
         out = []
         for r in rows:
             d = dict(r)
@@ -305,6 +339,13 @@ def load_answers(db_path):
             d["p_largo"], d["p_corto"] = leans.get((d["snap_id"], "action"), (None, None))
             d["p_largo_m"], d["p_corto_m"] = leans.get((d["snap_id"], "mirror"), (None, None)) \
                 if d["mirror_action"] is not None else (None, None)
+            if d["snap_id"] in factors:
+                # the lean of a factors photo is the sum of its gradients over 14; it reaches ``split_lean`` as the pair of
+                # probabilities whose difference is that lean, so lean / lean_m / lean_num / habit come out unchanged
+                f = d["factors"] = factors[d["snap_id"]]
+                d["p_largo"], d["p_corto"] = fq.probabilities_for(fq.lean_of(f["real"]))
+                if f["mirror"] is not None:
+                    d["p_largo_m"], d["p_corto_m"] = fq.probabilities_for(fq.lean_of(f["mirror"]))
             d.update(split_lean(d))
             out.append(d)
         return out, pdb.meta()
@@ -655,6 +696,9 @@ def lean_lines(rows, cfg):
                   "respuestas) el espejo invirtió el lado.".format(_rho(hb["mean"]), _rho(hb["median"]), _pct(hb["coherent"]),
                                                                     hb["n"])]
     lines.append("")
+    ficha = fq.ficha_summary(rows, horizons)
+    if ficha:
+        lines += fq.ficha_lines(ficha)
     return lines, a
 
 
