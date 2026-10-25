@@ -57,7 +57,7 @@ import statistics
 import sys
 import time
 import urllib.parse
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 
 from .futures_costs import COST_MODEL_VERSION, fee_rate, side_impact_bps, stop_exit_bps
 from .futures_funding_context import FundingContext, funding_periods
@@ -1116,7 +1116,14 @@ def neighbor_specs(spec, cfg):
             continue
         for direction, factor in (("-{:.0f}%".format(block["pct"] * 100), 1 - block["pct"]),
                                   ("+{:.0f}%".format(block["pct"] * 100), 1 + block["pct"])):
-            value = format(round(base * Decimal(str(factor)), 6).normalize(), "f")
+            moved = base * Decimal(str(factor))
+            if base == base.to_integral_value():
+                # A whole-number parameter (bins, bars, counts) stays whole: a neighbour of 48 is 38 or 58, never 38.4.
+                moved = moved.quantize(Decimal(1), rounding=ROUND_HALF_UP)
+                moved = min(moved, base - 1) if factor < 1 else max(moved, base + 1)
+                if moved < 1:
+                    continue
+            value = format(round(moved, 6).normalize(), "f")
             variant = json.loads(json.dumps(spec))
             variant["params"][name] = value
             out.append((name, direction, value, variant))
