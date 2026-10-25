@@ -36,12 +36,7 @@ import {
 import './terminal-chart-panel.css'
 
 type Overlay =
-  | 'ema9'
-  | 'ema21'
-  | 'bollinger'
-  | 'donchian'
-  | 'vwap'
-  | 'valueArea'
+  'ema9' | 'ema21' | 'bollinger' | 'donchian' | 'vwap' | 'valueArea'
 type Pane = 'flow' | 'oi' | 'liquidations' | 'positioning' | 'premium' | 'rsi'
 
 const OVERLAYS: ReadonlyArray<{ id: Overlay; label: string; color: string }> = [
