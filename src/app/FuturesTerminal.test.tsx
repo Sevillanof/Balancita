@@ -18,7 +18,10 @@ import { reasonLabel } from './terminal-copy.ts'
 
 // The default list of approved strategies is empty (the Terminal shows only
 // Qwen); these tests exercise the verdict rendering itself.
-vi.mock('./terminal-approved.ts', () => ({ isApprovedAnalysis: () => true }))
+vi.mock('./terminal-approved.ts', () => ({
+  isApprovedAnalysis: () => true,
+  approvedChartData: <T,>(input: T) => input,
+}))
 import healthHealthy from '../../docs/mission-control/b1/ejemplo-saludable.json'
 
 type ChartClickParameter = {

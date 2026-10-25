@@ -24,3 +24,41 @@ export function isApprovedAnalysis(value: unknown): boolean {
   if (id === QWEN_STRATEGY_ID) return true
   return typeof id === 'string' && APPROVED_TERMINAL_STRATEGIES.includes(id)
 }
+
+/** An order, fill or position shows on the chart only if its strategy is Qwen's or approved. */
+export function isApprovedStrategyId(id: unknown): boolean {
+  if (typeof id !== 'string') return true
+  if (APPROVED_TERMINAL_STRATEGIES.includes('*')) return true
+  if (id === QWEN_STRATEGY_ID) return true
+  return typeof id === 'string' && APPROVED_TERMINAL_STRATEGIES.includes(id)
+}
+
+/**
+ * Chart data of the Terminal: drops what belongs to other strategies (e.g. the
+ * retired C25/C27 history). Fills carry no strategy: they follow their order. Rows with no strategy id are kept.
+ */
+export function approvedChartData(input: {
+  orders: unknown[]
+  fills: unknown[]
+  positions: unknown[]
+  position: Record<string, unknown>
+}) {
+  const orders = input.orders.filter((order) =>
+    isApprovedStrategyId(record(order).strategy_id),
+  )
+  const dropped = new Set(
+    input.orders
+      .filter((order) => !orders.includes(order))
+      .map((order) => record(order).order_id),
+  )
+  return {
+    orders,
+    fills: input.fills.filter((fill) => !dropped.has(record(fill).order_id)),
+    positions: input.positions.filter((item) =>
+      isApprovedStrategyId(record(item).strategy_id),
+    ),
+    position: isApprovedStrategyId(input.position.strategy_id)
+      ? input.position
+      : {},
+  }
+}
