@@ -1581,14 +1581,15 @@ def _parser():
     ee.add_argument("--offline", action="store_true", help="use only the local cache: no Kraken request at all")
     ee.add_argument("--sequential", action="store_true")
     ee.add_argument("--variant", default=None, metavar="ID",
-                    help="with --quick: a variant of config/qwen-quick-variants.json (other prompt or other model); each one "
-                         "has its own database and state file")
+                    help="a variant of config/qwen-quick-variants.json (other questions). With --quick each has its own "
+                         "database and state file; for the full exam pass its own --exam-db")
     ee.add_argument("--quick", nargs="?", const=150, type=int, default=None, metavar="N",
                     help="quick test: only ~N photos (default 150), in its own database (exam-v3-rapida.sqlite); leaves "
                          "rapida-v3.json for the screen. Orientative: it is not the exam")
     er = sub.add_parser("exam-report", help="v3: Spanish markdown report of the exam (no model)")
     common(er, "3", ("3",))
     er.add_argument("--exam-db", default=DEFAULT_EXAM_DB_V3)
+    er.add_argument("--variant", default=None, metavar="ID", help="report of an exam run with a variant of config/qwen-quick-variants.json")
     er.add_argument("--out", default=os.path.join(DATA_DIR, "informe-examen-v3.md"))
     rp = sub.add_parser("report", help="Spanish markdown report (no model)")
     common(rp, "all", PRACTICE_VERSIONS + ("all",))
@@ -1628,8 +1629,9 @@ def main(argv=None):
             run_probe(args.db, cfg, _provider(args.llama_url), sample=args.sample, seed=args.seed, max_minutes=args.max_minutes,
                       concurrency=1 if args.sequential else None)
         elif args.command == "exam-report":
+            from . import futures_qwen_quick_variants as variants
             from .futures_qwen_trader_exam import build_exam_report
-            text = build_exam_report(args.exam_db, cfg)
+            text = build_exam_report(args.exam_db, variants.apply_variant(cfg, variants.get_variant(args.variant)))
             os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
             with open(args.out, "w", encoding="utf-8") as handle:
                 handle.write(text)
@@ -1662,6 +1664,13 @@ def main(argv=None):
                     state = fail_quick(state_path, variant, str(error))
                 print("prueba rápida {}: {}".format(variant["id"], state["state"]))
                 return
+            if args.variant:
+                # the full exam of a variant: its own version (own questions, hashed in the identity), so give it its own --exam-db
+                from . import futures_qwen_quick_variants as variants
+                variant = variants.get_variant(args.variant)
+                if variant.get("model"):
+                    raise TraderError("el examen completo de una variante de modelo no está soportado")
+                cfg = variants.apply_variant(cfg, variant)
             run_exam(history, args.exam_db, _provider(args.llama_url), cfg, holdout_ms, max_minutes=args.max_minutes)
         elif args.command in ("prefetch", "practice"):
             history = History(args.cache_dir, holdout_ms, offline=getattr(args, "offline", False))
