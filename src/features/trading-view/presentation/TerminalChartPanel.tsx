@@ -11,6 +11,8 @@ import {
   bollinger,
   donchian,
   ema,
+  priorDayValueArea,
+  volumeProfile,
   rsi,
   vwap,
 } from '../domain/chart-indicators.ts'
@@ -34,7 +36,14 @@ import {
 } from '../domain/terminal-chart-model.ts'
 import './terminal-chart-panel.css'
 
-type Overlay = 'ema9' | 'ema21' | 'bollinger' | 'donchian' | 'vwap'
+type Overlay =
+  | 'ema9'
+  | 'ema21'
+  | 'bollinger'
+  | 'donchian'
+  | 'vwap'
+  | 'valueArea'
+  | 'volumeProfile'
 type Pane = 'flow' | 'oi' | 'liquidations' | 'positioning' | 'premium' | 'rsi'
 
 const OVERLAYS: ReadonlyArray<{ id: Overlay; label: string; color: string }> = [
@@ -43,6 +52,8 @@ const OVERLAYS: ReadonlyArray<{ id: Overlay; label: string; color: string }> = [
   { id: 'bollinger', label: 'Bollinger 20', color: '#b48ff0' },
   { id: 'donchian', label: 'Donchian 20', color: '#5fc4d3' },
   { id: 'vwap', label: 'VWAP diario', color: '#e98fc0' },
+  { id: 'valueArea', label: 'Área de valor (día previo)', color: '#d9a066' },
+  { id: 'volumeProfile', label: 'Perfil de volumen (24 h)', color: '#d9a066' },
 ]
 const PANES: ReadonlyArray<{ id: Pane; label: string; live: boolean }> = [
   { id: 'flow', label: 'Compra/venta', live: true },
@@ -135,6 +146,19 @@ function overlayLines(
   }
   if (enabled.includes('vwap'))
     out.push({ id: 'vwap', color: color('vwap'), points: vwap(candles) })
+  if (enabled.includes('valueArea')) {
+    const area = priorDayValueArea(candles)
+    out.push(
+      { id: 'va-vah', color: color('valueArea'), points: area.vah },
+      {
+        id: 'va-poc',
+        color: color('valueArea'),
+        points: area.poc,
+        dashed: true,
+      },
+      { id: 'va-val', color: color('valueArea'), points: area.val },
+    )
+  }
   return out
 }
 
@@ -369,6 +393,12 @@ export default function TerminalChartPanel({
     () => overlayLines(shown, settings.overlays),
     [shown, settings.overlays],
   )
+  const profile = useMemo(() => {
+    if (!settings.overlays.includes('volumeProfile') || shown.length === 0)
+      return null
+    const from = shown[shown.length - 1]!.time - 86_400
+    return volumeProfile(shown.filter((candle) => candle.time > from))
+  }, [shown, settings.overlays])
   const panes = useMemo(
     () =>
       flowPanes(
@@ -684,6 +714,7 @@ export default function TerminalChartPanel({
           instrument={instrument}
           initialViewport="approved-terminal"
           overlays={overlays}
+          profile={profile}
           panes={panes}
           priceLines={lines}
           onSelect={(time, markerId) => {
