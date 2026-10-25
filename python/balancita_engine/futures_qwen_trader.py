@@ -528,6 +528,7 @@ class Trader:
         self.questions = questions_for(cfg, product)
         self.notional = D(cfg["notional_usd"])
         self.t, self.o, self.h, self.l, self.c, self.v, self.lc = [], [], [], [], [], [], []
+        self.context = {}                 # other products' closes {product: {bar end ms: close}} (``state_extras``: otros_activos)
         self.position = None
         self.cooldown_until = 0
         self.last_call_ms = None
@@ -627,6 +628,47 @@ class Trader:
 
     # ---- state text
 
+    def _extra_lines(self, t_ms, sg):
+        """Optional extra context (``cfg['state_extras']``, quick-test variants only): other assets, the hour, and the shape of
+        the range. Everything that has a direction flips with ``sg`` in the mirror; the hour and the sizes do not."""
+        extras = self.cfg.get("state_extras") or ()
+        out, last = [], self.c[-1]
+        if "otros_activos" in extras:
+            parts = []
+            for product, closes in sorted(self.context.items()):
+                now = closes.get(t_ms)
+                rets = []
+                for name, bars in (("1h", H1), ("4h", H4), ("24h", H24)):
+                    before = closes.get(t_ms - bars * BAR_MS)
+                    rets.append("{} {} %".format(name, "n/d" if not now or not before else es(sg * (now / before - 1) * 100, 2, True)))
+                parts.append("{}: {}".format(product.replace("PF_", "").replace("USD", ""), " | ".join(rets)))
+                before = closes.get(t_ms - H4 * BAR_MS)
+                if now and before:
+                    gap = sg * ((last / self.c[-1 - H4] - 1) - (now / before - 1)) * 100
+                    parts.append("fuerza de {} contra el activo en 4h: {} puntos".format(
+                        self.product.replace("PF_", "").replace("USD", ""), es(gap, 2, True)))
+            if parts:
+                out.append("Otros activos (retornos): " + "; ".join(parts))
+        if "hora" in extras:
+            moment = time.gmtime(t_ms / 1000)
+            session = ("Asia" if moment.tm_hour < 8 else "Europa" if moment.tm_hour < 14 else
+                       "EE. UU." if moment.tm_hour < 21 else "cierre de EE. UU. / noche")
+            out.append("Momento: {} {:02d}:00 UTC (sesión de {}).".format(
+                ("lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo")[moment.tm_wday],
+                moment.tm_hour, session))
+        if "volatilidad" in extras:
+            hi24, lo24 = max(self.h[-H24:]), min(self.l[-H24:])
+            ranges = [(max(self.h[-(d + 1) * H24:len(self.h) - d * H24]) - min(self.l[-(d + 1) * H24:len(self.l) - d * H24]))
+                      / last for d in range(7)]
+            since_hi = (len(self.h) - 1 - (len(self.h) - H24 + self.h[-H24:].index(hi24))) * 5 / 60.0
+            since_lo = (len(self.l) - 1 - (len(self.l) - H24 + self.l[-H24:].index(lo24))) * 5 / 60.0
+            if sg < 0:
+                since_hi, since_lo = since_lo, since_hi
+            out.append("Rango de las últimas 24h: {} % (promedio de los últimos 7 días: {} %). Horas desde el máximo de 24h: {} "
+                       "| desde el mínimo de 24h: {}.".format(es((hi24 - lo24) / last * 100, 2), es(math.fsum(ranges) / 7 * 100, 2),
+                                                             es(since_hi, 1), es(since_lo, 1)))
+        return out
+
     def state_text(self, t_ms, reasons, mirror=False):
         """The STATE shown to Qwen. ``mirror`` (v3, flat only): the same market with the signs turned over (what went up went
         down; highs and lows swapped; funding with the opposite sign). Volatility, volume and costs do not change."""
@@ -679,6 +721,7 @@ class Trader:
                 "" if pct is None else ", percentil {} de los ultimos 30 dias".format(int(round(pct)))))
         lines.append("Costo de entrar y salir: ~{} % del tamaño".format(
             es(float(round_trip_cost_bps(self.product)) / 100.0, 2)))
+        lines.extend(self._extra_lines(t_ms, sg))
         guard = self.cfg["guardrails"]
         if self.cfg.get("state_variant", 1) >= 3:
             return self._state_v3(lines, t_ms, sigma5)
@@ -1637,19 +1680,21 @@ def main(argv=None):
                 handle.write(text)
             print("informe del examen escrito en {}".format(args.out))
         elif args.command == "exam":
+            from . import futures_qwen_quick_variants as variants
             from .futures_qwen_trader_exam import run_exam
+            variant = variants.get_variant(args.variant) if args.variant or args.quick is not None else None
+            if variant is not None and variant.get("model") is None:
+                cfg = variants.apply_variant(cfg, variant)       # its own questions / state: hashed in the identity
             history = History(args.cache_dir, holdout_ms, offline=args.offline)
             if not history.offline:
-                for product in cfg["exam"]["products"]:
+                for product in list(cfg["exam"]["products"]) + list(cfg.get("state_context") or ()):
                     print("candles {}: {} a {}".format(product, cfg["practice"]["from"], stamp(holdout_ms)))
                     history.prefetch(product, date_ms(cfg["practice"]["from"]) - cfg["practice"]["warmup_days"] * DAY_MS,
                                      holdout_ms)
             if args.sequential:
                 cfg = dict(cfg, runtime=dict(cfg.get("runtime") or {}, concurrent_orders=False))
             if args.quick is not None:
-                from . import futures_qwen_quick_variants as variants
                 from .futures_qwen_trader_exam import fail_quick, run_quick
-                variant = variants.get_variant(args.variant)
                 base = os.path.dirname(os.path.abspath(args.exam_db))
                 quick_db = os.path.join(base, variants.db_name(variant["id"]))
                 state_path = os.path.join(base, variants.state_name(variant["id"]))
@@ -1657,20 +1702,17 @@ def main(argv=None):
                     server = variants.ModelServer(variant["model"]) if variant.get("model") else None
                     with server or contextlib.nullcontext():
                         url = server.url if server else args.llama_url
-                        state = run_quick(history, quick_db, _provider(url), variants.apply_variant(cfg, variant), holdout_ms,
+                        if server:
+                            cfg = variants.apply_variant(cfg, variant)
+                        state = run_quick(history, quick_db, _provider(url), cfg, holdout_ms,
                                           snapshots=args.quick, max_minutes=args.max_minutes, state_path=state_path,
                                           variant=variant)
                 except variants.VariantError as error:
                     state = fail_quick(state_path, variant, str(error))
                 print("prueba rápida {}: {}".format(variant["id"], state["state"]))
                 return
-            if args.variant:
-                # the full exam of a variant: its own version (own questions, hashed in the identity), so give it its own --exam-db
-                from . import futures_qwen_quick_variants as variants
-                variant = variants.get_variant(args.variant)
-                if variant.get("model"):
-                    raise TraderError("el examen completo de una variante de modelo no está soportado")
-                cfg = variants.apply_variant(cfg, variant)
+            if variant is not None and variant.get("model"):
+                raise TraderError("el examen completo de una variante de modelo no está soportado")
             run_exam(history, args.exam_db, _provider(args.llama_url), cfg, holdout_ms, max_minutes=args.max_minutes)
         elif args.command in ("prefetch", "practice"):
             history = History(args.cache_dir, holdout_ms, offline=getattr(args, "offline", False))

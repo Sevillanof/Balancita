@@ -25,10 +25,10 @@ class VariantConfigTests(unittest.TestCase):
         for variant in qv.load_variants():
             applied = qv.apply_variant(CFG3, variant)
             hashes[variant["id"]] = qt.config_hash(applied)
-            self.assertEqual(variant["kind"] == "prompt", applied["prompt"]["version"] != CFG3["prompt"]["version"])
+            self.assertEqual(variant["kind"] in ("prompt", "state"), applied["prompt"]["version"] != CFG3["prompt"]["version"])
             self.assertEqual((variant["kind"] == "model"), "model" in variant)
         self.assertEqual(qt.config_hash(CFG3), before)
-        prompt_variants = [h for k, h in hashes.items() if k.startswith("p")]
+        prompt_variants = [h for k, h in hashes.items() if k.startswith(("p", "e"))]
         self.assertEqual(len(set(prompt_variants + [hashes[qv.CONTROL]])), len(prompt_variants) + 1)
         for variant in qv.load_variants():                            # model variants ask the same questions as the control
             if variant["kind"] == "model":
@@ -48,6 +48,32 @@ class VariantConfigTests(unittest.TestCase):
                 self.assertIn("CORTO", [o["id"] for o in flat["options"]])
             if variant.get("model"):
                 self.assertNotEqual(variant["model"]["port"], 8088)       # never the live operator's server
+
+    def test_the_state_variant_adds_context_lines_and_the_mirror_flips_only_what_has_a_direction(self):
+        variant = qv.get_variant("e123-contexto")
+        cfg = qv.apply_variant(cfg3(), variant)
+        cfg["state_context"] = ["PF_ETHUSD"]                        # the test series only has these two assets
+        history = MemHistory()
+        practice = cfg["practice"]
+        start = qt.date_ms(practice["from"])
+        bars = history.bars("PF_XBTUSD", start - practice["warmup_days"] * qt.DAY_MS, HOLDOUT)
+        trader = qt.Trader(cfg, "PF_XBTUSD", None, history.funding("PF_XBTUSD"), key="t", entry_threshold=0.5)
+        trader.context["PF_ETHUSD"] = {int(b["bucket_start"]) + qt.BAR_MS: float(b["close"]) for b in history.bars(
+            "PF_ETHUSD", start - practice["warmup_days"] * qt.DAY_MS, HOLDOUT)}
+        for bar in bars[:qt.MIN_BARS + 400]:
+            trader.feed(bar, trade=False)
+        t_ms = int(bars[qt.MIN_BARS + 399]["bucket_start"]) + qt.BAR_MS
+        real, mirror = trader.state_text(t_ms, ["hora_cerrada"]), trader.state_text(t_ms, ["hora_cerrada"], mirror=True)
+        for needle in ("Otros activos (retornos):", "Momento:", "Rango de las últimas 24h:"):
+            self.assertIn(needle, real)
+        line = lambda text, head: next(x for x in text.splitlines() if x.startswith(head))
+        self.assertEqual(line(real, "Momento:"), line(mirror, "Momento:"))               # the hour does not flip
+        self.assertNotEqual(line(real, "Otros activos"), line(mirror, "Otros activos"))  # the returns do
+        self.assertIn("Horas desde el máximo", line(real, "Rango"))
+        plain = trader.state_text(t_ms, ["hora_cerrada"])
+        trader.cfg = CFG3
+        self.assertNotIn("Momento:", trader.state_text(t_ms, ["hora_cerrada"]))          # off by default
+        self.assertEqual(plain, real)
 
     def test_unknown_variant(self):
         with self.assertRaises(qv.VariantError):

@@ -24,7 +24,7 @@ export type QuickSummary = {
 export type QuickVariant = {
   id: string
   label: string
-  kind: 'control' | 'prompt' | 'model'
+  kind: 'control' | 'prompt' | 'state' | 'model'
   note?: string | null
   /** Size of the model to have on the Mac, for the model variants. */
   approx_gb?: number | null

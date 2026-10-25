@@ -50,6 +50,9 @@ def make_photos(history, cfg, product, holdout_ms):
     if len(bars) < (holdout_ms - (start - practice["warmup_days"] * DAY_MS)) // BAR_MS * 0.98:
         raise qt.TraderError("{}: faltan velas para el examen; ejecutá `prefetch`".format(product))
     trader = qt.Trader(cfg, product, None, history.funding(product), key="exam", entry_threshold=cfg["practice_entry_threshold"])
+    for other in cfg.get("state_context") or ():                        # closes of the other assets shown in the STATE
+        trader.context[other] = {int(b["bucket_start"]) + BAR_MS: float(b["close"]) for b in history.bars(
+            other, start - practice["warmup_days"] * DAY_MS, holdout_ms)}
     closes, found = {}, []
     for bar in bars:
         trader.feed(bar, trade=False)

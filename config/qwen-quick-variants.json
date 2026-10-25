@@ -86,6 +86,40 @@
           ]
         }
       }
+    },
+    {
+      "id": "e123-contexto",
+      "label": "Dirección pura + contexto (otros activos, hora, volatilidad)",
+      "kind": "state",
+      "prompt_version": 5.1,
+      "note": "La pregunta de p1-direccion con tres datos extra en el estado: retornos de ETH y SOL y fuerza relativa de BTC, hora y día (sesión), y forma del rango de 24 h. Mismas fotos que p1-direccion, así que se compara directo.",
+      "prompt": {
+        "flat": {
+          "id": "trader_flat_direccion",
+          "version": 4.1,
+          "type": "choice",
+          "instruction": "Con el estado de abajo, ¿dentro de 4 horas es más probable que el precio esté más alto o más bajo que ahora? Elegí siempre una de las dos, aunque la diferencia sea chica.",
+          "options": [
+            {
+              "id": "LARGO",
+              "description": "más alto dentro de 4 horas"
+            },
+            {
+              "id": "CORTO",
+              "description": "más bajo dentro de 4 horas"
+            }
+          ]
+        }
+      },
+      "state_extras": [
+        "otros_activos",
+        "hora",
+        "volatilidad"
+      ],
+      "state_context": [
+        "PF_ETHUSD",
+        "PF_SOLUSD"
+      ]
     }
   ]
 }
