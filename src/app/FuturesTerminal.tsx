@@ -22,7 +22,7 @@ import type { DecisionRow } from './terminal-decisions.ts'
 import SelectedDecision from './SelectedDecision.tsx'
 import { markerGap, markerGapNote } from './terminal-markers.ts'
 import TerminalMarketChart from './TerminalMarketChart.tsx'
-import { isApprovedAnalysis } from './terminal-approved.ts'
+import { approvedChartData, isApprovedAnalysis } from './terminal-approved.ts'
 import { qwenNotice, useQwenDecisions } from './useQwenDecisions.ts'
 import QwenTradesPanel from './QwenTradesPanel.tsx'
 import {
@@ -431,10 +431,22 @@ export default function FuturesTerminal({
                       record(bootstrap.market).ticker_stats ??
                       null) as TerminalTickerStats | null
                   }
-                  position={position}
-                  positions={positions}
-                  orders={orders}
-                  fills={fills}
+                  {...approvedChartData({
+                    orders,
+                    fills,
+                    positions: positions ?? [],
+                    position,
+                  })}
+                  positions={
+                    positions
+                      ? approvedChartData({
+                          orders: [],
+                          fills: [],
+                          positions,
+                          position,
+                        }).positions
+                      : undefined
+                  }
                   quantityUnit={
                     typeof state?.quantity_unit === 'string'
                       ? state.quantity_unit
