@@ -329,7 +329,11 @@ export default function StrategyRunView({
 
   // One tab per market stage, each one a run. By default the chart follows the newest finished run;
   // a stage picked by hand stays. With no stage tried, the newest finished runs are shown as one tab.
-  const tabs = useMemo(() => stageTabs(overview?.runs ?? []), [overview])
+  const stageList = overview?.stages?.practice ?? MARKET_STAGES
+  const tabs = useMemo(
+    () => stageTabs(overview?.runs ?? [], stageList),
+    [overview, stageList],
+  )
   const triedTabs = useMemo(
     () => tabs.filter((tab) => tab.run !== null),
     [tabs],
@@ -537,8 +541,8 @@ export default function StrategyRunView({
   // they recorded in real time, so a repetition never hands them a result.
   const repeatable = kind === 'qwen_live' || kind === 'model'
   const untried = repeatable
-    ? [...MARKET_STAGES]
-    : untriedStages(overview?.runs ?? [])
+    ? [...stageList]
+    : untriedStages(overview?.runs ?? [], stageList)
   const count = Math.min(Math.max(howMany, 1), Math.max(untried.length, 1))
   const plan = untried.slice(0, count)
   const testNote = repeatable
@@ -588,13 +592,23 @@ export default function StrategyRunView({
       }
     }
   }
+  const examStage = overview?.stages?.exam ?? null
   /** The final exam (everything since the cut): only Qwen and Kronos can repeat it. */
   const runExam = async () => {
     setPanelOpen(false)
     setTesting(true)
     setTestError(null)
     try {
-      const started = await gate.start(strategyId, { exam: true })
+      const started = await gate.start(
+        strategyId,
+        examStage
+          ? {
+              exam: true,
+              from: examStage.from,
+              ...(examStage.to ? { to: examStage.to } : {}),
+            }
+          : { exam: true },
+      )
       let latest = await gate.overview(strategyId)
       while (latest.running != null) {
         setOverview(latest)
@@ -1020,7 +1034,7 @@ export default function StrategyRunView({
               })}
             </div>
             <p className="runview__hint" data-testid="stage-count">
-              {triedTabs.length} de {MARKET_STAGES.length} tramos probados
+              {triedTabs.length} de {stageList.length} tramos probados
             </p>
           </div>
         )}

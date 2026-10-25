@@ -1236,20 +1236,25 @@ def evaluate(strategy_id, *, kind="practice", from_date=None, to_date=None, prod
         raise GateError("el id de la especificación ({}) no coincide con --strategy ({})".format(spec["id"], strategy_id))
     holdout_ms = _date_ms(cfg["holdout_from"])
     now_ms = (now_ms if now_ms is not None else _now_ms()) // MINUTE_MS * MINUTE_MS
+    # Kronos' stages are tramos of its own recorded operation (after the cut): nothing was ever hidden from it there.
+    own_history = strategy_models.has_own_history(strategy_id)
     if kind == "exam":
-        if from_date or to_date:
+        if (from_date or to_date) and not own_history:
             raise GateError("El examen siempre evalúa desde la fecha de corte ({}); --from y --to solo valen en la práctica."
                             .format(cfg["holdout_from"]))
-        start_ms, end_ms = holdout_ms, now_ms
+        start_ms, end_ms = (_date_ms(from_date) if from_date else holdout_ms), (_date_ms(to_date) if to_date else now_ms)
+        end_ms = min(end_ms, now_ms)
         if end_ms - start_ms < MINUTE_MS:
             raise GateError("Todavía no hay datos posteriores a la fecha de corte.")
     else:
         start_ms, end_ms = _date_ms(from_date or cfg["default_from"]), holdout_ms
-        if start_ms >= holdout_ms:
+        if start_ms >= holdout_ms and not own_history:
             raise GateError("La práctica no puede empezar en o después de la fecha de corte ({}).".format(cfg["holdout_from"]))
         if to_date:  # one market stage: the practice never goes past the holdout cut
             end_ms = _date_ms(to_date)
-            if end_ms > holdout_ms:
+            if own_history:
+                end_ms = min(end_ms, now_ms)
+            elif end_ms > holdout_ms:
                 raise GateError("La práctica no puede terminar después de la fecha de corte ({}).".format(cfg["holdout_from"]))
             if end_ms <= start_ms:
                 raise GateError("La práctica tiene que terminar después de la fecha de inicio.")
