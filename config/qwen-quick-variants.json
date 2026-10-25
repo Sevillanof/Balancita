@@ -1,6 +1,6 @@
 {
   "schema": "balancita-qwen-quick-variants.v1",
-  "note": "Variantes candidatas de Qwen para la Prueba rápida (/Estrategias > Qwen en vivo). Cada una es una versión aparte: su propia base y su propio estado, sin heredar resultados. Las fotos son las mismas para todas (misma semilla), así que los números se pueden comparar. Qwen en vivo NO cambia con esto: solo cambia lo que se le pregunta a la prueba. 'prompt' reemplaza partes de qwen-trader-v3.json (system y/o la pregunta 'flat'); 'model' hace que la prueba levante su propio llama-server (solo 127.0.0.1, --offline, nada se descarga) y lo apague al terminar.",
+  "note": "Variantes candidatas de Qwen para la Prueba rápida (/Estrategias > Qwen en vivo). Cada una es una versión aparte: su propia base y su propio estado, sin heredar resultados. Las fotos son las mismas para todas (misma semilla), así que los números se pueden comparar. Qwen en vivo NO cambia con esto: solo cambia lo que se le pregunta a la prueba. 'prompt' reemplaza partes de qwen-trader-v3.json (system y/o la pregunta 'flat'); Por pedido de Fran (25-oct) no hay variantes de modelo: se usa el que ya tiene Qwen en vivo. (El código admite 'model', pero no se usa.)",
   "variants": [
     {
       "id": "actual",
@@ -20,8 +20,14 @@
           "type": "choice",
           "instruction": "Con el estado de abajo, ¿dentro de 4 horas es más probable que el precio esté más alto o más bajo que ahora? Elegí siempre una de las dos, aunque la diferencia sea chica.",
           "options": [
-            {"id": "LARGO", "description": "más alto dentro de 4 horas"},
-            {"id": "CORTO", "description": "más bajo dentro de 4 horas"}
+            {
+              "id": "LARGO",
+              "description": "más alto dentro de 4 horas"
+            },
+            {
+              "id": "CORTO",
+              "description": "más bajo dentro de 4 horas"
+            }
           ]
         }
       }
@@ -39,9 +45,18 @@
           "type": "choice",
           "instruction": "No tenés ninguna posición. Si abrís una ahora, se cierra sola a las 4 horas (no podés cerrarla antes). Entrar y salir cuesta ~{cost} % del tamaño. Con el estado de abajo, ¿qué hacés? Abrí solo si esperás que el precio dentro de 4 horas se mueva claramente a tu favor; si no, esperá.",
           "options": [
-            {"id": "LARGO", "description": "abrir una posición larga (apostás a que dentro de 4 horas está más alto)"},
-            {"id": "CORTO", "description": "abrir una posición corta (apostás a que dentro de 4 horas está más bajo)"},
-            {"id": "ESPERAR", "description": "no operar ahora"}
+            {
+              "id": "LARGO",
+              "description": "abrir una posición larga (apostás a que dentro de 4 horas está más alto)"
+            },
+            {
+              "id": "CORTO",
+              "description": "abrir una posición corta (apostás a que dentro de 4 horas está más bajo)"
+            },
+            {
+              "id": "ESPERAR",
+              "description": "no operar ahora"
+            }
           ]
         }
       }
@@ -60,32 +75,17 @@
           "type": "choice",
           "instruction": "Con el estado de abajo y la regla empírica, ¿dentro de 4 horas es más probable que el precio esté más alto o más bajo que ahora? Elegí siempre una de las dos.",
           "options": [
-            {"id": "LARGO", "description": "más alto dentro de 4 horas"},
-            {"id": "CORTO", "description": "más bajo dentro de 4 horas"}
+            {
+              "id": "LARGO",
+              "description": "más alto dentro de 4 horas"
+            },
+            {
+              "id": "CORTO",
+              "description": "más bajo dentro de 4 horas"
+            }
           ]
         }
       }
-    },
-    {
-      "id": "m1-qwen3-8b",
-      "label": "Modelo: Qwen3 8B (Q4_K_M)",
-      "kind": "model",
-      "note": "El doble de parámetros que el actual (4B), misma familia. ~5 GB.",
-      "model": {"file": "Qwen3-8B-Q4_K_M.gguf", "hf": "unsloth/Qwen3-8B-GGUF:Q4_K_M", "approx_gb": 5.0, "port": 8090}
-    },
-    {
-      "id": "m2-gemma3-4b",
-      "label": "Modelo: Gemma 3 4B (Q8_0)",
-      "kind": "model",
-      "note": "Otra familia con el mismo tamaño que el actual, para ver si el problema es de Qwen. ~4.1 GB.",
-      "model": {"file": "gemma-3-4b-it-Q8_0.gguf", "hf": "unsloth/gemma-3-4b-it-GGUF:Q8_0", "approx_gb": 4.1, "port": 8090}
-    },
-    {
-      "id": "m3-qwen3-14b",
-      "label": "Modelo: Qwen3 14B (Q4_K_M)",
-      "kind": "model",
-      "note": "El más grande que entraría en una Mac de 24 GB o más. ~9 GB.",
-      "model": {"file": "Qwen3-14B-Q4_K_M.gguf", "hf": "unsloth/Qwen3-14B-GGUF:Q4_K_M", "approx_gb": 9.0, "port": 8090}
     }
   ]
 }

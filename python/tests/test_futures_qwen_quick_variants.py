@@ -141,7 +141,7 @@ class VariantApiTests(unittest.TestCase):
         with open(os.path.join(self.dir.name, qv.state_name("p2-horizonte")), "w", encoding="utf-8") as handle:
             json.dump({"state": "running", "pid": os.getpid(), "started_ms": 5}, handle)
         with self.assertRaises(GateApiError) as busy:
-            self.api.launch(models.QWEN_LIVE_ID, "m1-qwen3-8b")
+            self.api.launch(models.QWEN_LIVE_ID, "p3-reversion")
         self.assertEqual(busy.exception.status, 409)
         self.assertEqual(self.api.status(models.QWEN_LIVE_ID)["variant"], "p2-horizonte")   # the last one started
 
