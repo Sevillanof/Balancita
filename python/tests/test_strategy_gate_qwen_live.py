@@ -15,14 +15,23 @@ LIVE_T0 = 1_792_000_000_000 // HOUR * HOUR     # after it
 
 
 def photo_db(path, photos):
+    """``photos``: (t_ms, lean, move_240); the lean is the real-numbers lean, the mirror leans the other way."""
     pdb = qt.PracticeDB(path)
     pdb.db.executescript(ex._EXAM_SQL)
     with pdb.db:
-        for order, (t_ms, action, mirror, move) in enumerate(photos):
+        for order, (t_ms, lean, move) in enumerate(photos):
             sid = ex.snap_id("PF_XBTUSD", t_ms)
             pdb.db.execute("INSERT INTO exam_snapshots VALUES(?,?,?,?,?,?,?,?,?)",
                            (sid, "PF_XBTUSD", t_ms, order, "[]", "s", "m", json.dumps({"240": move, "1440": 0}), 10.0))
-            pdb.db.execute("INSERT INTO exam_answers VALUES(?,?,?,?,?,?)", (sid, action, 0.9, mirror, 0.9, 0))
+            pdb.db.execute("INSERT INTO exam_answers VALUES(?,?,?,?,?,?)",
+                           (sid, "ESPERAR", 0.9, "ESPERAR", 0.9, 0))
+            for step, signed in (("action", lean), ("mirror", -lean)):
+                for variant in (0, 1):
+                    pdb.put_call({"key": sid, "t_ms": t_ms, "step": step, "variant": variant, "order": [0, 1, 2],
+                                  "probabilities": {"LARGO": 0.5 + signed / 2, "CORTO": 0.5 - signed / 2, "ESPERAR": 0.0},
+                                  "chosen": "ESPERAR", "confidence": 0.5, "source": "t", "latency_ms": 1,
+                                  "prompt_hash": "h", "prompt_version": 1, "state_hash": "x", "model": "m",
+                                  "asked_at_ms": 0})
     pdb.close()
 
 
@@ -62,16 +71,19 @@ class QwenLiveTradesTests(unittest.TestCase):
         none, _ = self.source()(None, "PF_XBTUSD", None, [], [], [], T0, T0 + HOUR, lambda f: None)
         self.assertEqual(none, [])
 
-    def test_photos_become_one_position_at_a_time_after_costs(self):
-        photo_db(self.exam, [(T0, "LARGO", "CORTO", 50.0),
-                             (T0 + HOUR, "LARGO", "CORTO", 80.0),          # still inside the 4 h of the first one
-                             (T0 + 5 * HOUR, "CORTO", "LARGO", 30.0),
-                             (T0 + 9 * HOUR, "LARGO", "LARGO", 99.0),      # the mirror blocks it
-                             (T0 + 12 * HOUR, "ESPERAR", "ESPERAR", 99.0)])
-        got, _ = self.source()(None, "PF_XBTUSD", None, [], [], [], T0, T0 + 30 * HOUR, lambda f: None)
-        self.assertEqual([(t["side"], round(t["net_bp"], 6)) for t in got], [("LONG", 40.0), ("SHORT", -40.0)])
+    def test_photos_follow_the_lean_extremes_even_when_qwen_always_waits(self):
+        leans = [0.4, 0.1, -0.1, 0.05, -0.05, -0.4, 0.0, 0.02, -0.02, 0.01]
+        photo_db(self.exam, [(T0 + 5 * HOUR * i, lean, 50.0 if lean > 0 else -50.0) for i, lean in enumerate(leans)])
+        got, _ = self.source()(None, "PF_XBTUSD", None, [], [], [], T0, T0 + 80 * HOUR, lambda f: None)
+        self.assertEqual([(t["side"], round(t["net_bp"], 6)) for t in got], [("LONG", 40.0), ("SHORT", 40.0)])
         self.assertEqual(got[0]["exit_time_ms"] - got[0]["entry_time_ms"], models.LIVE_HOLD_MS)
         self.assertEqual({t["funding_status"] for t in got}, {"unknown"})
+
+    def test_photo_positions_do_not_overlap(self):
+        photo_db(self.exam, [(T0, 0.4, 50.0), (T0 + HOUR, 0.39, 80.0), (T0 + 6 * HOUR, -0.4, -30.0),
+                             (T0 + 12 * HOUR, 0.0, 0.0), (T0 + 18 * HOUR, 0.0, 0.0)])
+        got, _ = self.source()(None, "PF_XBTUSD", None, [], [], [], T0, T0 + 80 * HOUR, lambda f: None)
+        self.assertEqual([t["entry_time_ms"] for t in got], [T0, T0 + 6 * HOUR])
 
     def test_missing_files_give_no_trades(self):
         got, _ = self.source()(None, "PF_XBTUSD", None, [], [], [], T0, T0 + HOUR, lambda f: None)

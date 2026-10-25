@@ -98,8 +98,8 @@ class RecordedTrades:
 
 
 LIVE_NOTE = ("Qwen en vivo se juzga sin llamar al modelo. Práctica (antes de la fecha de corte): las \"fotos\" del pasado "
-             "que Qwen ya contestó (examen por fotos, exam-v3.sqlite), convertidas en operaciones de 4 h con costos y "
-             "funding reales, una a la vez por producto. Examen (desde la fecha de corte): sus operaciones reales en paper, "
+             "que Qwen ya contestó (examen por fotos, exam-v3.sqlite): largo en el quinto más inclinado a largo y corto en el "
+             "quinto más inclinado a corto, como operaciones de 4 h con costos y funding reales, una a la vez por producto. Examen (desde la fecha de corte): sus operaciones reales en paper, "
              "cerradas; las abiertas no cuentan y Qwen sigue operando mientras tanto.")
 
 
@@ -112,26 +112,32 @@ class QwenLiveTrades:
         self.live_db_path, self.exam_db_path = live_db_path, exam_db_path
 
     def photo_trades(self, product_id, funding):
+        """The extremes of the lean (the exam's own criterion): long on the fifth of photos where the numbers lean most
+        to LARGO, short on the fifth that lean most to CORTO. Qwen almost never answers LARGO/CORTO outright, so the
+        entries come from its probabilities, not from its chosen action."""
         if not self.exam_db_path or not os.path.isfile(self.exam_db_path):
             return []
         from . import futures_qwen_trader as qt
         from . import futures_qwen_trader_exam as exam
-        threshold = qt.load_config(qt.CONFIG_PATH_V3)["practice_entry_threshold"]
+        share = qt.load_config(qt.CONFIG_PATH_V3)["exam_lean"]["extreme_share"]
         try:
             rows, _ = exam.load_answers(self.exam_db_path)
         except sqlite3.OperationalError:
             return []
+        pool = sorted((r for r in rows if r.get("lean_num") not in (None, 0) and r["moves"].get("240") is not None),
+                      key=lambda r: r["lean_num"])
+        k = max(1, int(len(pool) * share)) if pool else 0
+        side_of = {r["snap_id"]: -1 for r in pool[:k]}
+        side_of.update({r["snap_id"]: 1 for r in pool[len(pool) - k:]})
         line = qt.FundingLine([(r[0], r[1]) for r in funding]) if funding else None
         out, free_at = [], 0
-        for row in sorted((r for r in rows if r["product"] == product_id and exam.classify(r, threshold) == "pasa"),
+        for row in sorted((r for r in pool if r["product"] == product_id and r["snap_id"] in side_of),
                           key=lambda r: r["t_ms"]):
             entry = int(row["t_ms"])
             if entry < free_at:                     # one position at a time, like the live operator
                 continue
-            move = row["moves"].get("240")
-            if move is None:
-                continue
-            long = row["real_action"] == "LARGO"
+            long = side_of[row["snap_id"]] > 0
+            move = row["moves"]["240"]
             end = entry + LIVE_HOLD_MS
             paid, covered = line.accrue(entry, end, 100.0, long) if line is not None else (0.0, 0)
             funding_bp = float(paid) / 100.0 * 10_000
