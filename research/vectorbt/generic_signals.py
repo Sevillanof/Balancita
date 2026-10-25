@@ -11,6 +11,9 @@ compiled version of the strategy's own exit rule. The semantics are those of the
   gates, the checks, ``sides.requires`` (LONG wins a tie), stop / target (tick rounding, ``risk.vol`` in log scale, a
   ``target`` operand), and the engine's minimum-cost filter (a target that does not clear the round trip cost is skipped);
 * ``regime_adapter`` specs: each branch is evaluated and kept only on the bars where the regime selects it.
+* the value area (``indicators.valuearea``; features ``5m.poc / vah / val / vaside / vaout / vain``): the volume profile of the
+  ``window`` closed 5m bars before each bar and, ``confirm`` bars after a close outside it, how many closes stayed outside
+  (``_valuearea``, same arithmetic as ``indicator_catalog._profile``). One configuration per spec, 5m series only.
 
 Anything the closed language can express but this evaluator cannot reproduce raises ``UnsupportedSpec`` with a message in
 Spanish that names what is missing. Nothing is ignored in silence.
@@ -37,7 +40,7 @@ from numba import njit
 from . import data_contract as contract
 from .engine import DEFAULT_PERIODS, declared_indicators, futures_costs, merge_periods
 from balancita_engine.canonical import canonical_hash
-from balancita_engine.futures_spec_strategy import SpecError, validate_spec
+from balancita_engine.futures_spec_strategy import AREA_FEATURES, SpecError, validate_spec
 
 MINIMUM_CANDLES = 50
 COST_BUFFER_RATE = 0.0002
@@ -272,6 +275,89 @@ def _donchian(h, l, v, p):
     return hi, lo, vm
 
 
+@njit(cache=True)
+def _area(h, l, v, start, end, pct, bins):
+    """(poc, vah, val) of the volume profile of bars ``start`` .. ``end - 1``; NaN when it has no range or no volume.
+
+    The same rule and the same order of operations as ``indicator_catalog._profile`` (and ``valueArea`` of the Terminal): each
+    volume is spread evenly over the bins its high-low range touches; the area grows from the POC toward the heavier
+    neighbour (the upper one on a tie) until it holds ``pct`` % of the volume."""
+    low = l[start]
+    high = h[start]
+    for j in range(start + 1, end):
+        low = min(low, l[j])
+        high = max(high, h[j])
+    span = high - low
+    if not span > 0.0:
+        return np.nan, np.nan, np.nan
+    volume = np.zeros(bins)
+    last_bin = bins - 1
+    for j in range(start, end):
+        if not v[j] > 0.0:
+            continue
+        first = min(last_bin, max(0, int(np.floor((l[j] - low) * bins / span))))
+        last = min(last_bin, max(0, int(np.floor((h[j] - low) * bins / span))))
+        share = v[j] / (last - first + 1)
+        for k in range(first, last + 1):
+            volume[k] += share
+    total = 0.0
+    for k in range(bins):
+        total += volume[k]
+    if not total > 0.0:
+        return np.nan, np.nan, np.nan
+    poc = 0
+    for k in range(1, bins):
+        if volume[k] > volume[poc]:
+            poc = k
+    lo = poc
+    hi = poc
+    held = volume[poc]
+    while held * 100.0 < total * pct and (lo > 0 or hi < last_bin):
+        below = volume[lo - 1] if lo > 0 else -1.0
+        above = volume[hi + 1] if hi < last_bin else -1.0
+        if above >= below:
+            hi += 1
+            held += volume[hi]
+        else:
+            lo -= 1
+            held += volume[lo]
+    return low + span * (poc * 2 + 1) / (2.0 * bins), low + span * (hi + 1) / bins, low + span * lo / bins
+
+
+@njit(cache=True)
+def _valuearea(h, l, v, c, window, pct, bins, confirm):
+    """The value area features of ``indicator_catalog`` (valuearea) on the 5m series: poc, vah, val of the ``window`` bars
+    before each bar and, ``confirm`` bars after a fresh exit of that area, vaside / vaout / vain (NaN when there is no event)."""
+    n = len(c)
+    poc, vah, val = np.full(n, np.nan), np.full(n, np.nan), np.full(n, np.nan)
+    side, outside, inside = np.full(n, np.nan), np.full(n, np.nan), np.full(n, np.nan)
+    event = np.zeros(n, dtype=np.int8)
+    event_vah, event_val = np.full(n, np.nan), np.full(n, np.nan)
+    for t in range(n):
+        if t >= window:
+            poc[t], vah[t], val[t] = _area(h, l, v, t - window, t, pct, bins)
+            if t >= 1 and not np.isnan(vah[t]) and val[t] <= c[t - 1] <= vah[t]:
+                if c[t] > vah[t]:
+                    event[t] = 1
+                elif c[t] < val[t]:
+                    event[t] = -1
+                if event[t] != 0:
+                    event_vah[t], event_val[t] = vah[t], val[t]
+        if t >= confirm and event[t - confirm] != 0:
+            e = t - confirm
+            count = 0
+            for j in range(e + 1, t + 1):
+                if event[e] > 0:
+                    if c[j] > event_vah[e]:
+                        count += 1
+                elif c[j] < event_val[e]:
+                    count += 1
+            side[t] = event[e]
+            outside[t] = count
+            inside[t] = 1.0 if event_val[e] <= c[t] <= event_vah[e] else 0.0
+    return poc, vah, val, side, outside, inside
+
+
 def _shift(a):
     out = np.empty_like(a)
     out[0] = np.nan
@@ -285,6 +371,7 @@ class FeatureStore:
     def __init__(self, market):
         self.m = market
         self.cache = {}
+        self.va = None   # (window, pct, bins, confirm) of the spec being evaluated; evaluate_spec sets it
         self.idx5 = np.searchsorted(market.index5 + FIVE_MINUTES_MS, market.index + ONE_MINUTE_MS, side="right") - 1
 
     def base(self, resolution, name):
@@ -297,6 +384,11 @@ class FeatureStore:
             result = {"c": c, "h": h, "l": l, "v": v}[_CANDIDATES[name]]
             self.cache[key] = result
             return result
+        if name in AREA_FEATURES:
+            if resolution != "5m" or self.va is None:
+                raise UnsupportedSpec("el área de valor ({}.{}) solo existe en la serie de 5 m y hay que declararla en "
+                                      "indicators.valuearea".format(resolution, name))
+            return self._area_features()[name]
         match = _FEATURE.match(name)
         if match is None:
             raise UnsupportedSpec(_unsupported_feature(resolution, name))
@@ -325,9 +417,19 @@ class FeatureStore:
             self.cache[(resolution, "prior_volume_mean{}".format(period))] = vm
         return self.cache[key]
 
+    def _area_features(self):
+        """Value area arrays on the 5m series for the current configuration, cached per configuration."""
+        key = ("valuearea", self.va)
+        if key not in self.cache:
+            window, pct, bins, confirm = self.va
+            m = self.m
+            arrays = _valuearea(m.h5, m.l5, m.v5, m.c5, window, float(pct), bins, confirm)
+            self.cache[key] = dict(zip(("poc", "vah", "val", "vaside", "vaout", "vain"), arrays))
+        return self.cache[key]
+
     def value(self, scope, name):
         """The feature as seen from each 1m bar, NaN where the engine's value would be ``None``."""
-        key = ("scope", scope, name)
+        key = ("scope", scope, name, self.va if name in AREA_FEATURES else None)
         if key in self.cache:
             return self.cache[key]
         if scope == "1m":
@@ -747,6 +849,7 @@ def evaluate_spec(spec, market, store=None):
     _check_supported(spec)
     store = store or FeatureStore(market)
     periods = merge_periods(DEFAULT_PERIODS, declared_indicators(spec))
+    store.va = periods["valuearea"][0] if "valuearea" in periods else None
     params = spec.get("params", {})
     n = market.bars
     programs = ExitPrograms(n)
