@@ -1,5 +1,10 @@
 import { useEffect, useState } from 'react'
 import { record } from '../shared/wire/decode.ts'
+import {
+  probabilitiesText,
+  skippedReason,
+  waitReason,
+} from './qwen-wait-reason.ts'
 import { QWEN_RUNTIME } from '../features/observability/presentation/latest-decision.ts'
 
 export const QWEN_STRATEGY_ID = 'qwen'
@@ -18,7 +23,29 @@ const LOADING: QwenSource = { state: 'loading' }
 export function qwenAnalyses(payload: unknown): Record<string, unknown>[] {
   const body = record(payload)
   if (body.status !== 'ok' || !Array.isArray(body.decisions)) return []
-  return body.decisions
+  const skipped = (Array.isArray(body.skipped) ? body.skipped : [])
+    .map(record)
+    .filter(
+      (row) =>
+        typeof row.product === 'string' &&
+        Number.isSafeInteger(row.bucket_start_ms),
+    )
+    .map((row) => ({
+      // No runtime_version: a wake without a decision is never «the latest decision».
+      analysis_id: `qwen:${row.product}:skipped:${row.bucket_start_ms}`,
+      product: row.product,
+      bucket_start_ms: Number.isSafeInteger(row.decision_time_ms)
+        ? row.decision_time_ms
+        : row.bucket_start_ms,
+      decision_time_ms: row.decision_time_ms ?? row.bucket_start_ms,
+      action: 'WAIT',
+      selected_strategy_id: QWEN_STRATEGY_ID,
+      selector: { strategy_id: QWEN_STRATEGY_ID, action: 'WAIT' },
+      reason_code: 'qwen_omitida',
+      qwen_why: skippedReason(row.reason, row.detail),
+      qwen_skipped: true,
+    }))
+  const decided = body.decisions
     .map(record)
     .filter(
       (row) =>
@@ -40,8 +67,12 @@ export function qwenAnalyses(payload: unknown): Record<string, unknown>[] {
       selector: { strategy_id: QWEN_STRATEGY_ID, action: row.action },
       reason_code: `qwen_${String(row.chosen)}`,
       confidence: row.confidence,
+      qwen_why: waitReason(row),
+      qwen_probabilities: probabilitiesText(row.probabilities),
     }))
-    .sort((a, b) => Number(a.decision_time_ms) - Number(b.decision_time_ms))
+  return [...decided, ...skipped].sort(
+    (a, b) => Number(a.decision_time_ms) - Number(b.decision_time_ms),
+  )
 }
 
 export type QwenSource =

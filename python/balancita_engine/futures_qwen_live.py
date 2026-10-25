@@ -73,14 +73,26 @@ def _positive(text, name):
 
 def apply_overrides(cfg, env=None):
     """The config with what the owner may change by environment: ``QWEN_LIVE_NOTIONAL_USD`` (size per trade, default the
-    config's 100), ``QWEN_LIVE_LEVERAGE`` (default 1) and ``QWEN_LIVE_PRODUCTS`` (comma separated, default BTC and ETH). The
+    config's 100), ``QWEN_LIVE_LEVERAGE`` (default 1) and ``QWEN_LIVE_PRODUCTS`` (comma separated, default BTC and ETH) and ``QWEN_LIVE_FORCE_SIDE_AFTER_H`` (hours without opening before the
+    forced LARGO / CORTO question; 0 = off). The
     only check is that sizes are positive numbers and products look like Kraken ids (``futures_costs`` prices any of them): there are no caps on purpose. A changed
-    value changes the config identity, so a database made with other values is refused."""
+    size, leverage or product list changes the config identity, so a database made with other values is refused; the forced-entry
+    hours do not (they live in the ``live`` section, outside ``config_hash``)."""
     env = os.environ if env is None else env
     out = copy_config(cfg)
     notional = (env.get("QWEN_LIVE_NOTIONAL_USD") or "").strip()
     leverage = (env.get("QWEN_LIVE_LEVERAGE") or "").strip()
     products = (env.get("QWEN_LIVE_PRODUCTS") or "").strip()
+    force = (env.get("QWEN_LIVE_FORCE_SIDE_AFTER_H") or "").strip()
+    if force:
+        try:
+            hours = D(force)
+        except Exception:
+            hours = None
+        if hours is None or not hours.is_finite() or hours < 0:
+            raise qt.TraderError("QWEN_LIVE_FORCE_SIDE_AFTER_H: tiene que ser un número de horas, 0 o más (0 lo apaga); "
+                                 "llegó {!r}".format(force))
+        out.setdefault("live", {})["force_side_after_h"] = float(hours)
     out["notional_usd"] = format(_positive(notional or out["notional_usd"], "QWEN_LIVE_NOTIONAL_USD").normalize(), "f")
     out["leverage"] = format(_positive(leverage or out.get("leverage", "1"), "QWEN_LIVE_LEVERAGE").normalize(), "f")
     if products:
@@ -297,6 +309,10 @@ class LiveStore:
         self.db.execute("UPDATE trades SET {} WHERE product=? AND trade_no=?".format(", ".join(n + "=?" for n in names)),
                         tuple(fields[n] for n in names) + (product, trade_no))
 
+    def last_entry_ms(self, product):
+        row = self.db.execute("SELECT MAX(entry_ms) AS m FROM trades WHERE product=?", (product,)).fetchone()
+        return row["m"]
+
     def incomplete_funding(self, product):
         return [dict(r) for r in self.db.execute(
             "SELECT * FROM trades WHERE product=? AND status='closed' AND funding_status != 'complete'", (product,))]
@@ -424,6 +440,11 @@ class LiveOperator:
                 if state["position_json"]:
                     trader.position = position_from_json(state["position_json"])
                 last_fed = state["last_fed_ms"]
+            hours = float((self.cfg.get("live") or {}).get("force_side_after_h") or 0)
+            trader.force_idle_ms = int(hours * HOUR_MS) if hours > 0 else None
+            last_open = self.store.last_entry_ms(product)
+            trader.last_open_ms = last_open
+            trader.idle_since_ms = now                    # no opening on record: counted from this start
             self.traders[product] = trader
             bars = fill_gaps(self.feed.bars(product, (now // BAR_MS) * BAR_MS - self.warmup_ms, now), BAR_MS)
             bars = [b for b in bars if b["bucket_start"] + BAR_MS <= now]
@@ -536,7 +557,8 @@ class LiveOperator:
                         "" if event["action"] == event.get("model_action") or not event.get("model_action")
                         else " [el modelo dijo {}]".format(event["model_action"]),
                         event.get("p_action") or 0.0, event["answer"]["confidence"],
-                        "" if not event.get("override") else " — sin operar: " + str(event["override"])))
+                        " — entrada forzada: llevaba {} h sin operar".format(event["idle_hours"]) if event.get("forced")
+                        else "" if not event.get("override") else " — sin operar: " + str(event["override"])))
             position = trader.position
             if position is not None:
                 self._write_open(product, trader, position, t_ms, now)

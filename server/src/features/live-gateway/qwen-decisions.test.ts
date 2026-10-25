@@ -59,6 +59,51 @@ function seed(
   return path
 }
 
+describe('createQwenDecisions: why it waited', () => {
+  it('delivers probabilities, override and mirror when the base has them, null when not', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'qwen-live-'))
+    dirs.push(dir)
+    const path = join(dir, 'live.sqlite')
+    const db = new DatabaseSync(path)
+    db.exec(`CREATE TABLE decisions(
+      product TEXT, bucket_ms INTEGER, t_ms INTEGER, decided_at_ms INTEGER, kind TEXT, action TEXT,
+      model_action TEXT, p_action REAL, confidence REAL, probs_json TEXT, override TEXT, reason TEXT,
+      mirror_action TEXT, mirror_p REAL, latency_ms INTEGER, threshold REAL, prompt_version TEXT);
+      CREATE TABLE skipped(product TEXT, bucket_ms INTEGER, t_ms INTEGER, reason TEXT, detail TEXT)`)
+    db.prepare(
+      `INSERT INTO decisions VALUES('PF_XBTUSD',?,?,?,'flat','ESPERAR','LARGO',0.46,0.2,?,'bajo_umbral',NULL,'CORTO',0.4,100,0.5,'4')`,
+    ).run(0, MIN15, MIN15 + 1, '{"LARGO":0.46,"CORTO":0.2,"ESPERAR":0.34}')
+    db.prepare(
+      `INSERT INTO decisions VALUES('PF_XBTUSD',?,?,?,'flat','ESPERAR',NULL,NULL,0.2,'no json',NULL,NULL,NULL,NULL,100,NULL,'4')`,
+    ).run(MIN15, 2 * MIN15, 2 * MIN15 + 1)
+    db.close()
+    const result = createQwenDecisions({ liveDbPath: path }).report('PF_XBTUSD')
+    if (result.status !== 'ok') throw new Error('expected ok')
+    const [late, early] = result.decisions
+    expect(early).toMatchObject({
+      override: 'bajo_umbral',
+      model_action: 'LARGO',
+      p_action: 0.46,
+      threshold: 0.5,
+      mirror_action: 'CORTO',
+      mirror_p: 0.4,
+      probabilities: { LARGO: 0.46, CORTO: 0.2, ESPERAR: 0.34 },
+    })
+    expect(late).toMatchObject({ override: null, probabilities: null })
+  })
+
+  it('still reads an older base without those columns', () => {
+    const path = seed([['PF_XBTUSD', MIN15, 'ESPERAR', 0.5]])
+    const result = createQwenDecisions({ liveDbPath: path }).report('PF_XBTUSD')
+    if (result.status !== 'ok') throw new Error('expected ok')
+    expect(result.decisions[0]).toMatchObject({
+      override: null,
+      probabilities: null,
+      kind: null,
+    })
+  })
+})
+
 describe('createQwenDecisions: decisions', () => {
   it('maps the operator actions, newest first, and ignores other products', () => {
     const path = seed([

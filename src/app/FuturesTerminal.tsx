@@ -171,6 +171,13 @@ export default function FuturesTerminal({
         ).split(' · ')[0]!,
         reason: analysisReason(analysis),
         time: shortTime(analysis.decision_time_ms),
+        ...(typeof analysis.qwen_probabilities === 'string' &&
+        analysis.qwen_probabilities
+          ? { detail: analysis.qwen_probabilities }
+          : {}),
+        ...(typeof analysis.qwen_why === 'string' && analysis.qwen_why
+          ? { explained: true }
+          : {}),
       }
     })
   // Where the selected decision stands on the chart and in the list: what it

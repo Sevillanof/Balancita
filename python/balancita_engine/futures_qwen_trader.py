@@ -533,6 +533,10 @@ class Trader:
         self.trade_seq = 0
         self.hooks = [WAKE_HOOKS[name] for name in cfg["wake"].get("hooks", [])]
         self.skip_entry_reason = runtime_of(cfg)["skip_entry_reason"]
+        # Live operator only (None in the practice): after ``force_idle_ms`` without opening, the flat wake asks LARGO or CORTO.
+        self.force_idle_ms = None
+        self.idle_since_ms = None         # reference when nothing was opened yet (process start / last opening in the database)
+        self.last_open_ms = None
 
     # ---- data
 
@@ -834,6 +838,7 @@ class Trader:
             stop_pct = guard["stop_sigma_24h"] * self._sigma5() * math.sqrt(H24)
             stop_pct = min(guard["max_stop_pct"], max(guard["min_stop_pct"], stop_pct))
         entry = entry_fill(D(repr(last)), side, self.product)
+        self.last_open_ms = t_ms
         self.trade_seq += 1
         self.position = Position(
             side=side, entry_ms=t_ms, entry_ref=last, entry_px=entry, qty=self.notional / entry,
@@ -856,6 +861,35 @@ class Trader:
             return False
         return True
 
+    def _force_ref(self):
+        return self.last_open_ms if self.last_open_ms is not None else self.idle_since_ms
+
+    def _force_due(self, t_ms):
+        """Live exploration: no opening for longer than ``force_idle_ms`` (flat only; the cooldown is checked by ``feed``)."""
+        ref = self._force_ref()
+        question = (self.cfg.get("live") or {}).get("force_question")
+        return bool(self.force_idle_ms and question and ref is not None and t_ms - ref > self.force_idle_ms)
+
+    def _decide_forced(self, t_ms, event):
+        """The alternative question: ONLY LARGO and CORTO, with an honest text. The side with the higher probability (mean of
+        the two option orders) opens, with no entry threshold and no mirror test. Marked ``entrada_forzada`` on the decision
+        and ``forzada`` as the trade's entry reason, so reports can tell them apart."""
+        hours = (t_ms - self._force_ref()) / HOUR_MS
+        spec = self.cfg["live"]["force_question"]
+        question = dict(spec, instruction=spec["instruction"].replace("{hours}", es(hours, 1)))
+        try:
+            answer = self.decider.ask(self.key, t_ms, "force", question, event["state_text"])
+        except DecisionError:
+            event["override"] = "sin_respuesta"
+            return [event]
+        action = answer["chosen"]
+        event.update(answer=answer, model_action=action, p_action=answer["probabilities"][action], action=action,
+                     threshold=None, override="entrada_forzada", reason="entrada_forzada", forced=True,
+                     idle_hours=round(hours, 2))
+        self._open(t_ms, "LONG" if action == "LARGO" else "SHORT", event["p_action"], "forzada")
+        event["trade_no"] = self.position.trade_no
+        return [event]
+
     def _decide(self, t_ms, reasons):
         self.last_call_ms = t_ms
         in_position = self.position is not None
@@ -874,6 +908,8 @@ class Trader:
                  "p_action": None, "mirror_action": None, "mirror_p": None,
                  "action": "MANTENER" if in_position else "ESPERAR", "override": None,
                  "reason": None, "reason_answer": None, "trade_no": self.position.trade_no if in_position else None}
+        if not in_position and self._force_due(t_ms):
+            return self._decide_forced(t_ms, event)
         try:
             answer = self.decider.ask(self.key, t_ms, "action", question, state)
         except DecisionError:

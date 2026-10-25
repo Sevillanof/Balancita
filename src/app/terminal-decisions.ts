@@ -4,6 +4,10 @@ export type DecisionRow = {
   strategy: string
   reason: string
   time: string
+  /** Qwen's probability of each option, shown under the reason. */
+  detail?: string
+  /** A wait with its own reason (Qwen's): never collapsed into «WAIT ×N». */
+  explained?: boolean
 }
 
 export type DecisionItem =
@@ -14,7 +18,7 @@ export function groupDecisions(rows: DecisionRow[]): DecisionItem[] {
   const items: DecisionItem[] = []
   for (const row of rows) {
     const last = items.at(-1)
-    if (row.action !== 'WAIT') items.push({ kind: 'row', row })
+    if (row.action !== 'WAIT' || row.explained) items.push({ kind: 'row', row })
     else if (last?.kind === 'waits') last.rows.push(row)
     else items.push({ kind: 'waits', rows: [row] })
   }
