@@ -35,6 +35,7 @@ const env = loadDevEnv({ root, env: process.env })
 // Optional backends: when one fails the others (and the app) keep running.
 const optionalChildren = new Set([
   'capture',
+  'positioning',
   'live',
   'verdict',
   'scores',
@@ -49,6 +50,8 @@ const optionalChildren = new Set([
 ])
 const exitLabels = {
   capture: 'Live market capture (new candles)',
+  positioning:
+    'The positioning collector (new long/short and premium data for the chart)',
   verdict: 'The verdict service (new verdicts)',
   scores: 'The forecast scorer (new forecast scores)',
   forward:
