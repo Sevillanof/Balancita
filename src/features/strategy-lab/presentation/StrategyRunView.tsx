@@ -586,7 +586,9 @@ export default function StrategyRunView({
   const unknownToGate = overviewError?.startsWith('No existe') ?? false
 
   // --- Explorar con VectorBT ---
-  const vbt = useVectorbt(strategyId, vectorbt)
+  // VectorBT only explores rules: Qwen and Kronos never ask for it.
+  const exploresRules = kind === undefined || kind === 'rules'
+  const vbt = useVectorbt(strategyId, vectorbt, exploresRules)
   const vbtState = vbt.state
   const vbtRunning = vbtState?.running ?? null
   const [vbtModal, setVbtModal] = useState(false)
@@ -856,7 +858,7 @@ export default function StrategyRunView({
       <VectorbtVariantLink
         key={strategyId}
         api={vectorbt}
-        registry={registry}
+        registry={exploresRules ? registry : undefined}
         strategyId={strategyId}
         hasPractice={finished.length > 0}
       />

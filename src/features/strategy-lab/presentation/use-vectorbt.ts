@@ -12,7 +12,11 @@ const message = (error: unknown) =>
  * progress (if any) and the finished ones. Polls while one runs, so a
  * reloaded page picks the running exploration up again from the server.
  */
-export function useVectorbt(strategyId: string, api: VectorbtApi) {
+export function useVectorbt(
+  strategyId: string,
+  api: VectorbtApi,
+  enabled = true,
+) {
   const [state, setState] = useState<VbtState | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [tick, setTick] = useState(0)
@@ -21,6 +25,7 @@ export function useVectorbt(strategyId: string, api: VectorbtApi) {
   const elsewhere = state?.busy_with != null
 
   useEffect(() => {
+    if (!enabled) return
     let alive = true
     api.status(strategyId).then(
       (next) => {
@@ -35,7 +40,7 @@ export function useVectorbt(strategyId: string, api: VectorbtApi) {
     return () => {
       alive = false
     }
-  }, [api, strategyId, tick])
+  }, [api, strategyId, tick, enabled])
 
   useEffect(() => {
     if (!running && !elsewhere) return
