@@ -236,19 +236,52 @@ _KIND_OF = {"ema": "ema", "sma": "sma", "rsi": "rsi", "atr": "atr", "prior_volum
             "logret": "logret", "logvol": "logvol"}
 # Log-scale kinds (logret, logvol) have no default period: a spec that reads them declares them.
 _DEFAULT_PERIODS = {"ema": (9, 21), "sma": (50,), "rsi": (14,), "atr": (14,), "bollinger": (20,), "donchian": (20,),
-                    "logret": (), "logvol": ()}
+                    "logret": (), "logvol": (), "valuearea": ()}
+# Value area (volume profile by price, indicator_catalog): a spec declares ONE configuration, each field a number or a
+# "$param", and reads the 5m features below (no period in the name). Ranges are inclusive.
+AREA_FIELDS = (("window", 12, 1000), ("pct", 1, 99), ("bins", 4, 200), ("confirm", 1, 24))
+AREA_FEATURES = ("poc", "vah", "val", "vaside", "vaout", "vain")
+
+
+def _area_config(config, params):
+    """``(window, pct, bins, confirm)`` of ``indicators.valuearea`` with its ``$param`` references resolved."""
+    _require(isinstance(config, dict) and set(config) == {name for name, _, _ in AREA_FIELDS},
+             "indicators.valuearea takes window, pct, bins and confirm (each a whole number or a $param)")
+    values = []
+    for name, low, high in AREA_FIELDS:
+        raw = config[name]
+        if isinstance(raw, str) and raw.startswith("$"):
+            _require(raw[1:] in params, "indicators.valuearea." + name + ": unknown parameter " + raw)
+            raw = params[raw[1:]]
+        _require(isinstance(raw, (int, str)) and not isinstance(raw, bool),
+                 "indicators.valuearea." + name + " must be a whole number")
+        try:
+            number = Decimal(str(raw).strip())
+        except ArithmeticError:
+            raise SpecError("indicators.valuearea." + name + " must be a whole number") from None
+        _require(number.is_finite() and number == number.to_integral_value() and low <= number <= high,
+                 "indicators.valuearea.{} must be a whole number from {} to {}".format(name, low, high))
+        values.append(int(number))
+    return tuple(values)
 
 
 def declared_indicators(spec):
-    """The ``indicators`` block of a spec: kind -> periods, on top of the default set."""
+    """The ``indicators`` block of a spec: kind -> periods, on top of the default set.
+
+    ``valuearea`` is one configuration, returned as the single period ``(window, pct, bins, confirm)``."""
     block = spec.get("indicators", {})
     _require(isinstance(block, dict), "indicators must be an object")
+    out = {}
     for kind, periods in block.items():
         _require(kind in _DEFAULT_PERIODS, "unknown indicator kind " + str(kind))
+        if kind == "valuearea":
+            out[kind] = (_area_config(periods, spec.get("params", {})),)
+            continue
         _require(isinstance(periods, list) and 0 < len(periods) <= 8
                  and all(isinstance(v, int) and not isinstance(v, bool) and 2 <= v <= 400 for v in periods),
                  "indicators." + kind + " takes up to 8 integer periods from 2 to 400")
-    return block
+        out[kind] = periods
+    return out
 
 
 def _check_indicators(spec):
@@ -264,6 +297,9 @@ def _check_indicators(spec):
                 kind = _KIND_OF.get(name) or name.split("_")[0]
                 _require(period in allowed.get(kind, ()),
                          "{} uses period {} that is not declared under indicators.{}".format(node, period, kind))
+            if field in AREA_FEATURES and scope in ("1m", "1m_previous", "5m"):
+                _require(scope == "5m", node + ": the value area exists only on the 5m series")
+                _require("valuearea" in block, node + " needs indicators.valuearea")
         elif isinstance(node, dict):
             for key, value in node.items():
                 if key != "indicators":

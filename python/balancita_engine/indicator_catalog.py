@@ -8,8 +8,8 @@ identica bit a bit a la implementacion anterior. Este modulo no importa nada del
 ``calculate_features`` (verdicts C/Q/E) todavia NO usa el catalogo: ver ``KNOWN_DIVERGENCES``.
 """
 
-from collections import namedtuple
-from decimal import Decimal
+from collections import deque, namedtuple
+from decimal import Decimal, ROUND_FLOOR
 
 from .canonical import normalize_decimal
 
@@ -166,6 +166,95 @@ def _donchian_emit(period, state, step):
             ("prior_volume_mean{}".format(period), _n(prior))], reasons
 
 
+# ---- area de valor (perfil de volumen por precio, aceptacion / rechazo) ---------------------------------------------
+# periodo = (ventana, pct, bins, confirmacion): ventana del perfil en barras, % de volumen del area (entero), niveles de
+# precio y barras de confirmacion. Solo se calcula en la serie de 5 m (``IncrementalFeatures(series="5m")``).
+VALUEAREA_FEATURES = ("poc", "vah", "val", "vaside", "vaout", "vain")
+
+
+def _profile(bars, pct, bins):
+    """(poc, vah, val) del perfil de ``bars`` = [(alto, bajo, volumen)]: cada volumen se reparte parejo entre los bins que
+    toca su rango; el area crece desde el POC hacia el vecino mas pesado (el de arriba si empatan) hasta ``pct`` % del volumen.
+    ``None`` si el rango es cero o no hay volumen. Es la misma regla de ``valueArea`` de la Terminal (chart-indicators.ts)."""
+    low = min(bar[1] for bar in bars)
+    high = max(bar[0] for bar in bars)
+    span = high - low
+    if not span > 0:
+        return None
+    volume = [D(0)] * bins
+    last_bin = bins - 1
+    for bar_high, bar_low, bar_volume in bars:
+        if not bar_volume > 0:
+            continue
+        first = min(last_bin, max(0, int(((bar_low - low) * bins / span).to_integral_value(rounding=ROUND_FLOOR))))
+        last = min(last_bin, max(0, int(((bar_high - low) * bins / span).to_integral_value(rounding=ROUND_FLOOR))))
+        share = bar_volume / D(last - first + 1)
+        for index in range(first, last + 1):
+            volume[index] += share
+    total = sum(volume, D(0))
+    if not total > 0:
+        return None
+    poc = 0
+    for index in range(1, bins):
+        if volume[index] > volume[poc]:
+            poc = index
+    lo = hi = poc
+    held = volume[poc]
+    while held * 100 < total * pct and (lo > 0 or hi < last_bin):
+        below = volume[lo - 1] if lo > 0 else D(-1)
+        above = volume[hi + 1] if hi < last_bin else D(-1)
+        if above >= below:
+            hi += 1
+            held += volume[hi]
+        else:
+            lo -= 1
+            held += volume[lo]
+    return (low + span * (poc * 2 + 1) / (D(2) * bins), low + span * (hi + 1) / D(bins), low + span * lo / D(bins))
+
+
+def _valuearea_state(period):
+    window, _, _, confirm = period
+    # barras previas (alto, bajo, volumen); evento de salida de cada barra reciente; ultimos cierres; cierre anterior; salida
+    return [deque(maxlen=window), deque(maxlen=confirm + 1), deque(maxlen=confirm), None, None]
+
+
+def _inside(price, area):
+    return area[1] <= price <= area[0]          # (vah, val): VAL <= precio <= VAH
+
+
+def _valuearea_update(period, state, step):
+    window, pct, bins, confirm = period
+    bars, events, closes, previous_close, _ = state
+    area = _profile(list(bars), pct, bins) if len(bars) == window else None
+    # Salida nueva en esta barra: cierra fuera del area del perfil previo y la barra anterior cerro dentro.
+    event = None
+    if area is not None and previous_close is not None and _inside(previous_close, (area[1], area[2])):
+        if step.close > area[1]:
+            event = (1, area[1], area[2])
+        elif step.close < area[2]:
+            event = (-1, area[1], area[2])
+    events.append(event)
+    closes.append(step.close)
+    out = [area, None, None, None]
+    if len(events) == confirm + 1 and events[0] is not None:
+        side, vah, val = events[0]
+        outside = sum(1 for close in closes if (close > vah if side > 0 else close < val))
+        out[1:] = [D(side), D(outside), D(1) if val <= step.close <= vah else D(0)]
+    state[3], state[4] = step.close, out
+    bars.append((step.high, step.low, step.volume))
+
+
+def _valuearea_emit(period, state, step):
+    area, side, outside, inside = state[4]
+    poc, vah, val = area if area is not None else (None, None, None)
+    return [("poc", _n(poc)), ("vah", _n(vah)), ("val", _n(val)), ("vaside", _n(side)), ("vaout", _n(outside)),
+            ("vain", _n(inside))], []
+
+
+def _valuearea_warmup(period):
+    return period[0] + period[3] + 1
+
+
 _OHLCV, _TF = ("ohlcv",), ("1m", "5m")
 # El orden de registro es el orden de emision de claves (igual que la implementacion anterior).
 _register(Definition("ema", _OHLCV, _TF, "active", _ema_like, lambda p: [None, []], _ema_update, _ema_emit))
@@ -176,6 +265,8 @@ _register(Definition("rsi", _OHLCV, _TF, "active", _wilder, lambda p: [None, Non
 _register(Definition("atr", _OHLCV, _TF, "active", _wilder, lambda p: [None, []], _atr_update, _atr_emit))
 _register(Definition("bollinger", _OHLCV, _TF, "active", _exact_window, _no_state, _no_update, _bollinger_emit))
 _register(Definition("donchian", _OHLCV, _TF, "active", _exact_window, _no_state, _no_update, _donchian_emit))
+_register(Definition("valuearea", _OHLCV, ("5m",), "active", _valuearea_warmup, _valuearea_state, _valuearea_update,
+                     _valuearea_emit))
 
 # Reservado (diseno 2.E): `validate_spec` lo rechazara en el PR 2; aun no tiene implementacion.
 RESERVED = {"funding.vs24h": Definition("funding.vs24h", ("funding",), ("funding",), "reserved",

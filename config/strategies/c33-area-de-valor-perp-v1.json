@@ -1,0 +1,197 @@
+{
+  "schema": "balancita-strategy.v1",
+  "id": "c33-area-de-valor-perp-v1",
+  "version": 1,
+  "name": "C33 Área de valor (aceptación/rechazo)",
+  "description": "Perfil de volumen por precio de las 288 velas de 5 m (24 h) cerradas antes de cada barra: POC y área de valor (70 % del volumen, 48 niveles, igual que el indicador de la Terminal). Dentro del área no opera. Cuando el precio cierra por fuera del VAH o del VAL se mira la ventana siguiente de 30 min (6 velas de 5 m): si al menos 4 de 6 cierres quedan del lado de afuera es ACEPTADO y entra a favor (largo sobre el VAH, corto bajo el VAL); si menos de 4 quedan afuera y la última vela cierra de nuevo dentro del área es RECHAZADO y entra al revés (corto si falló arriba, largo si falló abajo). Definición congelada por Fran el 2026-10-25; sus parámetros no se eligieron mirando resultados. Solo para probarla en el ciclo de Estrategias.",
+  "params": {
+    "profile_bars": "288",
+    "area_pct": "70",
+    "bins": "48",
+    "confirm_bars": "6",
+    "accept_min": "4",
+    "stop_atr": "1.5",
+    "target_stop_ratio": "1.5"
+  },
+  "indicators": {
+    "logvol": [
+      288
+    ],
+    "valuearea": {
+      "window": "$profile_bars",
+      "pct": "$area_pct",
+      "bins": "$bins",
+      "confirm": "$confirm_bars"
+    }
+  },
+  "rules": {
+    "gates": [
+      {
+        "require": "trend",
+        "reason": "trend_features_unavailable",
+        "condition": "trend_features_ready"
+      }
+    ],
+    "checks": [
+      {
+        "name": "long",
+        "node": {
+          "all": [
+            {
+              "available": "log_volatility_available",
+              "operand": "5m.logvol288"
+            },
+            {
+              "any": [
+                {
+                  "all": [
+                    {
+                      "available": "value_area_event_available",
+                      "operand": "5m.vaout"
+                    },
+                    {
+                      "cmp": "exit_above_value_area",
+                      "left": "5m.vaside",
+                      "op": ">",
+                      "right": "0"
+                    },
+                    {
+                      "cmp": "closes_outside_at_least_accept_min",
+                      "left": "5m.vaout",
+                      "op": ">=",
+                      "right": "$accept_min"
+                    }
+                  ]
+                },
+                {
+                  "all": [
+                    {
+                      "available": "value_area_event_available",
+                      "operand": "5m.vaout"
+                    },
+                    {
+                      "cmp": "exit_below_value_area",
+                      "left": "5m.vaside",
+                      "op": "<",
+                      "right": "0"
+                    },
+                    {
+                      "cmp": "closes_outside_below_accept_min",
+                      "left": "5m.vaout",
+                      "op": "<",
+                      "right": "$accept_min"
+                    },
+                    {
+                      "cmp": "last_close_back_inside_value_area",
+                      "left": "5m.vain",
+                      "op": ">",
+                      "right": "0"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "name": "short",
+        "node": {
+          "all": [
+            {
+              "available": "log_volatility_available",
+              "operand": "5m.logvol288"
+            },
+            {
+              "any": [
+                {
+                  "all": [
+                    {
+                      "available": "value_area_event_available",
+                      "operand": "5m.vaout"
+                    },
+                    {
+                      "cmp": "exit_below_value_area",
+                      "left": "5m.vaside",
+                      "op": "<",
+                      "right": "0"
+                    },
+                    {
+                      "cmp": "closes_outside_at_least_accept_min",
+                      "left": "5m.vaout",
+                      "op": ">=",
+                      "right": "$accept_min"
+                    }
+                  ]
+                },
+                {
+                  "all": [
+                    {
+                      "available": "value_area_event_available",
+                      "operand": "5m.vaout"
+                    },
+                    {
+                      "cmp": "exit_above_value_area",
+                      "left": "5m.vaside",
+                      "op": ">",
+                      "right": "0"
+                    },
+                    {
+                      "cmp": "closes_outside_below_accept_min",
+                      "left": "5m.vaout",
+                      "op": "<",
+                      "right": "$accept_min"
+                    },
+                    {
+                      "cmp": "last_close_back_inside_value_area",
+                      "left": "5m.vain",
+                      "op": ">",
+                      "right": "0"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      }
+    ],
+    "sides": {
+      "LONG": {
+        "requires": [
+          "long"
+        ],
+        "reason": "c33_long_value_area",
+        "invalidation": "stop_target_or_6h_time_stop"
+      },
+      "SHORT": {
+        "requires": [
+          "short"
+        ],
+        "reason": "c33_short_value_area",
+        "invalidation": "stop_target_or_6h_time_stop"
+      }
+    },
+    "exit": {
+      "LONG": {
+        "cmp": "no_rule_exit_stop_target_or_6h",
+        "left": "0",
+        "op": ">",
+        "right": "1"
+      },
+      "SHORT": {
+        "cmp": "no_rule_exit_stop_target_or_6h",
+        "left": "0",
+        "op": ">",
+        "right": "1"
+      }
+    },
+    "risk": {
+      "stop_atr": "$stop_atr",
+      "target_stop_ratio": "$target_stop_ratio",
+      "vol": "5m.logvol288",
+      "vol_minutes": 5
+    },
+    "horizon_minutes": 360
+  }
+}

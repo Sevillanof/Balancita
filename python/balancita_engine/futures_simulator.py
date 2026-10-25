@@ -42,7 +42,9 @@ DEFAULT_PERIODS = {
 }
 # Log-scale features exist only when a spec declares them, so the default feature set is unchanged.
 LOG_KINDS = ("logret", "logvol")
-PERIOD_KINDS = tuple(DEFAULT_PERIODS) + LOG_KINDS
+# Value area (volume profile): its "period" is the tuple (window, pct, bins, confirm), one per run, and it only exists on the 5m series.
+AREA_KIND = "valuearea"
+PERIOD_KINDS = tuple(DEFAULT_PERIODS) + LOG_KINDS + (AREA_KIND,)
 # The regime chain reads these three on the 5m series whatever a spec declares.
 REGIME_PERIODS = {"ema": (9, 21), "atr": (14,)}
 
@@ -55,9 +57,18 @@ def merge_periods(*declared):
             if kind not in merged:
                 raise ValueError("unknown indicator kind {!r}".format(kind))
             for value in values:
+                if kind == AREA_KIND:
+                    value = tuple(value)
+                    if len(value) != 4 or any(isinstance(v, bool) or not isinstance(v, int) for v in value):
+                        raise ValueError("valuearea takes (window, pct, bins, confirm) as integers")
+                    merged[kind].add(value)
+                    continue
                 if isinstance(value, bool) or not isinstance(value, int) or not 2 <= value <= 400:
                     raise ValueError("indicator periods are integers from 2 to 400")
                 merged[kind].add(value)
+    if len(merged[AREA_KIND]) > 1:
+        # its features (vah, val, poc, vaside...) carry no period in their name, so one run holds one configuration
+        raise ValueError("valuearea: una sola configuracion por corrida ({})".format(sorted(merged[AREA_KIND])))
     return {kind: tuple(sorted(values)) for kind, values in merged.items() if values}
 
 
@@ -75,9 +86,11 @@ class IncrementalFeatures:
     log return by ``logvol * sqrt(bars)`` gives a z-score that is comparable across products.
     """
 
-    def __init__(self, periods=None):
+    def __init__(self, periods=None, series=None):
         self.periods = merge_periods(DEFAULT_PERIODS if periods is None else periods)
-        reach = max([p for values in self.periods.values() for p in values] + [MINIMUM_CANDLES])
+        # ``series`` "1m" leaves out what only exists on 5m (the value area): its profile would cost a lot for nothing.
+        self.skip = (AREA_KIND,) if series == "1m" else ()
+        reach = max([p for kind, values in self.periods.items() if kind != AREA_KIND for p in values] + [MINIMUM_CANDLES])
         reach = max([reach] + [p + 1 for p in self.periods.get("logret", ())])
         self.count = 0
         self.closes = deque(maxlen=reach)
@@ -89,6 +102,7 @@ class IncrementalFeatures:
         self._rsi = {p: [None, None, []] for p in self.periods.get("rsi", ())}
         self._prev_close = None
         self._logvol = {p: [None, 0] for p in self.periods.get("logvol", ())}  # [ewma of r^2, returns seen]
+        self._valuearea = {p: CATALOG[AREA_KIND].new_state(p) for p in self.periods.get(AREA_KIND, ())}
 
     def update(self, candle):
         with localcontext() as context:
@@ -113,7 +127,8 @@ class IncrementalFeatures:
                     log_return=log_return, closes=list(self.closes), before_highs=before_highs,
                     before_lows=before_lows, before_volumes=before_volumes)
         # The arithmetic of every indicator lives in indicator_catalog; this class only feeds it and keeps the windows.
-        active = [(kind, definition) for kind, definition in CATALOG.items() if kind in self.periods]
+        active = [(kind, definition) for kind, definition in CATALOG.items()
+                  if kind in self.periods and kind not in self.skip]
         for kind, definition in active:
             states = getattr(self, "_" + kind, {})
             for period, state in states.items():
@@ -149,7 +164,7 @@ def frames(candles_1m, candles_5m, periods=None, funding=None):
     bar's close. The key is absent while there is not 30 days of funding history.
     """
     periods = merge_periods(DEFAULT_PERIODS if periods is None else periods, REGIME_PERIODS)
-    one, five = IncrementalFeatures(periods), IncrementalFeatures(periods)
+    one, five = IncrementalFeatures(periods, series="1m"), IncrementalFeatures(periods, series="5m")
     fives = iter(candles_5m)
     pending = next(fives, None)
     trend, previous, regime = None, None, "unknown"

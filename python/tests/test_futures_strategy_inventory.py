@@ -75,6 +75,15 @@ class InventoryTest(unittest.TestCase):
         self.assertFalse(c32["forward"]["registered"])
         self.assertTrue(c32["spec_hash"])  # the spec is kept: replay 9A depends on its hash
 
+    def test_c33_enters_the_estrategias_cycle_as_an_unmeasured_draft_without_forward(self):
+        c33 = _row(self.inventory(), "c33-area-de-valor-perp-v1")
+        self.assertEqual(c33["operational"]["state"], "draft")           # nothing activates it
+        self.assertFalse(c33["forward"]["registered"])                    # no forward registration
+        self.assertEqual(c33["research"]["state"], "unmeasured")          # no invented numbers
+        self.assertIsNone(c33["research"]["backtest"])
+        self.assertTrue(c33["research"]["investigating"])
+        self.assertTrue(c33["spec_hash"])
+
     def test_forward_results_are_never_invented(self):
         inv = self.inventory()
         for row in inv["strategies"]:

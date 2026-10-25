@@ -15,6 +15,7 @@ GOLDEN_HASHES = {
     "c29-momentum-perp-v1": "ca81f9ce070d1db8410e9a8b06688555d9c80e33fd6f6eab056f84d8d452f871",
     "c30-momentum-12h-perp-v1": "29de8c4ff4d53cd477a1689508035455d402bd57aa6028390bd2a7e8f54da2e1",
     "c32-funding-contrarian-24h-perp-v1": "1481148d45aea9b0969d0a5a4a37126d002ccf1f8c14d504338ee7279cba7612",
+    "c33-area-de-valor-perp-v1": "372aa92d51085c68fa2dda6125deea814154cd14c893cfc28ee2469dca650094",
 }
 
 

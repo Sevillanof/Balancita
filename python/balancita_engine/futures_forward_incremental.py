@@ -126,6 +126,9 @@ def _undec(value):
 
 def features_to_state(features):
     """Estado exacto de un ``IncrementalFeatures`` (Decimal como texto, claves de periodo como texto)."""
+    if "valuearea" in features.periods:
+        # Su perfil de volumen no se guarda: una estrategia de area de valor no entra al forward hasta que se guarde.
+        raise NotImplementedError("el estado de valuearea no se serializa: no se puede reanudar en el forward")
     return {
         "periods": {kind: list(values) for kind, values in features.periods.items()},
         "count": features.count,
@@ -172,7 +175,7 @@ class FrameStream:
     def __init__(self, periods=None):
         merged = merge_periods(DEFAULT_PERIODS if periods is None else periods, REGIME_PERIODS)
         self.periods = merged
-        self.one, self.five = IncrementalFeatures(merged), IncrementalFeatures(merged)
+        self.one, self.five = IncrementalFeatures(merged, series="1m"), IncrementalFeatures(merged, series="5m")
         self.waiting_ones = {}           # 1m recibidas aún no procesadas (bucket -> vela)
         self.pending = {}                # 5m recibidas aún no consumidas (bucket -> vela)
         self.trend = self.previous = None

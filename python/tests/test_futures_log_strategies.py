@@ -34,6 +34,8 @@ def _tight(candle):
 
 C29 = "c29-momentum-perp-v1"
 SPECS = load_specs()
+# Specs that entered /Estrategias as drafts and have no reliability row yet (the inventory reads them as "unmeasured").
+NOT_YET_MEASURED = {"c33-area-de-valor-perp-v1"}
 
 
 def _candles(closes):
@@ -259,6 +261,8 @@ class ReliabilityTests(unittest.TestCase):
             forward_only |= set(json.load(handle).get("retired") or {})  # retired after forward-only: never backtested
         for strategy_id, spec in SPECS.items():
             if strategy_id in forward_only:  # its input (funding history) is too short to backtest; forward trades only
+                continue
+            if strategy_id in NOT_YET_MEASURED:  # shipped as a draft: its first measurement comes from the Estrategias cycle
                 continue
             self.assertIsNotNone(reliability_for(table, spec), strategy_id + " has no measurement for its current spec")
 

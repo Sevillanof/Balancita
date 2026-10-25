@@ -18,7 +18,7 @@ from research.vectorbt.tests import helpers
 
 PRODUCT = "PF_XBTUSD"
 SPECS = ["c25-pullback-perp-v1", "c26-reversion-perp-v1", "c27-breakout-perp-v1", "c28-adapter-perp-v1",
-         "c29-momentum-perp-v1", "c30-momentum-12h-perp-v1"]
+         "c29-momentum-perp-v1", "c30-momentum-12h-perp-v1", "c33-area-de-valor-perp-v1"]
 EXIT_REASON = {"strategy_exit": "rule", "time_stop": "time", "stop": "stop", "target": "target"}
 
 # Two specs of our own that use what the shipped ones do not: bollinger / sma / rsi / ema / atr / logvol on 1m,
@@ -134,7 +134,7 @@ def test_signals_and_levels_match_the_engine_bar_by_bar(name, market, engine_sid
 def test_there_are_signals_of_both_sides_and_regimes_to_compare(market, engine_side):
     _, _, mk = market
     for name in ("c27-breakout-perp-v1", "c25-pullback-perp-v1", "c28-adapter-perp-v1", "c29-momentum-perp-v1",
-                 "custom-a", "custom-b"):
+                 "c33-area-de-valor-perp-v1", "custom-a", "custom-b"):
         side, _, _ = engine_side(name)
         assert (side == 1).sum() > 3 and (side == -1).sum() > 3, name
     plan = gs.evaluate_spec(_load("c28-adapter-perp-v1"), mk)
@@ -143,7 +143,8 @@ def test_there_are_signals_of_both_sides_and_regimes_to_compare(market, engine_s
 
 
 @pytest.mark.parametrize("name", ["c27-breakout-perp-v1", "c25-pullback-perp-v1", "c26-reversion-perp-v1",
-                                  "c28-adapter-perp-v1", "c29-momentum-perp-v1", "custom-a", "custom-b"])
+                                  "c28-adapter-perp-v1", "c29-momentum-perp-v1", "c33-area-de-valor-perp-v1",
+                                  "custom-a", "custom-b"])
 def test_trades_match_the_engine_book(name, market):
     rows, five, mk = market
     spec = _load(name)
@@ -198,6 +199,75 @@ def test_funding_is_charged_like_the_engine(market):
     for t in trades:
         theirs = by_engine[int(mk_f.index[t["entry_i"]])]
         assert abs(theirs["net_bp"] - t["net_bp"]) < 0.01 + 3e-5 * abs(theirs["net_bp"])
+
+
+# ------------------------------------------------------------------------------------ C33: value area
+C33 = "c33-area-de-valor-perp-v1"
+
+
+def _engine_area_features(five, spec):
+    """The engine's value-area features of every 5m bar (what ``frames`` hands the rules as ``5m``)."""
+    from balancita_engine.futures_simulator import IncrementalFeatures
+    features = IncrementalFeatures({"valuearea": declared_indicators(spec)["valuearea"]}, series="5m")
+    rows = [features.update(c) for c in five]
+    return {name: np.array([float(r[name]) if r[name] is not None else np.nan for r in rows])
+            for name in ("poc", "vah", "val", "vaside", "vaout", "vain")}
+
+
+def test_value_area_features_match_the_engine_on_every_5m_bar(market):
+    rows, five, mk = market
+    spec = _load(C33)
+    theirs = _engine_area_features(five, spec)
+    store = gs.FeatureStore(mk)
+    store.va = declared_indicators(spec)["valuearea"][0]
+    for name, expected in theirs.items():
+        mine = store.base("5m", name)
+        assert np.array_equal(np.isnan(mine), np.isnan(expected)), name
+        keep = ~np.isnan(expected)
+        np.testing.assert_allclose(mine[keep], expected[keep], rtol=1e-9, atol=0, err_msg=name)
+    # every case of the rule shows up in the data: exits of both sides, accepted and rejected
+    side, out, inside = theirs["vaside"], theirs["vaout"], theirs["vain"]
+    accept_min = float(spec["params"]["accept_min"])
+    for direction in (1, -1):
+        assert ((side == direction) & (out >= accept_min)).sum() > 3, direction
+        assert ((side == direction) & (out < accept_min) & (inside == 1)).sum() > 3, direction
+        assert ((side == direction) & (out < accept_min) & (inside == 0)).sum() > 0, direction
+
+
+def test_value_area_never_reads_a_bar_that_is_not_closed(market):
+    _, _, mk = market
+    cut = 2600
+    head = gs.Market(mk.product, mk.tick, mk.index[:cut * 5], mk.o[:cut * 5], mk.h[:cut * 5], mk.l[:cut * 5], mk.c[:cut * 5],
+                     mk.v[:cut * 5], mk.index5[:cut], mk.o5[:cut], mk.h5[:cut], mk.l5[:cut], mk.c5[:cut], mk.v5[:cut])
+    spec = _load(C33)
+    whole, part = gs.FeatureStore(mk), gs.FeatureStore(head)
+    whole.va = part.va = declared_indicators(spec)["valuearea"][0]
+    for name in ("poc", "vah", "val", "vaside", "vaout", "vain"):
+        np.testing.assert_array_equal(whole.base("5m", name)[:cut], part.base("5m", name))
+    assert np.array_equal(gs.evaluate_spec(spec, mk).raw_side[:cut * 5], gs.evaluate_spec(spec, head).raw_side)
+
+
+def test_params_change_the_vectorbt_profile_like_the_engine(market):
+    rows, five, mk = market
+    spec = _load(C33)
+    spec["params"].update(profile_bars="144", area_pct="60", bins="24", confirm_bars="3", accept_min="2")
+    plan = gs.evaluate_spec(spec, mk)
+    periods = merge_periods(DEFAULT_PERIODS, declared_indicators(spec))
+    side = np.zeros(len(rows), dtype=np.int8)
+    for i, (_, current, previous, trend, regime) in enumerate(frames(rows, five, periods)):
+        proposal = propose_spec(spec, current, previous=previous, trend=trend, regime=regime, tick_size="1")
+        if proposal["action"] in ("LONG", "SHORT"):
+            side[i] = 1 if proposal["action"] == "LONG" else -1
+    assert (side != 0).sum() > 20
+    assert np.array_equal(side, plan.raw_side)
+
+
+def test_value_area_on_the_one_minute_series_is_refused(market):
+    _, _, mk = market
+    spec = _load(C33)
+    spec["rules"]["checks"][0]["node"]["all"][1]["any"][0]["all"][0]["operand"] = "1m.vaout"
+    with pytest.raises(gs.UnsupportedSpec):
+        gs.evaluate_spec(spec, mk)
 
 
 # ---------------------------------------------------------------------------------------- not supported
