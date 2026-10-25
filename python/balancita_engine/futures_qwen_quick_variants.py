@@ -46,13 +46,16 @@ def apply_variant(cfg, variant):
     variant never reads another one's database."""
     out = copy.deepcopy(cfg)
     prompt, change = out["prompt"], variant.get("prompt")
-    if not change:
-        return out
-    if "system" in change:
-        prompt["system"] = change["system"]
-    if "flat" in change:
-        prompt["questions"]["flat"] = change["flat"]
-    prompt["version"] = variant["prompt_version"]
+    if "state_extras" in variant:                       # more context in the STATE (see ``Trader._extra_lines``)
+        out["state_extras"] = list(variant["state_extras"])
+        out["state_context"] = list(variant.get("state_context") or ())
+    if change:
+        if "system" in change:
+            prompt["system"] = change["system"]
+        if "flat" in change:
+            prompt["questions"]["flat"] = change["flat"]
+    if change or "state_extras" in variant:
+        prompt["version"] = variant["prompt_version"]
     return out
 
 
