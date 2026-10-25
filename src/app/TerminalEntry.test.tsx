@@ -1,6 +1,6 @@
 import { cleanup, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import TerminalEntry from './TerminalEntry.tsx'
+import TerminalEntry, { TERMINAL_RETRY_MS } from './TerminalEntry.tsx'
 
 const lifecycle = vi.hoisted(() => ({ mounts: 0, unmounts: 0 }))
 
@@ -114,4 +114,24 @@ describe('TerminalEntry', () => {
     render(<TerminalEntry />)
     expect(await screen.findByRole('alert')).toHaveTextContent('Real')
   })
+
+  it('retries by itself and recovers when the gateway answers again', async () => {
+    let calls = 0
+    stubFetch(() => {
+      calls += 1
+      return calls === 1
+        ? { status: 503 }
+        : { status: 200, body: bootstrapBody('paper_live') }
+    })
+    render(<TerminalEntry />)
+    expect(await screen.findByRole('alert')).toBeTruthy()
+    expect(
+      await screen.findByTestId(
+        'futures-terminal',
+        {},
+        { timeout: TERMINAL_RETRY_MS + 2_000 },
+      ),
+    ).toHaveTextContent('paper_live')
+    expect(calls).toBe(2)
+  }, 10_000)
 })

@@ -13,6 +13,10 @@ import {
 // data).
 const SOURCE: TerminalSource = 'live'
 
+// A slow or failed bootstrap is usually transient (busy gateway), so the
+// terminal keeps retrying on its own instead of staying "unavailable".
+export const TERMINAL_RETRY_MS = 3_000
+
 function SourceView({ source }: { source: TerminalSource }) {
   const [product, setProduct] = useState<string | undefined>(undefined)
   const [state, setState] = useState<
@@ -23,20 +27,25 @@ function SourceView({ source }: { source: TerminalSource }) {
       }
     | { kind: 'unavailable' }
   >({ kind: 'loading' })
+  const [attempt, setAttempt] = useState(0)
   const apiBase = terminalApiBase(source)
   useEffect(() => {
     let active = true
+    let retry: ReturnType<typeof setTimeout> | undefined
     void loadTerminalBootstrap(apiBase, product)
       .then((bootstrap) => {
         if (active) setState({ kind: 'ready', bootstrap })
       })
       .catch(() => {
-        if (active) setState({ kind: 'unavailable' })
+        if (!active) return
+        setState({ kind: 'unavailable' })
+        retry = setTimeout(() => setAttempt((n) => n + 1), TERMINAL_RETRY_MS)
       })
     return () => {
       active = false
+      clearTimeout(retry)
     }
-  }, [apiBase, product])
+  }, [apiBase, product, attempt])
   if (state.kind === 'ready') {
     const products = state.bootstrap.products ?? []
     return (
@@ -77,6 +86,7 @@ function SourceView({ source }: { source: TerminalSource }) {
             {
               ' Inicia la app con pnpm run dev y verifica la conexión con Kraken.'
             }
+            {' Reintentando automáticamente…'}
           </p>
         </main>
       </SwitchBar>
