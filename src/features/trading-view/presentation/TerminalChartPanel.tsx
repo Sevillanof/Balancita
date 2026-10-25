@@ -53,6 +53,9 @@ const PANES: ReadonlyArray<{ id: Pane; label: string; live: boolean }> = [
   { id: 'rsi', label: 'RSI 14', live: false },
 ]
 
+/** How long a pane without data still reads «Cargando» (the collector may be downloading). */
+const PANE_LOAD_MS = 90_000
+
 type Settings = { intervalMs: number; overlays: Overlay[]; panes: Pane[] }
 const STORAGE_KEY = 'balancita.terminal-chart.v1'
 const DEFAULTS: Settings = {
@@ -308,6 +311,9 @@ export default function TerminalChartPanel({
 }) {
   const [settings, setSettings] = useState<Settings>(loadSettings)
   const [now, setNow] = useState(() => Date.now())
+  // When each live pane was asked for (per product and timeframe): a pane whose
+  // data has not arrived shows «Cargando…» first and «Sin datos» after a while.
+  const [askedAt, setAskedAt] = useState<Record<string, number>>({})
   // A picked EJEC. marker: independent of the decision selection (a fill is
   // not linked to any verdict). The decision picked from outside or another
   // product clears it.
@@ -375,6 +381,28 @@ export default function TerminalChartPanel({
       ),
     [settings.panes, remote, shown, colors, live],
   )
+  const askKey = (id: Pane) => `${id}|${product ?? ''}|${settings.intervalMs}`
+  const wantedLive = settings.panes.filter(
+    (id) => live && PANES.find((pane) => pane.id === id)!.live,
+  )
+  if (wantedLive.some((id) => askedAt[askKey(id)] === undefined)) {
+    const next = { ...askedAt }
+    for (const id of wantedLive) next[askKey(id)] ??= Date.now()
+    setAskedAt(next)
+  }
+  const pendingPanes = wantedLive
+    .filter((id) => !panes.some((pane) => pane.id === id))
+    .map((id) => {
+      const label = PANES.find((pane) => pane.id === id)!.label
+      const loading =
+        remote === null || now - (askedAt[askKey(id)] ?? now) < PANE_LOAD_MS
+      return {
+        id,
+        text: loading
+          ? `Cargando ${label}…`
+          : `Sin datos de ${label} por ahora`,
+      }
+    })
   const stats = ticker ?? remote?.ticker ?? null
   const mark = stats?.mark ?? null
   const lines = useMemo(() => {
@@ -699,6 +727,15 @@ export default function TerminalChartPanel({
           }}
         />
       )}
+      {pendingPanes.map((pane) => (
+        <p
+          key={pane.id}
+          className="terminal-chart__pane-placeholder"
+          role="status"
+        >
+          {pane.text}
+        </p>
+      ))}
       {fillRows && (
         <section
           className="terminal-chart__fill-detail"
