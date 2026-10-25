@@ -18,7 +18,7 @@ def photo_db(path, photos, config_hash=None, mirrored=True):
     """``photos``: (t_ms, lean, move_240); the lean is the real-numbers lean, the mirror leans the other way."""
     pdb = qt.PracticeDB(path)
     pdb.db.executescript(ex._EXAM_SQL)
-    pdb.set_meta("config_hash", config_hash or qt.config_hash(qt.load_config(qt.CONFIG_PATH_V3)))
+    pdb.set_meta("config_hash", config_hash or qt.config_hash(qt.load_config(qt.CONFIG_PATH_LIVE)))
     with pdb.db:
         for order, (t_ms, lean, move) in enumerate(photos):
             sid = ex.snap_id("PF_XBTUSD", t_ms)

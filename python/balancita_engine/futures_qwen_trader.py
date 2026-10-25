@@ -76,6 +76,7 @@ DEFAULT_DB_V2 = os.path.join(DATA_DIR, "practice-v2.sqlite")
 DEFAULT_DB_V21 = os.path.join(DATA_DIR, "practice-v2.1.sqlite")
 DEFAULT_DB_V3 = os.path.join(DATA_DIR, "practice-v3.sqlite")
 DEFAULT_EXAM_DB_V3 = os.path.join(DATA_DIR, "exam-v3.sqlite")
+DEFAULT_EXAM_DB_LIVE = os.path.join(DATA_DIR, "exam-live.sqlite")     # the Examen of the live config (``exam --version live``)
 DEFAULT_DB_LIVE_PRACTICE = os.path.join(DATA_DIR, "practice-live.sqlite")
 PRACTICE_VERSIONS = ("1", "2", "2.1", "3")      # the ones that have a report
 VERSIONS = PRACTICE_VERSIONS + ("live",)        # "live": the rules of the live operator (``futures_qwen_live``)
@@ -935,7 +936,7 @@ class Trader:
         """Live exploration: while flat (the cooldown is checked by ``feed``) every wake belongs to the opportunity window. It
         starts as soon as the product is flat and out of cooldown; ``force_idle_ms`` (default none) is an optional delay counted
         from the last opening on record, or from the process start. Opening a position ends the window."""
-        question = (self.cfg.get("live") or {}).get("force_question")
+        question = (self.cfg.get("live") or {}).get("force_question") or self.cfg.get("factors")
         if not (self.window_on and question):
             return False
         if self.window is not None or not self.force_idle_ms:
@@ -951,24 +952,45 @@ class Trader:
         ``force_neutral_lean``: a 50/50 is noise, not a side, on the real state or on the mirror) AND ``score >= force_min_score``. It enters when it is a candidate AND its
         score reaches the best candidate score of the window minus ``force_record_tol`` AND at least ``force_min_looks`` looks came before; after
         ``force_window_h`` hours it enters at the first candidate with no record required. A contradicting mirror never
-        enters. The look is stored as a wait (``ventana_mirando``); the entry as ``entrada_ventana`` / entry reason ``ventana``."""
+        enters. The look is stored as a wait (``ventana_mirando``); the entry as ``entrada_ventana`` / entry reason ``ventana``.
+
+        With ``cfg["factors"]`` (live config, version 5) the two questions of letters are replaced by one factors call on the real
+        STATE and one on the mirrored one (``decider.ask_factors``): ``lean`` = (sum of the 7 voting gradients) / 14 of the real
+        answer, ``lean_m`` the same on the mirror, ``lean_num`` = (lean - lean_m) / 2 as above, and the event also carries
+        ``factors`` (the 8 gradients of both answers and the reading per line) for the Terminal. ``live.force_question`` is not used."""
         live = self.cfg["live"]
         window = self.window
         if window is None:
             window = self.window = {"start_ms": t_ms, "looks": 0, "best": 0.0}
         ref = self._force_ref()
         hours = 0.0 if ref is None else max(0.0, (t_ms - ref) / HOUR_MS)
-        spec = live["force_question"]
-        question = dict(spec, instruction=spec["instruction"].replace("{hours}", es(hours, 1)))
-        try:
-            real = self.decider.ask(self.key, t_ms, "force", question, event["state_text"])
-            mirror = self.decider.ask(self.key, t_ms, "force_mirror", question, self.state_text(t_ms, reasons, mirror=True))
-        except DecisionError:
-            event["override"] = "sin_respuesta"
-            return [event]
-        lean = real["probabilities"]["LARGO"] - real["probabilities"]["CORTO"]
-        lean_m = mirror["probabilities"]["LARGO"] - mirror["probabilities"]["CORTO"]
-        lean_num = (lean - lean_m) / 2.0
+        if self.cfg.get("factors"):
+            # Version 5 of the live config: ONE factors call on the real STATE and ONE on the mirrored one (gradient of -2 to +2 per
+            # line, ``futures_qwen_factors``). lean = sum of F1..F7 / 14; the rest of the window is exactly the same.
+            from . import futures_qwen_factors as fq
+            try:
+                real = self.decider.ask_factors(self.key, t_ms, "force", event["state_text"])
+                mirror = self.decider.ask_factors(self.key, t_ms, "force_mirror", self.state_text(t_ms, reasons, mirror=True))
+            except DecisionError:
+                event["override"] = "sin_respuesta"
+                return [event]
+            look = fq.window_look(real, mirror)
+            lean, lean_m, lean_num = look["lean"], look["lean_m"], look["lean_num"]
+            real_answer, mirror_action, mirror_p = look["answer"], look["mirror_action"], look["mirror_p"]
+            event["factors"] = look["factors"]
+        else:
+            spec = live["force_question"]
+            question = dict(spec, instruction=spec["instruction"].replace("{hours}", es(hours, 1)))
+            try:
+                real = self.decider.ask(self.key, t_ms, "force", question, event["state_text"])
+                mirror = self.decider.ask(self.key, t_ms, "force_mirror", question, self.state_text(t_ms, reasons, mirror=True))
+            except DecisionError:
+                event["override"] = "sin_respuesta"
+                return [event]
+            lean = real["probabilities"]["LARGO"] - real["probabilities"]["CORTO"]
+            lean_m = mirror["probabilities"]["LARGO"] - mirror["probabilities"]["CORTO"]
+            lean_num = (lean - lean_m) / 2.0
+            real_answer, mirror_action, mirror_p = real, mirror["chosen"], mirror["probabilities"][mirror["chosen"]]
         score = abs(lean_num)
         side = "LARGO" if lean_num > 0 else "CORTO"
         neutral = live.get("force_neutral_lean", 0.05)
@@ -982,8 +1004,8 @@ class Trader:
         window["looks"] += 1
         if candidate:                      # solo las candidatas (espejo coincidente) suben la vara
             window["best"] = max(best_before, score)
-        event.update(answer=real, model_action=side, p_action=real["probabilities"][side], threshold=None,
-                     mirror_action=mirror["chosen"], mirror_p=mirror["probabilities"][mirror["chosen"]],
+        event.update(answer=real_answer, model_action=side, p_action=real_answer["probabilities"][side], threshold=None,
+                     mirror_action=mirror_action, mirror_p=mirror_p,
                      lean=lean, lean_m=lean_m, lean_num=lean_num, lean_eff=lean_eff, score=score, best_score=window["best"],
                      look_n=window["looks"], mirror_ok=candidate, idle_hours=round(hours, 2), override="ventana_mirando")
         if not enter:
@@ -1640,9 +1662,10 @@ def _parser():
     pb.add_argument("--max-minutes", type=float, default=55.0)
     pb.add_argument("--llama-url", default=None)
     pb.add_argument("--sequential", action="store_true")
-    ee = sub.add_parser("exam", help="v3: ask Qwen about thousands of past photos of the market (needs llama-server)")
-    common(ee, "3", ("3",))
-    ee.add_argument("--exam-db", default=DEFAULT_EXAM_DB_V3, help="exam database (default %(default)s)")
+    ee = sub.add_parser("exam", help="v3 or live: ask Qwen about thousands of past photos of the market (needs llama-server)")
+    common(ee, "3", ("3", "live"))
+    ee.add_argument("--exam-db", default=None, help="exam database (default: %s for v3, %s for live)" % (
+        DEFAULT_EXAM_DB_V3, DEFAULT_EXAM_DB_LIVE))
     ee.add_argument("--max-minutes", type=float, default=55.0)
     ee.add_argument("--llama-url", default=None)
     ee.add_argument("--offline", action="store_true", help="use only the local cache: no Kraken request at all")
@@ -1657,8 +1680,8 @@ def _parser():
                     help="quick test: only ~N photos (default 150), in its own database (exam-v3-rapida.sqlite); leaves "
                          "rapida-v3.json for the screen. Orientative: it is not the exam")
     er = sub.add_parser("exam-report", help="v3: Spanish markdown report of the exam (no model)")
-    common(er, "3", ("3",))
-    er.add_argument("--exam-db", default=DEFAULT_EXAM_DB_V3)
+    common(er, "3", ("3", "live"))
+    er.add_argument("--exam-db", default=None, help="default: exam-v3.sqlite for v3, exam-live.sqlite for live")
     er.add_argument("--variant", default=None, metavar="ID", help="report of an exam run with a variant of config/qwen-quick-variants.json")
     er.add_argument("--out", default=os.path.join(DATA_DIR, "informe-examen-v3.md"))
     rp = sub.add_parser("report", help="Spanish markdown report (no model)")
@@ -1681,6 +1704,13 @@ def main(argv=None):
             args.config, args.db = args.config or config_path, args.db or default_db
             print("Qwen operador: versión {} (config {}, base {})".format(args.version, args.config, args.db))
         cfg = load_config(args.config) if args.command != "report" else None
+        if args.command in ("exam", "exam-report"):
+            args.exam_db = args.exam_db or (DEFAULT_EXAM_DB_LIVE if args.version == "live" else DEFAULT_EXAM_DB_V3)
+        if args.command in ("exam", "exam-report") and args.version == "live":
+            # the same size / leverage / products the live process runs with (QWEN_LIVE_*): they are part of the config identity,
+            # and the gate only counts photos asked under the identity of the live database
+            from .futures_qwen_live import apply_overrides
+            cfg = apply_overrides(cfg)
         holdout_ms = load_holdout_ms()
         if args.command == "compare-prompts":
             from .futures_qwen_trader_probe import compare_lines, compare_prompts
@@ -1710,13 +1740,16 @@ def main(argv=None):
             from . import futures_qwen_quick_variants as variants
             from .futures_qwen_trader_exam import run_exam
             variant = variants.get_variant(args.variant) if args.variant or args.quick is not None else None
+            if args.version == "live" and variant is not None and variant["kind"] != "control":
+                raise TraderError("con --version live se pregunta lo que pregunta Qwen en vivo (variante «actual»): las otras "
+                                  "variantes se aplican sobre la v3")
             if variant is not None and variant.get("model") is None:
                 cfg = variants.apply_variant(cfg, variant)       # its own questions / state: hashed in the identity
             if args.positioning_db:
                 cfg = dict(cfg, positioning_db=os.path.abspath(args.positioning_db))
             history = History(args.cache_dir, holdout_ms, offline=args.offline)
             if not history.offline:
-                for product in list(cfg["exam"]["products"]) + list(cfg.get("state_context") or ()):
+                for product in dict.fromkeys(list(cfg["exam"]["products"]) + list(cfg.get("state_context") or ())):
                     print("candles {}: {} a {}".format(product, cfg["practice"]["from"], stamp(holdout_ms)))
                     history.prefetch(product, date_ms(cfg["practice"]["from"]) - cfg["practice"]["warmup_days"] * DAY_MS,
                                      holdout_ms)

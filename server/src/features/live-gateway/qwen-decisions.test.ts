@@ -124,6 +124,47 @@ describe('createQwenDecisions: why it waited', () => {
     expect(older.decisions[0]).toMatchObject({ score: null, look_n: null })
   })
 
+  it('delivers the factors of a look (real, mirror and reading per line) and reads a damaged or missing value as null', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'qwen-live-'))
+    dirs.push(dir)
+    const path = join(dir, 'live.sqlite')
+    const db = new DatabaseSync(path)
+    db.exec(`CREATE TABLE decisions(
+      product TEXT, bucket_ms INTEGER, t_ms INTEGER, decided_at_ms INTEGER, action TEXT,
+      confidence REAL, latency_ms INTEGER, prompt_version TEXT, reason TEXT, override TEXT, factors_json TEXT);
+      CREATE TABLE skipped(product TEXT, bucket_ms INTEGER, t_ms INTEGER, reason TEXT, detail TEXT)`)
+    const good = JSON.stringify({
+      real: [1, -2, 0, 0, 0.5, 1, 0, 0],
+      mirror: [-1, 2, 0, 0, -0.5, -1, 0, 0],
+      lectura: [1, -2, 0, 0, 0.5, 1, 0, 0],
+    })
+    const insert = db.prepare(
+      `INSERT INTO decisions VALUES('PF_XBTUSD',?,?,?,'ESPERAR',0.5,10,'5',NULL,'ventana_mirando',?)`,
+    )
+    insert.run(0, MIN15, MIN15 + 1, good)
+    insert.run(MIN15, 2 * MIN15, 2 * MIN15 + 1, '{"real":[1,2]}')
+    insert.run(2 * MIN15, 3 * MIN15, 3 * MIN15 + 1, 'no json')
+    insert.run(3 * MIN15, 4 * MIN15, 4 * MIN15 + 1, null)
+    db.close()
+    const result = createQwenDecisions({ liveDbPath: path }).report('PF_XBTUSD')
+    if (result.status !== 'ok') throw new Error('expected ok')
+    const [ok, short, bad, none] = [...result.decisions].reverse()
+    expect(ok!.factors).toEqual({
+      real: [1, -2, 0, 0, 0.5, 1, 0, 0],
+      mirror: [-1, 2, 0, 0, -0.5, -1, 0, 0],
+      lectura: [1, -2, 0, 0, 0.5, 1, 0, 0],
+    })
+    expect([short!.factors, bad!.factors, none!.factors]).toEqual([
+      null,
+      null,
+      null,
+    ])
+    const old = seed([['PF_XBTUSD', MIN15, 'ESPERAR', 0.5]])
+    const older = createQwenDecisions({ liveDbPath: old }).report('PF_XBTUSD')
+    if (older.status !== 'ok') throw new Error('expected ok')
+    expect(older.decisions[0]!.factors).toBeNull()
+  })
+
   it('still reads an older base without those columns', () => {
     const path = seed([['PF_XBTUSD', MIN15, 'ESPERAR', 0.5]])
     const result = createQwenDecisions({ liveDbPath: path }).report('PF_XBTUSD')

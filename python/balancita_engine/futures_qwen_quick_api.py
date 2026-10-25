@@ -20,7 +20,7 @@ QUICK_ID = models.QWEN_LIVE_ID
 class QuickTestApi:
     def __init__(self, exam_db_path=None, python=None, spawn=None):
         from . import futures_qwen_trader as qt
-        self.exam_db_path = os.path.abspath(exam_db_path or os.environ.get(models.QWEN_EXAM_DB_ENV) or qt.DEFAULT_EXAM_DB_V3)
+        self.exam_db_path = os.path.abspath(exam_db_path or os.environ.get(models.QWEN_EXAM_DB_ENV) or qt.DEFAULT_EXAM_DB_LIVE)
         self.python = python or default_python()
         self.spawn = spawn or popen_detached
         self._lock = threading.Lock()
@@ -82,7 +82,8 @@ class QuickTestApi:
         with self._lock:
             if any(v["state"] == "running" for v in self._catalog()):
                 raise GateApiError("busy", "Ya hay una prueba rápida en curso.", 409)
-            args = [self.python, "-m", "balancita_engine.futures_qwen_trader", "exam", "--version", "3",
+            # «actual» is Qwen en vivo as it runs today (its own config, ``--version live``); the others change the v3 questions
+            args = [self.python, "-m", "balancita_engine.futures_qwen_trader", "exam", "--version", chosen.get("base", "3"),
                     "--exam-db", self.exam_db_path, "--quick", str(exam.QUICK_SNAPSHOTS), "--variant", chosen["id"]]
             env = dict(os.environ)
             env["PYTHONPATH"] = os.pathsep.join(p for p in (os.path.join(ROOT, "python"), env.get("PYTHONPATH")) if p)

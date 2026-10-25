@@ -39,6 +39,14 @@ def walk(n, seed, start, price=100.0, sigma=0.0002):
     return out
 
 
+def legacy_letters(cfg):
+    """The live config without the sheet and the factors question: the window asks the two-option question of letters
+    (``live.force_question``), the way version 4 did. Same window logic, so its tests keep running on letters."""
+    cfg.pop("factors", None)
+    cfg["state_ficha"], cfg["state_context"] = False, []
+    return cfg
+
+
 class Policy:
     """What the fake model answers: one option per kind of question, by option id."""
 
@@ -79,6 +87,8 @@ class Env:
             self.cfg["live"]["force_window_h"] = 0           # the window is opt-in in tests: the rest exercises the normal flat question
         self.cfg["mirror"] = mirror
         self.tmp = db or tempfile.mkdtemp()
+        # the sheet reads the collector's database: a test never reads the real one of this machine
+        self.cfg.setdefault("positioning_db", os.path.join(self.tmp, "sin-posicionamiento.sqlite"))
         self.db_path = os.path.join(self.tmp, "live.sqlite")
         self.policy = policy or Policy()
         self.provider = provider or llm.FakeProvider(entries=self.policy)
@@ -546,6 +556,7 @@ class OpportunityWindowTests(unittest.TestCase):
         """One product (the prompts of the fake model are counted in order). ``plan(look, mirrored)`` is p(LARGO) of that
         question; both option orders get the same answer, so the mean is that number. Looks are 0-based."""
         cfg = live.apply_overrides(LIVE_CFG, {"QWEN_LIVE_FORCE_SIDE_AFTER_H": str(delay), "QWEN_LIVE_PRODUCTS": "PF_XBTUSD"})
+        legacy_letters(cfg)
         cfg["live"]["force_window_h"], cfg["live"]["force_min_looks"] = window_h, min_looks
         cfg["live"]["force_min_score"], cfg["live"]["force_neutral_lean"] = min_score, neutral
         cfg["live"]["force_record_tol"] = tol
@@ -886,7 +897,7 @@ class OpportunityWindowTests(unittest.TestCase):
         for key in ("force_window_h", "force_min_looks", "force_side_after_h", "force_question"):
             cfg["live"].pop(key)
         self.assertEqual(qt.config_hash(cfg), qt.config_hash(LIVE_CFG))
-        self.assertEqual(qt.config_hash(LIVE_CFG), "32a13314d45f58ca206728bc81f070129fb90ab8b4a17d0a2ad59f52d510ce58")
+        self.assertEqual(qt.config_hash(LIVE_CFG), "db3512cc6136fc174811dd2a8f416cf2b8bf5c2bdf1808d540b2e3a7026a56da")
 
 
 class LockTests(unittest.TestCase):

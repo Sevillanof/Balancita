@@ -12,12 +12,20 @@ Cómo decide (``config/qwen-live.json``)
       0,5 % y 3 %, cierre obligatorio a las 4 h y espera de 15 min después de cerrar. Tamaño fijo de 100 USD.
     * Si el modelo está caído o lento, ese despertar queda anotado como OMITIDO con el motivo y no se reintenta después:
       nunca se inventa una decisión y sin respuesta no se opera.
+    * Versión 5 de la config: el estado es la ficha de 8 factores (``futures_qwen_ficha``) con las velas de los otros activos
+      (renglón F7) y el posicionamiento del colector, que se lee en SOLO lectura (renglón F6; sin base dice n/d y se sigue). La
+      ventana de oportunidad hace una llamada por factores con el estado real y otra con el espejo
+      (``futures_qwen_factors``); la pregunta de posición sigue siendo una letra.
 
 Una base propia (``data/qwen-live/live.sqlite`` o ``QWEN_LIVE_DB``) y UN solo proceso por base (candado de archivo). Si el
-proceso se reinicia, recupera la posición abierta y no repite un despertar ya decidido.
+proceso se reinicia, recupera la posición abierta y no repite un despertar ya decidido. Si la base es de OTRA configuración
+(cambió la versión del prompt, el tamaño, los productos...), al arrancar se ARCHIVA (se renombra a ``live-<hash>.sqlite`` en la
+misma carpeta, después de cerrar la posición abierta como ``fin_de_bloque`` / ``cambio_de_version``) y empieza una nueva: nada
+se borra y nada de lo viejo se mezcla con lo nuevo.
 
     python -m balancita_engine.futures_qwen_live                      # corre hasta Ctrl+C
     python -m balancita_engine.futures_qwen_live --export datos.jsonl  # decisiones para reentrenar offline (sin modelo)
+    python -m balancita_engine.futures_qwen_live --positioning-db RUTA # otra base del colector para el renglón F6
 """
 
 import argparse
@@ -30,7 +38,9 @@ import time
 from decimal import Decimal
 
 from . import futures_llm_decisions as llm
+from . import futures_qwen_factors as fq
 from . import futures_qwen_trader as qt
+from . import positioning_data
 from .futures_products import is_product_id
 from .futures_history import (DAY_MS, HOUR_MS, MINUTE_MS, CandleCache, HistoryError, fetch_candles, fetch_funding,
                               fill_gaps)
@@ -44,6 +54,8 @@ DEFAULT_DB = os.path.join(DEFAULT_DIR, "live.sqlite")
 DEFAULT_CACHE = os.path.join(DEFAULT_DIR, "cache")
 SCHEMA_VERSION = 1
 SOURCE = "live"
+POSITIONING_KEEP_MS = 3 * DAY_MS                # F6 needs the last bucket and the one 24 h before: no need to read two years
+CONTEXT_KEEP_MS = 3 * DAY_MS                    # F7 needs 24 h of the other assets
 
 # Motivos de un despertar omitido (se guardan tal cual y se muestran en la Terminal).
 SKIP_TEXT = {
@@ -179,7 +191,7 @@ CREATE TABLE IF NOT EXISTS decisions(
   orders_json TEXT, override TEXT, reason TEXT, reason_json TEXT, mirror_action TEXT, mirror_p REAL, wake_json TEXT,
   state_text TEXT, state_hash TEXT, latency_ms INTEGER, threshold REAL, prompt_version TEXT, prompt_hash TEXT, model TEXT,
   config_hash TEXT, position_json TEXT, net_bp_now REAL, trade_no INTEGER,
-  lean REAL, lean_m REAL, lean_num REAL, score REAL, best_score REAL, look_n INTEGER, mirror_ok INTEGER,
+  lean REAL, lean_m REAL, lean_num REAL, score REAL, best_score REAL, look_n INTEGER, mirror_ok INTEGER, factors_json TEXT,
   PRIMARY KEY(product, bucket_ms));
 CREATE TABLE IF NOT EXISTS skipped(
   product TEXT NOT NULL, bucket_ms INTEGER NOT NULL, t_ms INTEGER NOT NULL, at_ms INTEGER NOT NULL, reason TEXT NOT NULL,
@@ -201,7 +213,7 @@ CREATE TABLE IF NOT EXISTS trader_state(
 
 _ADDED_COLUMNS = {
     "decisions": (("lean", "REAL"), ("lean_m", "REAL"), ("lean_num", "REAL"), ("score", "REAL"), ("best_score", "REAL"),
-                  ("look_n", "INTEGER"), ("mirror_ok", "INTEGER")),
+                  ("look_n", "INTEGER"), ("mirror_ok", "INTEGER"), ("factors_json", "TEXT")),
     "trader_state": (("window_json", "TEXT"),),
 }
 
@@ -223,6 +235,12 @@ def position_from_json(text):
     raw = json.loads(text)
     raw["entry_px"], raw["qty"] = D(raw["entry_px"]), D(raw["qty"])
     return qt.Position(**raw)
+
+
+def identity_of(cfg):
+    """What a live database is made with: it keeps this in ``meta`` and refuses (or, in ``main``, archives itself) when it changes."""
+    return {"schema_version": SCHEMA_VERSION, "config_hash": qt.config_hash(cfg), "prompt_version": cfg["prompt"]["version"],
+            "products": list(cfg["products"])}
 
 
 class LiveStore:
@@ -267,9 +285,10 @@ class LiveStore:
                             (at_ms, place, product, kind, str(detail)[:2000]))
 
     def check_identity(self, cfg):
-        """A live database belongs to one config: a position opened under other rules must not be judged under these."""
-        wanted = {"schema_version": SCHEMA_VERSION, "config_hash": qt.config_hash(cfg),
-                  "prompt_version": cfg["prompt"]["version"], "products": list(cfg["products"])}
+        """A live database belongs to one config: a position opened under other rules must not be judged under these.
+        (``main`` archives a database of another config BEFORE getting here, see ``archive_other_config``; a caller that did
+        not is still refused.)"""
+        wanted = identity_of(cfg)
         stored = self.meta()
         for key, value in wanted.items():
             if key in stored and stored[key] != value:
@@ -312,8 +331,8 @@ class LiveStore:
             "INSERT OR IGNORE INTO decisions(product, bucket_ms, t_ms, decided_at_ms, kind, action, model_action, p_action, "
             "confidence, probs_json, orders_json, override, reason, reason_json, mirror_action, mirror_p, wake_json, state_text, "
             "state_hash, latency_ms, threshold, prompt_version, prompt_hash, model, config_hash, position_json, net_bp_now, "
-            "trade_no, lean, lean_m, lean_num, score, best_score, look_n, mirror_ok) "
-            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "trade_no, lean, lean_m, lean_num, score, best_score, look_n, mirror_ok, factors_json) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (product, event["t_ms"] - BUCKET_MS, event["t_ms"], now_ms, event["kind"], event["action"],
              event.get("model_action"), event.get("p_action"), answer.get("confidence"),
              json.dumps(answer.get("probabilities")), json.dumps(orders), event.get("override"), event.get("reason"),
@@ -322,7 +341,8 @@ class LiveStore:
              str(meta["prompt_version"]), orders[0].get("prompt_hash"), meta["model"], meta["config_hash"],
              json.dumps(event.get("position")), event.get("net_bp_now"), event.get("trade_no"), event.get("lean"),
              event.get("lean_m"), event.get("lean_num"), event.get("score"), event.get("best_score"), event.get("look_n"),
-             None if event.get("mirror_ok") is None else int(event["mirror_ok"])))
+             None if event.get("mirror_ok") is None else int(event["mirror_ok"]),
+             None if not event.get("factors") else json.dumps(event["factors"])))
 
     def put_skipped(self, product, t_ms, kind, detail, wake, now_ms):
         self.db.execute("INSERT OR IGNORE INTO skipped VALUES(?,?,?,?,?,?,?)",
@@ -387,8 +407,9 @@ class WakeGate:
     """Sits between ``Trader`` and ``LlmDecider``. It turns "the model cannot answer" into ``WakeSkipped`` (the wake is
     recorded as omitted and never retried) and refuses to ask at all for wakes that are too old or already decided."""
 
-    def __init__(self, inner, provider, budget_s, clock=time.monotonic):
+    def __init__(self, inner, provider, budget_s, clock=time.monotonic, factors=None):
         self.inner, self.provider, self.budget_s, self.clock = inner, provider, budget_s, clock
+        self.factors = factors                            # ``FactorsDecider`` of the window (configs with ``factors``)
         self.mode = "live"
         self._healthy = None
 
@@ -398,8 +419,19 @@ class WakeGate:
         if mode == "live":
             self.inner.deadline = self.clock() + self.budget_s
             self.inner.down = 0
+            if self.factors is not None:
+                self.factors.deadline, self.factors.down = self.inner.deadline, 0
 
     def ask(self, key, t_ms, step, question, state_text, *, single=False):
+        self._check()
+        try:
+            return self.inner.ask(key, t_ms, step, question, state_text, single=single)
+        except qt.ModelDown:
+            raise qt.WakeSkipped("modelo_caido", SKIP_TEXT["modelo_caido"]) from None
+        except qt.BudgetExhausted:
+            raise qt.WakeSkipped("modelo_lento", SKIP_TEXT["modelo_lento"]) from None
+
+    def _check(self):
         if self.mode == "late":
             raise qt.WakeSkipped("proceso_detenido", SKIP_TEXT["proceso_detenido"])
         if self.mode == "done":
@@ -408,8 +440,14 @@ class WakeGate:
             self._healthy = bool(self.provider.health())
         if not self._healthy:
             raise qt.WakeSkipped("modelo_caido", SKIP_TEXT["modelo_caido"])
+
+    def ask_factors(self, key, t_ms, step, state_text):
+        """The factors question (``futures_qwen_factors``) of one STATE, with the same gate as ``ask``."""
+        self._check()
+        if self.factors is None:
+            raise qt.TraderError("esta configuración no tiene la pregunta por factores (falta 'factors')")
         try:
-            return self.inner.ask(key, t_ms, step, question, state_text, single=single)
+            return self.factors.ask(key, t_ms, step, state_text)
         except qt.ModelDown:
             raise qt.WakeSkipped("modelo_caido", SKIP_TEXT["modelo_caido"]) from None
         except qt.BudgetExhausted:
@@ -417,6 +455,17 @@ class WakeGate:
 
 
 # --------------------------------------------------------------------------- the operator
+
+
+def closed_fields(trade, notional, leverage, margin, now):
+    """The columns of a closed trade (``trade``: the dict ``Trader`` returns in a ``trade`` event)."""
+    return dict(
+        status="closed", side=trade["side"], entry_ms=trade["entry_ms"], exit_ms=trade["exit_ms"], entry_px=trade["entry_fill"],
+        exit_px=repr(trade["exit_px"]), qty=trade["qty"], notional_usd=str(notional), leverage=str(leverage),
+        margin_usd=str(margin), gross_usd=trade["gross_usd"], fees_usd=trade["fees_usd"], funding_usd=trade["funding_usd"],
+        net_usd=trade["net_usd"], net_bp=trade["net_bp"], funding_status=trade["funding_status"], closed_by=trade["closed_by"],
+        exit_reason=trade["exit_reason"], entry_reason=trade["entry_reason"], entry_p=trade["entry_p"],
+        hold_min=trade["hold_min"], mfe_bp=trade["mfe_bp"], mae_bp=trade["mae_bp"], closed_at_ms=now)
 
 
 def _hhmm(ms):
@@ -453,7 +502,17 @@ class LiveOperator:
         served = getattr(provider, "served_model", None)
         self.model = model or (served() if callable(served) else None) or getattr(provider, "model_ref", None) or "unknown"
         inner = qt.LlmDecider(provider, cfg, clock=clock, model=self.model)
-        self.gate = WakeGate(inner, provider, float(live.get("wake_budget_seconds", 240)), clock)
+        by_factors = fq.FactorsDecider(provider, cfg, clock=clock, model=self.model) if cfg.get("factors") else None
+        self.gate = WakeGate(inner, provider, float(live.get("wake_budget_seconds", 240)), clock, factors=by_factors)
+        # What the sheet (``state_ficha``) needs besides the candles of the product: the closes of the other assets (row F7,
+        # fed like the exam does) and the collector's positioning database (row F6, read-only, read again every few minutes).
+        self.context_pool = list(cfg.get("state_context") or ())
+        self.positioning_path = cfg.get("positioning_db") or positioning_data.default_path()
+        self.positioning_every_ms = int(float(live.get("positioning_refresh_minutes", 10)) * MINUTE_MS)
+        self.positioning = {}                             # product -> PositioningFeed
+        self.positioning_checked_ms = 0
+        self._positioning_seen = {}                       # product -> last availability said in the log
+        self._context_warned = set()
         self.config_hash = qt.config_hash(cfg)
         self.traders = {}
         self.funding_checked_ms = 0
@@ -501,10 +560,12 @@ class LiveOperator:
         hours = float(live_cfg.get("force_side_after_h") or 0)
         trader.force_idle_ms = int(hours * HOUR_MS) if hours > 0 else None
         trader.window_on = float(live_cfg.get("force_window_h") or 0) > 0
+        self._attach_sheet_data(product, trader, now)
         last_open = self.store.last_entry_ms(product)
         trader.last_open_ms = last_open
         trader.idle_since_ms = now                    # no opening on record: counted from this start
         self.traders[product] = trader
+        self._load_context(product, trader, (now // BAR_MS) * BAR_MS - self.warmup_ms, now)
         bars = fill_gaps(self.feed.bars(product, (now // BAR_MS) * BAR_MS - self.warmup_ms, now), BAR_MS)
         bars = [b for b in bars if b["bucket_start"] + BAR_MS <= now]
         warm = [b for b in bars if (b["bucket_start"] <= last_fed if last_fed is not None
@@ -533,6 +594,7 @@ class LiveOperator:
                 self._recovered("funding", None)
         except Exception as error:                        # noqa: BLE001
             self._failure("funding", None, error)
+        self._refresh_positioning(now)
         for product in self.cfg["products"]:
             if product not in self.traders:
                 try:
@@ -558,12 +620,85 @@ class LiveOperator:
             self.log("Qwen en vivo: no se pudieron leer las velas de {} ({}); se reintenta en el próximo ciclo."
                      .format(product, error))
             return
+        if fresh:
+            self._load_context(product, trader, fresh[0]["bucket_start"] - 3 * BAR_MS, now)
         for bar in fresh:
             if bar["bucket_start"] + BAR_MS > now or (trader.t and bar["bucket_start"] <= trader.t[-1]):
                 continue
             while trader.t and bar["bucket_start"] > trader.t[-1] + BAR_MS:
                 self._process(product, _flat_candle(repr(trader.c[-1]), trader.t[-1] + BAR_MS))
             self._process(product, bar)
+
+    # ---- what the sheet needs: other assets (F7) and positioning (F6)
+
+    def _attach_sheet_data(self, product, trader, now):
+        """Row F6: the collector's database, read-only. Without the file (or without rows of this product) F6 says «n/d» and the
+        process goes on; it is said once in the log, and again only when that changes."""
+        if not self.cfg.get("state_ficha"):
+            return
+        feed = positioning_data.PositioningFeed(self.positioning_path, product, since_ms=now - POSITIONING_KEEP_MS)
+        self.positioning[product] = feed
+        trader.positioning = feed
+        self._say_positioning(product, feed)
+
+    def _say_positioning(self, product, feed):
+        """One line in the log when the state of the positioning data of a product changes (and at the start). A missing FILE is
+        said once for all the products, not once per product."""
+        status = "ok" if feed.available else ("sin_archivo" if not os.path.isfile(self.positioning_path) else "sin_datos")
+        if self._positioning_seen.get(product) == status:
+            return
+        said = any(seen == status for other, seen in self._positioning_seen.items() if other != product)
+        self._positioning_seen[product] = status
+        self._meta("positioning_" + product, status == "ok")
+        if status == "ok":
+            self.log("Qwen en vivo: posicionamiento de {} leído de {} (solo lectura, se vuelve a leer cada {} min).".format(
+                product, self.positioning_path, self.positioning_every_ms // MINUTE_MS))
+        elif status == "sin_archivo" and not said:
+            self.log("Qwen en vivo: ATENCIÓN, no existe la base de posicionamiento ({}): el renglón F6 de la ficha dice n/d y el "
+                     "proceso sigue igual. Se vuelve a mirar solo; para usar otra ruta, --positioning-db o POSITIONING_DB_PATH "
+                     "(pnpm dev escribe server/data/dev-live/positioning.sqlite con el colector).".format(self.positioning_path))
+        elif status == "sin_datos":
+            self.log("Qwen en vivo: ATENCIÓN, la base de posicionamiento ({}) no tiene datos de {}: su renglón F6 dice n/d y se "
+                     "sigue igual.".format(self.positioning_path, product))
+
+    def _refresh_positioning(self, now):
+        if not self.positioning or now - self.positioning_checked_ms < self.positioning_every_ms:
+            return
+        self.positioning_checked_ms = now
+        for product, feed in self.positioning.items():
+            try:
+                feed.reload(since_ms=now - POSITIONING_KEEP_MS)
+            except Exception as error:                    # noqa: BLE001 - F6 is optional: never stop the process for it
+                self._failure("posicionamiento", product, error)
+                continue
+            self._recovered("posicionamiento", product)
+            self._say_positioning(product, feed)
+
+    def _load_context(self, product, trader, from_ms, to_ms):
+        """Closes of the other assets, keyed by the END of each 5m candle (``trader.context``, as the exam builds it): row F7 of
+        the sheet. A product is never its own context. An asset whose candles cannot be read leaves F7 «n/d» for that asset
+        (said once) and never stops the product."""
+        for other in self.context_pool:
+            if other == product:
+                continue
+            try:
+                bars = fill_gaps(self.feed.bars(other, from_ms, to_ms), BAR_MS)
+            except Exception as error:                    # noqa: BLE001
+                if (product, other) not in self._context_warned:
+                    self._context_warned.add((product, other))
+                    self.log("Qwen en vivo: no se pudieron leer las velas de {} para el contexto de {} ({}); el renglón F7 queda "
+                             "sin ese activo hasta que vuelvan.".format(other, product, error))
+                continue
+            if (product, other) in self._context_warned:
+                self._context_warned.discard((product, other))
+                self.log("Qwen en vivo: las velas de {} (contexto de {}) volvieron.".format(other, product))
+            closes = trader.context.setdefault(other, {})
+            for bar in bars:
+                end = int(bar["bucket_start"]) + BAR_MS
+                if end <= to_ms:
+                    closes[end] = float(bar["close"])
+            for key in [k for k in closes if k < to_ms - CONTEXT_KEEP_MS]:
+                del closes[key]
 
     # ---- resilience: model state, unexpected failures, heartbeat
 
@@ -721,18 +856,99 @@ class LiveOperator:
             mark_px=trader.c[-1], mark_ms=t_ms, net_now_usd=str(mark["net_usd"]), opened_at_ms=now)
 
     def _write_closed(self, product, trade, now):
-        self.store.put_trade(
-            product, trade["trade_no"], status="closed", side=trade["side"], entry_ms=trade["entry_ms"],
-            exit_ms=trade["exit_ms"], entry_px=trade["entry_fill"], exit_px=repr(trade["exit_px"]), qty=trade["qty"],
-            notional_usd=str(self.notional), leverage=str(self.leverage), margin_usd=str(self.margin),
-            gross_usd=trade["gross_usd"], fees_usd=trade["fees_usd"],
-            funding_usd=trade["funding_usd"], net_usd=trade["net_usd"], net_bp=trade["net_bp"],
-            funding_status=trade["funding_status"], closed_by=trade["closed_by"], exit_reason=trade["exit_reason"],
-            entry_reason=trade["entry_reason"], entry_p=trade["entry_p"], hold_min=trade["hold_min"],
-            mfe_bp=trade["mfe_bp"], mae_bp=trade["mae_bp"], closed_at_ms=now)
+        self.store.put_trade(product, trade["trade_no"], **closed_fields(trade, self.notional, self.leverage, self.margin, now))
         self.log("{} {}: cierre {} por {} — neto {} USD (costos {} USD, funding {} USD, {})".format(
             _hhmm(trade["exit_ms"]), product, "LARGO" if trade["side"] == "LONG" else "CORTO", trade["closed_by"],
             _usd(trade["net_usd"]), _usd(trade["fees_usd"]), _usd(trade["funding_usd"]), trade["funding_status"]))
+
+
+# --------------------------------------------------------------------------- a new configuration, a new database
+
+CHANGE_CLOSE = "cambio_de_version"                # exit_reason of a position closed because the configuration changed
+
+
+def _close_open_trades(db_path, cfg, funding_for, now_ms, log):
+    """Closes, in the database that is about to be archived, every position still open: ``closed_by`` ``fin_de_bloque`` (like the
+    end of a practice block: not a decision of Qwen), ``exit_reason`` ``cambio_de_version``. It closes at the last price the old
+    process saw (``mark_px`` at ``mark_ms``), with the same accounting as always (``settle``: exit costs and the funding
+    published up to that moment, when the public funding can be read; otherwise the trade says so in ``funding_status``).
+    Nothing needs the model. Returns ``[(product, trade_no, net_usd)]``."""
+    store = LiveStore(db_path)
+    done = []
+    try:
+        open_rows = [dict(r) for r in store.db.execute("SELECT * FROM trades WHERE status='open' ORDER BY product, trade_no")]
+        for row in open_rows:
+            product = row["product"]
+            state = store.load_state(product)
+            if state and state.get("position_json"):
+                position = position_from_json(state["position_json"])
+            else:                                     # the state row is gone: rebuild the position from the trade row
+                position = qt.Position(
+                    side=row["side"], entry_ms=row["entry_ms"], entry_ref=float(row["entry_px"]), entry_px=D(row["entry_px"]),
+                    qty=D(row["qty"]), stop_px=row["stop_px"], stop_pct=None, max_hold_ms=row["max_hold_ms"],
+                    entry_p=row["entry_p"], entry_reason=row["entry_reason"], trade_no=row["trade_no"],
+                    mfe_bp=row["mfe_bp"] or 0.0, mae_bp=row["mae_bp"] or 0.0)
+            mark_px = row["mark_px"] if row["mark_px"] else position.entry_ref
+            mark_ms = row["mark_ms"] if row["mark_ms"] else now_ms
+            try:
+                rows = funding_for(product) if funding_for else []
+            except Exception:                         # noqa: BLE001 - no network: the funding is left unknown, the close is not
+                rows = []
+            notional = D(row["notional_usd"] or cfg["notional_usd"])
+            trader = qt.Trader(cfg, product, None, qt.FundingLine(rows), key=product, entry_threshold=cfg["entry_threshold"])
+            trader.notional, trader.position = notional, position
+            trader.t, trader.c = [int(mark_ms) - BAR_MS], [float(mark_px)]
+            trade = [e["trade"] for e in trader.force_close("fin_de_bloque") if e["type"] == "trade"][0]
+            trade["exit_reason"] = CHANGE_CLOSE
+            leverage = D(row["leverage"] or "1")
+            with store.db:
+                store.put_trade(product, row["trade_no"], **closed_fields(trade, notional, leverage, notional / leverage, now_ms))
+                store.db.execute("UPDATE trader_state SET position_json=NULL, window_json=NULL, updated_ms=? WHERE product=?",
+                                 (now_ms, product))
+            done.append((product, row["trade_no"], trade["net_usd"]))
+            log("Qwen en vivo: la posición {} de {} (n.º {}) estaba abierta en la base vieja: se cerró como fin_de_bloque / {} a "
+                "{} — neto {} USD.".format("LARGO" if row["side"] == "LONG" else "CORTO", product, row["trade_no"], CHANGE_CLOSE,
+                                           _hhmm(int(mark_ms)), _usd(trade["net_usd"])))
+        return done
+    finally:
+        store.close()
+
+
+def archive_other_config(db_path, cfg, *, funding_for=None, now_ms=None, log=print):
+    """If ``db_path`` was made with ANOTHER configuration (``identity_of``: config hash, prompt version, products, schema), it
+    is archived and the live process starts a new database. NEVER deleted: the file is renamed, in the same folder, to
+    ``live-<first 12 characters of the old config hash>.sqlite`` (``-2``, ``-3``... if that name is taken), after closing its
+    open position, if any (``_close_open_trades``). Everything it recorded (decisions, skipped wakes, trades, errors) stays
+    readable in the archive. Returns ``{path, old_hash, closed}`` or ``None`` when there is nothing to archive (no file, an
+    empty one, or the same configuration)."""
+    if not os.path.isfile(db_path):
+        return None
+    now_ms = int(time.time() * 1000) if now_ms is None else now_ms
+    try:
+        old = LiveStore(db_path, readonly=True)
+        try:
+            stored = old.meta()
+        finally:
+            old.close()
+    except sqlite3.Error:
+        return None                                   # not a live database (or an empty file): ``LiveStore`` deals with it
+    wanted = identity_of(cfg)
+    if not stored or all(stored.get(key, value) == value for key, value in wanted.items()):
+        return None
+    old_hash = str(stored.get("config_hash") or "sin-hash")
+    closed = _close_open_trades(db_path, cfg, funding_for, now_ms, log)
+    base = os.path.join(os.path.dirname(os.path.abspath(db_path)), "live-{}".format(old_hash[:12]))
+    target, n = base + ".sqlite", 1
+    while os.path.exists(target):
+        n += 1
+        target = "{}-{}.sqlite".format(base, n)
+    for suffix in ("", "-wal", "-shm", "-journal"):
+        if os.path.exists(db_path + suffix):
+            os.replace(db_path + suffix, target + suffix)
+    log("Qwen en vivo: la base {} era de otra configuración (hash {}…, ahora {}…). Se ARCHIVÓ como {} (no se borró nada: decisiones, "
+        "operaciones y errores siguen ahí) y empieza una base nueva.".format(
+            db_path, old_hash[:12], wanted["config_hash"][:12], target))
+    return {"path": target, "old_hash": old_hash, "closed": closed}
 
 
 # --------------------------------------------------------------------------- learning data
@@ -830,6 +1046,10 @@ def _parser():
     parser.add_argument("--db", default=None, help="base en vivo (default: $QWEN_LIVE_DB o data/qwen-live/live.sqlite)")
     parser.add_argument("--cache-dir", default=None, help="caché de velas públicas (default: junto a la base)")
     parser.add_argument("--llama-url", default=None, help="default http://127.0.0.1:$LLAMA_PORT (solo loopback)")
+    parser.add_argument("--positioning-db", default=None, metavar="RUTA",
+                        help="base del colector de posicionamiento, abierta SOLO lectura para el renglón F6 de la ficha (default: "
+                             "$POSITIONING_DB_PATH o server/data/dev-live/positioning.sqlite, la que escribe pnpm dev); sin "
+                             "base, F6 dice n/d y el proceso sigue")
     parser.add_argument("--export", default=None, metavar="SALIDA.jsonl",
                         help="no corre nada: escribe las decisiones guardadas para reentrenar offline y sale")
     return parser
@@ -845,9 +1065,12 @@ def main(argv=None):
             print("{} decisiones escritas en {}".format(export_dataset(db_path, args.export), args.export))
             return 0
         cfg = apply_overrides(qt.load_config(args.config))
+        if args.positioning_db:
+            cfg["positioning_db"] = os.path.abspath(args.positioning_db)      # where the file is, not what Qwen is asked: not identity
         cache_dir = args.cache_dir or os.path.join(os.path.dirname(os.path.abspath(db_path)), "cache")
         with ProcessLock(db_path):
             provider = qt._provider(args.llama_url, timeout=float((cfg.get("live") or {}).get("model_timeout_seconds", 60)))
+            archive_other_config(db_path, cfg, funding_for=PublicFeed(cache_dir).funding, log=lambda m: print(m, flush=True))
             store = LiveStore(db_path)
             try:
                 if not provider.health():

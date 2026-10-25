@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  factorsLine,
   percent,
   probabilitiesText,
   skippedReason,
@@ -193,5 +194,51 @@ describe('waitReason: ventana de oportunidad', () => {
     expect(
       waitReason({ chosen: 'CORTO', override: 'entrada_forzada' }),
     ).toContain('Entró por inactividad')
+  })
+})
+
+describe('the reading of each line of the sheet', () => {
+  const factors = {
+    real: [1, 0, 0, 0, 0, 0, 0, 0],
+    mirror: [-1, 0, 0, 0, 0, 0, 0, 0],
+    lectura: [1.234, -0.4, 0, 0.04, -2, 2, 0.8, 0],
+  }
+  it('is one compact line with F1 to F8, a decimal comma and a real minus sign', () => {
+    expect(factorsLine(factors)).toBe(
+      'Lectura por renglón: F1 +1,2 · F2 −0,4 · F3 0,0 · F4 0,0 · F5 −2,0 · F6 +2,0 · F7 +0,8 · F8 0,0.',
+    )
+  })
+  it('says nothing when the row has no factors or they are damaged', () => {
+    expect(factorsLine(null)).toBeNull()
+    expect(factorsLine({ lectura: [1, 2, 3] })).toBeNull()
+    expect(factorsLine({ lectura: [1, 2, 3, 4, 5, 6, 7, 'x'] })).toBeNull()
+  })
+  it('explains a look and an entry of the window, and only those', () => {
+    const look = waitReason({
+      chosen: 'ESPERAR',
+      override: 'ventana_mirando',
+      model_action: 'CORTO',
+      lean_num: -0.2,
+      score: 0.2,
+      best_score: 0.3,
+      look_n: 4,
+      mirror_ok: 1,
+      lean: -0.3,
+      lean_m: 0.1,
+      factors,
+    })
+    expect(look).toContain('Mirando la mejor ocasión (mirada 4).')
+    expect(look).toContain('F1 +1,2 · F2 −0,4')
+    const entry = waitReason({
+      chosen: 'CORTO',
+      override: 'entrada_ventana',
+      score: 0.31,
+      factors,
+    })
+    expect(entry).toContain('Entró CORTO en la ventana de oportunidad')
+    expect(entry).toContain('F7 +0,8')
+    expect(
+      waitReason({ chosen: 'ESPERAR', override: 'espejo', factors }),
+    ).not.toContain('F1')
   })
 })

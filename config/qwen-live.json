@@ -1,7 +1,7 @@
 {
   "schema": "balancita-qwen-trader.v1",
   "version": "live",
-  "note": "Qwen operador EN VIVO (paper, sin claves ni órdenes reales): parte de la v3 (misma pregunta, mismas salidas, mismo espejo antes de entrar) y la consulta SOLO cada 15 minutos, tenga o no posición; nunca hay un despertar extra (movimiento fuerte, cerca del stop, funding o movimiento grande). Guardrails de explorador: stop a 1,5 x la volatilidad diaria acotado entre 0,5 % y 3 %, cierre obligatorio a las 4 h y espera de 15 min después de cerrar. Lo corre python -m balancita_engine.futures_qwen_live, con su propia base (data/qwen-live/live.sqlite). Las configs 1, 2, 2.1 y 3 quedan intactas.",
+  "note": "Qwen operador EN VIVO (paper, sin claves ni órdenes reales). Versión 5: el estado es la ficha de 8 factores (F1 a F8, con otros activos y el posicionamiento del colector) y la ventana de oportunidad hace UNA llamada por factores con el estado real y UNA con el espejo (gradiente de -2 a +2 por renglón, ver futures_qwen_factors.py), en vez de las dos preguntas de letras. lean = suma de F1 a F7 del real / 14, lean_m = lo mismo del espejo, lean_num = (lean - lean_m) / 2; el lado, el puntaje, el espejo que contradice, el récord de la ventana y las 12 h siguen siendo los de siempre. Los umbrales de la ventana (force_neutral_lean 0,05, force_min_score 0,15, force_record_tol 0,03) son los de la versión 4: la escala del gradiente es otra (un renglón en +1 mueve lean 1/14 = 0,07) y se recalibran con el primer día de datos. La pregunta de posición (MANTENER / CERRAR) no cambia: sigue siendo una letra, sobre el estado de la ficha con la cola de reglas (stop, cierre a las 4 h). live.force_question ya no se usa en la ventana (solo si se saca 'factors' de esta config, que vuelve a las preguntas de letras). Se la consulta SOLO cada 15 minutos, tenga o no posición; nunca hay un despertar extra. Guardrails de explorador: stop a 1,5 x la volatilidad diaria acotado entre 0,5 % y 3 %, cierre obligatorio a las 4 h y espera de 15 min después de cerrar. Lo corre python -m balancita_engine.futures_qwen_live, con su propia base (data/qwen-live/live.sqlite); si esa base es de otra configuración se archiva como live-<hash>.sqlite y arranca una nueva. El Examen con fotos del pasado de esta versión es `exam --version live` (exam-live.sqlite). Las configs 1, 2, 2.1 y 3 quedan intactas.",
   "products": [
     "PF_XBTUSD",
     "PF_ETHUSD"
@@ -11,8 +11,8 @@
   "timeframe_min": 5,
   "prompt": {
     "name": "qwen-trader",
-    "version": 4,
-    "system": "Sos un operador de futuros perpetuos en papel (sin dinero real). Respondé con exactamente una letra de opción y nada más.",
+    "version": 5,
+    "system": "Sos un operador de futuros perpetuos en papel (sin dinero real). Respondé con exactamente una línea con el formato que se pide y nada más.",
     "answer_line": "Respondé con una sola letra ({letters}):",
     "prefill": null,
     "probability_source": "auto",
@@ -252,6 +252,16 @@
     "force_min_looks": 6,
     "force_neutral_lean": 0.05,
     "force_min_score": 0.15,
-    "force_record_tol": 0.03
+    "force_record_tol": 0.03,
+    "positioning_refresh_minutes": 10
+  },
+  "state_ficha": true,
+  "state_context": [
+    "PF_XBTUSD",
+    "PF_ETHUSD",
+    "PF_SOLUSD"
+  ],
+  "factors": {
+    "question": "Mirá los factores F1 a F8 en ese orden. Para cada uno decí hacia dónde empuja el precio en las próximas 4 horas: -2 baja fuerte, -1 baja, 0 nada, +1 sube, +2 sube fuerte. Un factor que no ves claro es 0. F8 no vota: ponele 0. Respondé con exactamente una línea: F1:+1 F2:-2 F3:0 F4:0 F5:0 F6:0 F7:0 F8:0"
   }
 }

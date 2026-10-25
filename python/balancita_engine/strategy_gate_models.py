@@ -125,7 +125,11 @@ def live_config_hash(qwen_live_dir=None):
             finally:
                 db.close()
             if row and row[0]:
-                return row[0]
+                try:                                  # the live process stores its meta values as JSON: «"abc…"»
+                    value = json.loads(row[0])
+                except ValueError:
+                    value = row[0]
+                return value if isinstance(value, str) else row[0]
         except sqlite3.Error:
             pass
     return qt.config_hash(_read(QWEN_LIVE_CONFIG))
@@ -180,10 +184,13 @@ class RecordedTrades:
 
 
 LIVE_NOTE = ("Qwen en vivo se juzga sin llamar al modelo. Práctica (antes de la fecha de corte): las \"fotos\" del pasado "
-             "que Qwen ya contestó (examen por fotos, exam-v3.sqlite): largo en el quinto más inclinado a largo y corto en el "
-             "quinto más inclinado a corto, como operaciones de 4 h con costos y funding reales, una a la vez por producto. Examen (desde la fecha de corte): sus operaciones reales en paper, "
-             "cerradas; las abiertas no cuentan y Qwen sigue operando mientras tanto. Si las fotos todavía no tienen la pregunta "
-             "espejo, se ordenan por la inclinación simple (probabilidad de largo menos la de corto), que incluye el vicio del modelo.")
+             "que Qwen ya contestó con la configuración vigente (examen por fotos con la ficha de 8 factores, `exam --version "
+             "live`, exam-live.sqlite): largo en el quinto más inclinado a largo y corto en el quinto más inclinado a corto "
+             "(inclinación = suma de los gradientes de la ficha, real contra espejo, sobre 14), como operaciones de 4 h con costos "
+             "y funding reales, una a la vez por producto. Examen (desde la fecha de corte): sus operaciones reales en paper, "
+             "cerradas; las abiertas no cuentan y Qwen sigue operando mientras tanto. Las fotos contestadas con otra configuración "
+             "no cuentan: al cambiar la configuración hay que volver a correr el examen de fotos. Si las fotos todavía no tienen "
+             "la pregunta espejo, se ordenan por la inclinación simple (sin descontar el vicio del modelo).")
 
 
 class QwenLiveTrades:
@@ -202,15 +209,16 @@ class QwenLiveTrades:
             return []
         from . import futures_qwen_trader as qt
         from . import futures_qwen_trader_exam as exam
-        cfg = qt.load_config(qt.CONFIG_PATH_V3)
+        cfg = qt.load_config(qt.CONFIG_PATH_LIVE)
         share = cfg["exam_lean"]["extreme_share"]
         try:
             rows, meta = exam.load_answers(self.exam_db_path)
         except sqlite3.OperationalError:
             return []
-        # The photos count only if they were asked with the protocol in force now: answers from another prompt or
-        # config are never mixed in (a changed protocol means asking every photo again).
-        if meta.get("config_hash") != qt.config_hash(cfg):
+        # The photos count only if they were asked with the configuration of the live version under judgement (the hash its
+        # database carries): answers from another prompt or config are never mixed in (a changed one means asking every photo
+        # again, ``exam --version live``).
+        if meta.get("config_hash") != live_config_hash(os.path.dirname(self.live_db_path) if self.live_db_path else None):
             return []
         # lean_num (the part that comes from the numbers) needs the mirrored question. While the photos have not been
         # mirrored, the plain lean (p LARGO - p CORTO on the real numbers) orders them: weaker, and said in the report.
@@ -284,7 +292,7 @@ def model_subject(strategy_id, kronos_dir=None, qwen_exit_dir=None, qwen_live_di
         return model_spec(QWEN_ID), RecordedTrades(os.path.join(qwen_exit_dir, "qwen-exit.sqlite"), "qwen_exit_trade")
     if strategy_id == QWEN_LIVE_ID:
         from . import futures_qwen_trader as qt
-        exam_db = os.environ.get(QWEN_EXAM_DB_ENV) or qt.DEFAULT_EXAM_DB_V3
+        exam_db = os.environ.get(QWEN_EXAM_DB_ENV) or qt.DEFAULT_EXAM_DB_LIVE
         return model_spec(QWEN_LIVE_ID, qwen_live_dir), QwenLiveTrades(os.path.join(qwen_live_dir or QWEN_LIVE_DIR, "live.sqlite"), exam_db)
     raise KeyError(strategy_id)
 
