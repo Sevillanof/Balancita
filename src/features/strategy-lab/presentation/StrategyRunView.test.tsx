@@ -304,7 +304,16 @@ describe('StrategyRunView actions', () => {
     const user = userEvent.setup()
     const states = [
       { state: 'none', snapshots: 300, note: 'n' },
-      { state: 'running', snapshots: 300, note: 'n' },
+      {
+        state: 'running',
+        snapshots: 300,
+        note: 'n',
+        phase: 'preguntando',
+        answered: 30,
+        total: 300,
+        asking_ms: 1_000_000,
+        updated_ms: Date.now(),
+      },
       {
         state: 'done',
         snapshots: 300,
@@ -344,7 +353,12 @@ describe('StrategyRunView actions', () => {
       await screen.findByRole('button', { name: 'Prueba rápida' }),
     )
     expect(quick.start).toHaveBeenCalledWith('qwen-live')
-    await screen.findByText(/preguntando a Qwen sobre/)
+    expect(
+      await screen.findByRole('progressbar', {
+        name: 'Progreso de la prueba rápida',
+      }),
+    ).toHaveAttribute('aria-valuenow', '10')
+    await screen.findByText(/30 de 300 fotos/)
     at = 2
     await screen.findByText(/Prueba rápida \(orientativa\)/, undefined, {
       timeout: 8000,

@@ -24,6 +24,13 @@ export type QuickState = {
   state: 'none' | 'running' | 'done' | 'failed'
   answered?: number
   total?: number
+  /** `fotos` while the photos are made, `preguntando` once Qwen is asked. */
+  phase?: string
+  started_ms?: number
+  asking_ms?: number
+  updated_ms?: number
+  /** Set by the screen when it read this state (the browser clock). */
+  fetched_ms?: number
   summary?: QuickSummary | null
   error?: string | null
   snapshots: number
