@@ -9,6 +9,7 @@ export default function TerminalDecisions({
   selectedId,
   onSelect,
   notice,
+  health,
   selected,
   children,
   embedded = false,
@@ -18,6 +19,8 @@ export default function TerminalDecisions({
   onSelect: (id: string) => void
   /** Replaces the list when the engine has nothing to show. */
   notice?: ReactNode
+  /** Warning about the operator process (no heartbeat, model down); shown above the list, never instead of it. */
+  health?: ReactNode
   /** Detail of the selected decision (strip under the list). */
   selected?: ReactNode
   /** Extra detail below the strip (durable effects of the selection). */
@@ -83,6 +86,7 @@ export default function TerminalDecisions({
           </div>
         )}
       </div>
+      {health ? <p role="status">{health}</p> : null}
       {notice ? (
         <p role="status">{notice}</p>
       ) : rows.length === 0 ? (

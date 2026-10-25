@@ -136,6 +136,38 @@ describe('createQwenDecisions: why it waited', () => {
   })
 })
 
+describe('createQwenDecisions: heartbeat', () => {
+  it('delivers the last sign of life of the process, null when the base has none', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'qwen-live-'))
+    dirs.push(dir)
+    const path = join(dir, 'live.sqlite')
+    const db = new DatabaseSync(path)
+    db.exec(`CREATE TABLE decisions(product TEXT, bucket_ms INTEGER, t_ms INTEGER, decided_at_ms INTEGER, action TEXT,
+      confidence REAL, latency_ms INTEGER, prompt_version TEXT, reason TEXT);
+      CREATE TABLE skipped(product TEXT, bucket_ms INTEGER, t_ms INTEGER, reason TEXT, detail TEXT);
+      CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT NOT NULL)`)
+    db.prepare('INSERT INTO meta VALUES(?,?)').run('heartbeat_ms', '123456')
+    db.prepare('INSERT INTO meta VALUES(?,?)').run('model_ok', 'false')
+    db.close()
+    const result = createQwenDecisions({ liveDbPath: path }).report('PF_XBTUSD')
+    if (result.status !== 'ok') throw new Error('expected ok')
+    expect(result.heartbeat).toEqual({
+      heartbeat_ms: 123456,
+      model_ok: false,
+      last_error_ms: null,
+    })
+    const old = createQwenDecisions({
+      liveDbPath: seed([['PF_XBTUSD', MIN15, 'ESPERAR', 0.5]]),
+    }).report('PF_XBTUSD')
+    if (old.status !== 'ok') throw new Error('expected ok')
+    expect(old.heartbeat).toEqual({
+      heartbeat_ms: null,
+      model_ok: null,
+      last_error_ms: null,
+    })
+  })
+})
+
 describe('createQwenDecisions: decisions', () => {
   it('maps the operator actions, newest first, and ignores other products', () => {
     const path = seed([
@@ -171,6 +203,7 @@ describe('createQwenDecisions: decisions', () => {
     expect(result).toEqual({
       status: 'ok',
       decisions: [],
+      heartbeat: { heartbeat_ms: null, model_ok: null, last_error_ms: null },
       skipped: [
         {
           product: 'PF_XBTUSD',

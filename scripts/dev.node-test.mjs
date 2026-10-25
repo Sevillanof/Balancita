@@ -1244,3 +1244,81 @@ it('restartDelayMs backs off, resets after a minute up and gives up after 8 quic
   assert.equal(restartDelayMs({ restarts: 8, uptimeMs: 1000 }), null)
   assert.equal(restartDelayMs({ restarts: 8, uptimeMs: 61000 }), 1000)
 })
+
+describe('supervisor of the Qwen live operator', () => {
+  it('relaunches qwenlive with a 5 s backoff capped at 60 s, resetting after 5 stable minutes', async () => {
+    const { persistentRestartDelayMs, planChildExit } =
+      await import('./dev-provider-env.mjs')
+    const delays = [0, 1, 2, 3, 4, 10, 40].map((restarts) =>
+      persistentRestartDelayMs({ restarts, uptimeMs: 1000 }),
+    )
+    assert.deepEqual(delays, [5000, 10000, 20000, 40000, 60000, 60000, 60000])
+    assert.equal(
+      persistentRestartDelayMs({ restarts: 9, uptimeMs: 300_000 }),
+      5000,
+    )
+    // Never given up, unlike the other optional children (8 quick failures).
+    const plan = planChildExit({
+      name: 'qwenlive',
+      code: 1,
+      signal: null,
+      uptimeMs: 2000,
+      streak: 50,
+    })
+    assert.equal(plan.action, 'restart')
+    assert.equal(plan.delayMs, 60000)
+    assert.match(
+      plan.line,
+      /qwenlive exited \(code 1\) after 2 s up; restarting in 60 s/,
+    )
+    assert.equal(
+      planChildExit({
+        name: 'q',
+        code: 1,
+        signal: null,
+        uptimeMs: 1,
+        streak: 8,
+      }).action,
+      'down',
+    )
+  })
+
+  it('says why it exited and treats a signal as a reason too', async () => {
+    const { planChildExit } = await import('./dev-provider-env.mjs')
+    const plan = planChildExit({
+      name: 'qwenlive',
+      code: null,
+      signal: 'SIGKILL',
+      uptimeMs: 400_000,
+      streak: 3,
+    })
+    assert.equal(plan.reason, 'signal SIGKILL')
+    assert.equal(plan.resetStreak, true)
+    assert.equal(plan.delayMs, 5000)
+  })
+
+  it('keeps the lock exit and a held port terminal: no relaunch', async () => {
+    const { planChildExit } = await import('./dev-provider-env.mjs')
+    const locked = planChildExit({
+      name: 'qwenlive',
+      code: 2,
+      signal: null,
+      uptimeMs: 1000,
+      streak: 0,
+      sawLocked: true,
+    })
+    assert.equal(locked.action, 'down')
+    assert.match(locked.line, /already writing its database/)
+    assert.equal(
+      planChildExit({
+        name: 'qwenlive',
+        code: 1,
+        signal: null,
+        uptimeMs: 1000,
+        streak: 0,
+        sawAddrInUse: true,
+      }).action,
+      'down',
+    )
+  })
+})

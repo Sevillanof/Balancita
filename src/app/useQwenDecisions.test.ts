@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest'
-import { qwenAnalyses, qwenNotice } from './useQwenDecisions.ts'
+import {
+  qwenAnalyses,
+  qwenHealthNotice,
+  qwenNotice,
+} from './useQwenDecisions.ts'
 import { isApprovedAnalysis } from './terminal-approved.ts'
 
 const FIFTEEN = 900_000
@@ -63,5 +67,34 @@ describe('qwenNotice', () => {
     )
     expect(qwenNotice({ state: 'error' }, 0)).toMatch(/No se pudieron leer/)
     expect(qwenNotice({ state: 'ok' }, 0)).toMatch(/todavía no decidió/)
+  })
+})
+
+describe('qwenHealthNotice', () => {
+  const now = 10_000_000
+  it('says nothing while the heartbeat is fresh, or when the base has none', () => {
+    expect(
+      qwenHealthNotice(
+        { state: 'ok', heartbeatMs: now - 60_000, modelOk: true },
+        now,
+      ),
+    ).toBeNull()
+    expect(qwenHealthNotice({ state: 'ok' }, now)).toBeNull()
+    expect(qwenHealthNotice({ state: 'error' }, now)).toBeNull()
+  })
+
+  it('tells how long Qwen has been silent', () => {
+    expect(
+      qwenHealthNotice({ state: 'ok', heartbeatMs: now - 7 * 60_000 }, now),
+    ).toMatch(/Qwen sin latidos hace 7 min/)
+  })
+
+  it('says the model is out although the process is alive', () => {
+    expect(
+      qwenHealthNotice(
+        { state: 'ok', heartbeatMs: now - 1000, modelOk: false },
+        now,
+      ),
+    ).toMatch(/modelo local no responde.*sigue vivo/)
   })
 })

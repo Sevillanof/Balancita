@@ -17,6 +17,7 @@ import {
   findQwenModel,
   llamaPort,
   loadDevEnv,
+  planChildExit,
   onlyChildSpecs,
   planStartup,
   resolveLlamaModel,
@@ -163,6 +164,12 @@ function writeHealth() {
       restarts: entry.restarts,
       since_ms: entry.since,
       ...(entry.lastExit === undefined ? {} : { last_exit: entry.lastExit }),
+      ...(entry.lastExitReason === undefined
+        ? {}
+        : {
+            last_exit_reason: entry.lastExitReason,
+            last_exit_at_ms: entry.lastExitAtMs,
+          }),
     }
   try {
     writeFileSync(
@@ -310,26 +317,31 @@ function watch(entry) {
     }
     if (optionalChildren.has(name)) {
       const uptimeMs = Date.now() - health.startedAt
-      if (uptimeMs >= 60_000) health.streak = 0
-      const delay = restartDelayMs({ restarts: health.streak, uptimeMs })
-      // A port held by a stale process will not free itself: do not loop.
-      if (delay === null || state.sawAddrInUse || state.sawLocked) {
+      const plan = planChildExit({
+        name,
+        code,
+        signal,
+        uptimeMs,
+        streak: health.streak,
+        sawAddrInUse: state.sawAddrInUse,
+        sawLocked: state.sawLocked,
+        label: exitLabels[name] ?? 'The Real source',
+      })
+      if (plan.resetStreak) health.streak = 0
+      health.lastExit = signal ?? code
+      health.lastExitReason = plan.reason
+      health.lastExitAtMs = Date.now()
+      health.since = Date.now()
+      if (plan.action === 'down') {
         health.status = 'down'
-        health.lastExit = signal ?? code
-        health.since = Date.now()
         writeHealth()
-        process.stderr.write(
-          `[dev] ${name} exited (${signal ?? code}); the other processes keep running. ${exitLabels[name] ?? 'The Real source'} will be unavailable until you restart pnpm run dev.\n`,
-        )
+        process.stderr.write(`${plan.line}\n`)
         return
       }
+      const delay = plan.delayMs
       health.status = 'restarting'
-      health.lastExit = signal ?? code
-      health.since = Date.now()
       writeHealth()
-      process.stderr.write(
-        `[dev] ${name} exited (${signal ?? code}); restarting in ${Math.round(delay / 1000)} s.\n`,
-      )
+      process.stderr.write(`${plan.line}\n`)
       setTimeout(() => {
         if (shuttingDown) return
         const next = launch(entry.spec)

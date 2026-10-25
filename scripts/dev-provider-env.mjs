@@ -392,6 +392,55 @@ export function restartDelayMs({ restarts, uptimeMs }) {
   return Math.min(30_000, 1_000 * 2 ** attempt)
 }
 
+/**
+ * Children that must never be given up: they keep a long running record (the
+ * Qwen live operator). Backoff 5, 10, 20, 40, 60 s (cap); a child that stayed
+ * up 5 minutes starts the count again.
+ */
+export const PERSISTENT_CHILDREN = new Set(['qwenlive'])
+export function persistentRestartDelayMs({ restarts, uptimeMs }) {
+  const attempt = uptimeMs >= 300_000 ? 0 : restarts
+  return Math.min(60_000, 5_000 * 2 ** attempt)
+}
+
+/**
+ * What the supervisor does when an optional child exits: restart after a delay
+ * (`action: 'restart'`) or leave it down. A held port or an already-writing lock
+ * (`sawAddrInUse` / `sawLocked`) is always terminal: restarting cannot fix it.
+ * `line` is the clear sentence for stdout, with the exit reason.
+ */
+export function planChildExit({
+  name,
+  code,
+  signal,
+  uptimeMs,
+  streak,
+  sawAddrInUse = false,
+  sawLocked = false,
+  label = 'This process',
+}) {
+  const reason = signal ? `signal ${signal}` : `code ${code}`
+  const persistent = PERSISTENT_CHILDREN.has(name)
+  const delayMs = persistent
+    ? persistentRestartDelayMs({ restarts: streak, uptimeMs })
+    : restartDelayMs({ restarts: streak, uptimeMs })
+  if (delayMs === null || sawAddrInUse || sawLocked)
+    return {
+      action: 'down',
+      delayMs: null,
+      resetStreak: false,
+      reason,
+      line: `[dev] ${name} exited (${reason})${sawLocked ? ': another process is already writing its database' : ''}; the other processes keep running. ${label} will be unavailable until you restart pnpm run dev.`,
+    }
+  return {
+    action: 'restart',
+    delayMs,
+    resetStreak: persistent ? uptimeMs >= 300_000 : uptimeMs >= 60_000,
+    reason,
+    line: `[dev] ${name} exited (${reason}) after ${Math.round(uptimeMs / 1000)} s up; restarting in ${Math.round(delayMs / 1000)} s.`,
+  }
+}
+
 export function describeChildExit({ name, code, signal, sawAddrInUse }) {
   const port = DEV_PORTS[name === 'vite' ? 'vite' : name]
   const base = `[dev] ${name} exited (${signal ?? code})`

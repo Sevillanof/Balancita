@@ -216,7 +216,16 @@ describe('live market gateway', () => {
     const asked: string[] = []
     const on = await start(path, {
       qwenDecisions: {
-        report: () => ({ status: 'ok', decisions: [], skipped: [] }),
+        report: () => ({
+          status: 'ok',
+          decisions: [],
+          skipped: [],
+          heartbeat: {
+            heartbeat_ms: null,
+            model_ok: null,
+            last_error_ms: null,
+          },
+        }),
         trades: (product, limit) => {
           asked.push(`${product}:${limit}`)
           return product === 'bad'
