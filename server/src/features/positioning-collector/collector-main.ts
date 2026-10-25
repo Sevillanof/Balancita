@@ -1,5 +1,7 @@
+import { fileURLToPath } from 'node:url'
 import { acquireWriterLock } from '../../platform/writer-lock.ts'
 import { resolveFuturesProducts } from '../kraken-futures/futures-products.ts'
+import { DEFAULT_CATALOG_URL, loadCatalog } from './catalog.ts'
 import { PositioningCollector } from './collector.ts'
 import { createPositioningSource } from './source.ts'
 import { PositioningStore } from './store.ts'
@@ -25,7 +27,10 @@ store.startRun(Date.now())
 const collector = new PositioningCollector({
   store,
   source: createPositioningSource(),
-  products: resolveFuturesProducts(process.env).map((p) => p.productId),
+  catalog: loadCatalog(
+    process.env.INDICATORS_CATALOG_PATH ?? fileURLToPath(DEFAULT_CATALOG_URL),
+    resolveFuturesProducts(process.env).map((p) => p.productId),
+  ),
   log,
 })
 let timer: ReturnType<typeof setTimeout> | undefined

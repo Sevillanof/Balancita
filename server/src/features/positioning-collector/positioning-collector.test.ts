@@ -1,7 +1,9 @@
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
+import { fileURLToPath } from 'node:url'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
+import { parseCatalog } from './catalog.ts'
 import { PositioningCollector } from './collector.ts'
 import { createPositioningSource, parseCloses, premiumRows } from './source.ts'
 import { HOUR_MS, PositioningStore } from './store.ts'
@@ -77,15 +79,41 @@ function fakeFetch(options: { fail?: string } = {}) {
   return { fetch, urls }
 }
 
+const card = (extra: Record<string, unknown>) => ({
+  products: 'pinned',
+  consumers: [{ kind: 'chart', id: 'terminal' }],
+  state: 'active',
+  ...extra,
+})
+export const FULL_CATALOG = JSON.stringify({
+  version: 'indicators.v1',
+  purge_after_days: 14,
+  indicators: [
+    card({
+      id: 'pos',
+      series: 'positioning',
+      resolution: '1h',
+      history_from: '2025-12-31',
+    }),
+    card({
+      id: 'prima-h',
+      series: 'premium',
+      resolution: '1h',
+      history_from: '2025-12-31',
+    }),
+    card({ id: 'prima-m', series: 'premium', resolution: '1m', keep_days: 7 }),
+  ],
+})
+
 const collector = (
   store: PositioningStore,
   fetched: ReturnType<typeof fakeFetch>,
-  products = ['PF_XBTUSD'],
+  catalog = parseCatalog(FULL_CATALOG, ['PF_XBTUSD']),
 ) =>
   new PositioningCollector({
     store,
     source: createPositioningSource({ fetch: fetched.fetch, clock: () => NOW }),
-    products,
+    catalog,
     clock: () => NOW,
     pause: async () => undefined,
   })
@@ -241,5 +269,141 @@ describe('terminal chart', () => {
     )
     market.close()
     positioning.close()
+  })
+})
+
+describe('indicator cards', () => {
+  const pinned = ['PF_XBTUSD']
+  const catalog = (indicators: unknown[], purge = 14) =>
+    parseCatalog(
+      JSON.stringify({
+        version: 'indicators.v1',
+        purge_after_days: purge,
+        indicators,
+      }),
+      pinned,
+    )
+
+  it('rejects an active card nobody uses and unknown products', () => {
+    expect(() =>
+      catalog([
+        card({
+          id: 'a',
+          series: 'premium',
+          resolution: '1h',
+          history_from: '2024-01-01',
+          consumers: [],
+        }),
+      ]),
+    ).toThrow(/needs a user/)
+    expect(() =>
+      catalog([
+        card({
+          id: 'a',
+          series: 'premium',
+          resolution: '1h',
+          history_from: '2024-01-01',
+          products: ['PF_DOGEUSD'],
+        }),
+      ]),
+    ).toThrow(/not a pinned/)
+    expect(() =>
+      catalog([
+        card({
+          id: 'a',
+          series: 'positioning',
+          resolution: '1m',
+          keep_days: 1,
+        }),
+      ]),
+    ).toThrow(/hourly only/)
+  })
+
+  it('downloads only what active cards declare, with the longest history', async () => {
+    const store = open()
+    const fetched = fakeFetch()
+    await collector(
+      store,
+      fetched,
+      catalog([
+        card({
+          id: 'p',
+          series: 'premium',
+          resolution: '1h',
+          history_from: '2026-01-01',
+        }),
+        card({
+          id: 'q',
+          series: 'premium',
+          resolution: '1h',
+          history_from: '2025-12-31',
+        }),
+        card({
+          id: 'old',
+          series: 'positioning',
+          resolution: '1h',
+          history_from: '2025-12-31',
+          state: 'archived',
+          archived_since: '2025-12-30',
+          consumers: [],
+        }),
+      ]),
+    ).syncOnce()
+    expect(fetched.urls.some((url) => url.includes('/analytics/'))).toBe(false)
+    expect(store.premiumSince('PF_XBTUSD', HOUR_MS, 0)[0]?.bucketMs).toBe(FROM)
+    expect(store.premiumSince('PF_XBTUSD', 60_000, 0)).toHaveLength(0)
+    store.close()
+  })
+
+  it('deletes an archived series 14 days after, never earlier or if another card needs it', async () => {
+    const store = open()
+    await collector(store, fakeFetch()).syncOnce()
+    expect(store.latestPositioning('PF_XBTUSD', 'all')).toBeDefined()
+    const archived = (since: string) => [
+      card({
+        id: 'pos',
+        series: 'positioning',
+        resolution: '1h',
+        history_from: '2025-12-31',
+        state: 'archived',
+        archived_since: since,
+        consumers: [],
+      }),
+      card({
+        id: 'prima',
+        series: 'premium',
+        resolution: '1h',
+        history_from: '2025-12-31',
+      }),
+    ]
+    await collector(
+      store,
+      fakeFetch(),
+      catalog(archived('2025-12-25')),
+    ).syncOnce()
+    expect(store.latestPositioning('PF_XBTUSD', 'all')).toBeDefined()
+    await collector(
+      store,
+      fakeFetch(),
+      catalog(archived('2025-12-18')),
+    ).syncOnce()
+    expect(store.latestPositioning('PF_XBTUSD', 'all')).toBeUndefined()
+    expect(store.latestPositioning('PF_XBTUSD', 'top')).toBeUndefined()
+    expect(store.latestPremium('PF_XBTUSD', HOUR_MS)).toBeDefined()
+    store.close()
+  })
+})
+
+describe('repository catalog', () => {
+  it('config/indicators.json is valid for the pinned products', async () => {
+    const { DEFAULT_CATALOG_URL, loadCatalog, plan } =
+      await import('./catalog.ts')
+    const { loadPinnedProducts } =
+      await import('../kraken-futures/futures-products.ts')
+    const pinned = loadPinnedProducts().map((p) => p.productId)
+    const catalog = loadCatalog(fileURLToPath(DEFAULT_CATALOG_URL), pinned)
+    expect(catalog.purgeAfterDays).toBe(14)
+    // 8 products x (all, top, hour, minute)
+    expect(plan(catalog, Date.now())).toHaveLength(pinned.length * 4)
   })
 })

@@ -6,6 +6,7 @@ Two public Kraken Futures series, one row per closed bucket:
 
 Nothing here looks ahead: a bucket is usable only from its END (bucket start + interval).
 """
+import json
 import sqlite3
 
 HOUR_MS = 3600000
@@ -54,3 +55,20 @@ def as_of(rows, at_ms, interval_ms=HOUR_MS):
             break
         found = row
     return found
+
+
+def active_indicators(catalog_path):
+    """Cards of config/indicators.json that are active, as dicts (id, series, resolution, products)."""
+    with open(catalog_path) as handle:
+        body = json.load(handle)
+    return [card for card in body["indicators"] if card.get("state") == "active"]
+
+
+def is_available(catalog_path, series, resolution, product_id):
+    """True when an active card keeps this series for this product ("pinned" covers every product)."""
+    return any(
+        card["series"] == series
+        and card["resolution"] == resolution
+        and (card["products"] == "pinned" or product_id in card["products"])
+        for card in active_indicators(catalog_path)
+    )

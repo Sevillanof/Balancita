@@ -1,17 +1,18 @@
+import {
+  expired,
+  plan,
+  type IndicatorCatalog,
+  type SeriesKind,
+} from './catalog.ts'
 import { HOUR_MS, MINUTE_MS, type PositioningStore } from './store.ts'
 import type { PositioningSource } from './source.ts'
 
-/** First hour Kraken has account positioning for (Jan 2024) and mark/spot candles (Mar 2022). */
-export const POSITIONING_HISTORY_FROM_MS = Date.UTC(2024, 0, 1)
-export const PREMIUM_HISTORY_FROM_MS = Date.UTC(2022, 2, 1)
-/** Minute-level premium kept for the live chart. */
-export const PREMIUM_MINUTES_KEPT_MS = 7 * 24 * HOUR_MS
 const MAX_PAGES_PER_SERIES = 40
 
 export class PositioningCollector {
   private readonly store: PositioningStore
   private readonly source: PositioningSource
-  private readonly products: readonly string[]
+  private readonly catalog: IndicatorCatalog
   private readonly clock: () => number
   private readonly pause: (ms: number) => Promise<void>
   private readonly requestGapMs: number
@@ -21,7 +22,7 @@ export class PositioningCollector {
   constructor(options: {
     store: PositioningStore
     source: PositioningSource
-    products: readonly string[]
+    catalog: IndicatorCatalog
     clock?: () => number
     pause?: (ms: number) => Promise<void>
     requestGapMs?: number
@@ -29,7 +30,7 @@ export class PositioningCollector {
   }) {
     this.store = options.store
     this.source = options.source
-    this.products = options.products
+    this.catalog = options.catalog
     this.clock = options.clock ?? Date.now
     this.pause =
       options.pause ??
@@ -44,31 +45,40 @@ export class PositioningCollector {
   }
 
   /**
-   * One pass over every product and series: fetches only what is newer than
-   * the stored data (history on the first pass), a failing series never stops
-   * the others. Returns the number of series that failed.
+   * One pass over what the active indicator cards ask for: fetches only what
+   * is newer than the stored data (history on the first pass), a failing series
+   * never stops the others, and series of long-archived cards are deleted.
+   * Returns the number of series that failed.
    */
   async syncOnce(): Promise<number> {
     let failures = 0
-    for (const productId of this.products)
-      for (const series of ['all', 'top', 'hour', 'minute'] as const) {
-        if (this.stopped) return failures
-        try {
-          await this.syncSeries(productId, series)
-        } catch (error) {
-          failures += 1
-          this.log(
-            `${productId} ${series} unavailable: ${error instanceof Error ? error.message : String(error)}`,
-          )
-        }
+    const now = this.clock()
+    for (const { productId, kind } of expired(this.catalog, now)) {
+      const removed = this.store.deleteSeries(productId, kind)
+      if (removed > 0)
+        this.log(
+          `${productId} ${kind}: archived indicator deleted (${removed} rows)`,
+        )
+    }
+    for (const { productId, kind, fromMs } of plan(this.catalog, now)) {
+      if (this.stopped) return failures
+      try {
+        await this.syncSeries(productId, kind, fromMs)
+      } catch (error) {
+        failures += 1
+        this.log(
+          `${productId} ${kind} unavailable: ${error instanceof Error ? error.message : String(error)}`,
+        )
       }
-    this.store.pruneMinutes(this.clock(), PREMIUM_MINUTES_KEPT_MS)
+      this.store.trimBefore(productId, kind, fromMs)
+    }
     return failures
   }
 
   private async syncSeries(
     productId: string,
-    series: 'all' | 'top' | 'hour' | 'minute',
+    series: SeriesKind,
+    fromMs: number,
   ): Promise<void> {
     let requested = false
     let cursor = 0
@@ -82,14 +92,10 @@ export class PositioningCollector {
           : this.store.latestPremium(productId, interval)
       // The newest bucket is already stored: nothing closed since.
       if (latest !== undefined && latest + 2 * interval > now) return
-      const start =
-        series === 'minute'
-          ? Math.max(now - PREMIUM_MINUTES_KEPT_MS, (latest ?? 0) + interval)
-          : latest === undefined
-            ? series === 'hour'
-              ? PREMIUM_HISTORY_FROM_MS
-              : POSITIONING_HISTORY_FROM_MS
-            : latest + interval
+      const start = Math.max(
+        fromMs,
+        latest === undefined ? 0 : latest + interval,
+      )
       const from = Math.max(start, cursor)
       if (requested) await this.pause(this.requestGapMs)
       requested = true

@@ -47,6 +47,18 @@ class PositioningDataTest(unittest.TestCase):
         with self.assertRaises(sqlite3.OperationalError):
             sqlite3.connect("file:{}?mode=ro".format(self.path), uri=True).execute("DELETE FROM premium")
 
+    def test_catalog_availability_follows_active_cards(self):
+        path = os.path.join(self.dir.name, "indicators.json")
+        with open(path, "w") as handle:
+            handle.write(
+                '{"indicators":['
+                '{"id":"a","series":"premium","resolution":"1h","products":"pinned","state":"active"},'
+                '{"id":"b","series":"positioning","resolution":"1h","products":["PF_XBTUSD"],"state":"archived"}]}'
+            )
+        self.assertTrue(pos.is_available(path, "premium", "1h", "PF_ETHUSD"))
+        self.assertFalse(pos.is_available(path, "positioning", "1h", "PF_XBTUSD"))
+        self.assertFalse(pos.is_available(path, "premium", "1m", "PF_ETHUSD"))
+
     def test_rejects_unknown_interval(self):
         with self.assertRaises(ValueError):
             pos.load_premium(self.path, "PF_XBTUSD", interval_ms=5)

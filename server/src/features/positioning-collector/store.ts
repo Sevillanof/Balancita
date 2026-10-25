@@ -2,6 +2,8 @@ import { mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 
+import type { SeriesKind } from './catalog.ts'
+
 export const POSITIONING_STORE_VERSION = 'positioning.v1'
 export const HOUR_MS = 3_600_000
 export const MINUTE_MS = 60_000
@@ -186,13 +188,41 @@ export class PositioningStore {
     return row.t ?? undefined
   }
 
-  /** Short premium history is kept at 1 minute; older minutes are dropped (hours stay). */
-  pruneMinutes(now: number, keepMs: number): number {
+  /** Drops one series of one product older than `fromMs` (the minute window rolls forward). */
+  trimBefore(productId: string, kind: SeriesKind, fromMs: number): number {
+    if (kind !== 'minute') return 0
     return Number(
       this.db
-        .prepare('DELETE FROM premium WHERE interval_ms=? AND bucket_ms<?')
-        .run(MINUTE_MS, now - keepMs).changes,
+        .prepare(
+          'DELETE FROM premium WHERE product_id=? AND interval_ms=? AND bucket_ms<?',
+        )
+        .run(productId, MINUTE_MS, fromMs).changes,
     )
+  }
+
+  /** Deletes every stored row of one series of one product (an archived indicator past its delay). */
+  deleteSeries(productId: string, kind: SeriesKind): number {
+    if (kind === 'hour' || kind === 'minute')
+      return Number(
+        this.db
+          .prepare('DELETE FROM premium WHERE product_id=? AND interval_ms=?')
+          .run(productId, kind === 'hour' ? HOUR_MS : MINUTE_MS).changes,
+      )
+    const columns =
+      kind === 'all'
+        ? 'long_percent=NULL, long_count=NULL, short_count=NULL'
+        : 'top_long_percent=NULL, top_long_count=NULL, top_short_count=NULL, top_open_interest=NULL'
+    const cleared = Number(
+      this.db
+        .prepare(`UPDATE positioning SET ${columns} WHERE product_id=?`)
+        .run(productId).changes,
+    )
+    this.db
+      .prepare(
+        'DELETE FROM positioning WHERE product_id=? AND long_percent IS NULL AND top_long_percent IS NULL',
+      )
+      .run(productId)
+    return cleared
   }
 
   positioningSince(
