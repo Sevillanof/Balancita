@@ -111,7 +111,7 @@ class RecordedTrades:
         try:
             columns = {r[1] for r in db.execute("PRAGMA table_info({})".format(self.table))}
             # Kronos' backtest rows ran on history it was pre-trained on: they are never evidence.
-            only_forward = " AND mode='forward'" if "mode" in columns else ""
+            only_forward = " AND mode<>'backtest'" if "mode" in columns else ""
             rows = db.execute("SELECT payload FROM {} WHERE product_id=?{}".format(self.table, only_forward),
                               (product_id,)).fetchall()
             trades = [json.loads(payload) for (payload,) in rows]

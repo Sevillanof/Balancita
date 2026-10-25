@@ -291,7 +291,7 @@ class ForwardResultTest(unittest.TestCase):
         self.assertTrue(c30["available"])
         self.assertEqual(c30["trades"]["live"]["closed"], 7)
         self.assertIn("spec_changed", [p["code"] for p in c30["problems"]])
-        self.assertTrue(rows["c31-qwen-exit-perp-v1"]["forward"]["missing"].startswith("apagada: "))
+        self.assertNotIn("c31-qwen-exit-perp-v1", rows)
         self.assertIn("Kronos", rows["kronos-small-1h-h4-v1"]["forward"]["missing"])
         self.assertIsNone(rows["kronos-small-1h-h4-v1"]["forward"]["trades"])
         self.assertIn("funding", inventory["forward_health"])

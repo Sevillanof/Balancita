@@ -596,7 +596,7 @@ class ModelGateTests(unittest.TestCase):
         self.assertIn("no se puede volver a correr", source.note)
         self.assertEqual(source(spec, "PF_ETHUSD", "1", [], [], [], 0, 10**14, lambda f: None)[0], [])
 
-    def test_the_gate_judges_kronos_by_its_recorded_trades_and_can_run_its_exam_once(self):
+    def test_the_gate_judges_kronos_by_its_recorded_trades_and_can_repeat_its_exam(self):
         import test_strategy_gate as tg
         from balancita_engine import strategy_gate_models as models
 
@@ -618,8 +618,8 @@ class ModelGateTests(unittest.TestCase):
             self.assertIn("no se puede volver a correr", handle.read())
         exam = tg.run(models.KRONOS_ID, data, kronos_dir=directory, kind="exam")
         self.assertEqual(exam["status"], "done")
-        with self.assertRaises(strategy_gate.GateError):
-            tg.run(models.KRONOS_ID, data, kronos_dir=directory, kind="exam")
+        again = tg.run(models.KRONOS_ID, data, kronos_dir=directory, kind="exam")  # Kronos can repeat its exam
+        self.assertEqual(again["status"], "done")
 
 
 if __name__ == "__main__":
