@@ -1,11 +1,13 @@
 {
   "schema": "balancita-qwen-quick-variants.v1",
-  "note": "Variantes candidatas de Qwen para la Prueba rápida (/Estrategias > Qwen en vivo). Cada una es una versión aparte: su propia base y su propio estado, sin heredar resultados. Las fotos son las mismas para todas (misma semilla), así que los números se pueden comparar. Qwen en vivo NO cambia con esto: solo cambia lo que se le pregunta a la prueba. 'prompt' reemplaza partes de qwen-trader-v3.json (system y/o la pregunta 'flat'); 'kind' factors (ficha) además pone el estado en 8 renglones y hace la pregunta por factores con gradiente (ver futures_qwen_factors.py); Por pedido de Fran (25-oct) no hay variantes de modelo: se usa el que ya tiene Qwen en vivo. (El código admite 'model', pero no se usa.)",
+  "note": "Variantes candidatas de Qwen para la Prueba rápida (/Estrategias > Qwen en vivo). Cada una es una versión aparte: su propia base y su propio estado, sin heredar resultados. Las fotos son las mismas para todas (misma semilla), así que los números se pueden comparar. Qwen en vivo NO cambia con esto: solo cambia lo que se le pregunta a la prueba. La variante «actual» corre la configuración de Qwen en vivo tal cual (base «live», con sus propias fotos); las demás se aplican sobre la v3 y comparten sus fotos. 'prompt' reemplaza partes de qwen-trader-v3.json (system y/o la pregunta 'flat'); 'kind' factors (ficha) además pone el estado en 8 renglones y hace la pregunta por factores con gradiente (ver futures_qwen_factors.py); Por pedido de Fran (25-oct) no hay variantes de modelo: se usa el que ya tiene Qwen en vivo. (El código admite 'model', pero no se usa.)",
   "variants": [
     {
       "id": "actual",
-      "label": "Actual (control)",
-      "kind": "control"
+      "label": "Actual (Qwen en vivo)",
+      "kind": "control",
+      "base": "live",
+      "note": "Lo que pregunta Qwen en vivo hoy (config/qwen-live.json): la ficha de 8 factores con la pregunta por factores, real y espejo, con otros activos y posicionamiento. Es la misma pregunta que contesta el Examen de 2000 fotos (`exam --version live`). Sus fotos se arman con las reglas de despertar de Qwen en vivo (una cada 15 minutos), así que no son las mismas que las de las otras variantes, que usan las de la v3: la comparación con ellas es orientativa."
     },
     {
       "id": "p1-direccion",

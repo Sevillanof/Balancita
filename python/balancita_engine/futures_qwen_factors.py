@@ -288,11 +288,12 @@ class FactorsDecider:
             self.calls += 1
             self.spent += took
             result["latency_ms"] = int(answer.get("latency_ms") or took * 1000)
+            result["prompt_hash"] = llm.prompt_hash(prompt, self.template)
             if self.store:
                 with self.store.db:
                     self.store.db.execute("INSERT OR REPLACE INTO exam_factors VALUES(?,?,?,?,?,?,?,?,?,?)", (
                         snap_id, step, result["text"], json.dumps(result["grads"]), json.dumps(result["detail"]),
-                        result["latency_ms"], llm.prompt_hash(prompt, self.template), self.template["version"], self.model,
+                        result["latency_ms"], result["prompt_hash"], self.template["version"], self.model,
                         int(time.time() * 1000)))
             return result
         raise qt.ModelDown()
@@ -323,6 +324,26 @@ def load_photo_factors(pdb):
             item.update(photo_numbers(real, steps["mirror"][0]), text_mirror=steps["mirror"][1])
         out[snap_id] = item
     return out
+
+
+def window_look(real, mirror):
+    """What the live opportunity window reads off the two answers (real and mirrored STATE) of one look: the numbers the
+    Terminal already shows (``lean``, ``lean_m``, ``lean_num``), the answer shaped like the letters question's (so the
+    decision row keeps its schema) and the gradients of both, for the explanation. ``real`` / ``mirror``: ``FactorsDecider.ask``."""
+    lean, lean_m = lean_of(real["grads"]), lean_of(mirror["grads"])
+    numbers = photo_numbers(real["grads"], mirror["grads"])
+    p_largo, p_corto = probabilities_for(lean)
+    answer = {"probabilities": {"LARGO": p_largo, "CORTO": p_corto}, "chosen": "LARGO" if lean >= 0 else "CORTO",
+              "confidence": abs(lean), "latency_ms": real.get("latency_ms", 0) + mirror.get("latency_ms", 0),
+              "orders": [{"order": ["factores"], "probabilities": {"LARGO": p_largo, "CORTO": p_corto},
+                          "confidence": abs(lean), "source": "factors", "latency_ms": real.get("latency_ms", 0),
+                          "prompt_hash": real.get("prompt_hash")}]}
+    side_m = "LARGO" if lean_m > 1e-9 else "CORTO" if lean_m < -1e-9 else "ESPERAR"
+    p_m = probabilities_for(lean_m)
+    return {"lean": lean, "lean_m": lean_m, "lean_num": (lean - lean_m) / 2.0, "answer": answer,
+            "mirror_action": side_m, "mirror_p": p_m[0] if side_m == "LARGO" else p_m[1] if side_m == "CORTO" else 0.5,
+            "factors": {"real": [round(x, 4) for x in numbers["real"]], "mirror": [round(x, 4) for x in numbers["mirror"]],
+                        "lectura": [round(x, 4) for x in numbers["lectura"]]}}
 
 
 def probabilities_for(lean):

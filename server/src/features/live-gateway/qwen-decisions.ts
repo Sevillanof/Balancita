@@ -62,6 +62,18 @@ export interface QwenDecision {
   readonly look_n: number | null
   /** 1 si el espejo contradice (candidato válido), 0 si no; null fuera de la ventana. */
   readonly mirror_ok: number | null
+  /**
+   * Ventana con la pregunta por factores (config en vivo desde la versión 5): los 8 gradientes F1..F8 (de -2 a +2) con el estado
+   * real y con el espejo, y la lectura por renglón ((real - espejo) / 2, lo que viene de los números). null en bases o miradas
+   * sin factores.
+   */
+  readonly factors: QwenFactors | null
+}
+
+export interface QwenFactors {
+  readonly real: readonly number[]
+  readonly mirror: readonly number[]
+  readonly lectura: readonly number[]
 }
 
 /** A wake that was not decided (model down or slow, process off). */
@@ -132,6 +144,30 @@ export function qwenDecisionsOff(reason: string): QwenDecisions {
   }
 }
 
+/** `{"real": [8], "mirror": [8], "lectura": [8]}`; anything else (an old row, a damaged value) reads as no factors. */
+function factorsOf(value: unknown): QwenFactors | null {
+  if (typeof value !== 'string' || value.length === 0) return null
+  try {
+    const parsed: unknown = JSON.parse(value)
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed))
+      return null
+    const line = (key: string): readonly number[] | null => {
+      const list = (parsed as Record<string, unknown>)[key]
+      return Array.isArray(list) &&
+        list.length === 8 &&
+        list.every((x) => typeof x === 'number' && Number.isFinite(x))
+        ? (list as number[])
+        : null
+    }
+    const real = line('real')
+    const mirror = line('mirror')
+    const lectura = line('lectura')
+    return real && mirror && lectura ? { real, mirror, lectura } : null
+  } catch {
+    return null
+  }
+}
+
 function probabilitiesOf(value: unknown): Record<string, number> | null {
   if (typeof value !== 'string' || value.length === 0) return null
   try {
@@ -165,6 +201,7 @@ const OPTIONAL_DECISION_COLUMNS = [
   'best_score',
   'look_n',
   'mirror_ok',
+  'factors_json',
 ] as const
 
 function readMeta(db: DatabaseSync): Record<string, unknown> {
@@ -279,6 +316,7 @@ export function createQwenDecisions(options: {
           best_score: num(row.best_score),
           look_n: num(row.look_n),
           mirror_ok: num(row.mirror_ok),
+          factors: factorsOf(row.factors_json),
         })
       }
       const skipped: QwenSkipped[] = []

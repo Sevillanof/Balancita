@@ -66,11 +66,45 @@ export function skippedReason(reason: unknown, detail?: unknown): string {
   return `No decidió esta vez${extra}.`
 }
 
+/** `1.234` -> `+1,2`, `-0.4` -> `−0,4`, `0` -> `0,0` (one decimal, decimal comma, a real minus sign). */
+function gradient(value: number): string {
+  const text = Math.abs(value).toFixed(1).replace('.', ',')
+  if (Math.abs(value) < 0.05) return '0,0'
+  return `${value < 0 ? '−' : '+'}${text}`
+}
+
+/**
+ * The reading of each line of the sheet in one compact line, «F1 +1,2 · F2 −0,4 · … · F8 0,0»: what comes from the numbers
+ * ((real - mirror) / 2 of the gradients Qwen gave, -2 to +2). Only the opportunity window with the factors question has it;
+ * null otherwise. F1 to F7 vote (their sum over 14 is the lean); F8 only describes the moment.
+ */
+export function factorsLine(value: unknown): string | null {
+  const reading = record(value).lectura
+  if (
+    !Array.isArray(reading) ||
+    reading.length !== 8 ||
+    !reading.every((x) => typeof x === 'number' && Number.isFinite(x))
+  )
+    return null
+  return `Lectura por renglón: ${reading
+    .map((x, i) => `F${i + 1} ${gradient(x as number)}`)
+    .join(' · ')}.`
+}
+
 /**
  * The reason of one decision in plain words, or null when the row carries
- * nothing to say (an old row, or an entry/exit that has its own reason).
+ * nothing to say (an old row, or an entry/exit that has its own reason). A look or an
+ * entry of the opportunity window adds the reading of each line of the sheet.
  */
 export function waitReason(row: Record<string, unknown>): string | null {
+  const text = baseReason(row)
+  const inWindow =
+    row.override === 'ventana_mirando' || row.override === 'entrada_ventana'
+  const lines = inWindow ? factorsLine(row.factors) : null
+  return text && lines ? `${text} ${lines}` : text
+}
+
+function baseReason(row: Record<string, unknown>): string | null {
   const chosen = row.chosen
   const override = typeof row.override === 'string' ? row.override : null
   const wanted = side(row.model_action)

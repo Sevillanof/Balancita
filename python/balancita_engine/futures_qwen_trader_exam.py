@@ -57,6 +57,8 @@ def make_photos(history, cfg, product, holdout_ms):
     if ficha:                                                           # row F6: the collector's database, read-only
         trader.positioning = positioning_data.PositioningFeed(positioning_path(cfg), product)
     for other in cfg.get("state_context") or ():                        # closes of the other assets shown in the STATE
+        if other == product:                                            # never its own context (the live config lists BTC, ETH, SOL)
+            continue
         trader.context[other] = {int(b["bucket_start"]) + BAR_MS: float(b["close"]) for b in history.bars(
             other, start - practice["warmup_days"] * DAY_MS, holdout_ms)}
     closes, found = {}, []
@@ -806,7 +808,9 @@ def build_exam_report(db_path, cfg):
               "- **pb (punto básico)**: 0,01 %. El costo de entrar y salir es de unos 10 pb.",
               "- **Holdout**: tramo final de datos que se guarda sin tocar para una prueba final.", "",
               "## Detalle técnico", "",
-              "- Base: `exam-v3.sqlite`; configuración `config/qwen-trader-v3.json` (hash {}...); modelo(s): {}.".format(
+              "- Base: `{}`; configuración `{}` (hash {}...); modelo(s): {}.".format(
+                  "exam-live.sqlite" if cfg.get("version") == "live" else "exam-v3.sqlite",
+                  "config/qwen-live.json" if cfg.get("version") == "live" else "config/qwen-trader-v3.json",
                   str(meta.get("config_hash"))[:12], ", ".join(meta.get("served_models", [])) or "n/d"),
               "- Período de las fotos: {} a {}; horizontes {} min; umbral de entrada {}; semilla {}.".format(
                   qt.stamp(min(x["t_ms"] for x in rows)), qt.stamp(max(x["t_ms"] for x in rows)),

@@ -93,21 +93,35 @@ class PositioningFeed:
     A bucket is known only from its END, so ``at(t_ms)`` never sees the future. When the file does not exist (or has no rows
     for the product) ``available`` is False and every query answers ``None``: the caller writes ``n/d`` and goes on."""
 
-    def __init__(self, db_path, product_id):
-        self.path, self.product_id = db_path, product_id
+    def __init__(self, db_path, product_id, since_ms=0):
+        self.path, self.product_id, self.since_ms = db_path, product_id, since_ms
         self.positioning, self.premium = [], []
         self._ends_p, self._ends_q = [], []
         self.available = False
-        if not db_path or not os.path.isfile(db_path):
+        self._load()
+
+    def _load(self):
+        if not self.path or not os.path.isfile(self.path):
+            self.positioning, self.premium, self._ends_p, self._ends_q, self.available = [], [], [], [], False
             return
         try:
-            self.positioning = load_positioning(db_path, product_id)
-            self.premium = load_premium(db_path, product_id, HOUR_MS)
+            positioning = load_positioning(self.path, self.product_id, self.since_ms)
+            premium = load_premium(self.path, self.product_id, HOUR_MS, self.since_ms)
         except sqlite3.Error:
-            self.positioning, self.premium = [], []
-        self.available = bool(self.positioning or self.premium)
-        self._ends_p = [row[0] + HOUR_MS for row in self.positioning]
-        self._ends_q = [row[0] + HOUR_MS for row in self.premium]
+            return                                      # unreadable right now (the collector is writing): keep what we have
+        self.positioning, self.premium = positioning, premium
+        self.available = bool(positioning or premium)
+        self._ends_p = [row[0] + HOUR_MS for row in positioning]
+        self._ends_q = [row[0] + HOUR_MS for row in premium]
+
+    def reload(self, since_ms=None):
+        """Reads the file again (the live operator calls it every few minutes: the collector adds one bucket an hour). A
+        file that appeared later is picked up; one that cannot be read at this moment leaves the rows as they were.
+        ``since_ms`` limits the rows kept to those from that moment on. Returns ``available``."""
+        if since_ms is not None:
+            self.since_ms = since_ms
+        self._load()
+        return self.available
 
     @staticmethod
     def _last(rows, ends, at_ms):
