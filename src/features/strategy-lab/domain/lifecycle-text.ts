@@ -17,7 +17,11 @@ export function formatActiveTime(ms: number): string {
 
 export function isProtectedStrategy(id: string): boolean {
   const lowered = id.toLowerCase()
-  return lowered.startsWith('kronos-') || lowered.startsWith('c31-qwen')
+  return (
+    lowered.startsWith('kronos-') ||
+    lowered.startsWith('c31-qwen') ||
+    lowered.startsWith('qwen-live')
+  )
 }
 
 export const NOT_PASSED_WARNING =

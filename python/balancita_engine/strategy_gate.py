@@ -1206,7 +1206,7 @@ def _run_tasks(runner, jobs_list, workers, base, span):
 def evaluate(strategy_id, *, kind="practice", from_date=None, to_date=None, products=None, cfg=None, data_dir=None, spec=None,
              specs_dir=None, provider=None, trade_source=None, jobs=None, neighbors=True, json_progress=False,
              on_progress=None, now_ms=None, install_signals=False, stream=None, registry_db=None,
-             kronos_dir=None, qwen_exit_dir=None, research_ledger=None, allow_contaminated=False,
+             kronos_dir=None, qwen_exit_dir=None, qwen_live_dir=None, research_ledger=None, allow_contaminated=False,
              evaluation_mode=evaluation_policy.BASELINE_MODE):
     """Runs the gate for one strategy. Returns ``{"run_id", "verdict", "report_path", "status"}``.
 
@@ -1228,7 +1228,7 @@ def evaluate(strategy_id, *, kind="practice", from_date=None, to_date=None, prod
     if kind not in ("practice", "exam"):
         raise GateError("tipo desconocido: {}".format(kind))
     if spec is None and strategy_models.is_model(strategy_id):
-        spec, trade_source = strategy_models.model_subject(strategy_id, kronos_dir, qwen_exit_dir)
+        spec, trade_source = strategy_models.model_subject(strategy_id, kronos_dir, qwen_exit_dir, qwen_live_dir)
     if spec is None:
         spec = find_spec(strategy_id, specs_dir, registry_db)
     if spec["id"] != strategy_id:
@@ -1677,6 +1677,7 @@ def _parser():
     e.add_argument("--jobs", type=int, help="procesos de cálculo (por defecto min(CPU, 8))")
     e.add_argument("--specs-dir", default=DEFAULT_SPEC_DIR)
     e.add_argument("--kronos-dir", help="carpeta con kronos.sqlite (para juzgar a Kronos por sus operaciones guardadas)")
+    e.add_argument("--qwen-live-dir", help="carpeta con live.sqlite (Qwen en vivo, solo lectura)")
     e.add_argument("--qwen-exit-dir", help="carpeta con qwen-exit.sqlite (para juzgar a Qwen por sus operaciones guardadas)")
     e.add_argument("--research-ledger", help="registro de intentos del laboratorio VectorBT (solo lectura)")
     e.add_argument("--registry-db", help="futures-strategies.sqlite del registro S (solo lectura): también se juzgan "
@@ -1706,7 +1707,7 @@ def main(argv=None):
             return 0
         out = evaluate(args.strategy, kind="exam" if args.exam else "practice", from_date=args.from_date, to_date=args.to_date,
                        products=args.products, data_dir=args.data_dir, specs_dir=args.specs_dir, registry_db=args.registry_db, kronos_dir=args.kronos_dir,
-                       qwen_exit_dir=args.qwen_exit_dir, jobs=args.jobs, research_ledger=args.research_ledger,
+                       qwen_exit_dir=args.qwen_exit_dir, qwen_live_dir=args.qwen_live_dir, jobs=args.jobs, research_ledger=args.research_ledger,
                        neighbors=not args.sin_vecinos, json_progress=args.json_progress, install_signals=True,
                        allow_contaminated=args.allow_contaminated, evaluation_mode=args.evaluation_mode)
     except (GateError, HistoryError, ValueError) as error:

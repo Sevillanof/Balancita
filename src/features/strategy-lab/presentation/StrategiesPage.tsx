@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react'
 import { DataState } from '../../../shared/mission-control/index.ts'
+import type { GateApi } from '../infrastructure/gate-api.ts'
+import type { RunVisualApi } from '../infrastructure/run-visual-api.ts'
 import type {
   InventoryStrategy,
   PurgeStatus,
@@ -9,6 +11,9 @@ import { operationalLabel } from '../domain/strategy-labels.ts'
 import DeleteStrategyDialog from './DeleteStrategyDialog.tsx'
 import ActivationDialog from './ActivationDialog.tsx'
 import PurgeNotice from './PurgeNotice.tsx'
+import { groupStrategies } from '../domain/strategy-order.ts'
+import { signedAmount } from '../domain/strategy-format.ts'
+import { useStandings } from './use-standings.ts'
 import StrategyDetailsModal from './StrategyDetailsModal.tsx'
 import { describeFailure } from './describe-failure.ts'
 import StrategyEditorModal from './StrategyEditorModal.tsx'
@@ -22,6 +27,9 @@ type Props = {
   /** Selected strategy, kept by the parent. */
   selectedId?: string | null
   onSelect?: (id: string) => void
+  /** Where the stage and the net per trade of each strategy are read (default: the real gate). */
+  gate?: GateApi
+  visual?: RunVisualApi
 }
 
 type Modal =
@@ -41,6 +49,7 @@ const exists = (row: InventoryStrategy) =>
 
 /** Qwen and Kronos act in the paper from code: they are tested but never edited or deleted here. */
 const editable = (row: InventoryStrategy) => row.kind === 'rules'
+
 const operating = (row: InventoryStrategy) =>
   row.operational.state === 'active' || row.operational.state === 'shadow'
 
@@ -56,6 +65,8 @@ export default function StrategiesPage({
   reload,
   selectedId: keptId = null,
   onSelect,
+  gate,
+  visual,
 }: Props) {
   const [rows, setRows] = useState<InventoryStrategy[] | null>(null)
   const [failure, setFailure] = useState<string | null>(null)
@@ -65,6 +76,7 @@ export default function StrategiesPage({
   const [modal, setModal] = useState<Modal | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
   const [problem, setProblem] = useState<string | null>(null)
+  const standings = useStandings(rows, gate, visual)
   const [purge, setPurge] = useState<{
     name: string
     status: PurgeStatus
@@ -204,92 +216,108 @@ export default function StrategiesPage({
     <section className="strategies" aria-label="Estrategias">
       <nav className="strategies__list" aria-label="Lista de estrategias">
         <p className="strategies__heading">Estrategias</p>
-        <ul>
-          {rows.map((row) => (
-            <li key={row.id} data-id={row.id}>
-              <button
-                type="button"
-                className="strategies__pick"
-                aria-current={row.id === selected?.id ? 'true' : undefined}
-                onClick={() => pick(row.id)}
-              >
-                <span>{row.name}</span>
-                <i
-                  className="strategies__dot"
-                  data-state={row.operational.state}
-                  title={operationalLabel(row.operational.state)}
-                  aria-hidden="true"
-                />
-              </button>
-              <button
-                type="button"
-                className="strategies__more"
-                aria-label={`Opciones de ${row.name}`}
-                aria-haspopup="menu"
-                aria-expanded={menuId === row.id}
-                onClick={(event) => {
-                  event.stopPropagation()
-                  setMenuId(menuId === row.id ? null : row.id)
-                }}
-              >
-                ⋮
-              </button>
-              {menuId === row.id && (
-                <ul className="strategies__menu" role="menu">
-                  <li role="none">
-                    <button
-                      type="button"
-                      role="menuitem"
-                      onClick={() => setModal({ kind: 'details', id: row.id })}
-                    >
-                      Detalles
-                    </button>
-                  </li>
-                  {editable(row) && (
-                    <>
+        {groupStrategies(rows, standings).map((group) => (
+          <div key={group.key} className="strategies__group">
+            {group.title && <p className="strategies__stage">{group.title}</p>}
+            <ul>
+              {group.rows.map((row) => (
+                <li key={row.id} data-id={row.id}>
+                  <button
+                    type="button"
+                    className="strategies__pick"
+                    aria-current={row.id === selected?.id ? 'true' : undefined}
+                    onClick={() => pick(row.id)}
+                  >
+                    <span>{row.name}</span>
+                    {standings.get(row.id)?.meanBp != null && (
+                      <small
+                        className="strategies__net"
+                        title="Neto por operación del último test"
+                      >
+                        {signedAmount(standings.get(row.id)?.meanBp ?? null, 1)}{' '}
+                        pb
+                      </small>
+                    )}
+                    <i
+                      className="strategies__dot"
+                      data-state={row.operational.state}
+                      title={operationalLabel(row.operational.state)}
+                      aria-hidden="true"
+                    />
+                  </button>
+                  <button
+                    type="button"
+                    className="strategies__more"
+                    aria-label={`Opciones de ${row.name}`}
+                    aria-haspopup="menu"
+                    aria-expanded={menuId === row.id}
+                    onClick={(event) => {
+                      event.stopPropagation()
+                      setMenuId(menuId === row.id ? null : row.id)
+                    }}
+                  >
+                    ⋮
+                  </button>
+                  {menuId === row.id && (
+                    <ul className="strategies__menu" role="menu">
                       <li role="none">
                         <button
                           type="button"
                           role="menuitem"
                           onClick={() =>
-                            setModal({ kind: 'modify', id: row.id })
+                            setModal({ kind: 'details', id: row.id })
                           }
                         >
-                          Modificar
+                          Detalles
                         </button>
                       </li>
-                      <li role="none">
-                        <button
-                          type="button"
-                          role="menuitem"
-                          onClick={() =>
-                            operating(row)
-                              ? void switchOff(row)
-                              : void startActivation(row)
-                          }
-                        >
-                          {operating(row) ? 'Apagar' : 'Activar en paper'}
-                        </button>
-                      </li>
-                      <li role="none">
-                        <button
-                          type="button"
-                          role="menuitem"
-                          data-danger="true"
-                          onClick={() =>
-                            setModal({ kind: 'delete', id: row.id })
-                          }
-                        >
-                          Borrar
-                        </button>
-                      </li>
-                    </>
+                      {editable(row) && (
+                        <>
+                          <li role="none">
+                            <button
+                              type="button"
+                              role="menuitem"
+                              onClick={() =>
+                                setModal({ kind: 'modify', id: row.id })
+                              }
+                            >
+                              Modificar
+                            </button>
+                          </li>
+                          <li role="none">
+                            <button
+                              type="button"
+                              role="menuitem"
+                              onClick={() =>
+                                operating(row)
+                                  ? void switchOff(row)
+                                  : void startActivation(row)
+                              }
+                            >
+                              {operating(row) ? 'Apagar' : 'Activar en paper'}
+                            </button>
+                          </li>
+                          <li role="none">
+                            <button
+                              type="button"
+                              role="menuitem"
+                              data-danger="true"
+                              onClick={() =>
+                                setModal({ kind: 'delete', id: row.id })
+                              }
+                            >
+                              Borrar
+                            </button>
+                          </li>
+                        </>
+                      )}
+                    </ul>
                   )}
-                </ul>
-              )}
-            </li>
-          ))}
-        </ul>
+                </li>
+              ))}
+            </ul>
+          </div>
+        ))}
       </nav>
       <div className="strategies__detail" data-testid="strategy-pane">
         {notice && (

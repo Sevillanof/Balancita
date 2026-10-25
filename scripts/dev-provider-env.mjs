@@ -905,6 +905,9 @@ export function devChildSpecs({
           kronosDir,
           '--qwen-exit-dir',
           qwenExitDir,
+          // Qwen en vivo: its paper trades (read-only) for the Estrategias cycle.
+          '--qwen-live-dir',
+          qwenLiveDb.slice(0, qwenLiveDb.lastIndexOf('/')),
           '--port',
           String(STRATEGIES_PORT),
         ],
