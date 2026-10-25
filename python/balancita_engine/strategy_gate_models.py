@@ -182,7 +182,8 @@ class RecordedTrades:
 LIVE_NOTE = ("Qwen en vivo se juzga sin llamar al modelo. Práctica (antes de la fecha de corte): las \"fotos\" del pasado "
              "que Qwen ya contestó (examen por fotos, exam-v3.sqlite): largo en el quinto más inclinado a largo y corto en el "
              "quinto más inclinado a corto, como operaciones de 4 h con costos y funding reales, una a la vez por producto. Examen (desde la fecha de corte): sus operaciones reales en paper, "
-             "cerradas; las abiertas no cuentan y Qwen sigue operando mientras tanto.")
+             "cerradas; las abiertas no cuentan y Qwen sigue operando mientras tanto. Si las fotos todavía no tienen la pregunta "
+             "espejo, se ordenan por la inclinación simple (probabilidad de largo menos la de corto), que incluye el vicio del modelo.")
 
 
 class QwenLiveTrades:
@@ -211,8 +212,11 @@ class QwenLiveTrades:
         # config are never mixed in (a changed protocol means asking every photo again).
         if meta.get("config_hash") != qt.config_hash(cfg):
             return []
-        pool = sorted((r for r in rows if r.get("lean_num") not in (None, 0) and r["moves"].get("240") is not None),
-                      key=lambda r: r["lean_num"])
+        # lean_num (the part that comes from the numbers) needs the mirrored question. While the photos have not been
+        # mirrored, the plain lean (p LARGO - p CORTO on the real numbers) orders them: weaker, and said in the report.
+        key = "lean_num" if any(r.get("lean_num") is not None for r in rows) else "lean"
+        pool = sorted((r for r in rows if r.get(key) not in (None, 0) and r["moves"].get("240") is not None),
+                      key=lambda r: r[key])
         k = max(1, int(len(pool) * share)) if pool else 0
         side_of = {r["snap_id"]: -1 for r in pool[:k]}
         side_of.update({r["snap_id"]: 1 for r in pool[len(pool) - k:]})
