@@ -352,7 +352,7 @@ describe('StrategyRunView actions', () => {
     await user.click(
       await screen.findByRole('button', { name: 'Prueba rápida' }),
     )
-    expect(quick.start).toHaveBeenCalledWith('qwen-live')
+    expect(quick.start).toHaveBeenCalledWith('qwen-live', 'actual')
     expect(
       await screen.findByRole('progressbar', {
         name: 'Progreso de la prueba rápida',
@@ -365,6 +365,73 @@ describe('StrategyRunView actions', () => {
     })
     expect(screen.getByText(/Es orientativa/)).toBeInTheDocument()
   }, 15000)
+
+  it('the quick test lets you pick a variant and compares the finished ones', async () => {
+    const user = userEvent.setup()
+    const summary = (net: number) => ({
+      photos: 150,
+      horizon_min: 240,
+      spearman: 0.02,
+      spearman_ci: [null, null],
+      extremes_net_bp: net,
+      extremes_ci: [null, null],
+      vs_random_pct: 65,
+      signals: { extremes: false, random: false, spearman: false },
+      note: 'Es orientativa.',
+    })
+    const state = {
+      state: 'none',
+      snapshots: 150,
+      note: 'n',
+      variants: [
+        {
+          id: 'actual',
+          label: 'Actual (control)',
+          kind: 'control',
+          state: 'done',
+          summary: summary(-5.3),
+        },
+        {
+          id: 'p1-direccion',
+          label: 'Pregunta directa',
+          kind: 'prompt',
+          state: 'done',
+          summary: summary(3.1),
+        },
+        {
+          id: 'm1-qwen3-8b',
+          label: 'Modelo: Qwen3 8B',
+          kind: 'model',
+          approx_gb: 5,
+          state: 'none',
+        },
+      ],
+    }
+    const quick = {
+      status: vi.fn(async () => state),
+      start: vi.fn(async () => undefined),
+    } as unknown as import('../infrastructure/quick-api.ts').QuickApi
+    render(
+      <StrategyRunView
+        strategyId="qwen-live"
+        strategyName="Qwen en vivo"
+        version={1}
+        kind="qwen_live"
+        gate={gateWith(overview([]))}
+        visual={visualWith()}
+        quick={quick}
+      />,
+    )
+    const picker = await screen.findByRole('combobox', {
+      name: 'Variante de la prueba rápida',
+    })
+    expect(
+      await screen.findByRole('table', { name: 'Comparación de variantes' }),
+    ).toBeInTheDocument()
+    await user.selectOptions(picker, 'm1-qwen3-8b')
+    await user.click(screen.getByRole('button', { name: 'Prueba rápida' }))
+    expect(quick.start).toHaveBeenCalledWith('qwen-live', 'm1-qwen3-8b')
+  })
 
   it('rules strategies have no quick test button', async () => {
     renderView(gateWith(overview([])), visualWith())

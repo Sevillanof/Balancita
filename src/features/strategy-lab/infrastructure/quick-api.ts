@@ -20,7 +20,24 @@ export type QuickSummary = {
   note: string
 }
 
+/** One candidate of the quick test (another prompt or another model) with its last state; the finished ones are compared. */
+export type QuickVariant = {
+  id: string
+  label: string
+  kind: 'control' | 'prompt' | 'model'
+  note?: string | null
+  /** Size of the model to have on the Mac, for the model variants. */
+  approx_gb?: number | null
+  state: 'none' | 'running' | 'done' | 'failed'
+  summary?: QuickSummary | null
+  error?: string | null
+  started_ms?: number | null
+}
+
 export type QuickState = {
+  /** The variant this state belongs to: the one started last. */
+  variant?: string
+  variants?: QuickVariant[]
   state: 'none' | 'running' | 'done' | 'failed'
   answered?: number
   total?: number
@@ -39,7 +56,7 @@ export type QuickState = {
 
 export type QuickApi = {
   status: (strategyId: string) => Promise<QuickState>
-  start: (strategyId: string) => Promise<void>
+  start: (strategyId: string, variant?: string) => Promise<void>
 }
 
 async function failure(response: Response): Promise<Error> {
@@ -61,8 +78,12 @@ export const quickApi: QuickApi = {
     if (!response.ok) throw await failure(response)
     return (await response.json()) as QuickState
   },
-  async start(strategyId) {
-    const response = await fetch(url(strategyId), { method: 'POST' })
+  async start(strategyId, variant) {
+    const response = await fetch(url(strategyId), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(variant ? { variant } : {}),
+    })
     if (!response.ok) throw await failure(response)
   },
 }

@@ -55,6 +55,7 @@ import {
   quickApi,
   type QuickApi,
   type QuickState,
+  type QuickVariant,
 } from '../infrastructure/quick-api.ts'
 import { installCommands } from '../domain/vectorbt-format.ts'
 import RunProgress from './RunProgress.tsx'
@@ -606,6 +607,8 @@ export default function StrategyRunView({
   const [quickState, setQuickState] = useState<QuickState | null>(null)
   const [quickError, setQuickError] = useState<string | null>(null)
   const quickRunning = quickState?.state === 'running'
+  const quickVariants = quickState?.variants ?? []
+  const [quickVariant, setQuickVariant] = useState('actual')
   useEffect(() => {
     if (!hasQuick) return
     let cancelled = false
@@ -626,7 +629,7 @@ export default function StrategyRunView({
   const startQuick = async () => {
     setQuickError(null)
     try {
-      await quick.start(strategyId)
+      await quick.start(strategyId, quickVariant)
       setQuickState({
         ...(await quick.status(strategyId)),
         fetched_ms: Date.now(),
@@ -832,6 +835,21 @@ export default function StrategyRunView({
                 Examen
               </button>
             )}
+            {hasQuick && quickVariants.length > 1 && (
+              <select
+                aria-label="Variante de la prueba rápida"
+                value={quickVariant}
+                onChange={(event) => setQuickVariant(event.target.value)}
+                disabled={quickRunning}
+                title="Qué se prueba: las preguntas actuales, otras preguntas u otro modelo. Cada variante es una versión aparte."
+              >
+                {quickVariants.map((variant) => (
+                  <option key={variant.id} value={variant.id}>
+                    {variantLabel(variant)}
+                  </option>
+                ))}
+              </select>
+            )}
             {hasQuick && (
               <button
                 type="button"
@@ -856,18 +874,28 @@ export default function StrategyRunView({
           </div>
         </div>
       </header>
-      {hasQuick && (quickState?.state !== 'none' || quickError) && (
-        <div className="runview__quick" role="group" aria-label="Prueba rápida">
-          {quickError && <p role="alert">{quickError}</p>}
-          {quickState?.state === 'running' && (
-            <QuickProgress state={quickState} />
-          )}
-          {quickState?.state === 'failed' && (
-            <p role="alert">Prueba rápida sin resultado: {quickState.error}</p>
-          )}
-          {quickState?.state === 'done' && <QuickResult state={quickState} />}
-        </div>
-      )}
+      {hasQuick &&
+        (quickState?.state !== 'none' ||
+          quickError ||
+          quickVariants.some((variant) => variant.summary)) && (
+          <div
+            className="runview__quick"
+            role="group"
+            aria-label="Prueba rápida"
+          >
+            {quickError && <p role="alert">{quickError}</p>}
+            {quickState?.state === 'running' && (
+              <QuickProgress state={quickState} />
+            )}
+            {quickState?.state === 'failed' && (
+              <p role="alert">
+                Prueba rápida sin resultado: {quickState.error}
+              </p>
+            )}
+            {quickState?.state === 'done' && <QuickResult state={quickState} />}
+            <QuickComparison variants={quickVariants} />
+          </div>
+        )}
       {panelOpen && (
         <div
           className="runview__series"
@@ -1356,6 +1384,47 @@ function QuickProgress({ state }: { state: QuickState }) {
         </p>
       )}
     </RunProgress>
+  )
+}
+
+const variantLabel = (variant: QuickVariant) =>
+  variant.approx_gb
+    ? `${variant.label} · ~${variant.approx_gb} GB`
+    : variant.label
+
+/** The finished variants side by side: the same photos, so the numbers compare. */
+function QuickComparison({ variants }: { variants: QuickVariant[] }) {
+  const done = variants.filter((variant) => variant.summary)
+  if (done.length < 2) return null
+  return (
+    <table aria-label="Comparación de variantes">
+      <thead>
+        <tr>
+          <th scope="col">Variante</th>
+          <th scope="col">Neto por operación</th>
+          <th scope="col">Contra el azar</th>
+          <th scope="col">Correlación</th>
+        </tr>
+      </thead>
+      <tbody>
+        {done.map((variant) => (
+          <tr key={variant.id}>
+            <th scope="row">{variant.label}</th>
+            <td>{bp(variant.summary?.extremes_net_bp)}</td>
+            <td>
+              {variant.summary?.vs_random_pct == null
+                ? 'sin dato'
+                : `${amount(variant.summary.vs_random_pct, 0)} %`}
+            </td>
+            <td>
+              {variant.summary?.spearman == null
+                ? 'sin dato'
+                : amount(variant.summary.spearman, 2)}
+            </td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
   )
 }
 

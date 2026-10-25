@@ -41,6 +41,7 @@ import array
 import bisect
 import calendar
 import collections
+import contextlib
 import hashlib
 import json
 import math
@@ -1579,6 +1580,9 @@ def _parser():
     ee.add_argument("--llama-url", default=None)
     ee.add_argument("--offline", action="store_true", help="use only the local cache: no Kraken request at all")
     ee.add_argument("--sequential", action="store_true")
+    ee.add_argument("--variant", default=None, metavar="ID",
+                    help="with --quick: a variant of config/qwen-quick-variants.json (other prompt or other model); each one "
+                         "has its own database and state file")
     ee.add_argument("--quick", nargs="?", const=150, type=int, default=None, metavar="N",
                     help="quick test: only ~N photos (default 150), in its own database (exam-v3-rapida.sqlite); leaves "
                          "rapida-v3.json for the screen. Orientative: it is not the exam")
@@ -1641,11 +1645,22 @@ def main(argv=None):
             if args.sequential:
                 cfg = dict(cfg, runtime=dict(cfg.get("runtime") or {}, concurrent_orders=False))
             if args.quick is not None:
-                from .futures_qwen_trader_exam import run_quick
-                quick_db = os.path.join(os.path.dirname(os.path.abspath(args.exam_db)), "exam-v3-rapida.sqlite")
-                state = run_quick(history, quick_db, _provider(args.llama_url), cfg, holdout_ms, snapshots=args.quick,
-                                  max_minutes=args.max_minutes)
-                print("prueba rápida: {}".format(state["state"]))
+                from . import futures_qwen_quick_variants as variants
+                from .futures_qwen_trader_exam import fail_quick, run_quick
+                variant = variants.get_variant(args.variant)
+                base = os.path.dirname(os.path.abspath(args.exam_db))
+                quick_db = os.path.join(base, variants.db_name(variant["id"]))
+                state_path = os.path.join(base, variants.state_name(variant["id"]))
+                try:
+                    server = variants.ModelServer(variant["model"]) if variant.get("model") else None
+                    with server or contextlib.nullcontext():
+                        url = server.url if server else args.llama_url
+                        state = run_quick(history, quick_db, _provider(url), variants.apply_variant(cfg, variant), holdout_ms,
+                                          snapshots=args.quick, max_minutes=args.max_minutes, state_path=state_path,
+                                          variant=variant)
+                except variants.VariantError as error:
+                    state = fail_quick(state_path, variant, str(error))
+                print("prueba rápida {}: {}".format(variant["id"], state["state"]))
                 return
             run_exam(history, args.exam_db, _provider(args.llama_url), cfg, holdout_ms, max_minutes=args.max_minutes)
         elif args.command in ("prefetch", "practice"):

@@ -204,6 +204,15 @@ def quick_cfg(cfg, snapshots=QUICK_SNAPSHOTS):
     return dict(cfg, exam=exam)
 
 
+def fail_quick(state_path, variant, error):
+    """A quick test that could not even start (e.g. its model is not on this Mac): the reason reaches the screen."""
+    now = int(time.time() * 1000)
+    state = {"state": "failed", "pid": os.getpid(), "started_ms": now, "finished_ms": now, "updated_ms": now, "answered": 0,
+             "total": QUICK_SNAPSHOTS, "summary": None, "error": error, "variant": variant["id"]}
+    _write_state(state_path, state)
+    return state
+
+
 def quick_summary(db_path, cfg):
     """The lean on the decision horizon, read off the sample: no verdict, only whether each signal points the right way."""
     rows, _ = load_answers(db_path)
@@ -227,14 +236,15 @@ def _write_state(path, state):
 
 
 def run_quick(history, db_path, provider, cfg, holdout_ms, *, snapshots=QUICK_SNAPSHOTS, max_minutes=55.0,
-              clock=time.monotonic, log=print, state_path=None):
+              clock=time.monotonic, log=print, state_path=None, variant=None):
     """Asks Qwen about a small stratified sample of the photos, in its own database (the full exam's is never touched),
     and leaves ``{state, answered, total, summary}`` in ``state_path`` for the screen. Every run starts from scratch: a
     changed prompt or model is exactly what it is for, and an old sample would be refused by the config identity."""
     state_path = state_path or os.path.join(os.path.dirname(os.path.abspath(db_path)), QUICK_STATE)
     started = int(time.time() * 1000)
     state = {"state": "running", "pid": os.getpid(), "started_ms": started, "answered": 0, "total": snapshots,
-             "phase": "fotos", "updated_ms": started, "summary": None, "error": None}
+             "phase": "fotos", "updated_ms": started, "summary": None, "error": None,
+             "variant": (variant or {}).get("id", "actual")}
     _write_state(state_path, state)
     try:
         if os.path.exists(db_path):
