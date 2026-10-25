@@ -25,10 +25,10 @@ class VariantConfigTests(unittest.TestCase):
         for variant in qv.load_variants():
             applied = qv.apply_variant(CFG3, variant)
             hashes[variant["id"]] = qt.config_hash(applied)
-            self.assertEqual(variant["kind"] in ("prompt", "state"), applied["prompt"]["version"] != CFG3["prompt"]["version"])
+            self.assertEqual(variant["kind"] in ("prompt", "state", "factors"), applied["prompt"]["version"] != CFG3["prompt"]["version"])
             self.assertEqual((variant["kind"] == "model"), "model" in variant)
         self.assertEqual(qt.config_hash(CFG3), before)
-        prompt_variants = [h for k, h in hashes.items() if k.startswith(("p", "e"))]
+        prompt_variants = [h for k, h in hashes.items() if k.startswith(("p", "e", "ficha"))]
         self.assertEqual(len(set(prompt_variants + [hashes[qv.CONTROL]])), len(prompt_variants) + 1)
         for variant in qv.load_variants():                            # model variants ask the same questions as the control
             if variant["kind"] == "model":

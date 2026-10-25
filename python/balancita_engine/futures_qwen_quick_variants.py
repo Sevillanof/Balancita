@@ -1,7 +1,8 @@
 """Variants of Qwen for the quick test: other questions (prompt) or another model, each one its own version.
 
 ``config/qwen-quick-variants.json`` lists them. A prompt variant replaces the system text and/or the flat question of the v3
-config (the photos are the same, so the numbers compare). A model variant makes the quick test start its own ``llama-server``
+config (the photos are the same, so the numbers compare). A ``factors`` variant (the 8-line sheet) also changes the STATE and asks
+the question by factors, one gradient per line. A model variant makes the quick test start its own ``llama-server``
 on loopback (``--offline``: nothing is downloaded here) and stop it when the test ends. Qwen en vivo is never touched: its
 config, its server and its database stay as they are.
 """
@@ -54,7 +55,12 @@ def apply_variant(cfg, variant):
             prompt["system"] = change["system"]
         if "flat" in change:
             prompt["questions"]["flat"] = change["flat"]
-    if change or "state_extras" in variant:
+    factors = variant.get("kind") == "factors"
+    if factors:                                          # the 8-line sheet and the question by factors (``futures_qwen_factors``)
+        out["state_ficha"] = bool(variant.get("state_ficha", True))
+        out["state_context"] = list(variant.get("state_context") or ())
+        out["factors"] = copy.deepcopy(variant["factors"])
+    if change or factors or "state_extras" in variant:
         prompt["version"] = variant["prompt_version"]
     return out
 

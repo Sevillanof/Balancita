@@ -433,6 +433,131 @@ describe('StrategyRunView actions', () => {
     expect(quick.start).toHaveBeenCalledWith('qwen-live', 'm1-qwen3-8b')
   })
 
+  it('the sheet variants show the reading table and the comparison with the rule without Qwen', async () => {
+    const user = userEvent.setup()
+    const reading = (
+      id: string,
+      label: string,
+      verdict: string,
+      flip: number | null,
+    ) => ({
+      id,
+      label,
+      number: 'z de 24 h',
+      flip_share: flip,
+      flip_n: flip === null ? 0 : 120,
+      corr: flip === null ? null : 0.62,
+      corr_n: 140,
+      verdict,
+    })
+    const state = {
+      state: 'done',
+      variant: 'ficha',
+      snapshots: 300,
+      note: 'n',
+      variants: [
+        {
+          id: 'actual',
+          label: 'Actual (control)',
+          kind: 'control',
+          state: 'none',
+        },
+        {
+          id: 'ficha',
+          label: 'Ficha de 8 factores con gradiente',
+          kind: 'factors',
+          state: 'done',
+        },
+        {
+          id: 'ficha-pista',
+          label: 'Ficha de 8 factores con pista de reversión',
+          kind: 'factors',
+          state: 'none',
+        },
+      ],
+      summary: {
+        photos: 300,
+        horizon_min: 240,
+        spearman: 0.05,
+        spearman_ci: [-0.02, 0.12],
+        extremes_net_bp: 1.5,
+        extremes_ci: [-3, 6],
+        vs_random_pct: 80,
+        signals: { extremes: false, random: false, spearman: false },
+        note: 'Es orientativa.',
+        ficha: {
+          photos: 298,
+          reads: 1,
+          readings: [
+            reading('F1', 'Tendencia larga', 'lee', 0.91),
+            reading('F4', 'Área de valor del día previo', 'sin dato', null),
+          ],
+          comparison: [
+            {
+              horizon_min: 240,
+              photos: 298,
+              qwen_spearman: 0.04,
+              rule_spearman: -0.02,
+              always_long_net_bp: -10.5,
+              always_short_net_bp: -9.5,
+            },
+            {
+              horizon_min: 1440,
+              photos: 298,
+              qwen_spearman: null,
+              rule_spearman: 0.1,
+              always_long_net_bp: -30.2,
+              always_short_net_bp: 10.2,
+            },
+          ],
+        },
+      },
+    }
+    const quick = {
+      status: vi.fn(async () => state),
+      start: vi.fn(async () => undefined),
+    } as unknown as import('../infrastructure/quick-api.ts').QuickApi
+    render(
+      <StrategyRunView
+        strategyId="qwen-live"
+        strategyName="Qwen en vivo"
+        version={1}
+        kind="qwen_live"
+        gate={gateWith(overview([]))}
+        visual={visualWith()}
+        quick={quick}
+      />,
+    )
+    const picker = await screen.findByRole('combobox', {
+      name: 'Variante de la prueba rápida',
+    })
+    expect(
+      within(picker).getByRole('option', {
+        name: 'Ficha de 8 factores con gradiente',
+      }),
+    ).toBeInTheDocument()
+    expect(
+      within(picker).getByRole('option', {
+        name: 'Ficha de 8 factores con pista de reversión',
+      }),
+    ).toBeInTheDocument()
+    await user.selectOptions(picker, 'ficha-pista')
+    await user.click(screen.getByRole('button', { name: 'Prueba rápida' }))
+    expect(quick.start).toHaveBeenCalledWith('qwen-live', 'ficha-pista')
+    const reads = await screen.findByRole('table', {
+      name: 'Lectura por renglón',
+    })
+    expect(within(reads).getByText('F1 Tendencia larga')).toBeInTheDocument()
+    expect(within(reads).getByText('lee')).toBeInTheDocument()
+    expect(within(reads).getByText(/91 % \(120 fotos\)/)).toBeInTheDocument()
+    expect(within(reads).getAllByText('sin dato').length).toBeGreaterThan(0)
+    const rule = screen.getByRole('table', { name: 'Contra la regla sin Qwen' })
+    expect(within(rule).getByText('4 h')).toBeInTheDocument()
+    expect(within(rule).getByText('24 h')).toBeInTheDocument()
+    expect(within(rule).getByText('−10,5 pb')).toBeInTheDocument()
+    expect(within(rule).getByText('+10,2 pb')).toBeInTheDocument()
+  })
+
   it('rules strategies have no quick test button', async () => {
     renderView(gateWith(overview([])), visualWith())
     await screen.findByRole('button', { name: 'Testear' })
