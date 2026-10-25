@@ -926,9 +926,9 @@ class Trader:
         """Opportunity window, always on while flat. Every 15 min wake of the window asks the two-option question (LARGO / CORTO, both option
         orders) about the real numbers AND about the mirrored ones. ``lean`` = p(LARGO) - p(CORTO); ``lean_num`` =
         (lean - lean_m) / 2, the part of the lean that comes from the numbers; score = |lean_num|, side = its sign. A look is a
-        CANDIDATE only when the mirror does NOT repeat the same side (``lean_eff * lean_m <= 0``, where ``lean_eff`` is the real lean, or 0 when
-        it is under ``force_neutral_lean``: a real 50/50 is noise, not a side) AND ``score >= force_min_score``. It enters when it is a candidate AND its
-        score beats every score seen before in the window AND at least ``force_min_looks`` looks came before; after
+        CANDIDATE only when the mirror does NOT repeat the same side (``lean_eff * lean_m_eff <= 0``, where each lean counts as 0 when it is under
+        ``force_neutral_lean``: a 50/50 is noise, not a side, on the real state or on the mirror) AND ``score >= force_min_score``. It enters when it is a candidate AND its
+        score reaches the best candidate score of the window minus ``force_record_tol`` AND at least ``force_min_looks`` looks came before; after
         ``force_window_h`` hours it enters at the first candidate with no record required. A contradicting mirror never
         enters. The look is stored as a wait (``ventana_mirando``); the entry as ``entrada_ventana`` / entry reason ``ventana``."""
         live = self.cfg["live"]
@@ -950,11 +950,14 @@ class Trader:
         lean_num = (lean - lean_m) / 2.0
         score = abs(lean_num)
         side = "LARGO" if lean_num > 0 else "CORTO"
-        lean_eff = lean if abs(lean) >= live.get("force_neutral_lean", 0.05) else 0.0
-        candidate = not (lean_eff * lean_m > 0) and score >= live.get("force_min_score", 0.15)
+        neutral = live.get("force_neutral_lean", 0.05)
+        lean_eff = lean if abs(lean) >= neutral else 0.0              # a 50/50 is noise, not a side: on the real state...
+        lean_m_eff = lean_m if abs(lean_m) >= neutral else 0.0        # ...and on the mirrored one
+        candidate = not (lean_eff * lean_m_eff > 0) and score >= live.get("force_min_score", 0.15)
         looks_before, best_before = window["looks"], window["best"]
         late = t_ms - window["start_ms"] >= live.get("force_window_h", 12) * HOUR_MS
-        enter = candidate and ((looks_before >= live.get("force_min_looks", 6) and score > best_before) or late)
+        enter = candidate and ((looks_before >= live.get("force_min_looks", 6)
+                                      and score >= best_before - live.get("force_record_tol", 0.03)) or late)
         window["looks"] += 1
         if candidate:                      # solo las candidatas (espejo coincidente) suben la vara
             window["best"] = max(best_before, score)

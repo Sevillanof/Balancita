@@ -542,12 +542,13 @@ class OpportunityWindowTests(unittest.TestCase):
     """Fran's rule: at least one trade a day, but choosing the moment. After ``force_side_after_h`` without opening, a window
     opens: every 15 min wake asks LARGO / CORTO on the real numbers and on the mirror and enters only on a record candidate."""
 
-    def window_env(self, plan, delay=0, window_h=12, min_looks=6, db=None, min_score=0.0, neutral=0.05):
+    def window_env(self, plan, delay=0, window_h=12, min_looks=6, db=None, min_score=0.0, neutral=0.05, tol=0.0):
         """One product (the prompts of the fake model are counted in order). ``plan(look, mirrored)`` is p(LARGO) of that
         question; both option orders get the same answer, so the mean is that number. Looks are 0-based."""
         cfg = live.apply_overrides(LIVE_CFG, {"QWEN_LIVE_FORCE_SIDE_AFTER_H": str(delay), "QWEN_LIVE_PRODUCTS": "PF_XBTUSD"})
         cfg["live"]["force_window_h"], cfg["live"]["force_min_looks"] = window_h, min_looks
         cfg["live"]["force_min_score"], cfg["live"]["force_neutral_lean"] = min_score, neutral
+        cfg["live"]["force_record_tol"] = tol
         cfg["runtime"]["concurrent_orders"] = False                 # deterministic prompt order
         state = {"n": 0}
 
@@ -644,6 +645,60 @@ class OpportunityWindowTests(unittest.TestCase):
         entry = looks[-1]
         self.assertEqual((entry["override"], entry["look_n"]), ("entrada_ventana", 4))
         self.assertEqual(env.rows("SELECT side FROM trades")[0]["side"], "SHORT")
+
+    def test_a_neutral_mirror_with_an_extreme_real_is_a_long_candidate_that_enters_after_the_minimum_looks(self):
+        """Datos reales: real LARGO casi seguro (lean ~1,0) y espejo neutro (lean_m +0,003 a +0,045)."""
+        mirrors = [0.5075, 0.5015, 0.5225, 0.5075, 0.5, 0.5125, 0.5075, 0.5075]    # lean_m = 2p - 1: +0,015, +0,003, +0,045...
+
+        def plan(look, mirrored):
+            return mirrors[min(look, 7)] if mirrored else 1.0 - 1e-9
+        env = self.window_env(plan, min_looks=6, min_score=0.15, tol=0.03)
+        env.op.start()
+        env.advance(7 * 15)
+        looks = self.looks(env)
+        self.assertEqual([r["mirror_ok"] for r in looks[:6]], [1] * 6)       # candidates although lean * lean_m > 0 by noise
+        self.assertTrue(all(r["lean_num"] > 0.45 for r in looks))              # side LARGO, score near 0,5
+        self.assertEqual([r["override"] for r in looks[:6]], ["ventana_mirando"] * 6)   # not before 6 looks
+        self.assertEqual((looks[6]["override"], looks[6]["look_n"]), ("entrada_ventana", 7))
+        self.assertEqual(env.rows("SELECT side FROM trades")[0]["side"], "LONG")
+
+    def test_two_extreme_leans_of_the_same_side_are_a_habit_not_a_candidate(self):
+        env = self.window_env(lambda look, mirrored: 1.0 - 1e-9, min_looks=1, min_score=0.0, tol=0.03)
+        env.op.start()
+        env.advance(4 * 15)
+        looks = self.looks(env)
+        self.assertEqual({r["mirror_ok"] for r in looks}, {0})
+        self.assertEqual(env.rows("SELECT * FROM trades"), [])
+        env = self.window_env(lambda look, mirrored: 0.5, min_looks=1, min_score=0.15, tol=0.03)   # both neutral: no score
+        env.op.start()
+        env.advance(3 * 15)
+        self.assertEqual({r["mirror_ok"] for r in self.looks(env)}, {0})
+
+    def test_a_tie_or_a_score_within_the_tolerance_of_the_best_enters(self):
+        scores = [0.465, 0.30, 0.30, 0.465, 0.45]            # the 4th look ties the best, the others are far or inside the tolerance
+
+        def plan(look, mirrored):
+            real, mirror = self.candidate(scores[min(look, 4)])
+            return mirror if mirrored else real
+        env = self.window_env(plan, min_looks=3, tol=0.03)
+        env.op.start()
+        env.advance(4 * 15)
+        looks = self.looks(env)
+        self.assertEqual([r["override"] for r in looks], ["ventana_mirando"] * 3 + ["entrada_ventana"])
+        env = self.window_env(plan, min_looks=3, tol=0.0)     # with no tolerance the tie also enters (>=), a lower score does not
+        env.op.start()
+        env.advance(5 * 15)
+        self.assertEqual(self.looks(env)[3]["override"], "entrada_ventana")
+        lower = self.window_env(lambda look, m: (self.candidate([0.5, 0.3, 0.3, 0.3, 0.3][min(look, 4)])[1 if m else 0]),
+                                min_looks=3, tol=0.03)
+        lower.op.start()
+        lower.advance(5 * 15)
+        self.assertEqual({r["override"] for r in self.looks(lower)}, {"ventana_mirando"})
+        cfg = live.apply_overrides(LIVE_CFG, {"QWEN_LIVE_FORCE_RECORD_TOL": "0.1"})
+        self.assertEqual(cfg["live"]["force_record_tol"], 0.1)
+        self.assertEqual(LIVE_CFG["live"]["force_record_tol"], 0.03)
+        with self.assertRaises(qt.TraderError):
+            live.apply_overrides(LIVE_CFG, {"QWEN_LIVE_FORCE_RECORD_TOL": "-0.1"})
 
     def test_the_real_lean_counts_as_a_side_only_from_the_neutral_threshold(self):
         def plan_for(p_real):

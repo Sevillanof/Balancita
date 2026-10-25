@@ -127,6 +127,23 @@ describe('qwenAnalyses with reasons', () => {
 })
 
 describe('waitReason: ventana de oportunidad', () => {
+  it('explica el caso en que el espejo quedó neutro y el real es claro', () => {
+    const text = waitReason({
+      chosen: 'ESPERAR',
+      override: 'ventana_mirando',
+      lean: 0.99,
+      lean_m: 0.015,
+      lean_num: 0.4875,
+      score: 0.4875,
+      best_score: 0.49,
+      model_action: 'LARGO',
+      mirror_ok: 1,
+    })
+    expect(text).toContain(
+      'El espejo quedó neutro: el real dice LARGO con 0,49',
+    )
+  })
+
   it('explica el caso en que el real quedó neutro y el espejo no repite el lado', () => {
     const text = waitReason({
       chosen: 'ESPERAR',

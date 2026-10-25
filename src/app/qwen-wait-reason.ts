@@ -90,6 +90,10 @@ export function waitReason(row: Record<string, unknown>): string | null {
     const neutral = typeof row.lean === 'number' && Math.abs(row.lean) < 0.05
     if (row.mirror_ok === 0)
       return `${head} Se inclinaba ${lado}${now ? ` (puntaje ${now})` : ''}, pero no es una ocasión confiable: el espejo repite el mismo lado o la diferencia es muy chica. No entra.`
+    const mirrorNeutral =
+      typeof row.lean_m === 'number' && Math.abs(row.lean_m) < 0.05
+    if (mirrorNeutral && !neutral)
+      return `${head} El espejo quedó neutro: el real dice ${lado}${now ? ` con ${now}` : ''}${best ? `; la mejor candidata hasta ahora vale ${best}` : ''}. Espera una mejor antes de entrar.`
     if (neutral)
       return `${head} Con el estado real quedó neutro (50/50) y el espejo no repite el lado: ocasión ${lado}${now ? ` de ${now}` : ''}${best ? `; la mejor candidata hasta ahora vale ${best}` : ''}. Espera una mejor antes de entrar.`
     if (now && best)
