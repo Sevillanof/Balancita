@@ -1229,6 +1229,7 @@ def evaluate(strategy_id, *, kind="practice", from_date=None, to_date=None, prod
         raise GateError("tipo desconocido: {}".format(kind))
     if spec is None and strategy_models.is_model(strategy_id):
         spec, trade_source = strategy_models.model_subject(strategy_id, kronos_dir, qwen_exit_dir, qwen_live_dir)
+    repeatable = strategy_models.is_repeatable(strategy_id)
     if spec is None:
         spec = find_spec(strategy_id, specs_dir, registry_db)
     if spec["id"] != strategy_id:
@@ -1262,9 +1263,11 @@ def evaluate(strategy_id, *, kind="practice", from_date=None, to_date=None, prod
     provider = provider or KrakenProvider(os.path.join(data_dir, "cache"))
     db = open_db(os.path.join(data_dir, DB_NAME))
     try:
-        key, digest = (check_exam_allowed(db, spec, cfg, allow_contaminated) if kind == "exam" else version_key_of(spec))
+        key, digest = (check_exam_allowed(db, spec, cfg, allow_contaminated) if kind == "exam" and not repeatable
+                       else version_key_of(spec))
         family = family_of(strategy_id)
-        contaminated = bool(kind == "exam" and allow_contaminated and family_exam_on_window(db, spec, cfg) is not None)
+        contaminated = bool(kind == "exam" and allow_contaminated and not repeatable
+                            and family_exam_on_window(db, spec, cfg) is not None)
         gate_attempts = attempts_of(db, family) + int(kind == "practice")
         attempts = gate_attempts + lab_variants
         identity = provenance.start(cfg, digest, kind, start_ms, end_ms, product_list, family,
@@ -1452,9 +1455,11 @@ def _execute(runner, db, spec, cfg, meta, product_list, provider, trade_source, 
             funding[product] = []
     # --- the exam's lock: taken right before the first outcome is computed.
     if kind == "exam":
+        # Qwen and Kronos repeat the exam: the newest exam replaces the previous record (every run stays in ``runs``).
+        verb = "INSERT OR REPLACE" if strategy_models.is_repeatable(spec["id"]) else "INSERT"
         try:
             with db:
-                db.execute("INSERT INTO exam_locks(strategy_id,version_key,code_hash,holdout_from,run_id,locked_at,status)"
+                db.execute(verb + " INTO exam_locks(strategy_id,version_key,code_hash,holdout_from,run_id,locked_at,status)"
                            " VALUES(?,?,?,?,?,?,'running')", (spec["id"], meta["version_key"], digest,
                                                               cfg["holdout_from"], run_id, _now_ms()))
                 db.execute("UPDATE runs SET holdout_read=1 WHERE id=?", (run_id,))

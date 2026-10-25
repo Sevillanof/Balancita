@@ -14,10 +14,11 @@ T0 = 1_760_000_000_000 // HOUR * HOUR          # well before the holdout cut
 LIVE_T0 = 1_792_000_000_000 // HOUR * HOUR     # after it
 
 
-def photo_db(path, photos):
+def photo_db(path, photos, config_hash=None):
     """``photos``: (t_ms, lean, move_240); the lean is the real-numbers lean, the mirror leans the other way."""
     pdb = qt.PracticeDB(path)
     pdb.db.executescript(ex._EXAM_SQL)
+    pdb.set_meta("config_hash", config_hash or qt.config_hash(qt.load_config(qt.CONFIG_PATH_V3)))
     with pdb.db:
         for order, (t_ms, lean, move) in enumerate(photos):
             sid = ex.snap_id("PF_XBTUSD", t_ms)
@@ -78,6 +79,33 @@ class QwenLiveTradesTests(unittest.TestCase):
         self.assertEqual([(t["side"], round(t["net_bp"], 6)) for t in got], [("LONG", 40.0), ("SHORT", 40.0)])
         self.assertEqual(got[0]["exit_time_ms"] - got[0]["entry_time_ms"], models.LIVE_HOLD_MS)
         self.assertEqual({t["funding_status"] for t in got}, {"unknown"})
+
+    def test_photos_asked_with_another_protocol_never_count(self):
+        photo_db(self.exam, [(T0, 0.4, 50.0), (T0 + 6 * HOUR, -0.4, -30.0)], config_hash="otro-protocolo")
+        got, _ = self.source()(None, "PF_XBTUSD", None, [], [], [], T0, T0 + 80 * HOUR, lambda f: None)
+        self.assertEqual(got, [])
+
+    def test_kronos_backtest_rows_are_never_evidence(self):
+        path = os.path.join(self.dir.name, "kronos.sqlite")
+        db = sqlite3.connect(path)
+        db.execute("CREATE TABLE trade(product_id TEXT, decision_ms INTEGER, mode TEXT, payload TEXT)")
+        for mode, net in (("forward", 7), ("backtest", 99)):
+            db.execute("INSERT INTO trade VALUES('PF_XBTUSD', ?, ?, ?)", (T0 if mode == "forward" else T0 + HOUR, mode,
+                       json.dumps({"side": "LONG", "entry_time_ms": T0, "exit_time_ms": T0 + HOUR, "net_bp": net})))
+        db.commit()
+        db.close()
+        got, _ = models.RecordedTrades(path, "trade")(models.model_spec(models.KRONOS_ID), "PF_XBTUSD", None, [], [], [],
+                                                       T0, T0 + 10 * HOUR, lambda f: None)
+        self.assertEqual([t["net_bp"] for t in got], [7])
+
+    def test_live_config_identity_comes_from_the_database(self):
+        live_db(self.live, [])
+        db = sqlite3.connect(self.live)
+        db.execute("INSERT OR REPLACE INTO meta VALUES('config_hash', 'hash-de-la-base')")
+        db.commit()
+        db.close()
+        self.assertEqual(models.live_config_hash(self.dir.name), "hash-de-la-base")
+        self.assertNotEqual(models.model_spec(models.QWEN_LIVE_ID, self.dir.name), models.model_spec(models.QWEN_LIVE_ID))
 
     def test_photo_positions_do_not_overlap(self):
         photo_db(self.exam, [(T0, 0.4, 50.0), (T0 + HOUR, 0.39, 80.0), (T0 + 6 * HOUR, -0.4, -30.0),

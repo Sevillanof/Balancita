@@ -212,7 +212,7 @@ class GateApi:
         self._check_strategy(strategy_id)
         recorded_model = strategy_gate_models.is_model(strategy_id)
         # Match find_spec: shipped content wins, then the latest non-deleted registry spec.
-        spec = (strategy_gate_models.model_spec(strategy_id) if recorded_model else
+        spec = (strategy_gate_models.model_spec(strategy_id, self.qwen_live_dir) if recorded_model else
                 load_specs().get(strategy_id) or self.registry.version(strategy_id)["spec"])
         if spec.get("id") != strategy_id:
             raise GateApiError("not_found", "La especificación no coincide con la estrategia indicada.", 404)
@@ -287,7 +287,7 @@ class GateApi:
     def _current_hash(self, strategy_id, version=None):
         try:
             if strategy_gate_models.is_model(strategy_id):
-                return spec_hash(strategy_gate_models.model_spec(strategy_id))
+                return spec_hash(strategy_gate_models.model_spec(strategy_id, self.qwen_live_dir))
             return spec_hash(self.registry.version(strategy_id, version)["spec"])
         except Exception:  # noqa: BLE001 - unknown version or unreadable descriptor: nothing can be said
             return None

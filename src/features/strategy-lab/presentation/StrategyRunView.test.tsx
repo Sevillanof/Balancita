@@ -231,6 +231,37 @@ describe('StrategyRunView actions', () => {
     expect(screen.getByRole('button', { name: 'Crear' })).toBeDisabled()
   })
 
+  it('Qwen and Kronos can repeat every stage and take the exam again; rules strategies cannot', async () => {
+    const user = userEvent.setup()
+    const everyStage = MARKET_STAGES.map((stage, index) =>
+      run(10 + index, { params: { from: stage.from, to: stage.to } }),
+    )
+    const gate = gateWith(overview(everyStage))
+    vi.mocked(gate.start).mockResolvedValue({ run_id: 99 })
+    const { unmount } = render(
+      <StrategyRunView
+        strategyId="qwen-live"
+        strategyName="Qwen en vivo"
+        version={1}
+        kind="qwen_live"
+        gate={gate}
+        visual={visualWith()}
+      />,
+    )
+    const testear = await screen.findByRole('button', { name: 'Testear' })
+    await waitFor(() => expect(testear).toBeEnabled())
+    await user.click(screen.getByRole('button', { name: 'Examen' }))
+    await waitFor(() =>
+      expect(gate.start).toHaveBeenCalledWith('qwen-live', { exam: true }),
+    )
+    unmount()
+    renderView(gateWith(overview(everyStage)), visualWith())
+    expect(
+      await screen.findByRole('button', { name: 'Testear' }),
+    ).toBeDisabled()
+    expect(screen.queryByRole('button', { name: 'Examen' })).toBeNull()
+  })
+
   it('Testear asks how many tests in a row and runs them in distinct stretches', async () => {
     const user = userEvent.setup()
     const tried = run(5, {
