@@ -363,6 +363,17 @@ class ControlTests(Base):
         self.assertEqual(base, historical_spec())
         self.assertEqual(g.neighbor_specs(base, CFG), [])
 
+    def test_whole_number_params_get_whole_neighbors(self):
+        cfg = dict(CFG, neighbors={"enabled": True, "pct": 0.2, "max_params": 6})
+        base = historical_spec()
+        base["params"] = {"bins": "48", "confirm_bars": "6", "stop_atr": "1.5"}
+        values = {(name, direction): value for name, direction, value, _ in g.neighbor_specs(base, cfg)}
+        self.assertEqual(values[("bins", "-20%")], "38")
+        self.assertEqual(values[("bins", "+20%")], "58")
+        self.assertEqual(values[("confirm_bars", "-20%")], "5")
+        self.assertEqual(values[("confirm_bars", "+20%")], "7")
+        self.assertEqual(values[("stop_atr", "-20%")], "1.2")
+
     def test_neighbor_run_reports_sensitivity(self):
         cfg = dict(CFG, neighbors={"enabled": True, "pct": 0.2, "max_params": 2})
         out = run("c29-momentum-perp-v1", self.dir, spec=historical_spec(), cfg=cfg, neighbors=True)
