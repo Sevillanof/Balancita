@@ -51,6 +51,11 @@ import {
   type VectorbtApi,
 } from '../infrastructure/vectorbt-api.ts'
 import type { StrategyApi } from '../infrastructure/strategy-api.ts'
+import {
+  quickApi,
+  type QuickApi,
+  type QuickState,
+} from '../infrastructure/quick-api.ts'
 import { installCommands } from '../domain/vectorbt-format.ts'
 import RunProgress from './RunProgress.tsx'
 import VectorbtModal from './VectorbtModal.tsx'
@@ -123,6 +128,8 @@ type Props = {
   version: number | string
   gate?: GateApi
   visual?: RunVisualApi
+  /** Qwen's quick test (a sample of the photos): only Qwen en vivo has it. */
+  quick?: QuickApi
   /** «Explorar con VectorBT» (rutas `/strategies/:id/vectorbt`). */
   vectorbt?: VectorbtApi
   /** «Analizador de señales» (`/analyzer/events`): solo lectura. */
@@ -149,6 +156,7 @@ export default function StrategyRunView({
   version,
   gate = gateApi,
   visual = runVisualApi,
+  quick = quickApi,
   vectorbt = vectorbtApi,
   analyzer = analyzerApi,
   registry,
@@ -593,6 +601,37 @@ export default function StrategyRunView({
     }
   }
   const examStage = overview?.stages?.exam ?? null
+  // --- Prueba rápida (Qwen en vivo): una muestra de fotos, orientativa ---
+  const hasQuick = kind === 'qwen_live'
+  const [quickState, setQuickState] = useState<QuickState | null>(null)
+  const [quickError, setQuickError] = useState<string | null>(null)
+  const quickRunning = quickState?.state === 'running'
+  useEffect(() => {
+    if (!hasQuick) return
+    let cancelled = false
+    const look = () =>
+      quick
+        .status(strategyId)
+        .then((next) => {
+          if (!cancelled) setQuickState(next)
+        })
+        .catch(() => undefined)
+    void look()
+    const timer = quickRunning ? setInterval(() => void look(), 5000) : null
+    return () => {
+      cancelled = true
+      if (timer) clearInterval(timer)
+    }
+  }, [hasQuick, quick, strategyId, quickRunning])
+  const startQuick = async () => {
+    setQuickError(null)
+    try {
+      await quick.start(strategyId)
+      setQuickState(await quick.status(strategyId))
+    } catch (error) {
+      setQuickError(message(error))
+    }
+  }
   /** The final exam (everything since the cut): only Qwen and Kronos can repeat it. */
   const runExam = async () => {
     setPanelOpen(false)
@@ -786,6 +825,16 @@ export default function StrategyRunView({
                 Examen
               </button>
             )}
+            {hasQuick && (
+              <button
+                type="button"
+                onClick={() => void startQuick()}
+                disabled={quickRunning}
+                title="Pregunta a Qwen solo sobre unas 300 fotos del pasado (unos 20 minutos) para filtrar un cambio de prompt o modelo. Es orientativa: no es el Examen."
+              >
+                {quickRunning ? 'Prueba rápida en curso…' : 'Prueba rápida'}
+              </button>
+            )}
             <button
               type="button"
               onClick={() => setVbtModal(true)}
@@ -800,6 +849,21 @@ export default function StrategyRunView({
           </div>
         </div>
       </header>
+      {hasQuick && (quickState?.state !== 'none' || quickError) && (
+        <div className="runview__quick" role="group" aria-label="Prueba rápida">
+          {quickError && <p role="alert">{quickError}</p>}
+          {quickState?.state === 'running' && (
+            <p>
+              Prueba rápida en curso: preguntando a Qwen sobre{' '}
+              {quickState.snapshots} fotos del pasado…
+            </p>
+          )}
+          {quickState?.state === 'failed' && (
+            <p role="alert">Prueba rápida sin resultado: {quickState.error}</p>
+          )}
+          {quickState?.state === 'done' && <QuickResult state={quickState} />}
+        </div>
+      )}
       {panelOpen && (
         <div
           className="runview__series"
@@ -1242,6 +1306,42 @@ function Kpi({
         {value}
       </strong>
       <span className="runview__kpi-note">{note}</span>
+    </div>
+  )
+}
+
+const SIGNAL_TEXT = (ok: boolean | null) =>
+  ok === null ? 'sin dato' : ok ? 'apunta bien' : 'no apunta bien'
+
+function QuickResult({ state }: { state: QuickState }) {
+  const summary = state.summary
+  if (!summary)
+    return <p>Prueba rápida terminada, pero no alcanzó para una lectura.</p>
+  return (
+    <div>
+      <p>
+        <strong>Prueba rápida (orientativa)</strong> · {summary.photos} fotos ·
+        a {summary.horizon_min / 60} horas
+      </p>
+      <ul>
+        <li>
+          Los extremos de la inclinación ganan {bp(summary.extremes_net_bp)} por
+          operación después de costos: {SIGNAL_TEXT(summary.signals.extremes)}.
+        </li>
+        <li>
+          Contra entradas al azar:{' '}
+          {summary.vs_random_pct == null
+            ? 'sin dato'
+            : `${amount(summary.vs_random_pct, 0)} %`}{' '}
+          ({SIGNAL_TEXT(summary.signals.random)}).
+        </li>
+        <li>
+          La inclinación acompaña al movimiento (correlación{' '}
+          {summary.spearman == null ? 'sin dato' : amount(summary.spearman, 2)}
+          ): {SIGNAL_TEXT(summary.signals.spearman)}.
+        </li>
+      </ul>
+      <p className="runview__hint">{summary.note}</p>
     </div>
   )
 }

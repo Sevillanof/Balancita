@@ -300,6 +300,64 @@ describe('StrategyRunView actions', () => {
     )
   })
 
+  it('Qwen en vivo has a quick test button; it asks, polls and shows an orientative result', async () => {
+    const user = userEvent.setup()
+    const states = [
+      { state: 'none', snapshots: 300, note: 'n' },
+      { state: 'running', snapshots: 300, note: 'n' },
+      {
+        state: 'done',
+        snapshots: 300,
+        note: 'n',
+        summary: {
+          photos: 300,
+          horizon_min: 240,
+          spearman: 0.1,
+          spearman_ci: [0.01, 0.2],
+          extremes_net_bp: 4.2,
+          extremes_ci: [1, 7],
+          vs_random_pct: 97,
+          signals: { extremes: true, random: true, spearman: true },
+          note: 'Es orientativa: no es el Examen.',
+        },
+      },
+    ] as const
+    let at = 0
+    const quick = {
+      status: vi.fn(async () => states[Math.min(at, states.length - 1)]!),
+      start: vi.fn(async () => {
+        at = 1
+      }),
+    } as unknown as import('../infrastructure/quick-api.ts').QuickApi
+    render(
+      <StrategyRunView
+        strategyId="qwen-live"
+        strategyName="Qwen en vivo"
+        version={1}
+        kind="qwen_live"
+        gate={gateWith(overview([]))}
+        visual={visualWith()}
+        quick={quick}
+      />,
+    )
+    await user.click(
+      await screen.findByRole('button', { name: 'Prueba rápida' }),
+    )
+    expect(quick.start).toHaveBeenCalledWith('qwen-live')
+    await screen.findByText(/preguntando a Qwen sobre/)
+    at = 2
+    await screen.findByText(/Prueba rápida \(orientativa\)/, undefined, {
+      timeout: 8000,
+    })
+    expect(screen.getByText(/Es orientativa/)).toBeInTheDocument()
+  }, 15000)
+
+  it('rules strategies have no quick test button', async () => {
+    renderView(gateWith(overview([])), visualWith())
+    await screen.findByRole('button', { name: 'Testear' })
+    expect(screen.queryByRole('button', { name: 'Prueba rápida' })).toBeNull()
+  })
+
   it('Testear asks how many tests in a row and runs them in distinct stretches', async () => {
     const user = userEvent.setup()
     const tried = run(5, {

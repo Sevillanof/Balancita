@@ -46,6 +46,7 @@ from .futures_strategy_inventory import build_inventory
 from .futures_strategy_plan import all_plans, load_freeze
 from .futures_strategy_reliability import load_reliability, reliability_for
 from .futures_purged import cscv_pbo
+from .futures_qwen_quick_api import QuickTestApi
 from .futures_strategy_gate_api import GateApi, GateApiError
 from .analyzer_events_api import read_events as read_analyzer_events
 from .futures_strategy_vectorbt_api import VectorbtApi
@@ -668,6 +669,7 @@ class StrategyService:
         self.vectorbt = VectorbtApi(registry, self.gate, data_dir=vectorbt_dir, python=vectorbt_python,
                                     spawn=vectorbt_spawn)
         self.gate.busy_hook = self.vectorbt.busy_message
+        self.quick = QuickTestApi()
         self.lifecycle = Lifecycle(registry, self.gate, forward_db_path=forward_db_path, purge_dir=purge_dir,
                                    consumers=("forward",) if forward_db_path else (),
                                    specs_dir=specs_dir, forward_registration_path=forward_registration_path,
@@ -1059,9 +1061,23 @@ def make_handler(service):
                 return vectorbt.compare(parts[1], parts[3], query.get("value"), query.get("run_id"))
             return None
 
+        def _quick(self, method):
+            """Qwen's quick test: ``GET`` its state, ``POST`` to start it."""
+            parts = [p for p in urlparse(self.path).path.split("/") if p]
+            if parts[:1] == ["api-strategies"]:
+                parts = parts[1:]
+            if len(parts) != 3 or parts[0] != "strategies" or parts[2] != "quick":
+                return None
+            quick = getattr(service, "quick", None)
+            if quick is None:
+                return None
+            return quick.status(parts[1]) if method == "GET" else quick.launch(parts[1]) if method == "POST" else None
+
         def _handle(self, method):
             try:
                 out = self._gate(method)
+                if out is None:
+                    out = self._quick(method)
                 if out is True:
                     return
                 if out is None:

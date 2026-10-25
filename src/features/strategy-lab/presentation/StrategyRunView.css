@@ -469,3 +469,16 @@
 .runview__scope [data-tone='warn'] {
   color: var(--mc-text);
 }
+
+.runview__quick {
+  display: grid;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 1px solid var(--line, rgba(128, 128, 128, 0.3));
+  border-radius: 8px;
+}
+
+.runview__quick p,
+.runview__quick ul {
+  margin: 0;
+}
