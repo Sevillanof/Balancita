@@ -244,7 +244,7 @@ export type InventoryStrategy = {
   version: number
   name: string
   description: string
-  kind: 'rules' | 'qwen_exit' | 'model' | 'carry'
+  kind: 'rules' | 'qwen_exit' | 'qwen_live' | 'model' | 'carry'
   spec_hash: string | null
   operational: {
     state: string

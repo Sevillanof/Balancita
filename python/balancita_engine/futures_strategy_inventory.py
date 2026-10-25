@@ -26,6 +26,7 @@ from .futures_forward_result import strategy_block
 from .futures_spec_strategy import DEFAULT_SPEC_DIR, load_specs, spec_hash
 from .futures_strategy_plan import kronos_plan, spec_plan
 from .futures_simulator import DEFAULT_NOTIONAL_USD
+from .strategy_gate_models import QWEN_LIVE_ID
 
 INVENTORY_SCHEMA = "futures-strategy-inventory.v1"
 DEFAULT_CONFIG_DIR = os.path.dirname(DEFAULT_SPEC_DIR)
@@ -110,6 +111,7 @@ def build_inventory(entries, specs, *, config_dir=None, carry=None, forward_resu
     closed = _read(config_dir, "strategy-closed.json") or {"ids": []}
     forward = _read(config_dir, "forward-strategies.json") or {"strategies": {}}
     qwen_exit = _read(config_dir, "qwen-exit.json")
+    qwen_live = _read(config_dir, "qwen-live.json")
     kronos = _read(os.path.join(config_dir, "models"), "kronos-small-1h-h4-v1.json")
     shipped = load_specs(os.path.join(config_dir, "strategies")) if os.path.isdir(
         os.path.join(config_dir, "strategies")) else {}
@@ -234,6 +236,24 @@ def build_inventory(entries, specs, *, config_dir=None, carry=None, forward_resu
             "note": qwen_exit.get("note"), "no_backtest": True,
         })
 
+    if qwen_live is not None:
+        rows.append({
+            "id": QWEN_LIVE_ID, "version": 1, "name": "Qwen en vivo",
+            "description": "Qwen decide cada entrada y cada salida, cada 15 minutos, en {}.".format(
+                ", ".join(qwen_live.get("products") or [])),
+            "kind": "qwen_live", "spec_hash": None,
+            # It trades in the paper all the time; a config does not prove the process runs now.
+            "operational": {"state": "unverified", "basis": "config", "since_ms": None,
+                            "reason": "registered_in_qwen_live_config"},
+            "frozen": QWEN_LIVE_ID in frozen,
+            "research": {"state": "unmeasured", "evidence_of_edge": False, "reliable": False,
+                         "investigating": True, "backtest": None},
+            "forward": forward_block(),
+            "market": {"products": len(qwen_live.get("products") or []) or None, "horizon_minutes": 240,
+                       "exit_by": "qwen"},
+            "note": qwen_live.get("note"), "no_backtest": True,
+        })
+
     if kronos is not None:
         plan = kronos_plan(kronos)
         rows.append({
@@ -300,6 +320,7 @@ def _day_ms(day):
 
 # Strategies the forward runner does not measure in forward.sqlite: where their result lives, said, not "unknown".
 _NOT_IN_FORWARD = {
+    "qwen_live": "Qwen en vivo guarda su resultado en su propia base (qwen-live); este resumen no la lee",
     "qwen_exit": "C31 guarda su resultado en su propia base (qwen-exit); este resumen no la lee",
     "model": "Kronos guarda su actividad aparte (kronos_lab); este resumen no la lee",
     "carry": "contador aparte: no abre operaciones forward",

@@ -10,6 +10,8 @@ import {
   type StrategyDetail,
 } from '../infrastructure/strategy-api.ts'
 import type { StrategySpec } from '../domain/strategy-spec.ts'
+import type { GateApi } from '../infrastructure/gate-api.ts'
+import type { RunVisualApi } from '../infrastructure/run-visual-api.ts'
 import type { RunSummary } from '../infrastructure/run-visual-api.ts'
 
 vi.mock('./StrategyRunView.tsx', () => ({
@@ -252,13 +254,70 @@ async function openMenu(name: string) {
   return user
 }
 
-function renderPage(api: StrategyApi) {
-  return render(<StrategiesPage api={api} connectError={null} reload={0} />)
+/** A gate that knows nothing: every strategy stays in «Hipótesis» without a figure. */
+const emptyGate = {
+  overview: () => Promise.reject(new Error('sin pruebas')),
+} as unknown as GateApi
+
+function renderPage(api: StrategyApi, gate: GateApi = emptyGate) {
+  return render(
+    <StrategiesPage api={api} connectError={null} reload={0} gate={gate} />,
+  )
 }
 
 beforeEach(() => vi.clearAllMocks())
 
 describe('StrategiesPage list', () => {
+  it('groups the rules strategies by stage and sorts each group by net per trade', async () => {
+    const api = fakeApi()
+    const base = await api.inventory!()
+    const second = exampleRow({ id: 'c41', name: 'C41 Pullback' })
+    const third = exampleRow({ id: 'c42', name: 'C42 Reversión' })
+    api.inventory.mockResolvedValue({
+      strategies: [...base.strategies, second, third],
+    })
+    const run = (id: number) => ({
+      id,
+      kind: 'practice',
+      status: 'done',
+      verdict: 'NO PASA',
+      same_version: true,
+    })
+    const gate = {
+      overview: (id: string) =>
+        Promise.resolve({
+          runs: id === 'c40' ? [] : [run(id === 'c41' ? 1 : 2)],
+          exam: { taken: false },
+          running: null,
+        }),
+    } as unknown as GateApi
+    const visual = {
+      summary: (runId: number) =>
+        Promise.resolve({ summary: { mean_bp: runId === 1 ? -4 : 9 } }),
+    } as unknown as RunVisualApi
+    render(
+      <StrategiesPage
+        api={api}
+        connectError={null}
+        reload={0}
+        gate={gate}
+        visual={visual}
+      />,
+    )
+    const list = await screen.findByRole('navigation', {
+      name: 'Lista de estrategias',
+    })
+    await waitFor(() =>
+      expect(within(list).getByText('Optimizar')).toBeVisible(),
+    )
+    const names = within(list)
+      .getAllByRole('listitem')
+      .map((li) => li.getAttribute('data-id'))
+      .filter(Boolean)
+    expect(names).toEqual(['kronos-small-1h-h4-v1', 'c40', 'c42', 'c41'])
+    expect(within(list).getByText('Hipótesis')).toBeVisible()
+  })
+
   it('lists only what exists: no retired and no unknown strategies, Kronos stays', async () => {
     renderPage(fakeApi())
     const list = await screen.findByRole('navigation', {

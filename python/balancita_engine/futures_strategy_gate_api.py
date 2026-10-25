@@ -82,9 +82,9 @@ def popen_detached(args, env, cwd, log_path):
 
 class GateApi:
     def __init__(self, registry, data_dir=None, python=None, spawn=None, wait_s=SPAWN_WAIT_S, products=None,
-                 kronos_dir=None, qwen_exit_dir=None):
+                 kronos_dir=None, qwen_exit_dir=None, qwen_live_dir=None):
         self.registry = registry
-        self.kronos_dir, self.qwen_exit_dir = kronos_dir, qwen_exit_dir
+        self.kronos_dir, self.qwen_exit_dir, self.qwen_live_dir = kronos_dir, qwen_exit_dir, qwen_live_dir
         self.data_dir = os.path.abspath(data_dir or os.environ.get("STRATEGY_GATE_DIR") or DEFAULT_DATA_DIR)
         self.python = python or default_python()
         self.spawn = spawn or popen_detached
@@ -230,7 +230,8 @@ class GateApi:
         if isinstance(registry_db, str) and registry_db:
             args += ["--registry-db", os.path.abspath(registry_db)]
         if strategy_gate_models.is_model(strategy_id):
-            for flag, folder in (("--kronos-dir", self.kronos_dir), ("--qwen-exit-dir", self.qwen_exit_dir)):
+            for flag, folder in (("--kronos-dir", self.kronos_dir), ("--qwen-exit-dir", self.qwen_exit_dir),
+                                 ("--qwen-live-dir", self.qwen_live_dir)):
                 if folder:
                     args += [flag, os.path.abspath(folder)]
         if start:

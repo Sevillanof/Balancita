@@ -33,6 +33,7 @@ type Props = {
 const KIND_LABEL: Record<InventoryStrategy['kind'], string> = {
   rules: 'Reglas (JSON)',
   qwen_exit: 'Qwen decide las salidas',
+  qwen_live: 'Qwen opera en vivo',
   model: 'Modelo',
   carry: 'Carry',
 }

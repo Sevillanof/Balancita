@@ -649,7 +649,7 @@ class StrategyService:
                  market_db_path=None, config_dir=None, forward_db_path=None, forward_summary_path=None,
                  decisions_db_path=None, gate_data_dir=None, purge_dir=None, specs_dir=None,
                  forward_registration_path=None, freeze_path=None, qwen_exit_config=None, qwen_practice_dir=None,
-                 kronos_dir=None, qwen_exit_dir=None, account_db_path=None, vectorbt_dir=None, vectorbt_python=None,
+                 kronos_dir=None, qwen_exit_dir=None, qwen_live_dir=None, account_db_path=None, vectorbt_dir=None, vectorbt_python=None,
                  vectorbt_spawn=None):
         self.config_dir = config_dir
         self.forward_db_path = forward_db_path
@@ -663,7 +663,8 @@ class StrategyService:
         self.products = products
         self._cache = {}
         self._results = {}
-        self.gate = GateApi(registry, data_dir=gate_data_dir, kronos_dir=kronos_dir, qwen_exit_dir=qwen_exit_dir)
+        self.gate = GateApi(registry, data_dir=gate_data_dir, kronos_dir=kronos_dir, qwen_exit_dir=qwen_exit_dir,
+                            qwen_live_dir=qwen_live_dir)
         self.vectorbt = VectorbtApi(registry, self.gate, data_dir=vectorbt_dir, python=vectorbt_python,
                                     spawn=vectorbt_spawn)
         self.gate.busy_hook = self.vectorbt.busy_message
@@ -1101,6 +1102,7 @@ def main(argv=None):
     parser.add_argument("--vectorbt-dir", help="VectorBT lab data folder (default: data/research-vectorbt or "
                                                "$BALANCITA_VECTORBT_DIR); the interpreter is $BALANCITA_VECTORBT_PYTHON")
     parser.add_argument("--kronos-dir", help="folder with kronos.sqlite (the gate judges Kronos by its saved trades)")
+    parser.add_argument("--qwen-live-dir", help="folder with live.sqlite (the gate judges the live Qwen by its paper trades)")
     parser.add_argument("--qwen-exit-dir", help="folder with qwen-exit.sqlite (the gate judges Qwen by its saved trades)")
     parser.add_argument("--qwen-practice-dir", help="folder with the offline Qwen practice files "
                                                     "(default: data/qwen-practice)")
@@ -1129,7 +1131,7 @@ def main(argv=None):
                               qwen_exit_config=os.path.join(config_root, "qwen-exit.json"),
                               qwen_practice_dir=args.qwen_practice_dir or os.path.join(
                                   os.path.dirname(config_root), "data", "qwen-practice"),
-                              kronos_dir=args.kronos_dir, qwen_exit_dir=args.qwen_exit_dir,
+                              kronos_dir=args.kronos_dir, qwen_exit_dir=args.qwen_exit_dir, qwen_live_dir=args.qwen_live_dir,
                               account_db_path=args.account_db, vectorbt_dir=args.vectorbt_dir)
     server = ThreadingHTTPServer(("127.0.0.1", args.port), make_handler(service))
     print("[strategies] registry {} on http://127.0.0.1:{}".format(args.strategies_db, args.port), flush=True)
