@@ -190,7 +190,7 @@ def run_exam(history, db_path, provider, cfg, holdout_ms, *, max_minutes=55.0, c
 
 # --------------------------------------------------------------------------- the quick test
 
-QUICK_SNAPSHOTS = 300
+QUICK_SNAPSHOTS = 150
 QUICK_STATE = "rapida-v3.json"
 QUICK_NOTE = ("Prueba rápida: solo una muestra de fotos del pasado, para filtrar cambios de prompt o modelo. Es orientativa: "
               "no es el Examen ni sirve para dar una estrategia por ganadora.")

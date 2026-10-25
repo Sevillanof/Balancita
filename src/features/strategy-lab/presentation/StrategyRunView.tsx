@@ -837,7 +837,7 @@ export default function StrategyRunView({
                 type="button"
                 onClick={() => void startQuick()}
                 disabled={quickRunning}
-                title="Pregunta a Qwen solo sobre unas 300 fotos del pasado (unos 20 minutos) para filtrar un cambio de prompt o modelo. Es orientativa: no es el Examen."
+                title="Pregunta a Qwen solo sobre unas 150 fotos del pasado (unos 7 minutos) para filtrar un cambio de prompt o modelo. Es orientativa: no es el Examen."
               >
                 {quickRunning ? 'Prueba rápida en curso…' : 'Prueba rápida'}
               </button>

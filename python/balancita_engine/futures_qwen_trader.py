@@ -1579,8 +1579,8 @@ def _parser():
     ee.add_argument("--llama-url", default=None)
     ee.add_argument("--offline", action="store_true", help="use only the local cache: no Kraken request at all")
     ee.add_argument("--sequential", action="store_true")
-    ee.add_argument("--quick", nargs="?", const=300, type=int, default=None, metavar="N",
-                    help="quick test: only ~N photos (default 300), in its own database (exam-v3-rapida.sqlite); leaves "
+    ee.add_argument("--quick", nargs="?", const=150, type=int, default=None, metavar="N",
+                    help="quick test: only ~N photos (default 150), in its own database (exam-v3-rapida.sqlite); leaves "
                          "rapida-v3.json for the screen. Orientative: it is not the exam")
     er = sub.add_parser("exam-report", help="v3: Spanish markdown report of the exam (no model)")
     common(er, "3", ("3",))

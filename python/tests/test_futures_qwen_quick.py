@@ -20,9 +20,9 @@ class QuickTestTests(unittest.TestCase):
 
     def test_the_sample_is_a_smaller_stratified_exam_config(self):
         quick = ex.quick_cfg(CFG3)
-        self.assertEqual(quick["exam"]["snapshots"], 300)
+        self.assertEqual(quick["exam"]["snapshots"], 150)
         self.assertEqual(CFG3["exam"]["snapshots"], 2000)                 # the full exam's config is untouched
-        self.assertEqual(ex.quick_cfg(CFG3, 305)["exam"]["snapshots"], 300)  # whole photos per time bin
+        self.assertEqual(ex.quick_cfg(CFG3, 155)["exam"]["snapshots"], 150)  # whole photos per time bin
 
     def test_it_leaves_its_state_and_never_touches_the_full_exam_database(self):
         full = os.path.join(self.dir.name, "exam-v3.sqlite")
