@@ -113,6 +113,7 @@ export default function TerminalDecisions({
                   <span>{item.row.strategy}</span>
                   <time>{item.row.time}</time>
                   <small>{item.row.reason}</small>
+                  {item.row.detail && <small>{item.row.detail}</small>}
                 </button>
               </li>
             ),

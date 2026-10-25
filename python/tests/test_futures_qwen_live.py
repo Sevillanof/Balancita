@@ -41,11 +41,13 @@ def walk(n, seed, start, price=100.0, sigma=0.0002):
 class Policy:
     """What the fake model answers: one option per kind of question, by option id."""
 
-    def __init__(self, flat="ESPERAR", position="MANTENER", reason="sin_ventaja"):
-        self.flat, self.position, self.reason = flat, position, reason
+    def __init__(self, flat="ESPERAR", position="MANTENER", reason="sin_ventaja", forced="LARGO"):
+        self.flat, self.position, self.reason, self.forced = flat, position, reason, forced
 
     def __call__(self, prompt, letters):
-        if "No tenés ninguna posición" in prompt:
+        if "no operás" in prompt:
+            wanted = self.forced
+        elif "No tenés ninguna posición" in prompt:
             wanted = self.flat
         elif "Tenés una posición abierta" in prompt:
             wanted = self.position
@@ -415,6 +417,130 @@ class SizeLeverageProductsTests(unittest.TestCase):
         self.assertEqual(D(row["funding_usd"]), want["funding_usd"])
         self.assertEqual(D(row["fees_usd"]), (D(row["entry_px"]) + want["exit_px"]) * D(row["qty"]) * D("0.0005"))
         self.assertIn("tamaño fijo de 1000 USD", env.rows("SELECT state_text FROM decisions")[0]["state_text"])
+
+
+class ForcedEntryTests(unittest.TestCase):
+    """Fran's rule: at least one closed trade a day. After ``force_side_after_h`` without opening, the 15 minute wake asks a
+    question with only LARGO and CORTO."""
+
+    def forced_env(self, hours=8, **kwargs):
+        cfg = live.apply_overrides(LIVE_CFG, {"QWEN_LIVE_FORCE_SIDE_AFTER_H": str(hours)})
+        return make(self, cfg=cfg, **kwargs)
+
+    def test_it_is_off_for_the_practice_and_the_old_configs(self):
+        for path in (qt.CONFIG_PATH_V3, qt.CONFIG_PATH_V2):
+            self.assertNotIn("force_question", qt.load_config(path).get("live", {}))
+        self.assertEqual(LIVE_CFG["live"]["force_side_after_h"], 8)
+        self.assertEqual([o["id"] for o in LIVE_CFG["live"]["force_question"]["options"]], ["LARGO", "CORTO"])
+
+    def test_with_a_constant_wait_it_enters_forced_only_after_the_hours_and_once_per_position(self):
+        env = self.forced_env(8, policy=Policy(flat="ESPERAR"))
+        env.op.start()
+        env.advance(8 * 60 - 15)                                  # 7 h 45 min after the start: not yet
+        self.assertEqual(env.rows("SELECT * FROM trades"), [])
+        self.assertEqual({r["action"] for r in env.rows("SELECT action FROM decisions")}, {"ESPERAR"})
+        self.assertTrue(all(json.loads(r["probs_json"]).keys() == {"LARGO", "CORTO", "ESPERAR"}
+                            for r in env.rows("SELECT probs_json FROM decisions")))
+        env.advance(30)                                           # past the 8 h
+        trades = env.rows("SELECT * FROM trades ORDER BY product")
+        self.assertEqual(len(trades), 2)                          # one per product
+        forced = env.rows("SELECT * FROM decisions WHERE override='entrada_forzada' AND product='PF_XBTUSD'")
+        self.assertEqual(len(forced), 1)
+        row = forced[0]
+        self.assertEqual((row["reason"], row["kind"]), ("entrada_forzada", "flat"))
+        self.assertEqual(set(json.loads(row["probs_json"])), {"LARGO", "CORTO"})      # no ESPERAR option
+        self.assertGreater(row["t_ms"] - START, 8 * 3_600_000)
+        self.assertTrue(all(t["entry_reason"] == "forzada" and t["status"] == "open" for t in trades))
+        self.assertIsNone(row["mirror_action"])                                        # the mirror is skipped
+        self.assertIn("Hace 8,", env.provider.prompts[-1] if "Hace" in env.provider.prompts[-1] else
+                      next(p for p in env.provider.prompts if "Hace" in p))
+        # a position is open: the next wakes are position questions, never another forced entry
+        env.advance(60)
+        self.assertEqual(len(env.rows("SELECT * FROM decisions WHERE override='entrada_forzada'")), 2)
+        self.assertEqual(len(env.rows("SELECT * FROM trades")), 2)
+
+    def test_the_text_is_honest_and_has_only_two_options(self):
+        env = self.forced_env(1, policy=Policy(flat="ESPERAR"))
+        env.op.start()
+        env.advance(90)
+        prompt = next(p for p in env.provider.prompts if "no operás" in p)
+        self.assertIn("Tenés que elegir un lado para esta exploración en papel; elegí el que creas más probable.", prompt)
+        self.assertNotIn("ESPERAR", prompt)
+        self.assertEqual(len(re.findall(r"^[A-Z]\) ", prompt, re.M)), 2)
+
+    def test_it_opens_on_the_more_probable_side_by_the_mean_of_both_orders_without_threshold_or_mirror(self):
+        def lean(prompt, letters):
+            if "no operás" in prompt:
+                letter = re.search(r"^([A-Z])\) CORTO", prompt, re.M).group(1)
+                other = [x for x in letters if x != letter][0]
+                # barely above one half for CORTO: far below the 0.5 + threshold idea, still the side that wins
+                return [{"token": letter, "logprob": -0.62}, {"token": other, "logprob": -0.77}]
+            return Policy("ESPERAR")(prompt, letters)
+
+        env = self.forced_env(1, provider=llm.FakeProvider(entries=lean), mirror=True)      # mirror ON in the config
+        env.op.start()
+        env.advance(90)
+        trades = env.rows("SELECT * FROM trades")
+        self.assertTrue(trades)
+        self.assertTrue(all(t["side"] == "SHORT" and t["entry_reason"] == "forzada" for t in trades))
+        decision = env.rows("SELECT * FROM decisions WHERE override='entrada_forzada'")[0]
+        self.assertEqual(decision["action"], "CORTO")
+        self.assertLess(decision["p_action"], 0.7)
+        self.assertIsNone(decision["mirror_action"])
+        asked = [p for p in env.provider.prompts if "no operás" in p]
+        self.assertEqual(len(asked) % 2, 0)                      # two orders, no mirror question
+
+    def test_zero_turns_it_off(self):
+        env = self.forced_env(0, policy=Policy(flat="ESPERAR"))
+        env.op.start()
+        env.advance(10 * 60)
+        self.assertEqual(env.rows("SELECT * FROM trades"), [])
+        self.assertEqual(env.rows("SELECT * FROM decisions WHERE override='entrada_forzada'"), [])
+        self.assertFalse(any("no operás" in p for p in env.provider.prompts))
+        with self.assertRaises(qt.TraderError):
+            live.apply_overrides(LIVE_CFG, {"QWEN_LIVE_FORCE_SIDE_AFTER_H": "-1"})
+        with self.assertRaises(qt.TraderError):
+            live.apply_overrides(LIVE_CFG, {"QWEN_LIVE_FORCE_SIDE_AFTER_H": "mucho"})
+
+    def test_the_cooldown_and_the_open_position_are_respected(self):
+        env = self.forced_env(1, policy=Policy(flat="ESPERAR"))
+        env.op.start()
+        env.advance(7 * 60)
+        for product in PRODUCTS:
+            trades = env.rows("SELECT * FROM trades WHERE product=? ORDER BY trade_no", product)
+            self.assertGreaterEqual(len(trades), 2)
+            self.assertEqual(trades[0]["closed_by"], "tiempo")                    # closed by itself at 4 h
+            for a, b in zip(trades, trades[1:]):
+                self.assertGreaterEqual(b["entry_ms"] - a["exit_ms"], 15 * MIN)  # cooldown
+                self.assertGreater(b["entry_ms"], a["exit_ms"])                  # never while a position is open
+        # at least one closed trade per product within 7 hours
+        self.assertTrue(all(env.rows("SELECT * FROM trades WHERE product=? AND status='closed'", p) for p in PRODUCTS))
+
+    def test_the_idle_time_counts_from_the_last_opening_on_record_and_survives_a_restart(self):
+        env = self.forced_env(2, policy=Policy(flat="ESPERAR"))
+        env.op.start()
+        env.advance(150)
+        first = env.rows("SELECT entry_ms FROM trades WHERE product='PF_XBTUSD' ORDER BY trade_no")
+        self.assertEqual(len(first), 1)
+        op = env.restart()
+        op.start()                                                  # a new process: the reference is the opening in the base
+        self.assertEqual(op.traders["PF_XBTUSD"].last_open_ms, first[0]["entry_ms"])
+        env.advance(60)
+        self.assertEqual(len(env.rows("SELECT * FROM trades WHERE product='PF_XBTUSD'")), 1)   # still open or cooling down
+
+    def test_the_existing_live_base_is_still_accepted(self):
+        env = make(self, mirror=True)
+        env.op.start()
+        cfg = copy.deepcopy(LIVE_CFG)
+        old = copy.deepcopy(LIVE_CFG)
+        for key in ("force_side_after_h", "force_question"):
+            old["live"].pop(key)
+        self.assertEqual(qt.config_hash(old), qt.config_hash(cfg))
+        self.assertEqual(qt.config_hash(cfg), "32a13314d45f58ca206728bc81f070129fb90ab8b4a17d0a2ad59f52d510ce58")
+        store = live.LiveStore(env.db_path)
+        self.addCleanup(store.close)
+        store.check_identity(old)                                   # the base was written under the old config
+        store.check_identity(live.apply_overrides(LIVE_CFG, {"QWEN_LIVE_FORCE_SIDE_AFTER_H": "3"}))
 
 
 class LockTests(unittest.TestCase):

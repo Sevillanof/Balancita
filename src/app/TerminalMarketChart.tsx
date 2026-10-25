@@ -140,7 +140,9 @@ export default function TerminalMarketChart({
                 label: direction ? `${code ? `${code} ` : ''}${action}` : 'W',
                 detail: direction
                   ? `${code ? `${code} ` : ''}${action} propuesta`
-                  : 'WAIT',
+                  : typeof analysis.qwen_why === 'string' && analysis.qwen_why
+                    ? analysis.qwen_why
+                    : 'WAIT',
                 ...(direction && typeof strategyId === 'string'
                   ? { strategyId }
                   : {}),

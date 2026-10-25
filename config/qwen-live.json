@@ -230,6 +230,23 @@
     "max_late_seconds": 240,
     "wake_budget_seconds": 240,
     "model_timeout_seconds": 60,
-    "funding_refresh_minutes": 30
+    "funding_refresh_minutes": 30,
+    "force_side_after_h": 8,
+    "force_question": {
+      "id": "trader_force",
+      "version": 4,
+      "type": "choice",
+      "instruction": "Hace {hours} horas que no operás. Tenés que elegir un lado para esta exploración en papel; elegí el que creas más probable.",
+      "options": [
+        {
+          "id": "LARGO",
+          "description": "abrir una posición larga (apostás a que sube)"
+        },
+        {
+          "id": "CORTO",
+          "description": "abrir una posición corta (apostás a que baja)"
+        }
+      ]
+    }
   }
 }

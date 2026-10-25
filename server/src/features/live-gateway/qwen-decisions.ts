@@ -1,3 +1,4 @@
+import type { DatabaseSync } from 'node:sqlite'
 import { withDb, num, rowOf, type Row } from './observability-health.ts'
 
 /**
@@ -35,6 +36,20 @@ export interface QwenDecision {
   readonly written_at_ms: number
   readonly question_version: number
   readonly reason: string | null
+  /** FLAT (LARGO/CORTO/ESPERAR) or POSITION (MANTENER/CERRAR) question; null on older bases. */
+  readonly kind: string | null
+  /** What the model preferred before the guardrails, in its own words; null when unknown. */
+  readonly model_action: string | null
+  /** Probability of that preferred option (0 to 1). */
+  readonly p_action: number | null
+  /** Minimum probability needed to open (flat only). */
+  readonly threshold: number | null
+  /** Probability of each option, keyed by LARGO / CORTO / ESPERAR / MANTENER / CERRAR. */
+  readonly probabilities: Record<string, number> | null
+  /** Why it did NOT act although it wanted to (bajo_umbral, espejo, ...), or null. */
+  readonly override: string | null
+  readonly mirror_action: string | null
+  readonly mirror_p: number | null
 }
 
 /** A wake that was not decided (model down or slow, process off). */
@@ -96,8 +111,48 @@ export function qwenDecisionsOff(reason: string): QwenDecisions {
   }
 }
 
+function probabilitiesOf(value: unknown): Record<string, number> | null {
+  if (typeof value !== 'string' || value.length === 0) return null
+  try {
+    const parsed: unknown = JSON.parse(value)
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed))
+      return null
+    const out: Record<string, number> = {}
+    for (const [key, p] of Object.entries(parsed)) {
+      if (typeof p === 'number' && Number.isFinite(p)) out[key] = p
+    }
+    return Object.keys(out).length > 0 ? out : null
+  } catch {
+    return null
+  }
+}
+
+/** Columns added after the first version of the base: absent ones read as NULL. */
+const OPTIONAL_DECISION_COLUMNS = [
+  'kind',
+  'model_action',
+  'p_action',
+  'threshold',
+  'probs_json',
+  'override',
+  'mirror_action',
+  'mirror_p',
+] as const
+
 function text(value: unknown): string | null {
   return value === null || value === undefined ? null : String(value)
+}
+
+function optionalColumns(db: DatabaseSync): string {
+  const present = new Set(
+    db
+      .prepare('PRAGMA table_info(decisions)')
+      .all()
+      .map((row) => String(rowOf(row).name)),
+  )
+  return OPTIONAL_DECISION_COLUMNS.map((name) =>
+    present.has(name) ? `, ${name}` : `, NULL AS ${name}`,
+  ).join('')
 }
 
 export function createQwenDecisions(options: {
@@ -120,7 +175,7 @@ export function createQwenDecisions(options: {
       const opened = withDb(options.liveDbPath, (db) => ({
         decisions: db
           .prepare(
-            `SELECT bucket_ms, t_ms, decided_at_ms, action, confidence, latency_ms, prompt_version, reason
+            `SELECT bucket_ms, t_ms, decided_at_ms, action, confidence, latency_ms, prompt_version, reason${optionalColumns(db)}
                FROM decisions WHERE product=? ORDER BY bucket_ms DESC LIMIT ?`,
           )
           .all(product, limit)
@@ -153,6 +208,14 @@ export function createQwenDecisions(options: {
           written_at_ms: written,
           question_version: num(row.prompt_version) ?? 0,
           reason: text(row.reason),
+          kind: text(row.kind),
+          model_action: text(row.model_action),
+          p_action: num(row.p_action),
+          threshold: num(row.threshold),
+          probabilities: probabilitiesOf(row.probs_json),
+          override: text(row.override),
+          mirror_action: text(row.mirror_action),
+          mirror_p: num(row.mirror_p),
         })
       }
       const skipped: QwenSkipped[] = []

@@ -32,6 +32,9 @@ export function analysisAction(value: unknown): string {
 
 export function analysisReason(value: unknown): string {
   const analysis = record(value)
+  // Qwen's own wording of why it waited (or could not decide).
+  if (typeof analysis.qwen_why === 'string' && analysis.qwen_why.length > 0)
+    return analysis.qwen_why
   const selector = record(analysis.selector)
   const proposals = Array.isArray(analysis.proposals) ? analysis.proposals : []
   const selectedProposal = proposals.find(

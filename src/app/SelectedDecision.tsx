@@ -34,6 +34,14 @@ export default function SelectedDecision({
         · {strategyLabel(selector.strategy_id ?? analysis.selected_strategy_id)}
       </p>
       <p>{reason}</p>
+      {typeof analysis.qwen_probabilities === 'string' &&
+        analysis.qwen_probabilities.length > 0 && (
+          <p>
+            <small data-testid="qwen-probabilities">
+              Probabilidad de cada opción: {analysis.qwen_probabilities}
+            </small>
+          </p>
+        )}
       {notes.map((note) => (
         <p key={note} role="status" data-testid="decision-limit">
           <small>{note}</small>
