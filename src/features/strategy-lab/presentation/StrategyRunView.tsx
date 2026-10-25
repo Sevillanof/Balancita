@@ -613,7 +613,7 @@ export default function StrategyRunView({
       quick
         .status(strategyId)
         .then((next) => {
-          if (!cancelled) setQuickState(next)
+          if (!cancelled) setQuickState({ ...next, fetched_ms: Date.now() })
         })
         .catch(() => undefined)
     void look()
@@ -627,9 +627,16 @@ export default function StrategyRunView({
     setQuickError(null)
     try {
       await quick.start(strategyId)
-      setQuickState(await quick.status(strategyId))
+      setQuickState({
+        ...(await quick.status(strategyId)),
+        fetched_ms: Date.now(),
+      })
     } catch (error) {
-      setQuickError(message(error))
+      // already running (a second click, or another window): show its progress instead of an error
+      const current = await quick.status(strategyId).catch(() => null)
+      if (current?.state === 'running')
+        setQuickState({ ...current, fetched_ms: Date.now() })
+      else setQuickError(message(error))
     }
   }
   /** The final exam (everything since the cut): only Qwen and Kronos can repeat it. */
@@ -830,7 +837,7 @@ export default function StrategyRunView({
                 type="button"
                 onClick={() => void startQuick()}
                 disabled={quickRunning}
-                title="Pregunta a Qwen solo sobre unas 300 fotos del pasado (unos 20 minutos) para filtrar un cambio de prompt o modelo. Es orientativa: no es el Examen."
+                title="Pregunta a Qwen solo sobre unas 150 fotos del pasado (unos 7 minutos) para filtrar un cambio de prompt o modelo. Es orientativa: no es el Examen."
               >
                 {quickRunning ? 'Prueba rápida en curso…' : 'Prueba rápida'}
               </button>
@@ -853,10 +860,7 @@ export default function StrategyRunView({
         <div className="runview__quick" role="group" aria-label="Prueba rápida">
           {quickError && <p role="alert">{quickError}</p>}
           {quickState?.state === 'running' && (
-            <p>
-              Prueba rápida en curso: preguntando a Qwen sobre{' '}
-              {quickState.snapshots} fotos del pasado…
-            </p>
+            <QuickProgress state={quickState} />
           )}
           {quickState?.state === 'failed' && (
             <p role="alert">Prueba rápida sin resultado: {quickState.error}</p>
@@ -1312,6 +1316,48 @@ function Kpi({
 
 const SIGNAL_TEXT = (ok: boolean | null) =>
   ok === null ? 'sin dato' : ok ? 'apunta bien' : 'no apunta bien'
+
+/** «12 min» / «45 s» left, from the rate since Qwen began to be asked; `null` while there is nothing to measure. */
+function quickRemaining(state: QuickState): string | null {
+  const { answered = 0, total = 0, asking_ms: from, updated_ms: at } = state
+  if (!from || !at || answered < 3 || total <= answered) return null
+  const seconds = (((at - from) / answered) * (total - answered)) / 1000
+  return seconds >= 90
+    ? `${Math.round(seconds / 60)} min`
+    : `${Math.round(seconds)} s`
+}
+
+function QuickProgress({ state }: { state: QuickState }) {
+  const answered = state.answered ?? 0
+  const total = state.total ?? state.snapshots
+  const asking = state.phase === 'preguntando'
+  const percent = asking && total > 0 ? (answered / total) * 100 : 0
+  const left = quickRemaining(state)
+  const silent =
+    state.updated_ms && state.fetched_ms
+      ? state.fetched_ms - state.updated_ms
+      : 0
+  const text = asking
+    ? `Prueba rápida · ${answered} de ${total} fotos · ${Math.round(percent)} %${left ? ` · faltan unos ${left}` : ''}`
+    : 'Prueba rápida · preparando las fotos del pasado…'
+  return (
+    <RunProgress
+      label="Progreso de la prueba rápida"
+      valueText={text}
+      percent={percent}
+    >
+      <p className="runview__progress-text">
+        <span>{text}</span>
+      </p>
+      {silent > 120_000 && (
+        <p className="runview__hint" role="alert">
+          Sin avances hace {Math.round(silent / 60_000)} min: puede estar
+          trabada.
+        </p>
+      )}
+    </RunProgress>
+  )
+}
 
 function QuickResult({ state }: { state: QuickState }) {
   const summary = state.summary

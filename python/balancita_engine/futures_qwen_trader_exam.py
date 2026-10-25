@@ -112,7 +112,8 @@ def _store_photos(pdb, photos):
 # --------------------------------------------------------------------------- asking
 
 
-def run_exam(history, db_path, provider, cfg, holdout_ms, *, max_minutes=55.0, clock=time.monotonic, log=print):
+def run_exam(history, db_path, provider, cfg, holdout_ms, *, max_minutes=55.0, clock=time.monotonic, log=print,
+             on_progress=None):
     """Asks Qwen about the photos not answered yet, inside ``max_minutes``. Returns
     ``{stop_reason, answered, total, calls}``; ``stop_reason``: ``done``, ``budget``, ``model_down``."""
     if not provider.health():
@@ -149,6 +150,8 @@ def run_exam(history, db_path, provider, cfg, holdout_ms, *, max_minutes=55.0, c
         started, reason, handled = clock(), "done", 0
         log("examen: {} fotos, {} por preguntar, presupuesto {} min, modelo {}".format(
             total, len(pending), max_minutes, served or identity.get("model_ref")))
+        if on_progress:
+            on_progress(0, len(pending))
         for row in pending:
             question = questions.setdefault(row["product"], qt.questions_for(cfg, row["product"])["flat"])
             real_action, real_p, mirror_action, mirror_p = row["real_action"], row["real_p"], None, None
@@ -171,6 +174,8 @@ def run_exam(history, db_path, provider, cfg, holdout_ms, *, max_minutes=55.0, c
                 pdb.db.execute("INSERT OR REPLACE INTO exam_answers VALUES(?,?,?,?,?,?)", (
                     row["snap_id"], real_action, real_p, mirror_action, mirror_p, int(time.time() * 1000)))
             handled += 1
+            if on_progress:
+                on_progress(handled, len(pending))
             if handled % 50 == 0:
                 log("progreso: {} de {} fotos pendientes, {} llamadas nuevas, {:.2f} s por llamada, {} transcurridos".format(
                     handled, len(pending), decider.calls, decider.mean_call(), qt._eta(clock() - started)))
@@ -185,7 +190,7 @@ def run_exam(history, db_path, provider, cfg, holdout_ms, *, max_minutes=55.0, c
 
 # --------------------------------------------------------------------------- the quick test
 
-QUICK_SNAPSHOTS = 300
+QUICK_SNAPSHOTS = 150
 QUICK_STATE = "rapida-v3.json"
 QUICK_NOTE = ("Prueba rápida: solo una muestra de fotos del pasado, para filtrar cambios de prompt o modelo. Es orientativa: "
               "no es el Examen ni sirve para dar una estrategia por ganadora.")
@@ -228,19 +233,28 @@ def run_quick(history, db_path, provider, cfg, holdout_ms, *, snapshots=QUICK_SN
     changed prompt or model is exactly what it is for, and an old sample would be refused by the config identity."""
     state_path = state_path or os.path.join(os.path.dirname(os.path.abspath(db_path)), QUICK_STATE)
     started = int(time.time() * 1000)
-    state = {"state": "running", "pid": os.getpid(), "started_ms": started, "answered": 0, "total": snapshots, "summary": None, "error": None}
+    state = {"state": "running", "pid": os.getpid(), "started_ms": started, "answered": 0, "total": snapshots,
+             "phase": "fotos", "updated_ms": started, "summary": None, "error": None}
     _write_state(state_path, state)
     try:
         if os.path.exists(db_path):
             os.replace(db_path, db_path + ".anterior")
         quick = quick_cfg(cfg, snapshots)
 
-        def tell(line):
-            log(line)
-            if line.startswith("progreso:"):
-                _write_state(state_path, dict(state, detail=line))
+        last = [0.0]
 
-        outcome = run_exam(history, db_path, provider, quick, holdout_ms, max_minutes=max_minutes, clock=clock, log=tell)
+        def progress(handled, total):
+            # the screen polls every few seconds: no need to rewrite the file for every photo
+            now = time.time()
+            if handled in (0, total) or now - last[0] >= 2.0:
+                last[0] = now
+                state.update(answered=handled, total=total, phase="preguntando", updated_ms=int(now * 1000))
+                if handled == 0:
+                    state["asking_ms"] = int(now * 1000)       # when the questions began: the rate is measured from here
+                _write_state(state_path, state)
+
+        outcome = run_exam(history, db_path, provider, quick, holdout_ms, max_minutes=max_minutes, clock=clock, log=log,
+                           on_progress=progress)
         state.update(answered=outcome["answered"], total=outcome["total"])
         if outcome["stop_reason"] == "done":
             state.update(state="done", summary=quick_summary(db_path, quick))
