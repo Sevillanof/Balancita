@@ -81,13 +81,14 @@ describe('no real orders (server)', () => {
     ]
     // the only writes there are, to the local strategies API and not orders: the strategy gate client
     // (start/cancel a backtest run) and the VectorBT client (start/cancel a research exploration, create a
-    // draft variant); neither touches a market
+    // draft variant) and Qwen's quick test client (start a sample of past photos); none touches a market
     const writers = files.filter((file) => {
       const text = readFileSync(file, 'utf8')
       return verbs.some((verb) => verb.test(text))
     })
     expect(writers.map((file) => relative(frontendSrc, file)).sort()).toEqual([
       join('features', 'strategy-lab', 'infrastructure', 'gate-api.ts'),
+      join('features', 'strategy-lab', 'infrastructure', 'quick-api.ts'),
       join('features', 'strategy-lab', 'infrastructure', 'vectorbt-api.ts'),
     ])
     for (const writer of writers)
