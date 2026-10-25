@@ -250,10 +250,10 @@ describe('approved connected terminal chart', () => {
     expect(onSelect).not.toHaveBeenCalled()
   })
 
-  it('retains the newest 200 eligible markers after sorting', () => {
-    const markers = Array.from({ length: 220 }, (_, index) => ({
+  it('keeps every eligible marker up to two per candle, sorted', () => {
+    const markers = Array.from({ length: 200 }, (_, index) => ({
       id: `decision-${index}`,
-      time: candles[0]!.time + index / 220,
+      time: candles[Math.floor(index / 2)]!.time,
       type: 'decision' as const,
       label: 'ESPERA',
       decisionStatus: 'hold' as const,
@@ -262,7 +262,7 @@ describe('approved connected terminal chart', () => {
       <ApprovedTerminalChart
         candles={candles}
         markers={markers}
-        selectedId="decision-219"
+        selectedId="decision-199"
         intervalSeconds={60}
         initialViewport="approved-terminal"
         onSelect={vi.fn()}
@@ -271,8 +271,8 @@ describe('approved connected terminal chart', () => {
     const rendered = chartMocks.markerApi.setMarkers.mock
       .lastCall?.[0] as Array<{ id: string; time: number }>
     expect(rendered).toHaveLength(200)
-    expect(rendered[0]?.id).toBe('decision-20')
-    expect(rendered.at(-1)?.id).toBe('decision-219')
+    expect(rendered[0]?.id).toBe('decision-1')
+    expect(rendered.at(-1)?.id).toBe('decision-198')
     expect(rendered.map((marker) => marker.time)).toEqual(
       [...rendered.map((marker) => marker.time)].sort(
         (left, right) => left - right,
@@ -318,7 +318,7 @@ describe('approved connected terminal chart', () => {
     )
   })
 
-  it('reserves price-scale headroom for a dense same-bucket marker stack', () => {
+  it('never widens the price scale for a dense same-bucket marker stack', () => {
     const marker = (id: string) => ({
       id,
       time: candles[50]!.time,
@@ -329,30 +329,24 @@ describe('approved connected terminal chart', () => {
     render(
       <ApprovedTerminalChart
         candles={candles}
-        markers={[
-          ...['a', 'b', 'c', 'd'].map(marker),
-          {
-            id: 'e',
-            time: candles[50]!.time,
-            type: 'entry' as const,
-            direction: 'long' as const,
-            label: 'LONG',
-          },
-        ]}
+        markers={['a', 'b', 'c', 'd', 'e'].map(marker)}
         selectedId=""
         intervalSeconds={60}
         initialViewport="approved-terminal"
         onSelect={vi.fn()}
       />,
     )
-    const margins = chartMocks.priceScaleApply.mock.calls.at(-1)?.[0] as {
-      scaleMargins: { top: number; bottom: number }
+    for (const call of chartMocks.priceScaleApply.mock.calls) {
+      expect(call[0]).not.toEqual(
+        expect.objectContaining({
+          scaleMargins: expect.objectContaining({ top: expect.any(Number) }),
+        }),
+      )
     }
-    expect(margins.scaleMargins.top).toBeGreaterThan(0.12 + 0.3)
-    expect(margins.scaleMargins.bottom).toBe(0.22)
-    expect(chartMocks.priceScaleApply).toHaveBeenCalledTimes(1)
-    expect(chartMocks.markerApi.setMarkers.mock.calls.at(-1)?.[0]).toHaveLength(
-      5,
-    )
+    const painted = chartMocks.markerApi.setMarkers.mock.calls.at(-1)?.[0] as {
+      text: string
+    }[]
+    expect(painted).toHaveLength(2)
+    expect(painted.at(-1)?.text).toContain('+3')
   })
 })
