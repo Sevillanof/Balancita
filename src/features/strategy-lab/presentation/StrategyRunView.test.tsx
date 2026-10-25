@@ -444,8 +444,11 @@ describe('StrategyRunView actions', () => {
       id,
       label,
       number: 'z de 24 h',
+      vote_share: flip === null ? null : 0.97,
+      vote_n: flip === null ? 0 : 145,
       flip_share: flip,
       flip_n: flip === null ? 0 : 120,
+      habit: flip === null ? null : 0.6,
       corr: flip === null ? null : 0.62,
       corr_n: 140,
       verdict,
@@ -490,6 +493,8 @@ describe('StrategyRunView actions', () => {
           reads: 1,
           readings: [
             reading('F1', 'Tendencia larga', 'lee', 0.91),
+            reading('F2', 'Impulso corto', 'sesgado', 0.34),
+            reading('F3', 'Lugar en el rango', 'no vota', 0.5),
             reading('F4', 'Área de valor del día previo', 'sin dato', null),
           ],
           comparison: [
@@ -550,6 +555,13 @@ describe('StrategyRunView actions', () => {
     expect(within(reads).getByText('F1 Tendencia larga')).toBeInTheDocument()
     expect(within(reads).getByText('lee')).toBeInTheDocument()
     expect(within(reads).getByText(/91 % \(120 fotos\)/)).toBeInTheDocument()
+    expect(within(reads).getByText('sesgado')).toBeInTheDocument()
+    expect(within(reads).getByText('no vota')).toBeInTheDocument()
+    expect(within(reads).getAllByText(/97 % \(145 fotos\)/).length).toBe(3)
+    expect(within(reads).getAllByText('+0,60').length).toBe(3)
+    expect(
+      within(reads).getByText('sin fotos fuera del área'),
+    ).toBeInTheDocument()
     expect(within(reads).getAllByText('sin dato').length).toBeGreaterThan(0)
     const rule = screen.getByRole('table', { name: 'Contra la regla sin Qwen' })
     expect(within(rule).getByText('4 h')).toBeInTheDocument()

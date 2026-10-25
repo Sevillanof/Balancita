@@ -186,7 +186,7 @@ class RecordedTrades:
 LIVE_NOTE = ("Qwen en vivo se juzga sin llamar al modelo. Práctica (antes de la fecha de corte): las \"fotos\" del pasado "
              "que Qwen ya contestó con la configuración vigente (examen por fotos con la ficha de 8 factores, `exam --version "
              "live`, exam-live.sqlite): largo en el quinto más inclinado a largo y corto en el quinto más inclinado a corto "
-             "(inclinación = suma de los gradientes de la ficha, real contra espejo, sobre 14), como operaciones de 4 h con costos "
+             "(inclinación = suma de los gradientes de la ficha, real contra espejo, sobre 12), como operaciones de 4 h con costos "
              "y funding reales, una a la vez por producto. Examen (desde la fecha de corte): sus operaciones reales en paper, "
              "cerradas; las abiertas no cuentan y Qwen sigue operando mientras tanto. Las fotos contestadas con otra configuración "
              "no cuentan: al cambiar la configuración hay que volver a correr el examen de fotos. Si las fotos todavía no tienen "

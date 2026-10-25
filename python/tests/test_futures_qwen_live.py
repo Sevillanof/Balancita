@@ -892,12 +892,12 @@ class OpportunityWindowTests(unittest.TestCase):
         self.assertEqual(store.db.execute("SELECT action, lean FROM decisions").fetchone()[:], ("ESPERAR", None))
         self.assertEqual(store.load_state("PF_XBTUSD")["window_json"], None)
         live.LiveStore(path).close()                          # a second open is harmless
-        # the config identity does not move: the section lives outside config_hash
+        # the section lives outside config_hash; the pinned hash moved on purpose with version 6 (question without example, F5 out)
         cfg = copy.deepcopy(LIVE_CFG)
         for key in ("force_window_h", "force_min_looks", "force_side_after_h", "force_question"):
             cfg["live"].pop(key)
         self.assertEqual(qt.config_hash(cfg), qt.config_hash(LIVE_CFG))
-        self.assertEqual(qt.config_hash(LIVE_CFG), "db3512cc6136fc174811dd2a8f416cf2b8bf5c2bdf1808d540b2e3a7026a56da")
+        self.assertEqual(qt.config_hash(LIVE_CFG), "422e83c97a0ce12c5d42cfde08a81aac526ee7d92cecae2435f210d9a330f27d")
 
 
 class LockTests(unittest.TestCase):

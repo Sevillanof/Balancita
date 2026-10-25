@@ -24,7 +24,8 @@ from . import futures_qwen_trader as qt
 from .indicator_catalog import _profile
 
 FACTORS = ("F1", "F2", "F3", "F4", "F5", "F6", "F7", "F8")
-VOTING = FACTORS[:7]                       # F8 (el momento) no vota
+VOTING = ("F1", "F2", "F3", "F4", "F6", "F7")   # F5 (volumen y volatilidad, un tamaño sin signo) y F8 (el momento) no votan
+VOTING_INDEX = tuple(FACTORS.index(f) for f in VOTING)   # posición de cada votante en la ficha: no son los primeros N
 LABELS = {"F1": "Tendencia larga", "F2": "Impulso corto", "F3": "Lugar en el rango", "F4": "Área de valor del día previo",
           "F5": "Volumen y volatilidad", "F6": "Posicionamiento y prima", "F7": "Otros activos", "F8": "Momento"}
 AREA_BARS, AREA_PCT, AREA_BINS, AREA_WINDOW, AREA_ACCEPT = 288, 70, 48, 6, 4
@@ -139,7 +140,7 @@ def facts(trader, t_ms):
 
 
 def numbers(trader, t_ms):
-    """El número de cada renglón F1 a F7 (orientación real) contra el que se mide si Qwen lo lee; ``None`` si no hay."""
+    """El número de cada renglón F1 a F7 (orientación real; F5 es un tamaño sin signo y no vota) contra el que se mide si Qwen lo lee; ``None`` si no hay."""
     f = facts(trader, t_ms)
     pos = f["pos"]
     return {"F1": f["z"]["24h"], "F2": f["z"]["4h"], "F3": f["pos7"],

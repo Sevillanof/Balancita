@@ -21,7 +21,8 @@ respeta el formato es ``DecisionError`` (como la pregunta de letras).
 
 Por foto se guardan los 8 gradientes reales y los 8 del espejo (tabla ``exam_factors``) y los números de cada renglón (tabla
 ``exam_ficha``). ``lectura_i = (F_i - F_i_espejo) / 2`` es lo que viene de los números, ``habito_i = (F_i + F_i_espejo) / 2`` lo
-que Qwen diría igual; ``lean_num = suma de lectura_i (i = 1..7) / 14`` queda entre -1 y +1, como el del Examen.
+que Qwen diría igual; ``lean_num = suma de lectura_i de los votantes (F1 F2 F3 F4 F6 F7) / 12`` queda entre -1 y +1, como el del Examen. F5 y F8 siguen
+en la ficha y en la línea de respuesta (con 0), pero no suman.
 """
 
 import json
@@ -31,19 +32,22 @@ import time
 
 from . import futures_llm_decisions as llm
 from . import futures_qwen_trader as qt
-from .futures_qwen_ficha import FACTORS, LABELS, VOTING
+from .futures_qwen_ficha import FACTORS, LABELS, VOTING, VOTING_INDEX
 
 GRAMMAR = ('root ::= "F1:" v " F2:" v " F3:" v " F4:" v " F5:" v " F6:" v " F7:" v " F8:" v\n'
            'v ::= ("+" | "-") ("1" | "2") | "0"')
 VALUE = r"(0|[+-][12])"
 LINE = re.compile("^" + " ".join("F{}:{}".format(i, VALUE) for i in range(1, 9)) + "$")
 MAX_TOKENS = 96
-DENOMINATOR = 2.0 * len(VOTING)          # |lectura_i| <= 2, 7 renglones votan: lean_num queda en [-1, 1]
+DENOMINATOR = 2.0 * len(VOTING)          # |lectura_i| <= 2, 6 renglones votan (F1 F2 F3 F4 F6 F7): lean_num queda en [-1, 1]
 
-# Resumen: criterios fijos de la lectura por renglón (informe, sección 5)
-MIN_ABS = 0.25                            # solo fotos con |F_i| >= 0,25 en el real
+# Resumen: criterios fijos de la lectura por renglón (informe, sección 5). Votar (dar un gradiente que no sea cero) y leer (que
+# el gradiente siga a los números) son cosas distintas: un renglón que casi nunca vota no se puede juzgar si lee o no.
+MIN_ABS = 0.25                            # «votó»: |F_i| >= 0,25 en el real
+VOTES_SHARE, VOTES_MIN_N = 0.20, 5        # menos que esto de las fotos (o menos de 5 fotos): «no vota»
 READS_FLIP, READS_CORR = 0.80, 0.5
 NO_READ_FLIP, NO_READ_CORR = 0.60, 0.2
+AREA_MIN_PHOTOS = 5                       # F4 vale 0 con el precio dentro del área: se mide solo con fotos afuera, y hacen falta 5
 NUMBER_TEXT = {"F1": "z de 24 h", "F2": "z de 4 h", "F3": "posición en el rango de 7 d", "F4": "distancia al área de valor",
                "F5": "volatilidad de 4 h contra la semana", "F6": "% de cuentas largas (centrado en 50)",
                "F7": "fuerza relativa a 4 h"}
@@ -200,8 +204,8 @@ def read_completion(completion, temperature=1.0):
 
 
 def lean_of(grads):
-    """Sum of the 7 voting gradients over 14: the lean in [-1, +1]."""
-    return math.fsum(grads[:len(VOTING)]) / DENOMINATOR
+    """Sum of the 6 voting gradients (F1 F2 F3 F4 F6 F7, by their place in the sheet) over 12: the lean in [-1, +1]."""
+    return math.fsum(grads[i] for i in VOTING_INDEX) / DENOMINATOR
 
 
 def summary_action(grads):
@@ -215,7 +219,7 @@ def photo_numbers(real, mirror):
     lectura = [(a - b) / 2 for a, b in zip(real, mirror)]
     habito = [(a + b) / 2 for a, b in zip(real, mirror)]
     return {"real": list(real), "mirror": list(mirror), "lectura": lectura, "habito": habito,
-            "suma": math.fsum(real[:len(VOTING)]), "lean_num": math.fsum(lectura[:len(VOTING)]) / DENOMINATOR}
+            "suma": math.fsum(real[i] for i in VOTING_INDEX), "lean_num": math.fsum(lectura[i] for i in VOTING_INDEX) / DENOMINATOR}
 
 
 FICHA_SQL = """
@@ -354,41 +358,97 @@ def probabilities_for(lean):
 # --------------------------------------------------------------------------- the summary
 
 
-def _flips(rows, factor):
+def _pool(rows, factor):
+    """The photos a line is judged on: with the mirror answer and with a number for the line. F4 is 0 when the price is inside the
+    area (the line says so and the right vote is 0): only the photos outside of it count, as a vote there is the only one that can
+    be wrong."""
     index = FACTORS.index(factor)
-    seen = [r for r in rows if r.get("factors") and r["factors"].get("mirror") is not None
-            and abs(r["factors"]["real"][index]) >= MIN_ABS]
-    flipped = [r for r in seen if (r["factors"]["real"][index] > 0) == (r["factors"]["mirror"][index] < 0)
-               and r["factors"]["mirror"][index] != 0]
+    out = []
+    for r in rows:
+        f = r.get("factors")
+        if not f or f.get("mirror") is None:
+            continue
+        number = (f.get("numbers") or {}).get(factor)
+        if number is None or (factor == "F4" and number == 0):
+            continue
+        out.append((f["real"][index], f["mirror"][index]))
+    return out
+
+
+def _votes(rows, factor):
+    """``(share, n, base)``: the photos where the real gradient is at least ``MIN_ABS`` in absolute value, over the ``base``
+    photos of the line (``_pool``). ``share`` is ``None`` without base."""
+    pool = _pool(rows, factor)
+    n = sum(1 for real, _ in pool if abs(real) >= MIN_ABS)
+    return (n / len(pool) if pool else None), n, len(pool)
+
+
+def _flips(rows, factor):
+    """``(share, n)``: of the photos where the line voted, the share whose sign flips in the mirror."""
+    seen = [(real, mirror) for real, mirror in _pool(rows, factor) if abs(real) >= MIN_ABS]
+    flipped = [1 for real, mirror in seen if (real > 0) == (mirror < 0) and mirror != 0]
     return (len(flipped) / len(seen) if seen else None), len(seen)
 
 
-def verdict_of(flip, corr):
-    """«lee» / «a medias» / «no lee» with the fixed criteria. The correlation counts in absolute value: its sign says whether
-    Qwen follows (+) or reverts (-) the number, and both are reading it."""
-    size = abs(corr) if corr is not None else 0.0
+def _habit(rows, factor):
+    """Mean of (real + mirror) / 2 of the line over the photos with the mirror: what Qwen says whatever the numbers say."""
+    index = FACTORS.index(factor)
+    both = [r["factors"] for r in rows if r.get("factors") and r["factors"].get("mirror") is not None]
+    return math.fsum((f["real"][index] + f["mirror"][index]) / 2 for f in both) / len(both) if both else None
+
+
+def verdict_of(vote_share, vote_n, flip, corr):
+    """«no vota» / «lee» / «sesgado» / «no lee» / «a medias» (or «sin dato»), with the fixed criteria and in this order:
+
+    * «no vota»: it votes in less than 20 % of the photos or in fewer than 5;
+    * «lee»: the sign flips in 80 % or more and |corr| reaches 0,5;
+    * «sesgado»: |corr| reaches 0,5 but the sign flips in less than 80 % (it reads the size, the habit decides the sign);
+    * «no lee»: |corr| under 0,2 or the sign flips in less than 60 %;
+    * «a medias»: anything else.
+
+    The correlation counts in absolute value: its sign says whether Qwen follows (+) or reverts (-) the number, and both are
+    reading it. «sin dato» when there is no photo to judge the line on."""
+    if vote_share is None:
+        return "sin dato"
+    if vote_share < VOTES_SHARE or vote_n < VOTES_MIN_N:
+        return "no vota"
     if flip is None:
         return "sin dato"
+    size = abs(corr) if corr is not None else 0.0
     if flip >= READS_FLIP and size >= READS_CORR:
         return "lee"
-    if flip < NO_READ_FLIP or size < NO_READ_CORR:
+    if size >= READS_CORR:
+        return "sesgado"
+    if size < NO_READ_CORR or flip < NO_READ_FLIP:
         return "no lee"
     return "a medias"
 
 
 def reading_table(rows):
-    """One entry per voting factor: the share of photos where its sign flips in the mirror, the Spearman correlation between
-    Qwen's real gradient and the number of the line, and the verdict."""
+    """One entry per voting factor (F1 F2 F3 F4 F6 F7): how much it votes, how much of that is the numbers, and the verdict.
+
+    ``vote_share`` / ``vote_n``: the photos (with the mirror) where |real gradient| >= 0,25, over ``base_n``; F4 only counts the
+    photos whose number is not 0 (price outside the area), and with fewer than 5 of them it has «sin dato».
+    ``flip_share`` / ``flip_n``: among those that voted, the share whose sign flips in the mirror.
+    ``habit``: mean of (real + mirror) / 2 over the photos with the mirror: the bias that does not depend on the data.
+    ``corr`` / ``corr_n``: Spearman between the real gradient and the number of the line (F4: only photos with a number != 0)."""
     from .futures_qwen_trader_exam import spearman
     out = []
     for factor in VOTING:
         index = FACTORS.index(factor)
+        vote_share, vote_n, base_n = _votes(rows, factor)
         flip, flip_n = _flips(rows, factor)
         pairs = [(r["factors"]["real"][index], r["factors"]["numbers"].get(factor)) for r in rows
-                 if r.get("factors") and r["factors"]["numbers"].get(factor) is not None]
+                 if r.get("factors") and r["factors"]["numbers"].get(factor) is not None
+                 and not (factor == "F4" and r["factors"]["numbers"][factor] == 0)]
         corr = spearman([a for a, _ in pairs], [b for _, b in pairs]) if pairs else None
-        out.append({"id": factor, "label": LABELS[factor], "number": NUMBER_TEXT[factor], "flip_share": flip, "flip_n": flip_n,
-                    "corr": corr, "corr_n": len(pairs), "verdict": verdict_of(flip, corr)})
+        if factor == "F4" and base_n < AREA_MIN_PHOTOS:
+            vote_share, verdict = None, "sin dato"          # «sin fotos fuera del área»
+        else:
+            verdict = verdict_of(vote_share, vote_n, flip, corr)
+        out.append({"id": factor, "label": LABELS[factor], "number": NUMBER_TEXT[factor], "vote_share": vote_share,
+                    "vote_n": vote_n, "base_n": base_n, "flip_share": flip, "flip_n": flip_n, "habit": _habit(rows, factor),
+                    "corr": corr, "corr_n": len(pairs), "verdict": verdict})
     return out
 
 
@@ -441,16 +501,27 @@ def ficha_lines(summary):
     """Markdown of the same block (the exam report)."""
     from .futures_qwen_trader_exam import _bp, _h, _pct, _rho
     lines = ["## Lectura por renglón", "",
-             "Para cada renglón: en qué parte de las fotos (con un gradiente de al menos 0,25 en el real) Qwen dio vuelta el "
-             "signo cuando se dieron vuelta los números, y cuánto se parece su gradiente al número del renglón (correlación "
-             "de Spearman; cuenta el valor absoluto: positivo sigue al número, negativo lo contradice). «Lee»: da vuelta el "
-             "signo en {} o más y la correlación llega a {}; «no lee»: menos de {} de vueltas o correlación menor a {}.".format(
-                 _pct(READS_FLIP), qt.es(READS_CORR, 1), _pct(NO_READ_FLIP), qt.es(NO_READ_CORR, 1)), "",
-             "| Renglón | Número contra el que se mide | Vueltas en el espejo | Correlación | Veredicto |", "|---|---|---|---|---|"]
+             "Votar y leer son cosas distintas. «Vota»: en qué parte de las fotos con espejo el renglón da un gradiente de al "
+             "menos 0,25 en el real (entre paréntesis, cuántas fotos). «Da vuelta»: entre las que votó, en qué parte el signo "
+             "se da vuelta cuando se dan vuelta los números. «Hábito»: lo que diría igual con los números del derecho o del "
+             "revés (promedio de real y espejo, de -2 a +2). «Corr»: Spearman entre el gradiente y el número del renglón "
+             "(cuenta el valor absoluto: positiva sigue al número, negativa lo contradice)."]
+    lines.append("")
     for item in summary["readings"]:
-        lines.append("| {} {} | {} | {} ({} fotos) | {} ({} fotos) | {} |".format(
-            item["id"], item["label"], item["number"], _pct(item["flip_share"]), item["flip_n"], _rho(item["corr"]),
-            item["corr_n"], item["verdict"]))
+        name = "{} {}".format(item["id"], item["label"][:1].lower() + item["label"][1:])
+        if item["verdict"] == "sin dato":
+            detail = "sin fotos fuera del área" if item["id"] == "F4" else "sin fotos para medirlo"
+            lines.append("- {}: {} → sin dato".format(name, detail))
+            continue
+        lines.append("- {}: vota {} ({}) · da vuelta {} · hábito {} · corr {} ({}) → {}".format(
+            name, _pct(item["vote_share"]), item["vote_n"], _pct(item["flip_share"]), _rho(item["habit"]), _rho(item["corr"]),
+            item["number"], item["verdict"]))
+    lines += ["", "Criterios, en este orden: «no vota» si vota en menos de {} de las fotos o en menos de {}; «lee» si da vuelta el "
+              "signo en {} o más y |corr| llega a {}; «sesgado» si |corr| llega a {} pero da vuelta menos de {} (lee el tamaño, "
+              "el hábito manda el signo); «no lee» si |corr| es menor a {} o da vuelta menos de {}; si no, «a medias». F4 se mide "
+              "solo con las fotos que tienen el precio fuera del área de valor (hacen falta {}).".format(
+                  _pct(VOTES_SHARE), VOTES_MIN_N, _pct(READS_FLIP), qt.es(READS_CORR, 1), qt.es(READS_CORR, 1), _pct(READS_FLIP),
+                  qt.es(NO_READ_CORR, 1), _pct(NO_READ_FLIP), AREA_MIN_PHOTOS)]
     lines += ["", "## Contra la regla sin Qwen", "",
               "En las mismas {} fotos: la correlación (Spearman) con el movimiento del precio de la suma de Qwen, de la regla sin "
               "Qwen (F1, F2, F3, F4 y F6 con signo de reversión, pesos iguales) y lo que rinden siempre largo y siempre corto "

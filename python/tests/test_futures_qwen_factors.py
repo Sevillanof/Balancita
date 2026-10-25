@@ -132,9 +132,12 @@ class GrammarAndParsingTests(unittest.TestCase):
     def test_the_question_of_the_variants_is_the_one_in_the_design_and_names_every_factor(self):
         for variant_id in ("ficha", "ficha-pista"):
             question = qv.get_variant(variant_id)["factors"]["question"]
-            for needle in ("F1 a F8", "próximas 4 horas", "-2 baja fuerte", "+2 sube fuerte", "F8 no vota",
-                           "F1:+1 F2:-2 F3:0 F4:0 F5:0 F6:0 F7:0 F8:0"):
+            for needle in ("F1 a F8", "próximas 4 horas", "-2 baja fuerte", "+2 sube fuerte", "F5 y F8 no votan",
+                           "tiene que votar según sus números", "n/d"):
                 self.assertIn(needle, question)
+            # sin línea de ejemplo: Qwen la copiaba (127 de 150 fotos); la gramática ya fija el formato
+            self.assertNotIn("F1:", question)
+            self.assertNotIn("F1:+1", question)
 
 
 # --------------------------------------------------------------------------- the gradient from the logprobs
@@ -203,12 +206,16 @@ class GradientTests(unittest.TestCase):
         with self.assertRaises(llm.ModelResponseError):
             fq.read_completion(broken)
 
-    def test_the_lean_is_the_sum_of_the_seven_voting_gradients_over_fourteen(self):
-        self.assertEqual(fq.DENOMINATOR, 14.0)
-        self.assertAlmostEqual(fq.lean_of([2] * 7 + [-2]), 1.0)               # F8 does not vote
-        self.assertAlmostEqual(fq.lean_of([-2] * 7 + [2]), -1.0)
-        self.assertAlmostEqual(fq.lean_of([1, -1, 0, 0, 0, 0, 0, 2]), 0.0)
+    def test_the_lean_is_the_sum_of_the_six_voting_gradients_over_twelve(self):
+        self.assertEqual(fq.VOTING, ("F1", "F2", "F3", "F4", "F6", "F7"))      # F5 and F8 do not vote
+        self.assertEqual(fq.DENOMINATOR, 12.0)
+        self.assertAlmostEqual(fq.lean_of([2, 2, 2, 2, -2, 2, 2, -2]), 1.0)   # F5 and F8 do not vote
+        self.assertAlmostEqual(fq.lean_of([-2, -2, -2, -2, 2, -2, -2, 2]), -1.0)
+        self.assertAlmostEqual(fq.lean_of([1, -1, 0, 0, 2, 0, 0, 2]), 0.0)
+        self.assertAlmostEqual(fq.lean_of([0, 0, 0, 0, 0, 2, 0, 0]), 2 / 12)   # F6 is the fifth voter, not the sixth line
+        self.assertAlmostEqual(fq.lean_of([0, 0, 0, 0, 0, 0, 2, 0]), 2 / 12)   # F7 votes
         self.assertEqual(fq.summary_action([1, 0, 0, 0, 0, 0, 0, 0])[0], "LARGO")
+        self.assertEqual(fq.summary_action([0, 0, 0, 0, 2, 0, 0, 0]), ("ESPERAR", 0.0))   # a lone F5 moves nothing
         self.assertEqual(fq.summary_action([0] * 8), ("ESPERAR", 0.0))
 
     def test_reading_and_habit_per_factor_and_the_lean_of_the_numbers_stay_in_range(self):
@@ -216,7 +223,7 @@ class GradientTests(unittest.TestCase):
         got = fq.photo_numbers(real, mirror)
         self.assertEqual(got["lectura"], [2, -1, 0, 0, 1, 0, -2, 0])
         self.assertEqual(got["habito"], [0, 0, 0, 1, 0, 0, 0, 2])
-        self.assertAlmostEqual(got["lean_num"], sum(got["lectura"][:7]) / 14)
+        self.assertAlmostEqual(got["lean_num"], (2 - 1 + 0 + 0 + 0 - 2) / 12)        # F5 (1) and F8 do not add
         self.assertTrue(-1 <= got["lean_num"] <= 1)
         self.assertAlmostEqual(fq.photo_numbers([2] * 8, [-2] * 8)["lean_num"], 1.0)
         self.assertAlmostEqual(fq.photo_numbers([2] * 8, [2] * 8)["lean_num"], 0.0)
@@ -572,7 +579,7 @@ class VariantTests(unittest.TestCase):
         self.assertIn("ficha-pista", ids)
         base, plain, hint = qt.config_hash(CFG3), qv.get_variant("ficha"), qv.get_variant("ficha-pista")
         applied = {v["id"]: qv.apply_variant(CFG3, v) for v in (plain, hint)}
-        self.assertEqual((applied["ficha"]["prompt"]["version"], applied["ficha-pista"]["prompt"]["version"]), (6.0, 6.1))
+        self.assertEqual((applied["ficha"]["prompt"]["version"], applied["ficha-pista"]["prompt"]["version"]), (6.2, 6.3))
         self.assertEqual(len({base, qt.config_hash(applied["ficha"]), qt.config_hash(applied["ficha-pista"])}), 3)
         for cfg in applied.values():
             self.assertTrue(cfg["state_ficha"])
@@ -661,9 +668,9 @@ class QuickRunTests(unittest.TestCase):
             self.assertAlmostEqual(r["lean"], fq.lean_of(f["real"]), places=9)
             self.assertAlmostEqual(r["lean_m"], fq.lean_of(f["mirror"]), places=9)
             self.assertAlmostEqual(r["lean_num"], (r["lean"] - r["lean_m"]) / 2, places=9)
-            self.assertAlmostEqual(r["lean_num"], sum(f["lectura"][:7]) / 14, places=9)
+            self.assertAlmostEqual(r["lean_num"], sum(f["lectura"][i] for i in (0, 1, 2, 3, 5, 6)) / 12, places=9)
             self.assertAlmostEqual(r["habit"], (r["lean"] + r["lean_m"]) / 2, places=9)
-            self.assertAlmostEqual(r["habit"], sum(f["habito"][:7]) / 14, places=9)
+            self.assertAlmostEqual(r["habit"], sum(f["habito"][i] for i in (0, 1, 2, 3, 5, 6)) / 12, places=9)
             self.assertEqual(r["real_action"], fq.summary_action(f["real"])[0])
             self.assertEqual(len(f["real"]), 8)
             self.assertEqual(len(f["mirror"]), 8)
@@ -689,7 +696,7 @@ class QuickRunTests(unittest.TestCase):
         sheet = summary["ficha"]
         self.assertEqual(sheet["photos"], 30)
         table = {x["id"]: x for x in sheet["readings"]}
-        self.assertEqual(list(table), ["F1", "F2", "F3", "F4", "F5", "F6", "F7"])
+        self.assertEqual(list(table), ["F1", "F2", "F3", "F4", "F6", "F7"])                # F5 and F8 do not vote
         f1, f2 = table["F1"], table["F2"]
         self.assertGreaterEqual(f1["flip_share"], 0.95)                         # F1 follows the z: it flips with the mirror
         self.assertGreaterEqual(f1["corr"], 0.5)
@@ -698,6 +705,7 @@ class QuickRunTests(unittest.TestCase):
         self.assertEqual(f2["verdict"], "no lee")
         self.assertIsNone(table["F6"]["corr"])                                  # no collector database: nothing to correlate
         self.assertEqual(table["F6"]["corr_n"], 0)
+        self.assertEqual(table["F6"]["verdict"], "sin dato")
         horizons = {c["horizon_min"]: c for c in sheet["comparison"]}
         self.assertEqual(set(horizons), {240, 1440})
         for c in horizons.values():
@@ -766,16 +774,91 @@ def photo(i, real, mirror, numbers, moves=(0.0, 0.0), t=None):
 
 
 class ReadingTableTests(unittest.TestCase):
-    def test_the_verdict_uses_the_fixed_criteria(self):
-        self.assertEqual(fq.verdict_of(0.85, 0.6), "lee")
-        self.assertEqual(fq.verdict_of(0.80, 0.50), "lee")
-        self.assertEqual(fq.verdict_of(0.85, 0.45), "a medias")
-        self.assertEqual(fq.verdict_of(0.70, 0.6), "a medias")
-        self.assertEqual(fq.verdict_of(0.59, 0.9), "no lee")
-        self.assertEqual(fq.verdict_of(0.95, 0.19), "no lee")
-        self.assertEqual(fq.verdict_of(0.95, None), "no lee")
-        self.assertEqual(fq.verdict_of(0.9, -0.7), "lee")                  # reverting the number is reading it
-        self.assertEqual(fq.verdict_of(None, 0.9), "sin dato")
+    def test_the_verdict_uses_the_fixed_criteria_in_order(self):
+        # (vote_share, vote_n, flip, corr) -> verdict
+        self.assertEqual(fq.verdict_of(0.15, 20, 0.95, 0.9), "no vota")            # votes in less than 20 % of the photos
+        self.assertEqual(fq.verdict_of(0.19, 30, 0.95, 0.9), "no vota")
+        self.assertEqual(fq.verdict_of(0.20, 4, 1.0, 0.9), "no vota")              # or in fewer than 5 photos
+        self.assertEqual(fq.verdict_of(0.20, 5, 0.85, 0.6), "lee")                 # 20 % and 5 photos are enough to vote
+        self.assertEqual(fq.verdict_of(0.97, 145, 0.85, 0.6), "lee")
+        self.assertEqual(fq.verdict_of(0.97, 145, 0.80, 0.50), "lee")
+        self.assertEqual(fq.verdict_of(0.97, 145, 0.9, -0.7), "lee")               # reverting the number is reading it
+        self.assertEqual(fq.verdict_of(0.97, 145, 0.34, 0.64), "sesgado")          # reads the size, the habit decides the sign
+        self.assertEqual(fq.verdict_of(0.97, 145, 0.79, 0.5), "sesgado")
+        self.assertEqual(fq.verdict_of(0.97, 145, 0.10, -0.8), "sesgado")
+        self.assertEqual(fq.verdict_of(0.97, 145, 0.95, 0.19), "no lee")
+        self.assertEqual(fq.verdict_of(0.97, 145, 0.59, 0.4), "no lee")
+        self.assertEqual(fq.verdict_of(0.97, 145, 0.95, None), "no lee")
+        self.assertEqual(fq.verdict_of(0.97, 145, 0.85, 0.45), "a medias")
+        self.assertEqual(fq.verdict_of(0.97, 145, 0.70, 0.30), "a medias")
+        self.assertEqual(fq.verdict_of(None, 0, None, None), "sin dato")           # nothing to judge the line on
+
+    def test_the_table_gives_the_four_new_verdicts_on_synthetic_rows(self):
+        rows = []
+        for i in range(40):
+            z = (i - 20) / 10.0 or 0.05
+            v = 2 if z > 0 else -2
+            lazy = 1 if i % 20 == 0 else 0
+            rows.append(photo(i, [v, v, 0 if i % 20 else 1, 2, 0, 0, lazy, 0],
+                              [-v, v, 0 if i % 20 else 1, 2, 0, 0, lazy, 0],
+                              {"F1": z, "F2": z, "F3": z, "F4": z, "F6": z, "F7": z}))
+        # F1 follows the z and flips with the mirror: reads. F2 follows the z but the mirror gives the same sign: biased
+        # (corr high, flips never). F3 is almost always 0: does not vote. F4 is always +2 whatever: does not read.
+        table = {x["id"]: x for x in fq.reading_table(rows)}
+        self.assertEqual(table["F1"]["verdict"], "lee")
+        self.assertEqual((table["F1"]["vote_share"], table["F1"]["vote_n"], table["F1"]["flip_share"]), (1.0, 40, 1.0))
+        self.assertAlmostEqual(table["F1"]["habit"], 0.0)
+        self.assertGreater(table["F1"]["corr"], 0.8)
+        self.assertEqual(table["F2"]["verdict"], "sesgado")
+        self.assertEqual(table["F2"]["flip_share"], 0.0)
+        self.assertGreater(table["F2"]["corr"], 0.8)
+        self.assertEqual(table["F3"]["verdict"], "no vota")                        # votes in 2 of 40 photos
+        self.assertEqual((table["F3"]["vote_n"], round(table["F3"]["vote_share"], 3)), (2, 0.05))
+        self.assertEqual(table["F4"]["verdict"], "no lee")                         # always +2, even flipped: no flips, no corr
+        self.assertEqual(table["F4"]["flip_share"], 0.0)
+        self.assertEqual(table["F6"]["verdict"], "no vota")                        # never votes: not «no lee»
+        self.assertEqual(table["F6"]["vote_share"], 0.0)
+        self.assertIsNone(table["F6"]["flip_share"])
+
+    def test_a_vote_in_the_middle_is_not_counted_as_not_reading(self):
+        # a line that reads well when it votes but votes in 10 % of the photos is «no vota», whatever its flips and correlation
+        rows = []
+        for i in range(50):
+            z = 2.0 if i < 5 else 0.0 + (i % 3) * 0.01
+            real = [2 if i < 5 else 0, 0, 0, 0, 0, 0, 0, 0]
+            mirror = [-2 if i < 5 else 0, 0, 0, 0, 0, 0, 0, 0]
+            rows.append(photo(i, real, mirror, {"F1": z}))
+        f1 = {x["id"]: x for x in fq.reading_table(rows)}["F1"]
+        self.assertEqual((f1["vote_n"], f1["vote_share"], f1["flip_share"]), (5, 0.1, 1.0))
+        self.assertEqual(f1["verdict"], "no vota")
+
+    def test_f4_is_measured_only_on_the_photos_with_the_price_outside_the_area(self):
+        def rows_with(outside, inside, votes_outside):
+            rows = []
+            for i in range(outside + inside):
+                out = i < outside
+                number = (1.0 + i % 4) * (1 if i % 2 else -1) if out else 0.0
+                vote = (2 if number > 0 else -2) if out and i < votes_outside else 0
+                rows.append(photo(i, [0, 0, 0, vote, 0, 0, 0, 0], [0, 0, 0, -vote, 0, 0, 0, 0], {"F4": number}))
+            return rows
+        # 150 photos, 15 outside the area (like the real ones): the 135 inside do not dilute the share
+        f4 = {x["id"]: x for x in fq.reading_table(rows_with(15, 135, 15))}["F4"]
+        self.assertEqual((f4["vote_n"], f4["base_n"], f4["vote_share"], f4["flip_share"]), (15, 15, 1.0, 1.0))
+        self.assertEqual(f4["corr_n"], 15)                                         # the zeros are out of the correlation too
+        self.assertEqual(f4["verdict"], "lee")
+        # the photos inside the area are not «votes» even when Qwen invents one there
+        noisy = rows_with(15, 135, 15)
+        for r in noisy[15:]:
+            r["factors"]["real"][3], r["factors"]["mirror"][3] = 2, -2
+        f4n = {x["id"]: x for x in fq.reading_table(noisy)}["F4"]
+        self.assertEqual((f4n["vote_n"], f4n["base_n"]), (15, 15))
+        # fewer than 5 photos outside the area: nothing to say about the line
+        few = {x["id"]: x for x in fq.reading_table(rows_with(4, 146, 4))}["F4"]
+        self.assertEqual((few["verdict"], few["vote_share"], few["base_n"]), ("sin dato", None, 4))
+        none = {x["id"]: x for x in fq.reading_table(rows_with(0, 150, 0))}["F4"]
+        self.assertEqual((none["verdict"], none["vote_n"], none["corr_n"]), ("sin dato", 0, 0))
+        text = "\n".join(fq.ficha_lines(fq.ficha_summary(rows_with(0, 40, 0), [240, 1440])))
+        self.assertIn("F4 área de valor del día previo: sin fotos fuera del área → sin dato", text)
 
     def test_flips_are_counted_over_the_photos_with_a_real_gradient_of_at_least_a_quarter(self):
         rows = []
@@ -788,7 +871,7 @@ class ReadingTableTests(unittest.TestCase):
         flat = [photo(1, [0.2] + [0] * 7, [-0.2] + [0] * 7, {})]
         self.assertEqual(fq._flips(flat, "F1"), (None, 0))
 
-    def test_the_table_has_the_seven_voting_lines_with_flip_share_correlation_and_verdict(self):
+    def test_the_table_has_the_six_voting_lines_with_vote_flip_habit_correlation_and_verdict(self):
         rows = []
         for i in range(40):
             z = (i - 20) / 10.0
@@ -801,6 +884,8 @@ class ReadingTableTests(unittest.TestCase):
         self.assertEqual(table["F2"]["verdict"], "no lee")                       # same +1 in both: never flips
         self.assertEqual(table["F4"]["flip_n"], 0)
         self.assertEqual(table["F4"]["verdict"], "sin dato")
+        self.assertEqual(table["F2"]["vote_share"], 1.0)
+        self.assertAlmostEqual(table["F2"]["habit"], 1.0)                        # (+1 + +1) / 2 on every photo
         self.assertEqual(table["F1"]["number"], "z de 24 h")
 
     def test_the_rule_without_qwen_reverts_f1_f2_f3_f4_and_f6_with_equal_weights_scaled_to_the_range(self):
@@ -837,12 +922,15 @@ class ReadingTableTests(unittest.TestCase):
         summary = fq.ficha_summary(rows, [240, 1440])
         text = "\n".join(fq.ficha_lines(summary))
         self.assertIn("## Lectura por renglón", text)
-        self.assertIn("| F1 Tendencia larga | z de 24 h |", text)
         self.assertIn("## Contra la regla sin Qwen", text)
         self.assertIn("| 4 h |", text)
         self.assertIn("| 24 h |", text)
-        for word in ("Lee", "no lee"):
-            self.assertIn(word, text)
+        self.assertIn("- F1 tendencia larga: vota 100 % (12) · da vuelta 100 % · hábito 0,00 · corr", text)
+        self.assertIn("→ no lee", text)
+        self.assertIn("«no vota»", text)
+        self.assertIn("«sesgado»", text)
+        self.assertIn("«a medias»", text)
+        self.assertNotIn("F5 Volumen", text)                                     # F5 does not vote: not in the table
 
 
 if __name__ == "__main__":
