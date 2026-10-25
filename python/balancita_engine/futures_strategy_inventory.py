@@ -238,7 +238,7 @@ def build_inventory(entries, specs, *, config_dir=None, carry=None, forward_resu
 
     if qwen_live is not None:
         rows.append({
-            "id": QWEN_LIVE_ID, "version": 1, "name": "Qwen en vivo",
+            "id": QWEN_LIVE_ID, "version": 2, "name": "Qwen en vivo",
             "description": "Qwen decide cada entrada y cada salida, cada 15 minutos, en {}.".format(
                 ", ".join(qwen_live.get("products") or [])),
             "kind": "qwen_live", "spec_hash": None,

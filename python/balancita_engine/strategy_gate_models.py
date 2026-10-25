@@ -18,7 +18,7 @@ from . import strategy_purge
 
 KRONOS_ID = "kronos-small-1h-h4-v1"
 QWEN_ID = "c31-qwen-exit-perp-v1"
-QWEN_LIVE_ID = "qwen-live-perp-v1"
+QWEN_LIVE_ID = "qwen-live-perp-v2"
 ROOT = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", ".."))
 KRONOS_CONFIG = os.path.join(ROOT, "config", "models", "kronos-small-1h-h4-v1.json")
 QWEN_CONFIG = os.path.join(ROOT, "config", "qwen-exit.json")
@@ -64,7 +64,8 @@ def model_spec(strategy_id):
     if strategy_id == QWEN_LIVE_ID:
         from . import futures_qwen_trader as qt
         config = _read(QWEN_LIVE_CONFIG)
-        return _canonical({"id": QWEN_LIVE_ID, "kind": "qwen_live", "version": 1, "name": "Qwen en vivo",
+        return _canonical({"id": QWEN_LIVE_ID, "kind": "qwen_live", "version": 2, "name": "Qwen en vivo",
+                           "photo_rule": "lean_extremes",
                            "products": config["products"], "notional_usd": config["notional_usd"],
                            "leverage": config.get("leverage", "1"), "config_hash": qt.config_hash(config)})
     raise KeyError(strategy_id)
