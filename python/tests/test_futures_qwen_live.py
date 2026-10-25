@@ -1,6 +1,7 @@
 """Qwen operador EN VIVO: todo con proveedor falso, velas inventadas y bases temporales. Sin red, sin modelo."""
 import copy
 import json
+import math
 import os
 import random
 import re
@@ -45,7 +46,7 @@ class Policy:
         self.flat, self.position, self.reason, self.forced = flat, position, reason, forced
 
     def __call__(self, prompt, letters):
-        if "no operás" in prompt:
+        if "elegir un lado" in prompt:
             wanted = self.forced
         elif "No tenés ninguna posición" in prompt:
             wanted = self.flat
@@ -74,6 +75,8 @@ class Env:
     def __init__(self, test, cfg=None, policy=None, sigma=0.0002, db=None, funding=(), mirror=False, now=START,
                  provider=None, clock=None):
         self.cfg = copy.deepcopy(cfg or LIVE_CFG)
+        if cfg is None:
+            self.cfg["live"]["force_window_h"] = 0           # the window is opt-in in tests: the rest exercises the normal flat question
         self.cfg["mirror"] = mirror
         self.tmp = db or tempfile.mkdtemp()
         self.db_path = os.path.join(self.tmp, "live.sqlite")
@@ -398,6 +401,7 @@ class SizeLeverageProductsTests(unittest.TestCase):
     def test_accounting_uses_the_notional_and_the_margin_is_notional_over_leverage(self):
         cfg = live.apply_overrides(LIVE_CFG, {"QWEN_LIVE_NOTIONAL_USD": "1000", "QWEN_LIVE_LEVERAGE": "5",
                                               "QWEN_LIVE_PRODUCTS": "PF_XBTUSD"})
+        cfg["live"]["force_window_h"] = 0
         rows = [(BASE - 10 * DAY + i * qt.HOUR_MS, 3e-5) for i in range(0, 10 * 24 + 40)]
         env = make(self, cfg=cfg, policy=Policy(flat="LARGO"), funding=rows)
         env.op.start()
@@ -419,128 +423,252 @@ class SizeLeverageProductsTests(unittest.TestCase):
         self.assertIn("tamaño fijo de 1000 USD", env.rows("SELECT state_text FROM decisions")[0]["state_text"])
 
 
-class ForcedEntryTests(unittest.TestCase):
-    """Fran's rule: at least one closed trade a day. After ``force_side_after_h`` without opening, the 15 minute wake asks a
-    question with only LARGO and CORTO."""
+class OpportunityWindowTests(unittest.TestCase):
+    """Fran's rule: at least one trade a day, but choosing the moment. After ``force_side_after_h`` without opening, a window
+    opens: every 15 min wake asks LARGO / CORTO on the real numbers and on the mirror and enters only on a record candidate."""
 
-    def forced_env(self, hours=8, **kwargs):
-        cfg = live.apply_overrides(LIVE_CFG, {"QWEN_LIVE_FORCE_SIDE_AFTER_H": str(hours)})
-        return make(self, cfg=cfg, **kwargs)
+    def window_env(self, plan, delay=0, window_h=12, min_looks=6, db=None):
+        """One product (the prompts of the fake model are counted in order). ``plan(look, mirrored)`` is p(LARGO) of that
+        question; both option orders get the same answer, so the mean is that number. Looks are 0-based."""
+        cfg = live.apply_overrides(LIVE_CFG, {"QWEN_LIVE_FORCE_SIDE_AFTER_H": str(delay), "QWEN_LIVE_PRODUCTS": "PF_XBTUSD"})
+        cfg["live"]["force_window_h"], cfg["live"]["force_min_looks"] = window_h, min_looks
+        cfg["runtime"]["concurrent_orders"] = False                 # deterministic prompt order
+        state = {"n": 0}
+
+        def entries(prompt, letters):
+            if "elegir un lado" not in prompt:
+                return Policy("ESPERAR")(prompt, letters)
+            look, mirrored = divmod(state["n"] // 2, 2)               # real x2 orders, mirror x2 orders, per look
+            if state["n"] % 4 == 0:
+                state["look"] = state["n"] // 4
+            state["n"] += 1
+            p = plan(state["n"] // 4 if False else (state["n"] - 1) // 4, bool(mirrored))
+            letter = re.search(r"^([A-Z])\) LARGO", prompt, re.M).group(1)
+            other = [x for x in letters if x != letter][0]
+            return [{"token": letter, "logprob": math.log(p)}, {"token": other, "logprob": math.log(1 - p)}]
+
+        return make(self, cfg=cfg, provider=llm.FakeProvider(entries=entries), db=db)
+
+    def looks(self, env):
+        return env.rows("SELECT * FROM decisions WHERE override IN ('ventana_mirando','entrada_ventana') ORDER BY t_ms")
+
+    @staticmethod
+    def candidate(score):
+        """p(real), p(mirror) of a candidate with this score: lean = score, lean_m = -score."""
+        return (1 + score) / 2, (1 - score) / 2
 
     def test_it_is_off_for_the_practice_and_the_old_configs(self):
         for path in (qt.CONFIG_PATH_V3, qt.CONFIG_PATH_V2):
             self.assertNotIn("force_question", qt.load_config(path).get("live", {}))
-        self.assertEqual(LIVE_CFG["live"]["force_side_after_h"], 8)
-        self.assertEqual([o["id"] for o in LIVE_CFG["live"]["force_question"]["options"]], ["LARGO", "CORTO"])
+        live_cfg = LIVE_CFG["live"]
+        self.assertEqual((live_cfg["force_side_after_h"], live_cfg["force_window_h"], live_cfg["force_min_looks"]), (0, 12, 6))
+        self.assertEqual([o["id"] for o in live_cfg["force_question"]["options"]], ["LARGO", "CORTO"])
 
-    def test_with_a_constant_wait_it_enters_forced_only_after_the_hours_and_once_per_position(self):
-        env = self.forced_env(8, policy=Policy(flat="ESPERAR"))
+    def test_it_does_not_enter_before_the_minimum_looks_even_with_a_perfect_candidate(self):
+        def plan(look, mirrored):
+            real, mirror = self.candidate(min(0.9, 0.3 + 0.05 * look))   # every look is a new record
+            return mirror if mirrored else real
+        env = self.window_env(plan, min_looks=6)
         env.op.start()
-        env.advance(8 * 60 - 15)                                  # 7 h 45 min after the start: not yet
+        self.assertEqual(self.looks(env), [])                          # nothing is asked before the first 15 min wake
+        env.advance(6 * 15)                                            # 6 looks: the window starts at the very first wake
+        looks = self.looks(env)
+        self.assertEqual([r["look_n"] for r in looks], [1, 2, 3, 4, 5, 6])
+        self.assertEqual({r["override"] for r in looks}, {"ventana_mirando"})
         self.assertEqual(env.rows("SELECT * FROM trades"), [])
-        self.assertEqual({r["action"] for r in env.rows("SELECT action FROM decisions")}, {"ESPERAR"})
-        self.assertTrue(all(json.loads(r["probs_json"]).keys() == {"LARGO", "CORTO", "ESPERAR"}
-                            for r in env.rows("SELECT probs_json FROM decisions")))
-        env.advance(30)                                           # past the 8 h
-        trades = env.rows("SELECT * FROM trades ORDER BY product")
-        self.assertEqual(len(trades), 2)                          # one per product
-        forced = env.rows("SELECT * FROM decisions WHERE override='entrada_forzada' AND product='PF_XBTUSD'")
-        self.assertEqual(len(forced), 1)
-        row = forced[0]
-        self.assertEqual((row["reason"], row["kind"]), ("entrada_forzada", "flat"))
-        self.assertEqual(set(json.loads(row["probs_json"])), {"LARGO", "CORTO"})      # no ESPERAR option
-        self.assertGreater(row["t_ms"] - START, 8 * 3_600_000)
-        self.assertTrue(all(t["entry_reason"] == "forzada" and t["status"] == "open" for t in trades))
-        self.assertIsNone(row["mirror_action"])                                        # the mirror is skipped
-        self.assertIn("Hace 8,", env.provider.prompts[-1] if "Hace" in env.provider.prompts[-1] else
-                      next(p for p in env.provider.prompts if "Hace" in p))
-        # a position is open: the next wakes are position questions, never another forced entry
+        self.assertTrue(all(r["action"] == "ESPERAR" and r["mirror_ok"] == 1 for r in looks))
+        env.advance(15)                                                # look 7: at least 6 looks came before and it is a record
+        entry = self.looks(env)[-1]
+        self.assertEqual((entry["look_n"], entry["override"], entry["reason"]), (7, "entrada_ventana", "entrada_ventana"))
+        self.assertEqual(entry["action"], "LARGO")
+        self.assertAlmostEqual(entry["score"], entry["best_score"])
+        trade = env.rows("SELECT * FROM trades")[0]
+        self.assertEqual((trade["entry_reason"], trade["side"], trade["status"]), ("ventana", "LONG", "open"))
+        self.assertGreater(entry["lean"], 0)
+        self.assertLess(entry["lean_m"], 0)
+        self.assertAlmostEqual(entry["lean_num"], (entry["lean"] - entry["lean_m"]) / 2)
+        # with a position open the window is closed: only position questions from here
         env.advance(60)
-        self.assertEqual(len(env.rows("SELECT * FROM decisions WHERE override='entrada_forzada'")), 2)
-        self.assertEqual(len(env.rows("SELECT * FROM trades")), 2)
+        self.assertEqual(len(self.looks(env)), 7)
 
-    def test_the_text_is_honest_and_has_only_two_options(self):
-        env = self.forced_env(1, policy=Policy(flat="ESPERAR"))
+    def test_it_waits_for_a_record_and_says_how_it_stands(self):
+        scores = [0.50, 0.10, 0.10, 0.10, 0.10, 0.10, 0.30, 0.60]      # the early 0.50 (a candidate) is the record to beat; 0.10 and 0.30 are candidates but no record
+
+        def plan(look, mirrored):
+            real, mirror = self.candidate(scores[min(look, len(scores) - 1)])
+            return mirror if mirrored else real
+        env = self.window_env(plan, min_looks=3)
         env.op.start()
-        env.advance(90)
-        prompt = next(p for p in env.provider.prompts if "no operás" in p)
-        self.assertIn("Tenés que elegir un lado para esta exploración en papel; elegí el que creas más probable.", prompt)
-        self.assertNotIn("ESPERAR", prompt)
-        self.assertEqual(len(re.findall(r"^[A-Z]\) ", prompt, re.M)), 2)
+        env.advance(8 * 15)
+        looks = self.looks(env)
+        self.assertEqual([r["override"] for r in looks[:7]], ["ventana_mirando"] * 7)
+        self.assertEqual((looks[7]["look_n"], looks[7]["override"]), (8, "entrada_ventana"))
+        weak = looks[6]
+        self.assertAlmostEqual(weak["score"], 0.30)
+        self.assertAlmostEqual(weak["best_score"], 0.50)                # "mejor hasta ahora"
+        self.assertEqual(weak["mirror_ok"], 1)                          # a candidate, but not a record: waits
+        self.assertEqual(len(env.rows("SELECT * FROM trades")), 1)
 
-    def test_it_opens_on_the_more_probable_side_by_the_mean_of_both_orders_without_threshold_or_mirror(self):
-        def lean(prompt, letters):
-            if "no operás" in prompt:
-                letter = re.search(r"^([A-Z])\) CORTO", prompt, re.M).group(1)
-                other = [x for x in letters if x != letter][0]
-                # barely above one half for CORTO: far below the 0.5 + threshold idea, still the side that wins
-                return [{"token": letter, "logprob": -0.62}, {"token": other, "logprob": -0.77}]
-            return Policy("ESPERAR")(prompt, letters)
+    def test_a_non_candidate_score_is_recorded_but_does_not_raise_the_bar(self):
+        scores = [None, 0.10, 0.12, 0.14]                 # look 1: high score but the mirror does not contradict
 
-        env = self.forced_env(1, provider=llm.FakeProvider(entries=lean), mirror=True)      # mirror ON in the config
+        def plan(look, mirrored):
+            if scores[min(look, 3)] is None:
+                return 0.7 if mirrored else 0.95          # real LARGO, mirror also LARGO: not a candidate
+            real, mirror = self.candidate(scores[min(look, 3)])
+            return mirror if mirrored else real
+        env = self.window_env(plan, min_looks=3)
         env.op.start()
-        env.advance(90)
-        trades = env.rows("SELECT * FROM trades")
-        self.assertTrue(trades)
-        self.assertTrue(all(t["side"] == "SHORT" and t["entry_reason"] == "forzada" for t in trades))
-        decision = env.rows("SELECT * FROM decisions WHERE override='entrada_forzada'")[0]
-        self.assertEqual(decision["action"], "CORTO")
-        self.assertLess(decision["p_action"], 0.7)
-        self.assertIsNone(decision["mirror_action"])
-        asked = [p for p in env.provider.prompts if "no operás" in p]
-        self.assertEqual(len(asked) % 2, 0)                      # two orders, no mirror question
+        env.advance(4 * 15)
+        looks = self.looks(env)
+        self.assertEqual(looks[0]["mirror_ok"], 0)
+        self.assertGreater(looks[0]["score"], 0.14)       # recorded...
+        self.assertAlmostEqual(looks[0]["best_score"], 0.0)   # ...but it does not count as the best
+        self.assertAlmostEqual(looks[1]["best_score"], 0.10)
+        self.assertEqual((looks[3]["look_n"], looks[3]["override"]), (4, "entrada_ventana"))   # 0.14 is the record among candidates
 
-    def test_zero_turns_it_off(self):
-        env = self.forced_env(0, policy=Policy(flat="ESPERAR"))
+    def test_a_contradicting_mirror_never_enters_even_as_a_record_and_even_after_the_window(self):
+        def plan(look, mirrored):
+            return 0.7 if mirrored else 0.95              # real LARGO, mirror ALSO LARGO: the answer is not from the numbers
+
+        env = self.window_env(plan, window_h=2, min_looks=2)
+        env.op.start()
+        env.advance(5 * 60)                           # 5 h into the window, far past window_h
+        looks = self.looks(env)
+        self.assertGreater(len(looks), 12)
+        self.assertEqual({r["override"] for r in looks}, {"ventana_mirando"})
+        self.assertEqual({r["mirror_ok"] for r in looks}, {0})
+        self.assertGreater(looks[0]["score"], 0)           # its score is high: only the mirror stops it
+        self.assertEqual(env.rows("SELECT * FROM trades"), [])
+
+    def test_after_the_window_hours_it_enters_at_the_first_candidate_without_a_record(self):
+        def plan(look, mirrored):
+            if look == 0:
+                real, mirror = self.candidate(0.8)                         # a record, but too early
+            elif look == 8:
+                real, mirror = self.candidate(0.1)                         # weak candidate, window of 2 h is over
+            else:
+                real, mirror = 0.7, 0.7                                    # no candidate
+            return mirror if mirrored else real
+        env = self.window_env(plan, window_h=2, min_looks=100)
+        env.op.start()
+        env.advance(9 * 15)
+        looks = self.looks(env)
+        self.assertEqual([r["override"] for r in looks[:8]], ["ventana_mirando"] * 8)
+        self.assertEqual((looks[8]["look_n"], looks[8]["override"]), (9, "entrada_ventana"))
+        self.assertAlmostEqual(looks[8]["score"], 0.1)
+        self.assertAlmostEqual(looks[8]["best_score"], 0.8)                # not a record, entered anyway
+
+    def test_a_short_when_the_numbers_say_down(self):
+        def plan(look, mirrored):
+            real, mirror = self.candidate(0.4)
+            return (real if mirrored else mirror)                          # real: CORTO, mirror: LARGO
+        env = self.window_env(plan, min_looks=0)
+        env.op.start()
+        env.advance(30)
+        entry = next(r for r in self.looks(env) if r["override"] == "entrada_ventana")
+        self.assertEqual(entry["action"], "CORTO")
+        self.assertLess(entry["lean_num"], 0)
+        self.assertEqual(env.rows("SELECT side FROM trades")[0]["side"], "SHORT")
+
+    def test_opening_a_position_closes_the_window_and_the_next_one_starts_from_zero(self):
+        def plan(look, mirrored):
+            real, mirror = self.candidate(0.2 + 0.01 * look)
+            return mirror if mirrored else real
+        env = self.window_env(plan, min_looks=2)
+        env.op.start()
+        env.advance(3 * 15)                                           # window 1: three looks, enters at the third
+        first = [r for r in self.looks(env)]
+        self.assertEqual(first[-1]["override"], "entrada_ventana")
+        env.advance(4 * 60 + 15 * 5)                                       # closes by time at 4 h, cooldown, window 2
+        looks = self.looks(env)
+        second = [r for r in looks if r["t_ms"] > first[-1]["t_ms"]]
+        self.assertTrue(second)
+        self.assertEqual(second[0]["look_n"], 1)                          # the counter restarted
+        self.assertAlmostEqual(second[0]["best_score"], second[0]["score"])   # and so did the best score
+        self.assertGreaterEqual(second[0]["t_ms"] - env.rows("SELECT exit_ms FROM trades")[0]["exit_ms"], 15 * MIN)
+
+    def test_the_window_is_always_on_and_the_flat_question_with_wait_is_gone(self):
+        env = self.window_env(lambda look, mirrored: 0.5 + (0.01 if not mirrored else -0.01), min_looks=100)
+        env.op.start()
+        env.advance(45)
+        rows = env.rows("SELECT action, override, probs_json FROM decisions ORDER BY t_ms")
+        self.assertEqual([r["override"] for r in rows], ["ventana_mirando"] * 3)
+        self.assertTrue(all(set(json.loads(r["probs_json"])) == {"LARGO", "CORTO"} for r in rows))   # no ESPERAR option
+        self.assertFalse(any("No tenés ninguna posición" in p for p in env.provider.prompts))
+
+    def test_the_start_delay_is_optional(self):
+        env = self.window_env(lambda look, mirrored: 0.5, delay=1)
+        env.op.start()
+        env.advance(60)
+        self.assertEqual(self.looks(env), [])                          # the first hour: the normal flat question
+        self.assertTrue(any("No tenés ninguna posición" in p for p in env.provider.prompts))
+        env.advance(30)
+        self.assertTrue(self.looks(env))
+
+    def test_zero_window_turns_it_off(self):
+        env = self.window_env(lambda look, mirrored: 0.9, window_h=0)
         env.op.start()
         env.advance(10 * 60)
         self.assertEqual(env.rows("SELECT * FROM trades"), [])
-        self.assertEqual(env.rows("SELECT * FROM decisions WHERE override='entrada_forzada'"), [])
-        self.assertFalse(any("no operás" in p for p in env.provider.prompts))
-        with self.assertRaises(qt.TraderError):
-            live.apply_overrides(LIVE_CFG, {"QWEN_LIVE_FORCE_SIDE_AFTER_H": "-1"})
-        with self.assertRaises(qt.TraderError):
-            live.apply_overrides(LIVE_CFG, {"QWEN_LIVE_FORCE_SIDE_AFTER_H": "mucho"})
+        self.assertEqual(self.looks(env), [])
+        self.assertFalse(any("elegir un lado" in p for p in env.provider.prompts))
+        for bad in ("-1", "mucho"):
+            for name in ("QWEN_LIVE_FORCE_SIDE_AFTER_H", "QWEN_LIVE_FORCE_WINDOW_H", "QWEN_LIVE_FORCE_MIN_LOOKS"):
+                with self.assertRaises(qt.TraderError):
+                    live.apply_overrides(LIVE_CFG, {name: bad})
+        cfg = live.apply_overrides(LIVE_CFG, {"QWEN_LIVE_FORCE_WINDOW_H": "6", "QWEN_LIVE_FORCE_MIN_LOOKS": "3"})
+        self.assertEqual((cfg["live"]["force_window_h"], cfg["live"]["force_min_looks"]), (6, 3))
 
-    def test_the_cooldown_and_the_open_position_are_respected(self):
-        env = self.forced_env(1, policy=Policy(flat="ESPERAR"))
+    def test_the_window_survives_a_restart(self):
+        def plan(look, mirrored):
+            real, mirror = self.candidate(0.3)
+            return mirror if mirrored else real
+        env = self.window_env(plan, min_looks=10)
         env.op.start()
-        env.advance(7 * 60)
-        for product in PRODUCTS:
-            trades = env.rows("SELECT * FROM trades WHERE product=? ORDER BY trade_no", product)
-            self.assertGreaterEqual(len(trades), 2)
-            self.assertEqual(trades[0]["closed_by"], "tiempo")                    # closed by itself at 4 h
-            for a, b in zip(trades, trades[1:]):
-                self.assertGreaterEqual(b["entry_ms"] - a["exit_ms"], 15 * MIN)  # cooldown
-                self.assertGreater(b["entry_ms"], a["exit_ms"])                  # never while a position is open
-        # at least one closed trade per product within 7 hours
-        self.assertTrue(all(env.rows("SELECT * FROM trades WHERE product=? AND status='closed'", p) for p in PRODUCTS))
-
-    def test_the_idle_time_counts_from_the_last_opening_on_record_and_survives_a_restart(self):
-        env = self.forced_env(2, policy=Policy(flat="ESPERAR"))
-        env.op.start()
-        env.advance(150)
-        first = env.rows("SELECT entry_ms FROM trades WHERE product='PF_XBTUSD' ORDER BY trade_no")
-        self.assertEqual(len(first), 1)
+        env.advance(3 * 15)
+        before = self.looks(env)[-1]
+        self.assertEqual(before["look_n"], 3)
         op = env.restart()
-        op.start()                                                  # a new process: the reference is the opening in the base
-        self.assertEqual(op.traders["PF_XBTUSD"].last_open_ms, first[0]["entry_ms"])
-        env.advance(60)
-        self.assertEqual(len(env.rows("SELECT * FROM trades WHERE product='PF_XBTUSD'")), 1)   # still open or cooling down
+        op.start()
+        self.assertEqual(op.traders["PF_XBTUSD"].window["looks"], 3)
+        env.advance(15)
+        self.assertEqual(self.looks(env)[-1]["look_n"], 4)
 
-    def test_the_existing_live_base_is_still_accepted(self):
-        env = make(self, mirror=True)
-        env.op.start()
-        cfg = copy.deepcopy(LIVE_CFG)
-        old = copy.deepcopy(LIVE_CFG)
-        for key in ("force_side_after_h", "force_question"):
-            old["live"].pop(key)
-        self.assertEqual(qt.config_hash(old), qt.config_hash(cfg))
-        self.assertEqual(qt.config_hash(cfg), "32a13314d45f58ca206728bc81f070129fb90ab8b4a17d0a2ad59f52d510ce58")
-        store = live.LiveStore(env.db_path)
+    def test_a_base_written_before_the_window_is_still_valid_and_gets_the_new_columns(self):
+        tmp = tempfile.mkdtemp()
+        path = os.path.join(tmp, "live.sqlite")
+        old = sqlite3.connect(path)
+        old.executescript("""
+        CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
+        CREATE TABLE decisions(product TEXT NOT NULL, bucket_ms INTEGER NOT NULL, t_ms INTEGER NOT NULL,
+          decided_at_ms INTEGER NOT NULL, kind TEXT NOT NULL, action TEXT NOT NULL, model_action TEXT, p_action REAL,
+          confidence REAL, probs_json TEXT, orders_json TEXT, override TEXT, reason TEXT, reason_json TEXT,
+          mirror_action TEXT, mirror_p REAL, wake_json TEXT, state_text TEXT, state_hash TEXT, latency_ms INTEGER,
+          threshold REAL, prompt_version TEXT, prompt_hash TEXT, model TEXT, config_hash TEXT, position_json TEXT,
+          net_bp_now REAL, trade_no INTEGER, PRIMARY KEY(product, bucket_ms));
+        CREATE TABLE trader_state(product TEXT PRIMARY KEY, last_fed_ms INTEGER, trade_seq INTEGER NOT NULL,
+          cooldown_until INTEGER NOT NULL, last_call_ms INTEGER, position_json TEXT, updated_ms INTEGER NOT NULL);
+        INSERT INTO decisions VALUES('PF_XBTUSD', 0, 900000, 1, 'flat', 'ESPERAR', 'ESPERAR', 0.99, 0.9, '{}', '[{}]', NULL,
+          NULL, NULL, NULL, NULL, '[]', 'x', 'h', 5, 0.5, '4', 'ph', 'm', 'c', NULL, NULL, NULL);
+        INSERT INTO trader_state VALUES('PF_XBTUSD', 300000, 1, 0, NULL, NULL, 1);
+        """)
+        old.commit()
+        old.close()
+        store = live.LiveStore(path)                         # opens for writing: columns appended, nothing lost
         self.addCleanup(store.close)
-        store.check_identity(old)                                   # the base was written under the old config
-        store.check_identity(live.apply_overrides(LIVE_CFG, {"QWEN_LIVE_FORCE_SIDE_AFTER_H": "3"}))
+        columns = {r[1] for r in store.db.execute("PRAGMA table_info(decisions)")}
+        self.assertTrue({"lean", "lean_m", "lean_num", "score", "best_score", "look_n", "mirror_ok"} <= columns)
+        self.assertIn("window_json", {r[1] for r in store.db.execute("PRAGMA table_info(trader_state)")})
+        self.assertEqual(store.db.execute("SELECT action, lean FROM decisions").fetchone()[:], ("ESPERAR", None))
+        self.assertEqual(store.load_state("PF_XBTUSD")["window_json"], None)
+        live.LiveStore(path).close()                          # a second open is harmless
+        # the config identity does not move: the section lives outside config_hash
+        cfg = copy.deepcopy(LIVE_CFG)
+        for key in ("force_window_h", "force_min_looks", "force_side_after_h", "force_question"):
+            cfg["live"].pop(key)
+        self.assertEqual(qt.config_hash(cfg), qt.config_hash(LIVE_CFG))
+        self.assertEqual(qt.config_hash(LIVE_CFG), "32a13314d45f58ca206728bc81f070129fb90ab8b4a17d0a2ad59f52d510ce58")
 
 
 class LockTests(unittest.TestCase):

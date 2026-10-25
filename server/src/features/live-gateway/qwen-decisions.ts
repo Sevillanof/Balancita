@@ -50,6 +50,18 @@ export interface QwenDecision {
   readonly override: string | null
   readonly mirror_action: string | null
   readonly mirror_p: number | null
+  /** Ventana de oportunidad: ventaja (p LARGO - p CORTO) con números reales y con espejo; null fuera de la ventana. */
+  readonly lean: number | null
+  readonly lean_m: number | null
+  /** Ventaja neta (lean - lean_m) / 2; su signo es el lado y su valor absoluto el puntaje. */
+  readonly lean_num: number | null
+  readonly score: number | null
+  /** Mejor puntaje de las miradas candidatas (espejo coincidente) de la ventana hasta esa mirada. */
+  readonly best_score: number | null
+  /** Número de mirada dentro de la ventana (1 = la primera). */
+  readonly look_n: number | null
+  /** 1 si el espejo contradice (candidato válido), 0 si no; null fuera de la ventana. */
+  readonly mirror_ok: number | null
 }
 
 /** A wake that was not decided (model down or slow, process off). */
@@ -137,6 +149,13 @@ const OPTIONAL_DECISION_COLUMNS = [
   'override',
   'mirror_action',
   'mirror_p',
+  'lean',
+  'lean_m',
+  'lean_num',
+  'score',
+  'best_score',
+  'look_n',
+  'mirror_ok',
 ] as const
 
 function text(value: unknown): string | null {
@@ -216,6 +235,13 @@ export function createQwenDecisions(options: {
           override: text(row.override),
           mirror_action: text(row.mirror_action),
           mirror_p: num(row.mirror_p),
+          lean: num(row.lean),
+          lean_m: num(row.lean_m),
+          lean_num: num(row.lean_num),
+          score: num(row.score),
+          best_score: num(row.best_score),
+          look_n: num(row.look_n),
+          mirror_ok: num(row.mirror_ok),
         })
       }
       const skipped: QwenSkipped[] = []

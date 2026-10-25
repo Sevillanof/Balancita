@@ -73,26 +73,28 @@ def _positive(text, name):
 
 def apply_overrides(cfg, env=None):
     """The config with what the owner may change by environment: ``QWEN_LIVE_NOTIONAL_USD`` (size per trade, default the
-    config's 100), ``QWEN_LIVE_LEVERAGE`` (default 1) and ``QWEN_LIVE_PRODUCTS`` (comma separated, default BTC and ETH) and ``QWEN_LIVE_FORCE_SIDE_AFTER_H`` (hours without opening before the
-    forced LARGO / CORTO question; 0 = off). The
+    config's 100), ``QWEN_LIVE_LEVERAGE`` (default 1) and ``QWEN_LIVE_PRODUCTS`` (comma separated, default BTC and ETH) and the opportunity window of the entry search: ``QWEN_LIVE_FORCE_WINDOW_H`` (length, 0 = window off),
+    ``QWEN_LIVE_FORCE_MIN_LOOKS`` and ``QWEN_LIVE_FORCE_SIDE_AFTER_H`` (optional start delay in hours, default 0). The
     only check is that sizes are positive numbers and products look like Kraken ids (``futures_costs`` prices any of them): there are no caps on purpose. A changed
-    size, leverage or product list changes the config identity, so a database made with other values is refused; the forced-entry
-    hours do not (they live in the ``live`` section, outside ``config_hash``)."""
+    size, leverage or product list changes the config identity, so a database made with other values is refused; the window
+    settings do not (they live in the ``live`` section, outside ``config_hash``)."""
     env = os.environ if env is None else env
     out = copy_config(cfg)
     notional = (env.get("QWEN_LIVE_NOTIONAL_USD") or "").strip()
     leverage = (env.get("QWEN_LIVE_LEVERAGE") or "").strip()
     products = (env.get("QWEN_LIVE_PRODUCTS") or "").strip()
-    force = (env.get("QWEN_LIVE_FORCE_SIDE_AFTER_H") or "").strip()
-    if force:
+    for name, key in (("QWEN_LIVE_FORCE_SIDE_AFTER_H", "force_side_after_h"), ("QWEN_LIVE_FORCE_WINDOW_H", "force_window_h"),
+                      ("QWEN_LIVE_FORCE_MIN_LOOKS", "force_min_looks")):
+        raw = (env.get(name) or "").strip()
+        if not raw:
+            continue
         try:
-            hours = D(force)
+            number = D(raw)
         except Exception:
-            hours = None
-        if hours is None or not hours.is_finite() or hours < 0:
-            raise qt.TraderError("QWEN_LIVE_FORCE_SIDE_AFTER_H: tiene que ser un número de horas, 0 o más (0 lo apaga); "
-                                 "llegó {!r}".format(force))
-        out.setdefault("live", {})["force_side_after_h"] = float(hours)
+            number = None
+        if number is None or not number.is_finite() or number < 0:
+            raise qt.TraderError("{}: tiene que ser un número, 0 o más; llegó {!r}".format(name, raw))
+        out.setdefault("live", {})[key] = float(number)
     out["notional_usd"] = format(_positive(notional or out["notional_usd"], "QWEN_LIVE_NOTIONAL_USD").normalize(), "f")
     out["leverage"] = format(_positive(leverage or out.get("leverage", "1"), "QWEN_LIVE_LEVERAGE").normalize(), "f")
     if products:
@@ -175,6 +177,7 @@ CREATE TABLE IF NOT EXISTS decisions(
   orders_json TEXT, override TEXT, reason TEXT, reason_json TEXT, mirror_action TEXT, mirror_p REAL, wake_json TEXT,
   state_text TEXT, state_hash TEXT, latency_ms INTEGER, threshold REAL, prompt_version TEXT, prompt_hash TEXT, model TEXT,
   config_hash TEXT, position_json TEXT, net_bp_now REAL, trade_no INTEGER,
+  lean REAL, lean_m REAL, lean_num REAL, score REAL, best_score REAL, look_n INTEGER, mirror_ok INTEGER,
   PRIMARY KEY(product, bucket_ms));
 CREATE TABLE IF NOT EXISTS skipped(
   product TEXT NOT NULL, bucket_ms INTEGER NOT NULL, t_ms INTEGER NOT NULL, at_ms INTEGER NOT NULL, reason TEXT NOT NULL,
@@ -188,8 +191,14 @@ CREATE TABLE IF NOT EXISTS trades(
   PRIMARY KEY(product, trade_no));
 CREATE TABLE IF NOT EXISTS trader_state(
   product TEXT PRIMARY KEY, last_fed_ms INTEGER, trade_seq INTEGER NOT NULL, cooldown_until INTEGER NOT NULL,
-  last_call_ms INTEGER, position_json TEXT, updated_ms INTEGER NOT NULL);
+  last_call_ms INTEGER, position_json TEXT, updated_ms INTEGER NOT NULL, window_json TEXT);
 """
+
+_ADDED_COLUMNS = {
+    "decisions": (("lean", "REAL"), ("lean_m", "REAL"), ("lean_num", "REAL"), ("score", "REAL"), ("best_score", "REAL"),
+                  ("look_n", "INTEGER"), ("mirror_ok", "INTEGER")),
+    "trader_state": (("window_json", "TEXT"),),
+}
 
 _TRADE_COLUMNS = ("status", "side", "entry_ms", "exit_ms", "entry_px", "exit_px", "qty", "notional_usd", "gross_usd",
                   "fees_usd", "funding_usd", "net_usd", "net_bp", "funding_status", "closed_by", "exit_reason",
@@ -223,7 +232,17 @@ class LiveStore:
             os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
             self.db = sqlite3.connect(path, timeout=30)
             self.db.executescript(_SCHEMA_SQL)
+            self._add_missing_columns()
         self.db.row_factory = sqlite3.Row
+
+    def _add_missing_columns(self):
+        """Bases written by an older version get the new columns (appended, NULL): they stay valid."""
+        for table, columns in _ADDED_COLUMNS.items():
+            have = {r[1] for r in self.db.execute("PRAGMA table_info({})".format(table))}
+            for name, kind in columns:
+                if name not in have:
+                    self.db.execute("ALTER TABLE {} ADD COLUMN {} {}".format(table, name, kind))
+        self.db.commit()
 
     def close(self):
         self.db.close()
@@ -259,9 +278,11 @@ class LiveStore:
 
     def save_state(self, product, trader, last_fed_ms, now_ms):
         self.db.execute(
-            "INSERT OR REPLACE INTO trader_state VALUES(?,?,?,?,?,?,?)",
+            "INSERT OR REPLACE INTO trader_state(product, last_fed_ms, trade_seq, cooldown_until, last_call_ms, position_json, "
+            "updated_ms, window_json) VALUES(?,?,?,?,?,?,?,?)",
             (product, last_fed_ms, trader.trade_seq, trader.cooldown_until, trader.last_call_ms,
-             None if trader.position is None else position_to_json(trader.position), now_ms))
+             None if trader.position is None else position_to_json(trader.position), now_ms,
+             None if trader.window is None else json.dumps(trader.window)))
 
     # ---- decisions and skipped wakes
 
@@ -278,14 +299,20 @@ class LiveStore:
         orders = answer.get("orders") or [{}]
         reason_answer = event.get("reason_answer")
         self.db.execute(
-            "INSERT OR IGNORE INTO decisions VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "INSERT OR IGNORE INTO decisions(product, bucket_ms, t_ms, decided_at_ms, kind, action, model_action, p_action, "
+            "confidence, probs_json, orders_json, override, reason, reason_json, mirror_action, mirror_p, wake_json, state_text, "
+            "state_hash, latency_ms, threshold, prompt_version, prompt_hash, model, config_hash, position_json, net_bp_now, "
+            "trade_no, lean, lean_m, lean_num, score, best_score, look_n, mirror_ok) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (product, event["t_ms"] - BUCKET_MS, event["t_ms"], now_ms, event["kind"], event["action"],
              event.get("model_action"), event.get("p_action"), answer.get("confidence"),
              json.dumps(answer.get("probabilities")), json.dumps(orders), event.get("override"), event.get("reason"),
              json.dumps(reason_answer), event.get("mirror_action"), event.get("mirror_p"), json.dumps(event.get("wake")),
              event.get("state_text"), event.get("state_hash"), answer.get("latency_ms"), event.get("threshold"),
              str(meta["prompt_version"]), orders[0].get("prompt_hash"), meta["model"], meta["config_hash"],
-             json.dumps(event.get("position")), event.get("net_bp_now"), event.get("trade_no")))
+             json.dumps(event.get("position")), event.get("net_bp_now"), event.get("trade_no"), event.get("lean"),
+             event.get("lean_m"), event.get("lean_num"), event.get("score"), event.get("best_score"), event.get("look_n"),
+             None if event.get("mirror_ok") is None else int(event["mirror_ok"])))
 
     def put_skipped(self, product, t_ms, kind, detail, wake, now_ms):
         self.db.execute("INSERT OR IGNORE INTO skipped VALUES(?,?,?,?,?,?,?)",
@@ -439,9 +466,13 @@ class LiveOperator:
                 trader.last_call_ms = state["last_call_ms"]
                 if state["position_json"]:
                     trader.position = position_from_json(state["position_json"])
+                if state.get("window_json"):
+                    trader.window = json.loads(state["window_json"])
                 last_fed = state["last_fed_ms"]
-            hours = float((self.cfg.get("live") or {}).get("force_side_after_h") or 0)
+            live_cfg = self.cfg.get("live") or {}
+            hours = float(live_cfg.get("force_side_after_h") or 0)
             trader.force_idle_ms = int(hours * HOUR_MS) if hours > 0 else None
+            trader.window_on = float(live_cfg.get("force_window_h") or 0) > 0
             last_open = self.store.last_entry_ms(product)
             trader.last_open_ms = last_open
             trader.idle_since_ms = now                    # no opening on record: counted from this start
@@ -557,7 +588,11 @@ class LiveOperator:
                         "" if event["action"] == event.get("model_action") or not event.get("model_action")
                         else " [el modelo dijo {}]".format(event["model_action"]),
                         event.get("p_action") or 0.0, event["answer"]["confidence"],
-                        " — entrada forzada: llevaba {} h sin operar".format(event["idle_hours"]) if event.get("forced")
+                        " — entró en la mejor ocasión de la ventana (puntaje {:.3f}, chequeo {})".format(
+                            event["score"], event["look_n"]) if event.get("forced")
+                        else " — mirando la mejor ocasión (chequeo {}: puntaje {:.3f}, mejor {:.3f}, espejo {})".format(
+                            event["look_n"], event["score"], event["best_score"], "coincide" if event["mirror_ok"] else "no coincide")
+                        if event.get("override") == "ventana_mirando"
                         else "" if not event.get("override") else " — sin operar: " + str(event["override"])))
             position = trader.position
             if position is not None:

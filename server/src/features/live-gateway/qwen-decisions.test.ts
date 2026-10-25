@@ -92,6 +92,38 @@ describe('createQwenDecisions: why it waited', () => {
     expect(late).toMatchObject({ override: null, probabilities: null })
   })
 
+  it('delivers the opportunity window fields and reads them as null on a base without them', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'qwen-live-'))
+    dirs.push(dir)
+    const path = join(dir, 'live.sqlite')
+    const db = new DatabaseSync(path)
+    db.exec(`CREATE TABLE decisions(
+      product TEXT, bucket_ms INTEGER, t_ms INTEGER, decided_at_ms INTEGER, action TEXT,
+      confidence REAL, latency_ms INTEGER, prompt_version TEXT, reason TEXT, override TEXT,
+      lean REAL, lean_m REAL, lean_num REAL, score REAL, best_score REAL, look_n INTEGER, mirror_ok INTEGER);
+      CREATE TABLE skipped(product TEXT, bucket_ms INTEGER, t_ms INTEGER, reason TEXT, detail TEXT)`)
+    db.prepare(
+      `INSERT INTO decisions VALUES('PF_XBTUSD',0,?,?,'ESPERAR',0.5,10,'4',NULL,'ventana_mirando',0.3,-0.1,0.2,0.2,0.4,3,1)`,
+    ).run(MIN15, MIN15 + 1)
+    db.close()
+    const result = createQwenDecisions({ liveDbPath: path }).report('PF_XBTUSD')
+    if (result.status !== 'ok') throw new Error('expected ok')
+    expect(result.decisions[0]).toMatchObject({
+      override: 'ventana_mirando',
+      lean: 0.3,
+      lean_m: -0.1,
+      lean_num: 0.2,
+      score: 0.2,
+      best_score: 0.4,
+      look_n: 3,
+      mirror_ok: 1,
+    })
+    const old = seed([['PF_XBTUSD', MIN15, 'ESPERAR', 0.5]])
+    const older = createQwenDecisions({ liveDbPath: old }).report('PF_XBTUSD')
+    if (older.status !== 'ok') throw new Error('expected ok')
+    expect(older.decisions[0]).toMatchObject({ score: null, look_n: null })
+  })
+
   it('still reads an older base without those columns', () => {
     const path = seed([['PF_XBTUSD', MIN15, 'ESPERAR', 0.5]])
     const result = createQwenDecisions({ liveDbPath: path }).report('PF_XBTUSD')

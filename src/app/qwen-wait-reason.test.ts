@@ -125,3 +125,41 @@ describe('qwenAnalyses with reasons', () => {
     expect(out[1]!.runtime_version).toBeUndefined()
   })
 })
+
+describe('waitReason: ventana de oportunidad', () => {
+  it('dice cuánto vale la ocasión y cuál es la mejor hasta ahora', () => {
+    const text = waitReason({
+      chosen: 'ESPERAR',
+      override: 'ventana_mirando',
+      look_n: 4,
+      score: 0.1234,
+      best_score: 0.5,
+      mirror_ok: 1,
+    })
+    expect(text).toContain('Mirando la mejor ocasión (mirada 4)')
+    expect(text).toContain('vale 0,12')
+    expect(text).toContain('mejor candidata hasta ahora vale 0,50')
+  })
+
+  it('dice que el espejo no coincidió y que no entra', () => {
+    const text = waitReason({
+      chosen: 'ESPERAR',
+      override: 'ventana_mirando',
+      lean_num: -0.3,
+      mirror_ok: 0,
+    })
+    expect(text).toContain('Se inclinaba CORTO')
+    expect(text).toContain('el espejo no coincidió')
+  })
+
+  it('cuenta la entrada y deja legible la entrada forzada vieja', () => {
+    expect(
+      waitReason({ chosen: 'LARGO', override: 'entrada_ventana', score: 0.31 }),
+    ).toBe(
+      'Entró LARGO en la ventana de oportunidad, con una ocasión de 0,31, con el espejo coincidiendo.',
+    )
+    expect(
+      waitReason({ chosen: 'CORTO', override: 'entrada_forzada' }),
+    ).toContain('Entró por inactividad')
+  })
+})
