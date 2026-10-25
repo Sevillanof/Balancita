@@ -427,11 +427,12 @@ class OpportunityWindowTests(unittest.TestCase):
     """Fran's rule: at least one trade a day, but choosing the moment. After ``force_side_after_h`` without opening, a window
     opens: every 15 min wake asks LARGO / CORTO on the real numbers and on the mirror and enters only on a record candidate."""
 
-    def window_env(self, plan, delay=0, window_h=12, min_looks=6, db=None):
+    def window_env(self, plan, delay=0, window_h=12, min_looks=6, db=None, min_score=0.0, neutral=0.05):
         """One product (the prompts of the fake model are counted in order). ``plan(look, mirrored)`` is p(LARGO) of that
         question; both option orders get the same answer, so the mean is that number. Looks are 0-based."""
         cfg = live.apply_overrides(LIVE_CFG, {"QWEN_LIVE_FORCE_SIDE_AFTER_H": str(delay), "QWEN_LIVE_PRODUCTS": "PF_XBTUSD"})
         cfg["live"]["force_window_h"], cfg["live"]["force_min_looks"] = window_h, min_looks
+        cfg["live"]["force_min_score"], cfg["live"]["force_neutral_lean"] = min_score, neutral
         cfg["runtime"]["concurrent_orders"] = False                 # deterministic prompt order
         state = {"n": 0}
 
@@ -508,6 +509,53 @@ class OpportunityWindowTests(unittest.TestCase):
         self.assertAlmostEqual(weak["best_score"], 0.50)                # "mejor hasta ahora"
         self.assertEqual(weak["mirror_ok"], 1)                          # a candidate, but not a record: waits
         self.assertEqual(len(env.rows("SELECT * FROM trades")), 1)
+
+    def test_a_neutral_real_lean_with_a_sure_mirror_is_a_short_candidate(self):
+        """Datos reales de la base: con el estado real 50/50 (lean +0,001 / +0,003 / ruido negativo) y con el espejado LARGO casi seguro."""
+        reals = [0.5005, 0.5015, 0.4990, 0.5010, 0.4995, 0.5008, 0.5012, 0.5003]   # lean = 2p - 1: +0,001, +0,003, -0,002...
+        mirrors = [0.945, 0.97, 0.995, 1.0 - 1e-9, 0.99, 0.95, 0.98, 0.945]          # lean_m 0,89 a 1,0
+
+        def plan(look, mirrored):
+            return mirrors[min(look, 7)] if mirrored else reals[min(look, 7)]
+        env = self.window_env(plan, min_looks=3, min_score=0.15)
+        env.op.start()
+        env.advance(4 * 15)
+        looks = self.looks(env)
+        self.assertGreaterEqual(len(looks), 4)
+        for r in looks:
+            self.assertEqual(r["mirror_ok"], 1)                           # candidates although the real lean is noise
+            self.assertLess(r["lean_num"], 0)                              # side CORTO
+            self.assertGreater(r["score"], 0.4)
+        entry = looks[-1]
+        self.assertEqual((entry["override"], entry["look_n"]), ("entrada_ventana", 4))
+        self.assertEqual(env.rows("SELECT side FROM trades")[0]["side"], "SHORT")
+
+    def test_the_real_lean_counts_as_a_side_only_from_the_neutral_threshold(self):
+        def plan_for(p_real):
+            return lambda look, mirrored: 0.95 if mirrored else p_real
+        for p_real, ok in ((0.52, 1), (0.53, 0)):                          # lean 0,04 neutral; lean 0,06 repeats the mirror's side
+            env = self.window_env(plan_for(p_real), min_looks=1, min_score=0.15)
+            env.op.start()
+            env.advance(15)
+            self.assertEqual([r["mirror_ok"] for r in self.looks(env)], [ok], p_real)
+
+    def test_a_candidate_needs_the_minimum_score(self):
+        def plan(look, mirrored):
+            real, mirror = self.candidate(0.10)                            # contradicts, but a score of only 0,10
+            return mirror if mirrored else real
+        env = self.window_env(plan, min_looks=1, min_score=0.15)
+        env.op.start()
+        env.advance(4 * 15)
+        looks = self.looks(env)
+        self.assertEqual({r["mirror_ok"] for r in looks}, {0})
+        self.assertEqual({r["override"] for r in looks}, {"ventana_mirando"})
+        self.assertEqual(env.rows("SELECT * FROM trades"), [])
+        cfg = live.apply_overrides(LIVE_CFG, {"QWEN_LIVE_FORCE_NEUTRAL_LEAN": "0.1", "QWEN_LIVE_FORCE_MIN_SCORE": "0.3"})
+        self.assertEqual((cfg["live"]["force_neutral_lean"], cfg["live"]["force_min_score"]), (0.1, 0.3))
+        self.assertEqual((LIVE_CFG["live"]["force_neutral_lean"], LIVE_CFG["live"]["force_min_score"]), (0.05, 0.15))
+        for name in ("QWEN_LIVE_FORCE_NEUTRAL_LEAN", "QWEN_LIVE_FORCE_MIN_SCORE"):
+            with self.assertRaises(qt.TraderError):
+                live.apply_overrides(LIVE_CFG, {name: "-1"})
 
     def test_a_non_candidate_score_is_recorded_but_does_not_raise_the_bar(self):
         scores = [None, 0.10, 0.12, 0.14]                 # look 1: high score but the mirror does not contradict
