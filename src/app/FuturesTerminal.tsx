@@ -23,7 +23,11 @@ import SelectedDecision from './SelectedDecision.tsx'
 import { markerGap, markerGapNote } from './terminal-markers.ts'
 import TerminalMarketChart from './TerminalMarketChart.tsx'
 import { approvedChartData, isApprovedAnalysis } from './terminal-approved.ts'
-import { qwenNotice, useQwenDecisions } from './useQwenDecisions.ts'
+import {
+  qwenHealthNotice,
+  qwenNotice,
+  useQwenDecisions,
+} from './useQwenDecisions.ts'
 import QwenTradesPanel from './QwenTradesPanel.tsx'
 import {
   analysesNotice,
@@ -484,6 +488,7 @@ export default function FuturesTerminal({
                     rows={decisionRows}
                     selectedId={selectedId}
                     onSelect={selectAnalysis}
+                    health={qwenHealthNotice(qwenSource, displayClock)}
                     notice={
                       engineOff && !analyses.length
                         ? 'Motor de decisiones apagado. Solo se muestran velas y precio públicos de Kraken Futures; no hay análisis, cuenta ni operaciones simuladas.'

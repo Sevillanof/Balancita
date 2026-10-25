@@ -75,9 +75,19 @@ export function qwenAnalyses(payload: unknown): Record<string, unknown>[] {
   )
 }
 
+function okSource(heartbeat: unknown): QwenSource {
+  const beat = record(heartbeat)
+  return {
+    state: 'ok',
+    heartbeatMs:
+      typeof beat.heartbeat_ms === 'number' ? beat.heartbeat_ms : null,
+    modelOk: typeof beat.model_ok === 'boolean' ? beat.model_ok : null,
+  }
+}
+
 export type QwenSource =
   | { state: 'loading' }
-  | { state: 'ok' }
+  | { state: 'ok'; heartbeatMs?: number | null; modelOk?: boolean | null }
   | { state: 'off'; reason: string }
   | { state: 'error' }
 
@@ -89,6 +99,25 @@ export function qwenNotice(source: QwenSource, rows: number): string | null {
   if (source.state === 'error')
     return 'No se pudieron leer las decisiones de Qwen del gateway.'
   return 'Qwen todavía no decidió nada para este producto. Mira el mercado cada 15 minutos y solo actúa cuando ve una ventaja clara.'
+}
+
+const STALE_HEARTBEAT_MS = 5 * 60_000
+
+/**
+ * Plain-words warning when the operator process is silent or its model is out,
+ * or null. Needs a heartbeat to say anything: an old base without one says nothing.
+ */
+export function qwenHealthNotice(
+  source: QwenSource,
+  nowMs: number,
+): string | null {
+  if (source.state !== 'ok') return null
+  const beat = source.heartbeatMs
+  if (typeof beat === 'number' && nowMs - beat >= STALE_HEARTBEAT_MS)
+    return `Qwen sin latidos hace ${Math.floor((nowMs - beat) / 60_000)} min: el proceso no está escribiendo. Si pnpm dev sigue corriendo, se está relanzando solo.`
+  if (source.modelOk === false)
+    return 'El modelo local no responde. Qwen sigue vivo: anota cada despertar como omitido y retoma solo cuando el modelo vuelva.'
+  return null
 }
 
 export function useQwenDecisions(
@@ -118,7 +147,7 @@ export function useQwenDecisions(
           rows: qwenAnalyses(body),
           source:
             status === 'ok'
-              ? { state: 'ok' }
+              ? okSource(record(body).heartbeat)
               : { state: 'off', reason: String(record(body).reason ?? '') },
         })
       } catch {

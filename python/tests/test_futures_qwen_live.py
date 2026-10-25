@@ -423,6 +423,121 @@ class SizeLeverageProductsTests(unittest.TestCase):
         self.assertIn("tamaño fijo de 1000 USD", env.rows("SELECT state_text FROM decisions")[0]["state_text"])
 
 
+class ResilienceTests(unittest.TestCase):
+    def test_the_model_falls_and_comes_back_the_process_stays_alive_and_resumes(self):
+        clock = [0.0]
+        provider = llm.FakeProvider(entries=Policy(), healthy=True)
+        env = make(self, provider=provider, clock=lambda: clock[0])
+        env.op.start()
+        env.advance(30)
+        before = len(env.rows("SELECT * FROM decisions WHERE product='PF_XBTUSD'"))
+        self.assertGreater(before, 0)
+        provider.healthy = False
+        for _ in range(8):                                                   # llama-server restarting: 40 minutes
+            clock[0] += 300
+            env.advance(5)
+        env.advance(5)
+        self.assertFalse(env.store.meta()["model_ok"])
+        self.assertGreater(env.store.meta()["heartbeat_ms"], 0)               # still alive while the model is out
+        skipped = env.rows("SELECT reason FROM skipped WHERE product='PF_XBTUSD'")
+        self.assertTrue(skipped and {r["reason"] for r in skipped} == {"modelo_caido"})
+        down_lines = [m for m in env.logs if "el modelo local no responde" in m]
+        self.assertEqual(len(down_lines), 1)                                  # one line per change, not one per poll
+        provider.healthy = True
+        clock[0] += 300
+        env.advance(30)
+        self.assertTrue(env.store.meta()["model_ok"])
+        self.assertEqual(len([m for m in env.logs if "volvió a responder" in m]), 1)
+        after = len(env.rows("SELECT * FROM decisions WHERE product='PF_XBTUSD'"))
+        self.assertGreater(after, before)                                     # decisions resume
+        keys = env.rows("SELECT product, bucket_ms FROM decisions")
+        self.assertEqual(len(keys), len({(k["product"], k["bucket_ms"]) for k in keys}))   # nothing duplicated
+        self.assertEqual(env.rows("SELECT * FROM errors"), [])                # a model outage is not an unexpected error
+
+    def test_an_exception_in_a_cycle_is_recorded_and_the_loop_goes_on(self):
+        env = make(self)
+        env.op.start()
+        env.advance(15)
+        real_bars = env.feed.bars
+        state = {"boom": 2}
+
+        def flaky(product, from_ms, to_ms):
+            if state["boom"] > 0:
+                state["boom"] -= 1
+                raise RuntimeError("Kraken se cayó a mitad de camino")
+            return real_bars(product, from_ms, to_ms)
+        env.feed.bars = flaky
+        env.advance(30)                                                        # polls that explode do not raise
+        errors = env.rows("SELECT * FROM errors")
+        self.assertTrue(errors)
+        self.assertEqual(errors[0]["place"], "ciclo")
+        self.assertIn("Kraken se cayó", errors[0]["detail"])
+        self.assertGreater(env.store.meta()["last_error_ms"], 0)
+        self.assertEqual(len([m for m in env.logs if "Kraken se cayó" in m]), 2)   # one per product, not one per poll
+        env.advance(30)                                                        # it came back by itself
+        self.assertTrue(any("volvió a andar" in m for m in env.logs))
+        keys = env.rows("SELECT product, bucket_ms FROM decisions")
+        self.assertEqual(len(keys), len({(k["product"], k["bucket_ms"]) for k in keys}))
+        self.assertEqual(max(r["t_ms"] for r in env.rows("SELECT t_ms FROM decisions")), env.now[0] - (env.now[0] % live.BUCKET_MS))
+
+    def test_a_write_that_fails_rebuilds_the_product_from_the_database_without_duplicates_or_lost_trades(self):
+        env = make(self, policy=Policy(flat="LARGO"))
+        env.op.start()
+        real_put = env.store.put_decision
+        state = {"boom": True}
+
+        def busy(*args, **kwargs):
+            if state["boom"]:
+                state["boom"] = False
+                raise sqlite3.OperationalError("database is locked")
+            return real_put(*args, **kwargs)
+        env.store.put_decision = busy
+        env.advance(60)
+        self.assertEqual(env.rows("SELECT place, kind FROM errors")[0]["kind"], "OperationalError")
+        trades = env.rows("SELECT product, trade_no, status FROM trades")
+        self.assertEqual(len(trades), len({(t["product"], t["trade_no"]) for t in trades}))
+        for product in PRODUCTS:
+            decisions = env.rows("SELECT bucket_ms FROM decisions WHERE product=?", product)
+            self.assertEqual(len(decisions), len({d["bucket_ms"] for d in decisions}))
+        self.assertTrue(env.rows("SELECT * FROM decisions"))                   # it kept deciding afterwards
+
+    def test_a_public_feed_that_is_down_at_start_does_not_end_the_process(self):
+        env = make(self)
+        real_bars = env.feed.bars
+        env.feed.bars = lambda *a: (_ for _ in ()).throw(OSError("sin red"))
+        env.op.start()                                                          # does not raise
+        self.assertEqual(env.op.traders, {})
+        self.assertTrue(env.rows("SELECT * FROM errors"))
+        env.feed.bars = real_bars
+        env.advance(15)
+        self.assertEqual(set(env.op.traders), set(env.cfg["products"]))
+        self.assertTrue(any("volvió a andar" in m for m in env.logs))
+
+    def test_run_survives_failing_cycles_with_a_bounded_backoff_and_ends_only_by_signal(self):
+        env = make(self)
+        calls, sleeps = [], []
+
+        def poll():
+            calls.append(1)
+            raise RuntimeError("explota siempre")
+        env.op.poll = poll
+        live.run(env.op, sleep=sleeps.append, max_polls=9)
+        self.assertEqual(len(calls), 9)
+        self.assertTrue(all(s <= 60 for s in sleeps))
+        self.assertEqual(sleeps[0], min(60.0, env.op.poll_s * 2))
+        self.assertEqual(sleeps, sorted(sleeps))                               # grows, then stays at the cap
+        stopper = []
+        env2 = make(self)
+        live.run(env2.op, stop=lambda: bool(stopper) or stopper.append(1), sleep=lambda s: None)   # stops by signal
+        self.assertTrue(env2.op.ready)
+
+    def test_a_database_of_another_config_still_ends_the_process(self):
+        env = make(self)
+        env.store.set_meta("config_hash", "otra")
+        with self.assertRaises(qt.TraderError):
+            live.run(env.op, sleep=lambda s: None, max_polls=1)
+
+
 class OpportunityWindowTests(unittest.TestCase):
     """Fran's rule: at least one trade a day, but choosing the moment. After ``force_side_after_h`` without opening, a window
     opens: every 15 min wake asks LARGO / CORTO on the real numbers and on the mirror and enters only on a record candidate."""

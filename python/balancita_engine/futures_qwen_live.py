@@ -190,6 +190,9 @@ CREATE TABLE IF NOT EXISTS trades(
   entry_p REAL, hold_min INTEGER, mfe_bp REAL, mae_bp REAL, stop_px REAL, max_hold_ms INTEGER, mark_px REAL,
   mark_ms INTEGER, net_now_usd TEXT, opened_at_ms INTEGER, closed_at_ms INTEGER, leverage TEXT, margin_usd TEXT,
   PRIMARY KEY(product, trade_no));
+CREATE TABLE IF NOT EXISTS errors(
+  id INTEGER PRIMARY KEY AUTOINCREMENT, at_ms INTEGER NOT NULL, place TEXT NOT NULL, product TEXT, kind TEXT NOT NULL,
+  detail TEXT);
 CREATE TABLE IF NOT EXISTS trader_state(
   product TEXT PRIMARY KEY, last_fed_ms INTEGER, trade_seq INTEGER NOT NULL, cooldown_until INTEGER NOT NULL,
   last_call_ms INTEGER, position_json TEXT, updated_ms INTEGER NOT NULL, window_json TEXT);
@@ -256,6 +259,11 @@ class LiveStore:
     def set_meta(self, key, value):
         with self.db:
             self.db.execute("INSERT OR REPLACE INTO meta VALUES(?,?)", (key, json.dumps(value)))
+
+    def put_error(self, at_ms, place, product, kind, detail):
+        with self.db:
+            self.db.execute("INSERT INTO errors(at_ms, place, product, kind, detail) VALUES(?,?,?,?,?)",
+                            (at_ms, place, product, kind, str(detail)[:2000]))
 
     def check_identity(self, cfg):
         """A live database belongs to one config: a position opened under other rules must not be judged under these."""
@@ -449,6 +457,10 @@ class LiveOperator:
         self.traders = {}
         self.funding_checked_ms = 0
         self.ready = False
+        self.model_ok = None                              # None: not probed yet
+        self._probe_failures, self._next_probe = 0, 0.0
+        self._errors = {}
+        self.failed_cycle = False
 
     # ---- start
 
@@ -458,62 +470,160 @@ class LiveOperator:
         now = self.now_ms()
         self._refresh_funding(now, first=True)
         for product in self.cfg["products"]:
-            trader = qt.Trader(self.cfg, product, self.gate, self._funding[product], key=product,
-                               entry_threshold=self.cfg["entry_threshold"])
-            state = self.store.load_state(product)
-            last_fed = None
-            if state is not None:
-                trader.trade_seq, trader.cooldown_until = state["trade_seq"], state["cooldown_until"]
-                trader.last_call_ms = state["last_call_ms"]
-                if state["position_json"]:
-                    trader.position = position_from_json(state["position_json"])
-                if state.get("window_json"):
-                    trader.window = json.loads(state["window_json"])
-                last_fed = state["last_fed_ms"]
-            live_cfg = self.cfg.get("live") or {}
-            hours = float(live_cfg.get("force_side_after_h") or 0)
-            trader.force_idle_ms = int(hours * HOUR_MS) if hours > 0 else None
-            trader.window_on = float(live_cfg.get("force_window_h") or 0) > 0
-            last_open = self.store.last_entry_ms(product)
-            trader.last_open_ms = last_open
-            trader.idle_since_ms = now                    # no opening on record: counted from this start
-            self.traders[product] = trader
-            bars = fill_gaps(self.feed.bars(product, (now // BAR_MS) * BAR_MS - self.warmup_ms, now), BAR_MS)
-            bars = [b for b in bars if b["bucket_start"] + BAR_MS <= now]
-            warm = [b for b in bars if (b["bucket_start"] <= last_fed if last_fed is not None
-                                        else now - (b["bucket_start"] + BAR_MS) > self.max_late_ms)]
-            for bar in warm:
-                trader.feed(bar, trade=False)
-            self.log("Qwen en vivo: {} calentado con {} velas de 5 min{}.".format(
-                product, len(warm), "" if trader.position is None else
-                " (posición {} recuperada, abierta desde {})".format(
-                    "LARGO" if trader.position.side == "LONG" else "CORTO", _hhmm(trader.position.entry_ms))))
-            for bar in bars[len(warm):]:
-                self._process(product, bar)
+            self._try_start(product, now)
         self.ready = True
+
+    def _try_start(self, product, now):
+        """A product that cannot start (public feed down, busy base) stays out and is tried again every poll."""
+        try:
+            self._start_product(product, now)
+        except qt.TraderError:
+            raise
+        except Exception as error:                      # noqa: BLE001 - the process must stay alive
+            self.traders.pop(product, None)
+            self._failure("arranque", product, error)
+
+    def _start_product(self, product, now):
+        trader = qt.Trader(self.cfg, product, self.gate, self._funding[product], key=product,
+                           entry_threshold=self.cfg["entry_threshold"])
+        state = self.store.load_state(product)
+        last_fed = None
+        if state is not None:
+            trader.trade_seq, trader.cooldown_until = state["trade_seq"], state["cooldown_until"]
+            trader.last_call_ms = state["last_call_ms"]
+            if state["position_json"]:
+                trader.position = position_from_json(state["position_json"])
+            if state.get("window_json"):
+                trader.window = json.loads(state["window_json"])
+            last_fed = state["last_fed_ms"]
+        live_cfg = self.cfg.get("live") or {}
+        hours = float(live_cfg.get("force_side_after_h") or 0)
+        trader.force_idle_ms = int(hours * HOUR_MS) if hours > 0 else None
+        trader.window_on = float(live_cfg.get("force_window_h") or 0) > 0
+        last_open = self.store.last_entry_ms(product)
+        trader.last_open_ms = last_open
+        trader.idle_since_ms = now                    # no opening on record: counted from this start
+        self.traders[product] = trader
+        bars = fill_gaps(self.feed.bars(product, (now // BAR_MS) * BAR_MS - self.warmup_ms, now), BAR_MS)
+        bars = [b for b in bars if b["bucket_start"] + BAR_MS <= now]
+        warm = [b for b in bars if (b["bucket_start"] <= last_fed if last_fed is not None
+                                    else now - (b["bucket_start"] + BAR_MS) > self.max_late_ms)]
+        for bar in warm:
+            trader.feed(bar, trade=False)
+        self.log("Qwen en vivo: {} calentado con {} velas de 5 min{}.".format(
+            product, len(warm), "" if trader.position is None else
+            " (posición {} recuperada, abierta desde {})".format(
+                "LARGO" if trader.position.side == "LONG" else "CORTO", _hhmm(trader.position.entry_ms))))
+        for bar in bars[len(warm):]:
+            self._process(product, bar)
 
     # ---- one poll
 
     def poll(self):
-        """Looks for newly closed candles and feeds them in order. Failures of the public feed are logged, never fatal."""
+        """Looks for newly closed candles and feeds them in order. Nothing that goes wrong in here ends the process: a
+        failure of one product is recorded in ``errors`` and that product is rebuilt from the database on the next poll
+        (what was not written is asked again; what was written is never asked twice)."""
         now = self.now_ms()
-        if now - self.funding_checked_ms >= self.funding_every_ms:
-            self._refresh_funding(now)
+        self.failed_cycle = False
+        self._check_model()
+        try:
+            if now - self.funding_checked_ms >= self.funding_every_ms:
+                self._refresh_funding(now)
+                self._recovered("funding", None)
+        except Exception as error:                        # noqa: BLE001
+            self._failure("funding", None, error)
         for product in self.cfg["products"]:
-            trader = self.traders[product]
-            try:
-                fresh = self.feed.bars(product, trader.t[-1] + BAR_MS if trader.t else now - self.warmup_ms, now)
-            except (HistoryError, OSError, ValueError) as error:
-                self.log("Qwen en vivo: no se pudieron leer las velas de {} ({}); se reintenta en el próximo ciclo."
-                         .format(product, error))
+            if product not in self.traders:
+                try:
+                    self._try_start(product, now)
+                    if product in self.traders:
+                        self._recovered("arranque", product)
+                except qt.TraderError as error:
+                    self._failure("arranque", product, error)
                 continue
-            for bar in fresh:
-                if bar["bucket_start"] + BAR_MS > now or (trader.t and bar["bucket_start"] <= trader.t[-1]):
-                    continue
-                while trader.t and bar["bucket_start"] > trader.t[-1] + BAR_MS:
-                    self._process(product, _flat_candle(repr(trader.c[-1]), trader.t[-1] + BAR_MS))
-                self._process(product, bar)
-        self.store.set_meta("heartbeat_ms", self.now_ms())
+            try:
+                self._poll_product(product, now)
+                self._recovered("ciclo", product)
+            except Exception as error:                    # noqa: BLE001 - the process must stay alive
+                self.traders.pop(product, None)           # in-memory state may be ahead of the database: rebuild it
+                self._failure("ciclo", product, error)
+        self._heartbeat()
+
+    def _poll_product(self, product, now):
+        trader = self.traders[product]
+        try:
+            fresh = self.feed.bars(product, trader.t[-1] + BAR_MS if trader.t else now - self.warmup_ms, now)
+        except (HistoryError, OSError, ValueError) as error:
+            self.log("Qwen en vivo: no se pudieron leer las velas de {} ({}); se reintenta en el próximo ciclo."
+                     .format(product, error))
+            return
+        for bar in fresh:
+            if bar["bucket_start"] + BAR_MS > now or (trader.t and bar["bucket_start"] <= trader.t[-1]):
+                continue
+            while trader.t and bar["bucket_start"] > trader.t[-1] + BAR_MS:
+                self._process(product, _flat_candle(repr(trader.c[-1]), trader.t[-1] + BAR_MS))
+            self._process(product, bar)
+
+    # ---- resilience: model state, unexpected failures, heartbeat
+
+    def _check_model(self):
+        """Tracks whether llama-server answers /health. One log line per change of state; while it is down the probe backs
+        off (5 s, 10 s ... 60 s). Does not decide anything: each wake still asks for itself."""
+        now = self.clock()
+        if self.model_ok is False and now < self._next_probe:
+            return
+        try:
+            ok = bool(self.provider.health())
+        except Exception:                                  # noqa: BLE001
+            ok = False
+        if ok:
+            self._probe_failures = 0
+        else:
+            self._probe_failures += 1
+            self._next_probe = now + min(60.0, 5.0 * 2 ** (self._probe_failures - 1))
+        if ok != self.model_ok:
+            if ok:
+                if self.model_ok is False:
+                    self.log("Qwen en vivo: el modelo local volvió a responder; se retoma con el próximo despertar.")
+            else:
+                self.log("Qwen en vivo: el modelo local no responde. Sigo vivo, anoto cada despertar como omitido y "
+                         "reintento solo hasta que /health vuelva a dar 200.")
+            self.model_ok = ok
+            self._meta("model_ok", ok)
+            self._meta("model_changed_ms", self.now_ms())
+
+    def _failure(self, place, product, error):
+        """Records an unexpected failure (table ``errors``) and goes on. The same failure is logged and stored once, not once
+        per cycle, until it changes or ten minutes pass; a recovery is logged once too."""
+        key = (place, product)
+        detail = "{}: {}".format(type(error).__name__, error)
+        now = self.now_ms()
+        last = self._errors.get(key)
+        if last is None or last[0] != detail or now - last[1] >= 10 * MINUTE_MS:
+            self._errors[key] = (detail, now)
+            self.log("Qwen en vivo: falló {}{} ({}); sigo vivo y reintento en el próximo ciclo.".format(
+                place, "" if product is None else " de " + product, detail))
+            try:
+                self.store.put_error(now, place, product, type(error).__name__, detail)
+                self.store.set_meta("last_error_ms", now)
+            except Exception as second:                    # noqa: BLE001 - a busy database must not end the loop either
+                self.log("Qwen en vivo: tampoco se pudo anotar el error ({}).".format(second))
+        self.failed_cycle = True
+
+    def _recovered(self, place, product):
+        if self._errors.pop((place, product), None) is not None:
+            self.log("Qwen en vivo: {}{} volvió a andar.".format(place, "" if product is None else " de " + product))
+
+    def _meta(self, key, value):
+        try:
+            self.store.set_meta(key, value)
+        except Exception as error:                         # noqa: BLE001
+            self._failure("meta", None, error)
+
+    def _heartbeat(self):
+        """Last sign of life: the gateway says «Qwen sin latidos hace X min» from it. Written every cycle, with or without
+        a model, so a silent process is told apart from a model that is down."""
+        self._meta("heartbeat_ms", self.now_ms())
 
     def _refresh_funding(self, now, first=False):
         self.funding_checked_ms = now
@@ -683,17 +793,34 @@ def resolve_db(path=None, env=None):
 
 
 def run(operator, *, stop=None, sleep=time.sleep, max_polls=None):
-    """Start, then poll every ``poll_s`` seconds until ``stop()`` is true (or ``max_polls``)."""
-    operator.start()
+    """Start, then poll every ``poll_s`` seconds until ``stop()`` is true (or ``max_polls``). Only a signal, the lock or a
+    wrong database identity end it: an unexpected failure of a cycle is recorded and the loop goes on, with a bounded
+    backoff (poll_s doubling, at most 60 s) while cycles keep failing."""
+    failures = 0
+    while not operator.ready and not (stop and stop()):
+        try:
+            operator.start()
+        except qt.TraderError:
+            raise
+        except Exception as error:                        # noqa: BLE001 - e.g. a busy database at start
+            failures += 1
+            operator.log("Qwen en vivo: no pudo arrancar ({}: {}); reintento.".format(type(error).__name__, error))
+            sleep(min(60.0, operator.poll_s * 2 ** min(failures, 6)))
     operator.log("Qwen en vivo: en marcha. Pregunta al modelo cada 15 minutos (productos: {}).".format(
         ", ".join(operator.cfg["products"])))
-    polls = 0
+    polls, failures = 0, 0
     while not (stop and stop()):
-        operator.poll()
+        try:
+            operator.poll()
+            bad = operator.failed_cycle
+        except Exception as error:                        # noqa: BLE001 - nothing may end the loop
+            operator._failure("ciclo", None, error)
+            bad = True
+        failures = failures + 1 if bad else 0
         polls += 1
         if max_polls is not None and polls >= max_polls:
             break
-        sleep(operator.poll_s)
+        sleep(min(60.0, operator.poll_s * 2 ** min(failures, 6)) if failures else operator.poll_s)
 
 
 def _parser():

@@ -99,11 +99,20 @@ export interface QwenTrade {
   readonly mark_ms: number | null
 }
 
+/** Last sign of life of the operator process (table `meta`); null on a base that never wrote it. */
+export interface QwenHeartbeat {
+  readonly heartbeat_ms: number | null
+  /** Whether llama-server answered /health at the last cycle; null when unknown. */
+  readonly model_ok: boolean | null
+  readonly last_error_ms: number | null
+}
+
 export type QwenDecisionsResponse =
   | {
       readonly status: 'ok'
       readonly decisions: readonly QwenDecision[]
       readonly skipped: readonly QwenSkipped[]
+      readonly heartbeat: QwenHeartbeat
     }
   | { readonly status: 'off' | 'error'; readonly reason: string }
 
@@ -158,6 +167,33 @@ const OPTIONAL_DECISION_COLUMNS = [
   'mirror_ok',
 ] as const
 
+function readMeta(db: DatabaseSync): Record<string, unknown> {
+  try {
+    const out: Record<string, unknown> = {}
+    for (const row of db.prepare('SELECT key, value FROM meta').all()) {
+      const r = rowOf(row)
+      try {
+        out[String(r.key)] = JSON.parse(String(r.value))
+      } catch {
+        // an unreadable value reads as absent
+      }
+    }
+    return out
+  } catch {
+    return {}
+  }
+}
+
+function heartbeatOf(meta: Record<string, unknown>): QwenHeartbeat {
+  const ms = (value: unknown) =>
+    typeof value === 'number' && Number.isFinite(value) ? value : null
+  return {
+    heartbeat_ms: ms(meta.heartbeat_ms),
+    model_ok: typeof meta.model_ok === 'boolean' ? meta.model_ok : null,
+    last_error_ms: ms(meta.last_error_ms),
+  }
+}
+
 function text(value: unknown): string | null {
   return value === null || value === undefined ? null : String(value)
 }
@@ -199,6 +235,7 @@ export function createQwenDecisions(options: {
           )
           .all(product, limit)
           .map((row) => rowOf(row)),
+        meta: readMeta(db),
         skipped: db
           .prepare(
             `SELECT bucket_ms, t_ms, reason, detail
@@ -256,7 +293,12 @@ export function createQwenDecisions(options: {
           detail: text(row.detail) ?? '',
         })
       }
-      return { status: 'ok', decisions, skipped }
+      return {
+        status: 'ok',
+        decisions,
+        skipped,
+        heartbeat: heartbeatOf(opened.value.meta),
+      }
     },
     trades(product, limit = DEFAULT_LIMIT) {
       const bad = invalid(product, limit)
