@@ -1,0 +1,33 @@
+{
+  "version": "indicators.v1",
+  "purge_after_days": 14,
+  "indicators": [
+    {
+      "id": "posicionamiento-1h",
+      "series": "positioning",
+      "products": "pinned",
+      "resolution": "1h",
+      "history_from": "2024-01-01",
+      "consumers": [{ "kind": "chart", "id": "terminal-long-short" }],
+      "state": "active"
+    },
+    {
+      "id": "prima-1h",
+      "series": "premium",
+      "products": "pinned",
+      "resolution": "1h",
+      "history_from": "2022-03-01",
+      "consumers": [{ "kind": "chart", "id": "terminal-prima" }],
+      "state": "active"
+    },
+    {
+      "id": "prima-1m",
+      "series": "premium",
+      "products": "pinned",
+      "resolution": "1m",
+      "keep_days": 7,
+      "consumers": [{ "kind": "chart", "id": "terminal-prima" }],
+      "state": "active"
+    }
+  ]
+}
