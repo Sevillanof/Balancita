@@ -146,6 +146,10 @@ export function aggregate<T extends IndicatorCandle & { open: number }>(
 }
 
 export type ValueArea = { poc: number; vah: number; val: number }
+export type VolumeProfile = ValueArea & {
+  /** Traded volume per price bin, lowest bin first. */
+  bins: Array<{ price: number; volume: number }>
+}
 
 /**
  * Volume profile of `candles`: each candle's volume is spread evenly over the
@@ -153,11 +157,11 @@ export type ValueArea = { poc: number; vah: number; val: number }
  * traded bin) and the value area (smallest run of bins around it holding
  * `share` of the volume, grown toward the heavier neighbour).
  */
-export function valueArea(
+export function volumeProfile(
   candles: readonly IndicatorCandle[],
   bins = 48,
   share = 0.7,
-): ValueArea | null {
+): VolumeProfile | null {
   let low = Infinity
   let high = -Infinity
   for (const candle of candles) {
@@ -199,7 +203,20 @@ export function valueArea(
     poc: low + (poc + 0.5) * step,
     vah: low + (hi + 1) * step,
     val: low + lo * step,
+    bins: volume.map((value, index) => ({
+      price: low + (index + 0.5) * step,
+      volume: value,
+    })),
   }
+}
+
+export function valueArea(
+  candles: readonly IndicatorCandle[],
+  bins = 48,
+  share = 0.7,
+): ValueArea | null {
+  const profile = volumeProfile(candles, bins, share)
+  return profile && { poc: profile.poc, vah: profile.vah, val: profile.val }
 }
 
 /**

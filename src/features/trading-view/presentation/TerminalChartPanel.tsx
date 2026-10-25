@@ -12,6 +12,7 @@ import {
   donchian,
   ema,
   priorDayValueArea,
+  volumeProfile,
   rsi,
   vwap,
 } from '../domain/chart-indicators.ts'
@@ -36,7 +37,13 @@ import {
 import './terminal-chart-panel.css'
 
 type Overlay =
-  'ema9' | 'ema21' | 'bollinger' | 'donchian' | 'vwap' | 'valueArea'
+  | 'ema9'
+  | 'ema21'
+  | 'bollinger'
+  | 'donchian'
+  | 'vwap'
+  | 'valueArea'
+  | 'volumeProfile'
 type Pane = 'flow' | 'oi' | 'liquidations' | 'positioning' | 'premium' | 'rsi'
 
 const OVERLAYS: ReadonlyArray<{ id: Overlay; label: string; color: string }> = [
@@ -46,6 +53,7 @@ const OVERLAYS: ReadonlyArray<{ id: Overlay; label: string; color: string }> = [
   { id: 'donchian', label: 'Donchian 20', color: '#5fc4d3' },
   { id: 'vwap', label: 'VWAP diario', color: '#e98fc0' },
   { id: 'valueArea', label: 'Área de valor (día previo)', color: '#d9a066' },
+  { id: 'volumeProfile', label: 'Perfil de volumen (24 h)', color: '#d9a066' },
 ]
 const PANES: ReadonlyArray<{ id: Pane; label: string; live: boolean }> = [
   { id: 'flow', label: 'Compra/venta', live: true },
@@ -379,6 +387,12 @@ export default function TerminalChartPanel({
     () => overlayLines(shown, settings.overlays),
     [shown, settings.overlays],
   )
+  const profile = useMemo(() => {
+    if (!settings.overlays.includes('volumeProfile') || shown.length === 0)
+      return null
+    const from = shown[shown.length - 1]!.time - 86_400
+    return volumeProfile(shown.filter((candle) => candle.time > from))
+  }, [shown, settings.overlays])
   const panes = useMemo(
     () =>
       flowPanes(
@@ -672,6 +686,7 @@ export default function TerminalChartPanel({
           instrument={instrument}
           initialViewport="approved-terminal"
           overlays={overlays}
+          profile={profile}
           panes={panes}
           priceLines={lines}
           onSelect={(time, markerId) => {

@@ -8,6 +8,7 @@ import {
   createChart,
   createSeriesMarkers,
   type IChartApi,
+  type ISeriesPrimitive,
   type ISeriesApi,
   type SeriesMarker,
   type Time,
@@ -99,6 +100,8 @@ type Props = {
   /** Show the volume histogram under the candles (default true). */
   showVolume?: boolean
   overlays?: readonly ApprovedChartOverlay[]
+  /** Volume by price, drawn as bars on the right edge (does not move the price scale). */
+  profile?: ApprovedVolumeProfile | null
   panes?: readonly ApprovedChartPane[]
   priceLines?: readonly ApprovedChartPriceLine[]
   /**
@@ -108,7 +111,15 @@ type Props = {
   focusOnMount?: boolean
 }
 
+export type ApprovedVolumeProfile = {
+  poc: number
+  vah: number
+  val: number
+  bins: ReadonlyArray<{ price: number; volume: number }>
+}
+
 const PANE_HEIGHT_PX = 110
+const PROFILE_MAX_WIDTH_RATIO = 0.18
 const NO_OVERLAYS: readonly ApprovedChartOverlay[] = []
 const NO_PANES: readonly ApprovedChartPane[] = []
 const NO_LINES: readonly ApprovedChartPriceLine[] = []
@@ -211,6 +222,7 @@ export default function ApprovedTerminalChart({
   ariaLabel,
   showVolume = true,
   overlays = NO_OVERLAYS,
+  profile = null,
   panes = NO_PANES,
   priceLines: fixedLines = NO_LINES,
   focusOnMount = true,
@@ -226,6 +238,8 @@ export default function ApprovedTerminalChart({
     ReturnType<ISeriesApi<'Candlestick'>['createPriceLine']>[]
   >([])
   const overlaySeries = useRef(new Map<string, ISeriesApi<'Line'>>())
+  const profileRef = useRef<ApprovedVolumeProfile | null>(null)
+  const profileRedraw = useRef<(() => void) | null>(null)
   const paneSeries = useRef<ISeriesApi<'Line' | 'Histogram'>[]>([])
   const paneKey = useRef('')
   const fixedPriceLines = useRef<
@@ -429,6 +443,68 @@ export default function ApprovedTerminalChart({
     if (typeof series.attachPrimitive === 'function')
       series.attachPrimitive(painted)
     chart.timeScale().subscribeVisibleLogicalRangeChange(publishPositions)
+    if (typeof series.attachPrimitive === 'function') {
+      let requestUpdate: (() => void) | undefined
+      const primitive: ISeriesPrimitive<Time> = {
+        attached: (param) => {
+          requestUpdate = param.requestUpdate
+        },
+        detached: () => {
+          requestUpdate = undefined
+        },
+        paneViews: () => [
+          {
+            renderer: () => ({
+              draw: (target) =>
+                target.useMediaCoordinateSpace(({ context, mediaSize }) => {
+                  const data = profileRef.current
+                  if (!data) return
+                  const peak = Math.max(...data.bins.map((bin) => bin.volume))
+                  if (!(peak > 0) || data.bins.length < 2) return
+                  const maxWidth = mediaSize.width * PROFILE_MAX_WIDTH_RATIO
+                  const edge = mediaSize.width - 60
+                  const yVal = series.priceToCoordinate(data.val)
+                  const yVah = series.priceToCoordinate(data.vah)
+                  if (yVal !== null && yVah !== null) {
+                    context.fillStyle = 'rgba(217, 160, 102, 0.07)'
+                    context.fillRect(
+                      edge - maxWidth,
+                      Math.min(yVal, yVah),
+                      maxWidth,
+                      Math.abs(yVal - yVah),
+                    )
+                  }
+                  const rowPrice = data.bins[1]!.price - data.bins[0]!.price
+                  for (const bin of data.bins) {
+                    const top = series.priceToCoordinate(
+                      bin.price + rowPrice / 2,
+                    )
+                    const bottom = series.priceToCoordinate(
+                      bin.price - rowPrice / 2,
+                    )
+                    if (top === null || bottom === null) continue
+                    const inside =
+                      bin.price >= data.val && bin.price <= data.vah
+                    context.fillStyle = inside
+                      ? 'rgba(217, 160, 102, 0.55)'
+                      : 'rgba(139, 150, 154, 0.35)'
+                    const width = (bin.volume / peak) * maxWidth
+                    context.fillRect(
+                      edge - width,
+                      top,
+                      width,
+                      Math.max(1, bottom - top - 1),
+                    )
+                  }
+                }),
+            }),
+          },
+        ],
+        updateAllViews: () => undefined,
+      }
+      series.attachPrimitive(primitive)
+      profileRedraw.current = () => requestUpdate?.()
+    }
     chartRef.current = chart
     candleSeriesRef.current = series
     volumeRef.current = volume
@@ -629,6 +705,11 @@ export default function ApprovedTerminalChart({
     volumeRef.current?.applyOptions({ visible: showVolume })
     volumeHidden.current = !showVolume
   }, [showVolume, initialViewport, currency])
+
+  useEffect(() => {
+    profileRef.current = profile
+    profileRedraw.current?.()
+  }, [profile])
 
   useEffect(() => {
     const chart = chartRef.current

@@ -7,6 +7,7 @@ import {
   priorDayValueArea,
   rsi,
   valueArea,
+  volumeProfile,
   vwap,
 } from './chart-indicators.ts'
 
@@ -94,5 +95,21 @@ describe('valueArea', () => {
   })
   it('gives nothing for a flat or empty range', () => {
     expect(valueArea([])).toBeNull()
+  })
+})
+
+describe('volumeProfile', () => {
+  it('returns the bins with the traded volume and a value area inside them', () => {
+    const profile = volumeProfile(
+      [
+        { time: 0, high: 101, low: 99, close: 100, volume: 800 },
+        { time: 60, high: 110, low: 90, close: 100, volume: 200 },
+      ],
+      20,
+    )!
+    const total = profile.bins.reduce((sum, bin) => sum + bin.volume, 0)
+    expect(total).toBeCloseTo(1000)
+    expect(profile.val).toBeLessThanOrEqual(profile.poc)
+    expect(profile.vah).toBeGreaterThanOrEqual(profile.poc)
   })
 })
