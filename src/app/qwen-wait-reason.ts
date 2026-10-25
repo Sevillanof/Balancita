@@ -28,6 +28,13 @@ function side(action: unknown): string | null {
   return null
 }
 
+/** `0.123` -> `0,12` (two decimals, decimal comma). */
+export function score(value: unknown): string | null {
+  return typeof value === 'number' && Number.isFinite(value)
+    ? value.toFixed(2).replace('.', ',')
+    : null
+}
+
 /** «Largo 46 % · Corto 20 % · Esperar 34 %», in the order the model gave. */
 export function probabilitiesText(value: unknown): string | null {
   const entries = Object.entries(record(value)).filter(
@@ -73,6 +80,26 @@ export function waitReason(row: Record<string, unknown>): string | null {
   const pWait = percent(probs.ESPERAR ?? probs.MANTENER)
   const mirror = side(row.mirror_action)
 
+  if (override === 'ventana_mirando') {
+    const now = score(row.score)
+    const best = score(row.best_score)
+    const n = typeof row.look_n === 'number' ? row.look_n : null
+    const lado =
+      side(row.model_action) ?? (Number(row.lean_num) < 0 ? 'CORTO' : 'LARGO')
+    const head = `Mirando la mejor ocasión${n ? ` (mirada ${n})` : ''}.`
+    if (row.mirror_ok === 0)
+      return `${head} Se inclinaba ${lado}, pero el espejo no coincidió: no es una ocasión confiable, no entra.`
+    if (now && best)
+      return `${head} Esta ocasión vale ${now} y la mejor candidata hasta ahora vale ${best}: espera una mejor antes de entrar.`
+    return `${head} Todavía no entra: espera una ocasión mejor.`
+  }
+  if (override === 'entrada_ventana') {
+    const now = score(row.score)
+    const lado = side(row.chosen)
+    return `Entró${lado ? ` ${lado}` : ''} en la ventana de oportunidad${now ? `, con una ocasión de ${now}` : ''}, con el espejo coincidiendo.`
+  }
+  if (override === 'entrada_forzada')
+    return 'Entró por inactividad: eligió el lado que veía más probable (modo anterior, sin espejo).'
   if (override === 'bajo_umbral')
     return wanted && pWanted && threshold
       ? `Quiso entrar ${wanted} con ${pWanted}, no llegó al ${threshold} mínimo.`

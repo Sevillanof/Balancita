@@ -533,10 +533,12 @@ class Trader:
         self.trade_seq = 0
         self.hooks = [WAKE_HOOKS[name] for name in cfg["wake"].get("hooks", [])]
         self.skip_entry_reason = runtime_of(cfg)["skip_entry_reason"]
-        # Live operator only (None in the practice): after ``force_idle_ms`` without opening, the flat wake asks LARGO or CORTO.
-        self.force_idle_ms = None
+        # Live operator only (off in the practice): while flat the wake is an opportunity window (see ``_decide_window``).
+        self.force_idle_ms = None         # optional start delay (ms without opening) before the window; None / 0: no delay
+        self.window_on = False            # live exploration: while flat, the wake is the opportunity window
         self.idle_since_ms = None         # reference when nothing was opened yet (process start / last opening in the database)
         self.last_open_ms = None
+        self.window = None                # opportunity window: {"start_ms", "looks", "best"} while open
 
     # ---- data
 
@@ -865,28 +867,60 @@ class Trader:
         return self.last_open_ms if self.last_open_ms is not None else self.idle_since_ms
 
     def _force_due(self, t_ms):
-        """Live exploration: no opening for longer than ``force_idle_ms`` (flat only; the cooldown is checked by ``feed``)."""
-        ref = self._force_ref()
+        """Live exploration: while flat (the cooldown is checked by ``feed``) every wake belongs to the opportunity window. It
+        starts as soon as the product is flat and out of cooldown; ``force_idle_ms`` (default none) is an optional delay counted
+        from the last opening on record, or from the process start. Opening a position ends the window."""
         question = (self.cfg.get("live") or {}).get("force_question")
-        return bool(self.force_idle_ms and question and ref is not None and t_ms - ref > self.force_idle_ms)
+        if not (self.window_on and question):
+            return False
+        if self.window is not None or not self.force_idle_ms:
+            return True
+        ref = self._force_ref()
+        return ref is not None and t_ms - ref > self.force_idle_ms
 
-    def _decide_forced(self, t_ms, event):
-        """The alternative question: ONLY LARGO and CORTO, with an honest text. The side with the higher probability (mean of
-        the two option orders) opens, with no entry threshold and no mirror test. Marked ``entrada_forzada`` on the decision
-        and ``forzada`` as the trade's entry reason, so reports can tell them apart."""
-        hours = (t_ms - self._force_ref()) / HOUR_MS
-        spec = self.cfg["live"]["force_question"]
+    def _decide_window(self, t_ms, reasons, event):
+        """Opportunity window, always on while flat. Every 15 min wake of the window asks the two-option question (LARGO / CORTO, both option
+        orders) about the real numbers AND about the mirrored ones. ``lean`` = p(LARGO) - p(CORTO); ``lean_num`` =
+        (lean - lean_m) / 2, the part of the lean that comes from the numbers; score = |lean_num|, side = its sign. A look is a
+        CANDIDATE only when the mirror gives the opposite side (lean * lean_m < 0). It enters when it is a candidate AND its
+        score beats every score seen before in the window AND at least ``force_min_looks`` looks came before; after
+        ``force_window_h`` hours it enters at the first candidate with no record required. A contradicting mirror never
+        enters. The look is stored as a wait (``ventana_mirando``); the entry as ``entrada_ventana`` / entry reason ``ventana``."""
+        live = self.cfg["live"]
+        window = self.window
+        if window is None:
+            window = self.window = {"start_ms": t_ms, "looks": 0, "best": 0.0}
+        ref = self._force_ref()
+        hours = 0.0 if ref is None else max(0.0, (t_ms - ref) / HOUR_MS)
+        spec = live["force_question"]
         question = dict(spec, instruction=spec["instruction"].replace("{hours}", es(hours, 1)))
         try:
-            answer = self.decider.ask(self.key, t_ms, "force", question, event["state_text"])
+            real = self.decider.ask(self.key, t_ms, "force", question, event["state_text"])
+            mirror = self.decider.ask(self.key, t_ms, "force_mirror", question, self.state_text(t_ms, reasons, mirror=True))
         except DecisionError:
             event["override"] = "sin_respuesta"
             return [event]
-        action = answer["chosen"]
-        event.update(answer=answer, model_action=action, p_action=answer["probabilities"][action], action=action,
-                     threshold=None, override="entrada_forzada", reason="entrada_forzada", forced=True,
-                     idle_hours=round(hours, 2))
-        self._open(t_ms, "LONG" if action == "LARGO" else "SHORT", event["p_action"], "forzada")
+        lean = real["probabilities"]["LARGO"] - real["probabilities"]["CORTO"]
+        lean_m = mirror["probabilities"]["LARGO"] - mirror["probabilities"]["CORTO"]
+        lean_num = (lean - lean_m) / 2.0
+        score = abs(lean_num)
+        side = "LARGO" if lean_num > 0 else "CORTO"
+        candidate = lean * lean_m < 0
+        looks_before, best_before = window["looks"], window["best"]
+        late = t_ms - window["start_ms"] >= live.get("force_window_h", 12) * HOUR_MS
+        enter = candidate and ((looks_before >= live.get("force_min_looks", 6) and score > best_before) or late)
+        window["looks"] += 1
+        if candidate:                      # solo las candidatas (espejo coincidente) suben la vara
+            window["best"] = max(best_before, score)
+        event.update(answer=real, model_action=side, p_action=real["probabilities"][side], threshold=None,
+                     mirror_action=mirror["chosen"], mirror_p=mirror["probabilities"][mirror["chosen"]],
+                     lean=lean, lean_m=lean_m, lean_num=lean_num, score=score, best_score=window["best"],
+                     look_n=window["looks"], mirror_ok=candidate, idle_hours=round(hours, 2), override="ventana_mirando")
+        if not enter:
+            return [event]
+        event.update(action=side, override="entrada_ventana", reason="entrada_ventana", forced=True)
+        self._open(t_ms, "LONG" if side == "LARGO" else "SHORT", event["p_action"], "ventana")
+        self.window = None
         event["trade_no"] = self.position.trade_no
         return [event]
 
@@ -909,7 +943,7 @@ class Trader:
                  "action": "MANTENER" if in_position else "ESPERAR", "override": None,
                  "reason": None, "reason_answer": None, "trade_no": self.position.trade_no if in_position else None}
         if not in_position and self._force_due(t_ms):
-            return self._decide_forced(t_ms, event)
+            return self._decide_window(t_ms, reasons, event)
         try:
             answer = self.decider.ask(self.key, t_ms, "action", question, state)
         except DecisionError:
