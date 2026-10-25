@@ -955,7 +955,7 @@ class Trader:
         enters. The look is stored as a wait (``ventana_mirando``); the entry as ``entrada_ventana`` / entry reason ``ventana``.
 
         With ``cfg["factors"]`` (live config, version 5) the two questions of letters are replaced by one factors call on the real
-        STATE and one on the mirrored one (``decider.ask_factors``): ``lean`` = (sum of the 7 voting gradients) / 14 of the real
+        STATE and one on the mirrored one (``decider.ask_factors``): ``lean`` = (sum of the 6 voting gradients) / 12 of the real
         answer, ``lean_m`` the same on the mirror, ``lean_num`` = (lean - lean_m) / 2 as above, and the event also carries
         ``factors`` (the 8 gradients of both answers and the reading per line) for the Terminal. ``live.force_question`` is not used."""
         live = self.cfg["live"]
@@ -966,7 +966,7 @@ class Trader:
         hours = 0.0 if ref is None else max(0.0, (t_ms - ref) / HOUR_MS)
         if self.cfg.get("factors"):
             # Version 5 of the live config: ONE factors call on the real STATE and ONE on the mirrored one (gradient of -2 to +2 per
-            # line, ``futures_qwen_factors``). lean = sum of F1..F7 / 14; the rest of the window is exactly the same.
+            # line, ``futures_qwen_factors``). lean = sum of F1 F2 F3 F4 F6 F7 / 12; the rest of the window is exactly the same.
             from . import futures_qwen_factors as fq
             try:
                 real = self.decider.ask_factors(self.key, t_ms, "force", event["state_text"])

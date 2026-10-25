@@ -4,19 +4,28 @@ import { STRATEGIES_API_BASE } from './strategy-api.ts'
  * Qwen's quick test: a small sample of the photos of the past, to filter a change of prompt or model before the full
  * run. Orientative only: it is not the exam and approves nothing. The server writes; this client asks and reads.
  */
-/** One line F1..F7 of the sheet: how much of it Qwen reads (factors variants only). */
+/**
+ * One voting line of the sheet (F1, F2, F3, F4, F6, F7): how much Qwen votes on it and how much of that comes from the numbers
+ * (factors variants only). Voting and reading are different things. The fields after `flip_n` are missing in the summaries
+ * saved before version 6, so the screen reads them as «sin dato».
+ */
 export type QuickReading = {
   id: string
   label: string
   /** What the gradient is measured against («z de 24 h»…). */
   number: string
-  /** Share (0–1) of the photos where the sign flips in the mirror, over `flip_n` photos. */
+  /** Share (0–1) of the photos with mirror where |real gradient| ≥ 0,25, over `vote_n` photos (F4: only photos outside the area). */
+  vote_share?: number | null
+  vote_n?: number
+  /** Among the photos where it voted, share (0–1) where the sign flips in the mirror, over `flip_n` photos. */
   flip_share: number | null
   flip_n: number
+  /** Mean of (real + mirror) / 2: the bias that does not depend on the data (−2…+2). */
+  habit?: number | null
   /** Spearman between Qwen's real gradient and the number of the line, over `corr_n` photos. */
   corr: number | null
   corr_n: number
-  verdict: 'lee' | 'a medias' | 'no lee' | 'sin dato'
+  verdict: 'no vota' | 'lee' | 'sesgado' | 'a medias' | 'no lee' | 'sin dato'
 }
 
 /** The same photos: Qwen's sum and the rule without Qwen against the move, and always long / always short. */

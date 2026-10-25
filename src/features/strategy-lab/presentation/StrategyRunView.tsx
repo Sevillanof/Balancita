@@ -1484,7 +1484,9 @@ function QuickFichaTables({ ficha }: { ficha: QuickFicha }) {
             <tr>
               <th scope="col">Renglón</th>
               <th scope="col">Se mide contra</th>
+              <th scope="col">Vota</th>
               <th scope="col">Da vuelta en el espejo</th>
+              <th scope="col">Hábito</th>
               <th scope="col">Correlación</th>
               <th scope="col">Veredicto</th>
             </tr>
@@ -1497,8 +1499,14 @@ function QuickFichaTables({ ficha }: { ficha: QuickFicha }) {
                 </th>
                 <td>{line.number}</td>
                 <td>
+                  {line.id === 'F4' && line.verdict === 'sin dato'
+                    ? 'sin fotos fuera del área'
+                    : `${percentText(line.vote_share)} (${line.vote_n ?? 0} fotos)`}
+                </td>
+                <td>
                   {percentText(line.flip_share)} ({line.flip_n} fotos)
                 </td>
+                <td>{rhoText(line.habit)}</td>
                 <td>
                   {rhoText(line.corr)} ({line.corr_n} fotos)
                 </td>
@@ -1509,10 +1517,17 @@ function QuickFichaTables({ ficha }: { ficha: QuickFicha }) {
         </table>
       </div>
       <p className="runview__hint">
-        «Lee»: da vuelta el signo en 80 % o más de las fotos y la correlación
-        llega a 0,5 (en valor absoluto: negativa quiere decir que lo
-        contradice). «No lee»: menos de 60 % de vueltas o correlación menor a
-        0,2.
+        Votar y leer son cosas distintas. «Vota»: parte de las fotos donde el
+        gradiente real es de al menos 0,25 (F4 cuenta solo las fotos con el
+        precio fuera del área). «Da vuelta»: entre las que votó, parte donde el
+        signo cambia en el espejo. «Hábito»: promedio de real y espejo, lo que
+        diría igual con los números del revés. Veredicto, en este orden: «no
+        vota» si vota en menos de 20 % de las fotos o en menos de 5; «lee» si da
+        vuelta el signo en 80 % o más y la correlación llega a 0,5 (en valor
+        absoluto: negativa quiere decir que lo contradice); «sesgado» si la
+        correlación llega a 0,5 pero da vuelta menos de 80 % (lee el tamaño, el
+        hábito manda el signo); «no lee» si la correlación es menor a 0,2 o da
+        vuelta menos de 60 %; si no, «a medias».
       </p>
       <p>
         <strong>Contra la regla sin Qwen</strong> · en las mismas fotos

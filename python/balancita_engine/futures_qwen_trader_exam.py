@@ -342,7 +342,7 @@ def load_answers(db_path):
             d["p_largo_m"], d["p_corto_m"] = leans.get((d["snap_id"], "mirror"), (None, None)) \
                 if d["mirror_action"] is not None else (None, None)
             if d["snap_id"] in factors:
-                # the lean of a factors photo is the sum of its gradients over 14; it reaches ``split_lean`` as the pair of
+                # the lean of a factors photo is the sum of its voting gradients over 12; it reaches ``split_lean`` as the pair of
                 # probabilities whose difference is that lean, so lean / lean_m / lean_num / habit come out unchanged
                 f = d["factors"] = factors[d["snap_id"]]
                 d["p_largo"], d["p_corto"] = fq.probabilities_for(fq.lean_of(f["real"]))

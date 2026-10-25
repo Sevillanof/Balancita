@@ -80,9 +80,9 @@ def add_positioning(path, product, first_ms, hours, long_start=40.0):
 
 
 class ConfigTests(unittest.TestCase):
-    def test_version_5_has_the_sheet_the_context_and_the_question_of_the_ficha_variant(self):
+    def test_version_6_has_the_sheet_the_context_and_the_question_of_the_ficha_variant(self):
         variant = qv.get_variant("ficha")
-        self.assertEqual(LIVE_CFG["prompt"]["version"], 5)
+        self.assertEqual(LIVE_CFG["prompt"]["version"], 6)
         self.assertTrue(LIVE_CFG["state_ficha"])
         self.assertEqual(LIVE_CFG["factors"], variant["factors"])                       # without the reversion hint
         self.assertEqual(LIVE_CFG["prompt"]["system"], variant["prompt"]["system"])
@@ -168,7 +168,7 @@ class FactorsWindowTests(unittest.TestCase):
         self.assertLess(factors["mirror"][0], -1.0)
         for r, m, lec in zip(factors["real"], factors["mirror"], factors["lectura"]):
             self.assertAlmostEqual(lec, (r - m) / 2, places=3)
-        self.assertAlmostEqual(sum(factors["lectura"][:7]) / 14, entry["lean_num"], places=3)   # F8 does not vote
+        self.assertAlmostEqual(sum(factors["lectura"][i] for i in (0, 1, 2, 3, 5, 6)) / 12, entry["lean_num"], places=3)   # F5 and F8 do not vote
         self.assertIn("F1 Tendencia larga", entry["state_text"])
 
     def test_an_answer_that_repeats_the_same_side_on_the_mirror_never_enters(self):
@@ -198,7 +198,7 @@ class FactorsWindowTests(unittest.TestCase):
         env.op.start()
         env.advance(10 + 15 * 3)
         looks = decisions(env)
-        self.assertTrue(all(r["score"] < 0.15 and r["mirror_ok"] == 0 for r in looks))   # one line at +1 moves the lean 1/14
+        self.assertTrue(all(r["score"] < 0.15 and r["mirror_ok"] == 0 for r in looks))   # one line at +1 moves the lean 1/12
         self.assertEqual(env.rows("SELECT * FROM trades"), [])
 
     def test_after_the_window_hours_it_enters_at_the_first_candidate_without_a_record(self):
@@ -259,7 +259,7 @@ class FactorsWindowTests(unittest.TestCase):
         op = env.restart()
         op.start()
         self.assertEqual(op.traders["PF_XBTUSD"].window["looks"], 2)
-        self.assertEqual(op.gate.factors.template["version"], 5)
+        self.assertEqual(op.gate.factors.template["version"], 6)
 
     def test_the_letters_window_is_still_there_for_a_config_without_factors(self):
         cfg = window_cfg()
@@ -761,7 +761,7 @@ class QuickLiveTests(unittest.TestCase):
                              max_minutes=500, clock=lambda: clock[0], log=lambda *a: None, state_path=state_path, variant=variant)
         self.assertEqual((state["state"], state["answered"]), ("done", 30))
         ficha = state["summary"]["ficha"]
-        self.assertEqual([r["id"] for r in ficha["readings"]], ["F1", "F2", "F3", "F4", "F5", "F6", "F7"])
+        self.assertEqual([r["id"] for r in ficha["readings"]], ["F1", "F2", "F3", "F4", "F6", "F7"])
         self.assertEqual(ficha["photos"], 30)
         self.assertTrue(ficha["comparison"])
         with open(state_path, encoding="utf-8") as handle:

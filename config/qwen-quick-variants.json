@@ -127,13 +127,13 @@
       "id": "ficha",
       "label": "Ficha de 8 factores con gradiente",
       "kind": "factors",
-      "prompt_version": 6.0,
-      "note": "El estado se reordena en una ficha de 8 renglones numerados (tendencia, impulso, rango, área de valor, volumen y volatilidad, posicionamiento y prima, otros activos, momento) y Qwen da UN gradiente de -2 a +2 por renglón en una sola línea con formato fijo. La suma de los 7 primeros es la inclinación; el espejo se hace renglón por renglón y dice cuáles lee Qwen. 2 llamadas por foto (real y espejo). Mismas fotos que las demás variantes. El renglón F6 lee la base del colector de posicionamiento en solo lectura; si no está, dice n/d.",
+      "prompt_version": 6.2,
+      "note": "El estado se reordena en una ficha de 8 renglones numerados (tendencia, impulso, rango, área de valor, volumen y volatilidad, posicionamiento y prima, otros activos, momento) y Qwen da UN gradiente de -2 a +2 por renglón en una sola línea con formato fijo. La suma de los 6 votantes (F1, F2, F3, F4, F6 y F7; F5 y F8 no votan) sobre 12 es la inclinación; el espejo se hace renglón por renglón y dice cuáles vota Qwen y cuáles lee (la tabla «Lectura por renglón» separa «no vota», «lee», «sesgado», «no lee» y «a medias»). La pregunta ya no trae una línea de ejemplo con valores (versión 6: Qwen la copiaba en 127 de 150 fotos); la gramática fija el formato. 2 llamadas por foto (real y espejo). Mismas fotos que las demás variantes. El renglón F6 lee la base del colector de posicionamiento en solo lectura; si no está, dice n/d.",
       "prompt": {
         "system": "Sos un operador de futuros perpetuos en papel (sin dinero real). Respondé con exactamente una línea con el formato que se pide y nada más."
       },
       "factors": {
-        "question": "Mirá los factores F1 a F8 en ese orden. Para cada uno decí hacia dónde empuja el precio en las próximas 4 horas: -2 baja fuerte, -1 baja, 0 nada, +1 sube, +2 sube fuerte. Un factor que no ves claro es 0. F8 no vota: ponele 0. Respondé con exactamente una línea: F1:+1 F2:-2 F3:0 F4:0 F5:0 F6:0 F7:0 F8:0"
+        "question": "Mirá los factores F1 a F8 en ese orden. Para cada uno decí hacia dónde empuja el precio en las próximas 4 horas: -2 baja fuerte, -1 baja, 0 no empuja, +1 sube, +2 sube fuerte. Todo renglón con datos tiene que votar según sus números; 0 es solo para un renglón que dice n/d o cuyos números están en el medio. F5 y F8 no votan: ponele 0. Respondé con una sola línea con los ocho valores en orden, cada uno con su signo, sin ejemplos ni explicaciones."
       },
       "state_ficha": true,
       "state_context": [
@@ -145,13 +145,13 @@
       "id": "ficha-pista",
       "label": "Ficha de 8 factores con pista de reversión",
       "kind": "factors",
-      "prompt_version": 6.1,
+      "prompt_version": 6.3,
       "note": "La misma ficha y la misma pregunta por factores, con la pista de reversión de «Con pistas de reversión» en el sistema. Comparada con «Ficha de 8 factores con gradiente» mide si la pista cambia lo que Qwen lee.",
       "prompt": {
         "system": "Sos un analista cuantitativo de futuros perpetuos de criptomonedas (papel, sin dinero real). Regla empírica: a 4 horas, después de un movimiento brusco con volumen muy alto y precio pegado al máximo o mínimo de 24 horas, el precio suele devolver parte del movimiento; con una tendencia suave y sostenida, suele seguir. Respondé con exactamente una línea con el formato que se pide y nada más."
       },
       "factors": {
-        "question": "Mirá los factores F1 a F8 en ese orden. Para cada uno decí hacia dónde empuja el precio en las próximas 4 horas: -2 baja fuerte, -1 baja, 0 nada, +1 sube, +2 sube fuerte. Un factor que no ves claro es 0. F8 no vota: ponele 0. Respondé con exactamente una línea: F1:+1 F2:-2 F3:0 F4:0 F5:0 F6:0 F7:0 F8:0"
+        "question": "Mirá los factores F1 a F8 en ese orden. Para cada uno decí hacia dónde empuja el precio en las próximas 4 horas: -2 baja fuerte, -1 baja, 0 no empuja, +1 sube, +2 sube fuerte. Todo renglón con datos tiene que votar según sus números; 0 es solo para un renglón que dice n/d o cuyos números están en el medio. F5 y F8 no votan: ponele 0. Respondé con una sola línea con los ocho valores en orden, cada uno con su signo, sin ejemplos ni explicaciones."
       },
       "state_ficha": true,
       "state_context": [
