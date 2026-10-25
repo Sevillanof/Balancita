@@ -250,10 +250,10 @@ describe('approved connected terminal chart', () => {
     expect(onSelect).not.toHaveBeenCalled()
   })
 
-  it('keeps every eligible marker up to two per candle, sorted', () => {
-    const markers = Array.from({ length: 200 }, (_, index) => ({
+  it('retains the newest 200 eligible markers after sorting', () => {
+    const markers = Array.from({ length: 220 }, (_, index) => ({
       id: `decision-${index}`,
-      time: candles[Math.floor(index / 2)]!.time,
+      time: candles[0]!.time + index / 220,
       type: 'decision' as const,
       label: 'ESPERA',
       decisionStatus: 'hold' as const,
@@ -262,7 +262,7 @@ describe('approved connected terminal chart', () => {
       <ApprovedTerminalChart
         candles={candles}
         markers={markers}
-        selectedId="decision-199"
+        selectedId="decision-219"
         intervalSeconds={60}
         initialViewport="approved-terminal"
         onSelect={vi.fn()}
@@ -271,8 +271,8 @@ describe('approved connected terminal chart', () => {
     const rendered = chartMocks.markerApi.setMarkers.mock
       .lastCall?.[0] as Array<{ id: string; time: number }>
     expect(rendered).toHaveLength(200)
-    expect(rendered[0]?.id).toBe('decision-1')
-    expect(rendered.at(-1)?.id).toBe('decision-198')
+    expect(rendered[0]?.id).toBe('decision-20')
+    expect(rendered.at(-1)?.id).toBe('decision-219')
     expect(rendered.map((marker) => marker.time)).toEqual(
       [...rendered.map((marker) => marker.time)].sort(
         (left, right) => left - right,
@@ -346,7 +346,6 @@ describe('approved connected terminal chart', () => {
     const painted = chartMocks.markerApi.setMarkers.mock.calls.at(-1)?.[0] as {
       text: string
     }[]
-    expect(painted).toHaveLength(2)
-    expect(painted.at(-1)?.text).toContain('+3')
+    expect(painted).toHaveLength(5)
   })
 })

@@ -197,9 +197,6 @@ function markerPresentation(
 const BASE_SCALE_MARGINS = { top: 0.12, bottom: 0.22 }
 // Distance between two stacked glyphs of one candle: glyph + margin + label.
 const MARKER_STACK_STEP_PX = 30
-// The candles alone set the price scale: markers never widen it. Beyond this
-// many markers per candle and side, the rest fold into a "+N" on the last one.
-const MAX_STACKED_MARKERS = 2
 
 export default function ApprovedTerminalChart({
   candles,
@@ -554,31 +551,9 @@ export default function ApprovedTerminalChart({
           },
         ]
       })
-    const sorted = visibleMarkers.sort(
-      (left, right) => Number(left.time) - Number(right.time),
-    )
-    const seen = new Map<string, SeriesMarker<Time>[]>()
-    for (const marker of sorted) {
-      if (marker.position === 'inBar') continue
-      const key = `${marker.time}:${marker.position}`
-      seen.set(key, [...(seen.get(key) ?? []), marker])
-    }
-    const hidden = new Set<SeriesMarker<Time>>()
-    for (const group of seen.values()) {
-      if (group.length <= MAX_STACKED_MARKERS) continue
-      // Keep the selected one visible, then the latest ones.
-      const keep = new Set(
-        [
-          ...group.filter((marker) => marker.id === selectedId),
-          ...group.slice().reverse(),
-        ].slice(0, MAX_STACKED_MARKERS),
-      )
-      const extra = group.length - MAX_STACKED_MARKERS
-      for (const marker of group) if (!keep.has(marker)) hidden.add(marker)
-      const last = group.filter((marker) => keep.has(marker)).at(-1)!
-      last.text = `${last.text ?? ''} +${extra}`
-    }
-    const painted = sorted.filter((marker) => !hidden.has(marker)).slice(-200)
+    const painted = visibleMarkers
+      .sort((left, right) => Number(left.time) - Number(right.time))
+      .slice(-200)
     markerRef.current?.setMarkers(painted)
     paintedRef.current = painted
     publishRef.current?.()
