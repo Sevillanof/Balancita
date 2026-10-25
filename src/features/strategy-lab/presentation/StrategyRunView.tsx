@@ -54,6 +54,7 @@ import type { StrategyApi } from '../infrastructure/strategy-api.ts'
 import {
   quickApi,
   type QuickApi,
+  type QuickFicha,
   type QuickState,
   type QuickVariant,
 } from '../infrastructure/quick-api.ts'
@@ -1456,7 +1457,95 @@ function QuickResult({ state }: { state: QuickState }) {
           ): {SIGNAL_TEXT(summary.signals.spearman)}.
         </li>
       </ul>
+      {summary.ficha && <QuickFichaTables ficha={summary.ficha} />}
       <p className="runview__hint">{summary.note}</p>
+    </div>
+  )
+}
+
+const percentText = (value: number | null | undefined) =>
+  value == null ? 'sin dato' : `${amount(value * 100, 0)} %`
+
+const rhoText = (value: number | null | undefined) =>
+  value == null ? 'sin dato' : (signedAmount(value, 2) ?? 'sin dato')
+
+/** What the sheet variants add: which lines Qwen reads, and how its sum compares with the rule without Qwen. */
+function QuickFichaTables({ ficha }: { ficha: QuickFicha }) {
+  return (
+    <div>
+      <p>
+        <strong>Lectura por renglón</strong> · {ficha.reads} de{' '}
+        {ficha.readings.length} renglones leídos, sobre {ficha.photos} fotos con
+        espejo
+      </p>
+      <div className="runview__table-wrap">
+        <table className="runview__table" aria-label="Lectura por renglón">
+          <thead>
+            <tr>
+              <th scope="col">Renglón</th>
+              <th scope="col">Se mide contra</th>
+              <th scope="col">Da vuelta en el espejo</th>
+              <th scope="col">Correlación</th>
+              <th scope="col">Veredicto</th>
+            </tr>
+          </thead>
+          <tbody>
+            {ficha.readings.map((line) => (
+              <tr key={line.id}>
+                <th scope="row">
+                  {line.id} {line.label}
+                </th>
+                <td>{line.number}</td>
+                <td>
+                  {percentText(line.flip_share)} ({line.flip_n} fotos)
+                </td>
+                <td>
+                  {rhoText(line.corr)} ({line.corr_n} fotos)
+                </td>
+                <td>{line.verdict}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <p className="runview__hint">
+        «Lee»: da vuelta el signo en 80 % o más de las fotos y la correlación
+        llega a 0,5 (en valor absoluto: negativa quiere decir que lo
+        contradice). «No lee»: menos de 60 % de vueltas o correlación menor a
+        0,2.
+      </p>
+      <p>
+        <strong>Contra la regla sin Qwen</strong> · en las mismas fotos
+      </p>
+      <div className="runview__table-wrap">
+        <table className="runview__table" aria-label="Contra la regla sin Qwen">
+          <thead>
+            <tr>
+              <th scope="col">Plazo</th>
+              <th scope="col">Suma de Qwen</th>
+              <th scope="col">Regla sin Qwen</th>
+              <th scope="col">Siempre largo</th>
+              <th scope="col">Siempre corto</th>
+            </tr>
+          </thead>
+          <tbody>
+            {ficha.comparison.map((row) => (
+              <tr key={row.horizon_min}>
+                <th scope="row">{row.horizon_min / 60} h</th>
+                <td>{rhoText(row.qwen_spearman)}</td>
+                <td>{rhoText(row.rule_spearman)}</td>
+                <td>{bp(row.always_long_net_bp)}</td>
+                <td>{bp(row.always_short_net_bp)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <p className="runview__hint">
+        Correlación (Spearman) de cada suma con el movimiento del precio; la
+        regla usa F1, F2, F3, F4 y F6 con signo de reversión y pesos iguales.
+        Siempre largo y siempre corto: neto por operación después de costos.
+      </p>
     </div>
   )
 }

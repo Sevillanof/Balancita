@@ -761,6 +761,20 @@ class FakeProvider:
     def tokenize(self, text):
         return [1]
 
+    def chat(self, body):
+        """Scripted ``POST /v1/chat/completions`` for the multi-token questions (``futures_qwen_factors``): ``chat_script``
+        is ``fn(body) -> completion dict`` (what llama-server would answer)."""
+        if not self.healthy:
+            raise ModelUnavailable("fake model is down")
+        if self.fail_with is not None:
+            raise self.fail_with
+        self.calls += 1
+        self.prompts.append(body["messages"][-1]["content"])
+        script = getattr(self, "chat_script", None)
+        if script is None:
+            raise ModelResponseError("malformed_response", "fake provider has no chat script")
+        return {"completion": script(body), "latency_ms": 0}
+
 
 class LlamaCppProvider:
     """llama-server over HTTP (``urllib``); every call has a timeout."""
@@ -886,6 +900,22 @@ class LlamaCppProvider:
         perf, seen = dict(self.perf), self.perf["prompt_n"] + self.perf["cache_n"]
         perf["cache_share"] = round(self.perf["cache_n"] / seen, 4) if seen else None
         return perf
+
+    def chat(self, body):
+        """One ``POST /v1/chat/completions`` with a ready body (the multi-token questions of ``futures_qwen_factors``).
+        Returns ``{completion, latency_ms}``; same errors as ``complete``."""
+        started = time.monotonic()
+        status, data = self._request("POST", "/v1/chat/completions", self.timeout, body)
+        if status == 503:
+            raise ModelUnavailable("llama-server answered 503 (model loading or busy)")
+        if status != 200:
+            raise ModelResponseError("http_{}".format(status), "llama-server answered {}".format(status))
+        answer = self._json(data, "completion")
+        latency_ms = int((time.monotonic() - started) * 1000)
+        self._account(answer.get("timings") if isinstance(answer, dict) else None, latency_ms)
+        if self.pause_s:
+            time.sleep(self.pause_s)
+        return {"completion": answer, "latency_ms": latency_ms}
 
     def complete(self, prompt, letters, source=RAW_SOURCE, template=None):
         started = time.monotonic()

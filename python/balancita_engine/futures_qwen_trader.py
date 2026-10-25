@@ -161,7 +161,9 @@ def config_hash(cfg):
     # ``runtime`` (concurrency, skipping the entry reason) only changes speed / what is stored, never an action: not identity.
     # ``exam`` and ``exam_lean`` (v3) only shape the ``exam`` command, which has its own identity (``futures_qwen_trader_exam``)
     # ``live`` (live operator) is how the process polls and budgets time, never what a decision is
-    body = {k: v for k, v in cfg.items() if k not in ("entry_threshold", "note", "rules", "runtime", "exam", "exam_lean", "live")}
+    # ``positioning_db`` is where the collector's file lives on this machine, not what Qwen is asked
+    body = {k: v for k, v in cfg.items() if k not in ("entry_threshold", "note", "rules", "runtime", "exam", "exam_lean", "live",
+                                                          "positioning_db")}
     body["practice"] = {k: v for k, v in cfg["practice"].items() if k != "target_blocks"}   # how many blocks is not identity
     raw = json.dumps({"config": body, "state": STATE_VERSION, "costs": COST_MODEL_VERSION}, sort_keys=True)
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
@@ -529,6 +531,7 @@ class Trader:
         self.notional = D(cfg["notional_usd"])
         self.t, self.o, self.h, self.l, self.c, self.v, self.lc = [], [], [], [], [], [], []
         self.context = {}                 # other products' closes {product: {bar end ms: close}} (``state_extras``: otros_activos)
+        self.positioning = None           # ``positioning_data.PositioningFeed`` of this product (``state_ficha``: renglón F6)
         self.position = None
         self.cooldown_until = 0
         self.last_call_ms = None
@@ -628,34 +631,43 @@ class Trader:
 
     # ---- state text
 
+    def _x_otros_activos(self, t_ms, sg):
+        """Returns of the context assets and the relative strength of this product (text without a heading), or ``None``."""
+        parts, last = [], self.c[-1]
+        for product, closes in sorted(self.context.items()):
+            now = closes.get(t_ms)
+            rets = []
+            for name, bars in (("1h", H1), ("4h", H4), ("24h", H24)):
+                before = closes.get(t_ms - bars * BAR_MS)
+                rets.append("{} {} %".format(name, "n/d" if not now or not before else es(sg * (now / before - 1) * 100, 2, True)))
+            parts.append("{}: {}".format(product.replace("PF_", "").replace("USD", ""), " | ".join(rets)))
+            before = closes.get(t_ms - H4 * BAR_MS)
+            if now and before:
+                gap = sg * ((last / self.c[-1 - H4] - 1) - (now / before - 1)) * 100
+                parts.append("fuerza de {} contra el activo en 4h: {} puntos".format(
+                    self.product.replace("PF_", "").replace("USD", ""), es(gap, 2, True)))
+        return "; ".join(parts) if parts else None
+
+    @staticmethod
+    def _x_hora(t_ms):
+        """Day, UTC hour and session: it has no direction, so the mirror leaves it as it is."""
+        moment = time.gmtime(t_ms / 1000)
+        session = ("Asia" if moment.tm_hour < 8 else "Europa" if moment.tm_hour < 14 else
+                   "EE. UU." if moment.tm_hour < 21 else "cierre de EE. UU. / noche")
+        return "{} {:02d}:00 UTC (sesión de {}).".format(
+            ("lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo")[moment.tm_wday], moment.tm_hour, session)
+
     def _extra_lines(self, t_ms, sg):
         """Optional extra context (``cfg['state_extras']``, quick-test variants only): other assets, the hour, and the shape of
         the range. Everything that has a direction flips with ``sg`` in the mirror; the hour and the sizes do not."""
         extras = self.cfg.get("state_extras") or ()
         out, last = [], self.c[-1]
         if "otros_activos" in extras:
-            parts = []
-            for product, closes in sorted(self.context.items()):
-                now = closes.get(t_ms)
-                rets = []
-                for name, bars in (("1h", H1), ("4h", H4), ("24h", H24)):
-                    before = closes.get(t_ms - bars * BAR_MS)
-                    rets.append("{} {} %".format(name, "n/d" if not now or not before else es(sg * (now / before - 1) * 100, 2, True)))
-                parts.append("{}: {}".format(product.replace("PF_", "").replace("USD", ""), " | ".join(rets)))
-                before = closes.get(t_ms - H4 * BAR_MS)
-                if now and before:
-                    gap = sg * ((last / self.c[-1 - H4] - 1) - (now / before - 1)) * 100
-                    parts.append("fuerza de {} contra el activo en 4h: {} puntos".format(
-                        self.product.replace("PF_", "").replace("USD", ""), es(gap, 2, True)))
-            if parts:
-                out.append("Otros activos (retornos): " + "; ".join(parts))
+            others = self._x_otros_activos(t_ms, sg)
+            if others:
+                out.append("Otros activos (retornos): " + others)
         if "hora" in extras:
-            moment = time.gmtime(t_ms / 1000)
-            session = ("Asia" if moment.tm_hour < 8 else "Europa" if moment.tm_hour < 14 else
-                       "EE. UU." if moment.tm_hour < 21 else "cierre de EE. UU. / noche")
-            out.append("Momento: {} {:02d}:00 UTC (sesión de {}).".format(
-                ("lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo")[moment.tm_wday],
-                moment.tm_hour, session))
+            out.append("Momento: " + self._x_hora(t_ms))
         if "volatilidad" in extras:
             hi24, lo24 = max(self.h[-H24:]), min(self.l[-H24:])
             ranges = [(max(self.h[-(d + 1) * H24:len(self.h) - d * H24]) - min(self.l[-(d + 1) * H24:len(self.l) - d * H24]))
@@ -679,6 +691,11 @@ class Trader:
         sigma5 = self._sigma5()
         lines = ["Mercado (velas cerradas; sin fechas ni precios absolutos). Despertaste por: {}.".format(
             ", ".join(reasons))]
+        if self.cfg.get("state_ficha"):        # quick-test variants "ficha": the 8 numbered factors instead of the plain lines
+            from . import futures_qwen_ficha as ficha
+            lines.extend(ficha.lines(self, t_ms, sg))
+            lines.append("Costo de entrar y salir: ~{} % del tamaño".format(es(float(round_trip_cost_bps(self.product)) / 100.0, 2)))
+            return self._state_tail(lines, t_ms, sigma5)
         rets, zs = [], []
         for name, bars in (("1h", H1), ("4h", H4), ("24h", H24), ("7d", D7)):
             ret = sg * (last / c[-1 - bars] - 1)
@@ -722,7 +739,11 @@ class Trader:
         lines.append("Costo de entrar y salir: ~{} % del tamaño".format(
             es(float(round_trip_cost_bps(self.product)) / 100.0, 2)))
         lines.extend(self._extra_lines(t_ms, sg))
-        guard = self.cfg["guardrails"]
+        return self._state_tail(lines, t_ms, sigma5)
+
+    def _state_tail(self, lines, t_ms, sigma5):
+        """The fixed rules and the position, by ``state_variant`` (1: the original, 2: no stop, 3: the live operator's)."""
+        guard, last = self.cfg["guardrails"], self.c[-1]
         if self.cfg.get("state_variant", 1) >= 3:
             return self._state_v3(lines, t_ms, sigma5)
         if self.cfg.get("state_variant", 1) >= 2:
@@ -1626,6 +1647,9 @@ def _parser():
     ee.add_argument("--llama-url", default=None)
     ee.add_argument("--offline", action="store_true", help="use only the local cache: no Kraken request at all")
     ee.add_argument("--sequential", action="store_true")
+    ee.add_argument("--positioning-db", default=None, metavar="PATH",
+                    help="database of the positioning collector, opened read-only for row F6 of the 'ficha' variants (default: "
+                         "$POSITIONING_DB_PATH or server/data/dev-live/positioning.sqlite); without it F6 says n/d")
     ee.add_argument("--variant", default=None, metavar="ID",
                     help="a variant of config/qwen-quick-variants.json (other questions). With --quick each has its own "
                          "database and state file; for the full exam pass its own --exam-db")
@@ -1688,6 +1712,8 @@ def main(argv=None):
             variant = variants.get_variant(args.variant) if args.variant or args.quick is not None else None
             if variant is not None and variant.get("model") is None:
                 cfg = variants.apply_variant(cfg, variant)       # its own questions / state: hashed in the identity
+            if args.positioning_db:
+                cfg = dict(cfg, positioning_db=os.path.abspath(args.positioning_db))
             history = History(args.cache_dir, holdout_ms, offline=args.offline)
             if not history.offline:
                 for product in list(cfg["exam"]["products"]) + list(cfg.get("state_context") or ()):
