@@ -212,29 +212,8 @@ def build_inventory(entries, specs, *, config_dir=None, carry=None, forward_resu
             "note": None, "no_backtest": False,
         })
 
-    if qwen_exit is not None:
-        strategy_id = qwen_exit["strategy_id"]
-        off = qwen_exit_off(qwen_exit)  # the one switch (owner decision): shown as "off" with its reason, never hidden
-        off_since = _day_ms(off["since"]) if off is not None and not off["invalid"] else None
-        rows.append({
-            "id": strategy_id, "version": 1, "name": "C31 Qwen decide salidas",
-            "description": "Entradas de {}; Qwen decide cada salida.".format(
-                ", ".join(s.split("-")[0].upper() for s in qwen_exit["entry_specs"])),
-            "kind": "qwen_exit", "spec_hash": None,
-            # Registered in config with a start; a config does not prove the process runs now.
-            "operational": ({"state": "off", "basis": "config", "since_ms": off_since,
-                             "reason": off["reason"] if off["invalid"] else
-                             "apagada desde {}: {}".format(off["since"], off["reason"])}
-                            if off is not None else
-                            {"state": "unverified", "basis": "config", "since_ms": qwen_exit.get("start_ms"),
-                             "reason": "registered_in_qwen_exit_config"}),
-            "frozen": strategy_id in frozen,
-            "research": {"state": "unmeasured", "evidence_of_edge": False, "reliable": False,
-                         "investigating": off is None, "backtest": None},
-            "forward": forward_block(qwen_exit.get("start_ms"), qwen_exit.get("registered")),
-            "market": {"products": len(products) or None, "horizon_minutes": None, "exit_by": "qwen"},
-            "note": qwen_exit.get("note"), "no_backtest": True,
-        })
+    # C31 (Qwen decides exits) is off and no longer listed: its trades stay in qwen-exit.sqlite and its config in place;
+    # "Qwen en vivo" is the Qwen of the Estrategias cycle.
 
     if qwen_live is not None:
         rows.append({
