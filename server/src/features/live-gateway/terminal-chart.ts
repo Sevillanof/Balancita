@@ -1,4 +1,5 @@
 import type { FuturesMarketStore } from '../kraken-futures/futures-market-store.ts'
+import type { PositioningStore } from '../positioning-collector/store.ts'
 import { FUTURES_PRODUCT } from '../kraken-futures/futures-market.ts'
 
 type Row = Record<string, unknown>
@@ -31,6 +32,8 @@ export interface ChartFlow {
   open_interest: number | null
   long_percent: number | null
   top_long_percent: number | null
+  /** Perpetual (mark) over spot index, basis points, last value of the bucket. */
+  premium_bp: number | null
   volatility: number | null
 }
 
@@ -237,6 +240,7 @@ export function chartFlow(
   intervalMs: number,
   fromMs: number,
   productId: string = FUTURES_PRODUCT,
+  positioning?: PositioningStore,
 ): ChartFlow[] {
   const source = intervalMs <= 900_000 ? MINUTE : HOUR
   const read = (metric: string) =>
@@ -254,6 +258,7 @@ export function chartFlow(
         open_interest: null,
         long_percent: null,
         top_long_percent: null,
+        premium_bp: null,
         volatility: null,
       }
       buckets.set(bucket, flow)
@@ -288,6 +293,19 @@ export function chartFlow(
   last('long-short-info', 'longPercent', 'long_percent')
   last('top-traders', 'top20Percent.longPercent', 'top_long_percent')
   last('rolling-volatility', 'value', 'volatility')
+  if (positioning) {
+    // The positioning collector's own database: all 8 products, history from
+    // 2024 (accounts, hourly) and 2022 (premium). It wins over the capture's copy.
+    for (const row of positioning.positioningSince(productId, fromMs - HOUR)) {
+      const flow = at(row.bucketMs)
+      if (row.longPercent !== null) flow.long_percent = row.longPercent
+      if (row.topLongPercent !== null)
+        flow.top_long_percent = row.topLongPercent
+    }
+    const premiumMs = intervalMs <= 900_000 ? MINUTE : HOUR
+    for (const row of positioning.premiumSince(productId, premiumMs, fromMs))
+      at(row.bucketMs).premium_bp = round(row.premiumBp)
+  }
   return [...buckets.values()].sort(
     (left, right) => left.time_ms - right.time_ms,
   )

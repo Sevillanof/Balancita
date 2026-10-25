@@ -5,6 +5,7 @@ import {
 } from '../kraken-futures/futures-market-store.ts'
 import { FUTURES_PRODUCT } from '../kraken-futures/futures-market.ts'
 import { closedHistoryRows, toTerminalMarket } from './terminal-market.ts'
+import { PositioningStore } from '../positioning-collector/store.ts'
 import {
   chartCandles,
   chartDepth,
@@ -131,6 +132,8 @@ export class LiveMarketFollower {
   private readonly staleAfterMs: number
   readonly productId: string
   private store: FuturesMarketStore | undefined
+  private readonly positioningDbPath: string | undefined
+  private positioning: PositioningStore | undefined
   private eventCursor = 0
   private candleCursor = 0
   private officialCursor = 0
@@ -148,7 +151,10 @@ export class LiveMarketFollower {
     productId?: string
     clock?: () => number
     staleAfterMs?: number
+    /** Positioning collector's database (read-only); absent: no positioning or premium. */
+    positioningDbPath?: string
   }) {
+    this.positioningDbPath = options.positioningDbPath
     this.productId = options.productId ?? FUTURES_PRODUCT
     this.dbPath = options.dbPath
     this.clock = options.clock ?? Date.now
@@ -167,6 +173,23 @@ export class LiveMarketFollower {
   close(): void {
     this.store?.close()
     this.store = undefined
+    this.positioning?.close()
+    this.positioning = undefined
+  }
+
+  /** Read-only handle of the positioning database, opened when its collector has created it. */
+  private openPositioning(): PositioningStore | undefined {
+    if (this.positioning) return this.positioning
+    if (!this.positioningDbPath || !existsSync(this.positioningDbPath))
+      return undefined
+    try {
+      this.positioning = new PositioningStore(this.positioningDbPath, {
+        readOnly: true,
+      })
+    } catch {
+      this.positioning = undefined
+    }
+    return this.positioning
   }
 
   /** Opens the read-only handle when the writer's database is ready. */
@@ -389,6 +412,7 @@ export class LiveMarketFollower {
           intervalMs,
           candles[0]?.time_ms ?? now,
           this.productId,
+          this.openPositioning(),
         ),
         depth: chartDepth(store, now, this.productId),
       }

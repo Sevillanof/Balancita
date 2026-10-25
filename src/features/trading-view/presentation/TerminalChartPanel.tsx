@@ -35,7 +35,7 @@ import {
 import './terminal-chart-panel.css'
 
 type Overlay = 'ema9' | 'ema21' | 'bollinger' | 'donchian' | 'vwap'
-type Pane = 'flow' | 'oi' | 'liquidations' | 'positioning' | 'rsi'
+type Pane = 'flow' | 'oi' | 'liquidations' | 'positioning' | 'premium' | 'rsi'
 
 const OVERLAYS: ReadonlyArray<{ id: Overlay; label: string; color: string }> = [
   { id: 'ema9', label: 'EMA 9', color: '#e6b35a' },
@@ -49,6 +49,7 @@ const PANES: ReadonlyArray<{ id: Pane; label: string; live: boolean }> = [
   { id: 'oi', label: 'Interés abierto', live: true },
   { id: 'liquidations', label: 'Liquidaciones', live: true },
   { id: 'positioning', label: 'Long/short', live: true },
+  { id: 'premium', label: 'Prima perpetuo-contado (pb)', live: true },
   { id: 'rsi', label: 'RSI 14', live: false },
 ]
 
@@ -215,6 +216,19 @@ function flowPanes(
             color: colors.amber,
             points: points((point) => point.top_long_percent),
             precision: 1,
+          },
+        ],
+      })
+    else if (pane.id === 'premium')
+      panes.push({
+        id: 'premium',
+        series: [
+          {
+            id: 'premium',
+            kind: 'line',
+            color: colors.info,
+            points: points((point) => point.premium_bp),
+            precision: 2,
           },
         ],
       })
@@ -753,6 +767,11 @@ export default function TerminalChartPanel({
         {panes.some((pane) => pane.id === 'positioning') && (
           <span>
             Long/short: % de cuentas en largo (verde) y top 20 % (ámbar)
+          </span>
+        )}
+        {panes.some((pane) => pane.id === 'premium') && (
+          <span>
+            Prima: precio del perpetuo sobre el contado, en puntos básicos
           </span>
         )}
       </p>

@@ -49,6 +49,8 @@ type Row = Record<string, unknown>
 
 export interface LiveGatewayOptions {
   readonly marketDbPath: string
+  /** Positioning collector's DB, read-only: long/short split and premium on the chart. */
+  readonly positioningDbPath?: string
   /** D's account DB, read-only. Absent: the engine is reported `off`. */
   readonly accountDbPath?: string
   /** C's verdicts DB, read-only: feeds the analyses panel and chart markers. */
@@ -148,6 +150,7 @@ export async function buildLiveGateway(
     if (!products.includes(productId)) return undefined
     const follower = new LiveMarketFollower({
       dbPath: options.marketDbPath,
+      positioningDbPath: options.positioningDbPath,
       productId,
       clock,
       staleAfterMs: options.staleAfterMs,

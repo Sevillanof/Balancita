@@ -28,6 +28,8 @@ const PUBLIC_REST = [
   'https://futures.kraken.com/derivatives/api/v3/tickers',
   'https://futures.kraken.com/api/charts/v1/trade',
   'https://futures.kraken.com/api/charts/v1/analytics',
+  'https://futures.kraken.com/api/charts/v1/mark',
+  'https://futures.kraken.com/api/charts/v1/spot',
 ]
 const PUBLIC_WS = ['wss://futures.kraken.com/ws/v1']
 const FORBIDDEN =

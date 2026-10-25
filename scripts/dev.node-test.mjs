@@ -34,6 +34,7 @@ describe('devChildSpecs', () => {
       [
         'vite',
         'capture',
+        'positioning',
         'live',
         'verdict',
         'scores',
@@ -351,7 +352,7 @@ describe('devChildSpecs with a resolved Python', () => {
     const specs = devChildSpecs({ ...base, python: null })
     assert.deepEqual(
       specs.map((spec) => spec.name),
-      ['vite', 'capture', 'live'],
+      ['vite', 'capture', 'positioning', 'live'],
     )
     assert.equal(
       specs.find((spec) => spec.name === 'live').env.BALANCITA_PYTHON_STATUS,
@@ -381,7 +382,7 @@ describe('devChildSpecs with a resolved Python', () => {
     })
     assert.deepEqual(
       specs.map((spec) => spec.name),
-      ['vite', 'capture', 'live'],
+      ['vite', 'capture', 'positioning', 'live'],
     )
     assert.equal(
       specs.find((spec) => spec.name === 'live').env.BALANCITA_PYTHON_STATUS,

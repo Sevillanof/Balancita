@@ -487,6 +487,10 @@ const GATEWAY_ARGS = [
 ]
 // No --watch: capture is the sole market-DB writer; never restart it on edits.
 const CAPTURE_ARGS = ['--experimental-strip-types', 'src/app/capture-main.ts']
+const POSITIONING_ARGS = [
+  '--experimental-strip-types',
+  'src/features/positioning-collector/collector-main.ts',
+]
 
 /**
  * Pure description of the `pnpm run dev` children:
@@ -603,6 +607,7 @@ export function devChildSpecs({
     },
   ]
   const marketDb = liveDb('futures-market.sqlite')
+  const positioningDb = liveDb('positioning.sqlite')
   const verdictsDb = liveDb('futures-verdicts.sqlite')
   // D (the old paper engine) no longer runs: its account database stays readable as history.
   const accountDb = liveDb('futures-paper-account.sqlite')
@@ -641,6 +646,17 @@ export function devChildSpecs({
       },
     },
     {
+      // Long/short split of accounts and perpetual-spot premium (public Kraken charts): own DB, sole writer.
+      name: 'positioning',
+      cwd: serverCwd,
+      args: nodeArgs(POSITIONING_ARGS),
+      env: {
+        ...serverEnvironment(env),
+        FUTURES_MODE: '',
+        POSITIONING_DB_PATH: positioningDb,
+      },
+    },
+    {
       name: 'live',
       cwd: serverCwd,
       args: nodeArgs(GATEWAY_ARGS),
@@ -649,6 +665,8 @@ export function devChildSpecs({
         PORT: String(DEV_PORTS.live),
         FUTURES_MODE: '',
         FUTURES_MARKET_DB_PATH: marketDb,
+        // Read-only: long/short and premium panes of the terminal chart.
+        POSITIONING_DB_PATH: positioningDb,
         // Read-only views of C's verdicts and D's account for the terminal.
         FUTURES_VERDICTS_DB_PATH: verdictsDb,
         FUTURES_PAPER_ACCOUNT_DB_PATH: accountDb,

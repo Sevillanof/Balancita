@@ -20,6 +20,7 @@ export type ChartFlowPoint = {
   open_interest: number | null
   long_percent: number | null
   top_long_percent: number | null
+  premium_bp: number | null
   volatility: number | null
 }
 
@@ -116,6 +117,7 @@ export function parseTerminalChart(value: unknown): TerminalChartData | null {
         open_interest: pick('open_interest'),
         long_percent: pick('long_percent'),
         top_long_percent: pick('top_long_percent'),
+        premium_bp: pick('premium_bp'),
         volatility: pick('volatility'),
       },
     ]
