@@ -702,6 +702,25 @@ class TemporalEvidenceTests(Base):
                 self.assertFalse(g._rule_by_id(out["result"])["positive_folds"]["ok"])
 
 
+class RepeatableModelTests(Base):
+    """Qwen and Kronos may repeat the exam; every other strategy keeps the once-per-version rule."""
+
+    def exam(self, sid):
+        return run(sid, self.dir, spec=g.strategy_models.model_spec(sid), trade_source=cheating_source, kind="exam")
+
+    def test_qwen_live_and_kronos_repeat_the_exam_and_keep_only_the_newest_lock(self):
+        for sid in (g.strategy_models.QWEN_LIVE_ID, g.strategy_models.KRONOS_ID):
+            first, second = self.exam(sid), self.exam(sid)
+            self.assertEqual((first["status"], second["status"]), ("done", "done"))
+            self.assertNotEqual(first["run_id"], second["run_id"])
+            locks = self.db().execute("SELECT run_id FROM exam_locks WHERE strategy_id=?", (sid,)).fetchall()
+            self.assertEqual([r[0] for r in locks], [second["run_id"]])
+
+    def test_c31_and_rules_strategies_do_not_repeat(self):
+        self.assertFalse(g.strategy_models.is_repeatable(g.strategy_models.QWEN_ID))
+        self.assertFalse(g.strategy_models.is_repeatable("c25-pullback-perp-v1"))
+
+
 class ExamLockTests(Base):
     def cheat(self, version=1, **kwargs):
         sid = "lab-cheat-v{}".format(version)

@@ -36,6 +36,13 @@ def is_model(strategy_id):
     return strategy_id in (KRONOS_ID, QWEN_ID, QWEN_LIVE_ID)
 
 
+def is_repeatable(strategy_id):
+    """Qwen and Kronos may repeat every stage, the exam included, as often as wanted (owner decision, 2026-10-25).
+    That is safe only because the gate never feeds anything back to them: it reads what they recorded in real time
+    (read-only), never asks them again, and only counts trades made by the configuration under test."""
+    return strategy_id in (KRONOS_ID, QWEN_LIVE_ID)
+
+
 def _read(path):
     with open(path, encoding="utf-8") as handle:
         return json.load(handle)
@@ -52,7 +59,27 @@ def _canonical(value):
     return value
 
 
-def model_spec(strategy_id):
+def live_config_hash(qwen_live_dir=None):
+    """The configuration identity the live database was made with (its own ``meta``), else the config file's. The live
+    process refuses a database made with another configuration, so one database is one configuration: a changed
+    prompt, size or product list is a new version here too and never inherits the trades of the old one."""
+    from . import futures_qwen_trader as qt
+    path = os.path.join(qwen_live_dir or QWEN_LIVE_DIR, "live.sqlite")
+    if os.path.isfile(path):
+        try:
+            db = sqlite3.connect("file:{}?mode=ro".format(path), uri=True, timeout=10)
+            try:
+                row = db.execute("SELECT value FROM meta WHERE key='config_hash'").fetchone()
+            finally:
+                db.close()
+            if row and row[0]:
+                return row[0]
+        except sqlite3.Error:
+            pass
+    return qt.config_hash(_read(QWEN_LIVE_CONFIG))
+
+
+def model_spec(strategy_id, qwen_live_dir=None):
     """A stand-in for the spec (id, name, version and the model's descriptor) whose digest names the version."""
     if strategy_id == KRONOS_ID:
         descriptor = _read(KRONOS_CONFIG)
@@ -62,11 +89,10 @@ def model_spec(strategy_id):
         config = {k: v for k, v in config.items() if k not in ("off", "note")}
         return _canonical(dict(config, id=QWEN_ID, kind="qwen_exit", version=1, name="Qwen decide salidas"))
     if strategy_id == QWEN_LIVE_ID:
-        from . import futures_qwen_trader as qt
         config = _read(QWEN_LIVE_CONFIG)
         return _canonical({"id": QWEN_LIVE_ID, "kind": "qwen_live", "version": 1, "name": "Qwen en vivo",
                            "products": config["products"], "notional_usd": config["notional_usd"],
-                           "leverage": config.get("leverage", "1"), "config_hash": qt.config_hash(config)})
+                           "leverage": config.get("leverage", "1"), "config_hash": live_config_hash(qwen_live_dir)})
     raise KeyError(strategy_id)
 
 
@@ -83,7 +109,11 @@ class RecordedTrades:
             return [], 0
         db = sqlite3.connect("file:{}?mode=ro".format(self.db_path), uri=True, timeout=10)
         try:
-            rows = db.execute("SELECT payload FROM {} WHERE product_id=?".format(self.table), (product_id,)).fetchall()
+            columns = {r[1] for r in db.execute("PRAGMA table_info({})".format(self.table))}
+            # Kronos' backtest rows ran on history it was pre-trained on: they are never evidence.
+            only_forward = " AND mode<>'backtest'" if "mode" in columns else ""
+            rows = db.execute("SELECT payload FROM {} WHERE product_id=?{}".format(self.table, only_forward),
+                              (product_id,)).fetchall()
             trades = [json.loads(payload) for (payload,) in rows]
         except sqlite3.OperationalError:
             return [], 0
@@ -119,10 +149,15 @@ class QwenLiveTrades:
             return []
         from . import futures_qwen_trader as qt
         from . import futures_qwen_trader_exam as exam
-        share = qt.load_config(qt.CONFIG_PATH_V3)["exam_lean"]["extreme_share"]
+        cfg = qt.load_config(qt.CONFIG_PATH_V3)
+        share = cfg["exam_lean"]["extreme_share"]
         try:
-            rows, _ = exam.load_answers(self.exam_db_path)
+            rows, meta = exam.load_answers(self.exam_db_path)
         except sqlite3.OperationalError:
+            return []
+        # The photos count only if they were asked with the protocol in force now: answers from another prompt or
+        # config are never mixed in (a changed protocol means asking every photo again).
+        if meta.get("config_hash") != qt.config_hash(cfg):
             return []
         pool = sorted((r for r in rows if r.get("lean_num") not in (None, 0) and r["moves"].get("240") is not None),
                       key=lambda r: r["lean_num"])
@@ -192,7 +227,7 @@ def model_subject(strategy_id, kronos_dir=None, qwen_exit_dir=None, qwen_live_di
     if strategy_id == QWEN_LIVE_ID:
         from . import futures_qwen_trader as qt
         exam_db = os.environ.get(QWEN_EXAM_DB_ENV) or qt.DEFAULT_EXAM_DB_V3
-        return model_spec(QWEN_LIVE_ID), QwenLiveTrades(os.path.join(qwen_live_dir or QWEN_LIVE_DIR, "live.sqlite"), exam_db)
+        return model_spec(QWEN_LIVE_ID, qwen_live_dir), QwenLiveTrades(os.path.join(qwen_live_dir or QWEN_LIVE_DIR, "live.sqlite"), exam_db)
     raise KeyError(strategy_id)
 
 

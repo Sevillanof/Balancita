@@ -533,11 +533,17 @@ export default function StrategyRunView({
   const progressLabel = series
     ? `Prueba ${series.done + 1} de ${series.total} · ${series.label}`
     : 'Prueba en curso'
-  const untried = untriedStages(overview?.runs ?? [])
+  // Qwen and Kronos repeat every stage, the exam included, as often as wanted: the gate only reads what
+  // they recorded in real time, so a repetition never hands them a result.
+  const repeatable = kind === 'qwen_live' || kind === 'model'
+  const untried = repeatable
+    ? [...MARKET_STAGES]
+    : untriedStages(overview?.runs ?? [])
   const count = Math.min(Math.max(howMany, 1), Math.max(untried.length, 1))
   const plan = untried.slice(0, count)
-  const testNote =
-    untried.length > 0
+  const testNote = repeatable
+    ? 'Repetir las etapas del mercado cuantas veces quieras'
+    : untried.length > 0
       ? 'Probar la estrategia en etapas distintas del mercado'
       : 'Ya la probaste en todas las etapas del mercado'
 
@@ -577,6 +583,33 @@ export default function StrategyRunView({
     } finally {
       if (mounted.current) {
         setSeries(null)
+        setTesting(false)
+        setReload((value) => value + 1)
+      }
+    }
+  }
+  /** The final exam (everything since the cut): only Qwen and Kronos can repeat it. */
+  const runExam = async () => {
+    setPanelOpen(false)
+    setTesting(true)
+    setTestError(null)
+    try {
+      const started = await gate.start(strategyId, { exam: true })
+      let latest = await gate.overview(strategyId)
+      while (latest.running != null) {
+        setOverview(latest)
+        await new Promise((resolve) => setTimeout(resolve, 4000))
+        if (!mounted.current) return
+        latest = await gate.overview(strategyId)
+      }
+      setOverview(latest)
+      const mine = latest.runs.find((run) => run.id === started.run_id)
+      if (mine && mine.status !== 'done')
+        setTestError(mine.error ?? `El examen no terminó (${mine.status}).`)
+    } catch (error) {
+      if (mounted.current) setTestError(message(error))
+    } finally {
+      if (mounted.current) {
         setTesting(false)
         setReload((value) => value + 1)
       }
@@ -729,6 +762,16 @@ export default function StrategyRunView({
             >
               {running || series ? 'Prueba en curso…' : 'Testear'}
             </button>
+            {repeatable && (
+              <button
+                type="button"
+                onClick={() => void runExam()}
+                disabled={testing || running != null}
+                title="Examen final: sus operaciones reales desde la fecha de corte. Se puede repetir."
+              >
+                Examen
+              </button>
+            )}
             <button
               type="button"
               onClick={() => setVbtModal(true)}
@@ -761,8 +804,10 @@ export default function StrategyRunView({
           </label>
           <p className="runview__hint">
             Cada una en una etapa distinta del mercado, una después de otra:{' '}
-            {plan.map((stage) => stage.label).join(' → ')}. Quedan{' '}
-            {untried.length} etapas sin probar.
+            {plan.map((stage) => stage.label).join(' → ')}.{' '}
+            {repeatable
+              ? 'Se pueden repetir cuantas veces quieras.'
+              : `Quedan ${untried.length} etapas sin probar.`}
           </p>
           <div className="runview__series-actions">
             <button type="button" onClick={() => void runSeries(plan)}>
