@@ -73,7 +73,7 @@ def _positive(text, name):
 
 def apply_overrides(cfg, env=None):
     """The config with what the owner may change by environment: ``QWEN_LIVE_NOTIONAL_USD`` (size per trade, default the
-    config's 100), ``QWEN_LIVE_LEVERAGE`` (default 1) and ``QWEN_LIVE_PRODUCTS`` (comma separated, default BTC and ETH) and the opportunity window of the entry search: ``QWEN_LIVE_FORCE_WINDOW_H`` (length, 0 = window off),
+    config's 100), ``QWEN_LIVE_LEVERAGE`` (default 1) and ``QWEN_LIVE_PRODUCTS`` (comma separated, default BTC and ETH) and the opportunity window of the entry search: ``QWEN_LIVE_FORCE_WINDOW_H`` (length, 0 = window off), ``QWEN_LIVE_FORCE_NEUTRAL_LEAN`` (a real lean under it counts as neutral, 0,05) and ``QWEN_LIVE_FORCE_MIN_SCORE`` (minimum score of a candidate, 0,15),
     ``QWEN_LIVE_FORCE_MIN_LOOKS`` and ``QWEN_LIVE_FORCE_SIDE_AFTER_H`` (optional start delay in hours, default 0). The
     only check is that sizes are positive numbers and products look like Kraken ids (``futures_costs`` prices any of them): there are no caps on purpose. A changed
     size, leverage or product list changes the config identity, so a database made with other values is refused; the window
@@ -84,7 +84,8 @@ def apply_overrides(cfg, env=None):
     leverage = (env.get("QWEN_LIVE_LEVERAGE") or "").strip()
     products = (env.get("QWEN_LIVE_PRODUCTS") or "").strip()
     for name, key in (("QWEN_LIVE_FORCE_SIDE_AFTER_H", "force_side_after_h"), ("QWEN_LIVE_FORCE_WINDOW_H", "force_window_h"),
-                      ("QWEN_LIVE_FORCE_MIN_LOOKS", "force_min_looks")):
+                      ("QWEN_LIVE_FORCE_MIN_LOOKS", "force_min_looks"),
+                      ("QWEN_LIVE_FORCE_NEUTRAL_LEAN", "force_neutral_lean"), ("QWEN_LIVE_FORCE_MIN_SCORE", "force_min_score")):
         raw = (env.get(name) or "").strip()
         if not raw:
             continue

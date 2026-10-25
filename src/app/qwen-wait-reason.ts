@@ -87,8 +87,11 @@ export function waitReason(row: Record<string, unknown>): string | null {
     const lado =
       side(row.model_action) ?? (Number(row.lean_num) < 0 ? 'CORTO' : 'LARGO')
     const head = `Mirando la mejor ocasión${n ? ` (mirada ${n})` : ''}.`
+    const neutral = typeof row.lean === 'number' && Math.abs(row.lean) < 0.05
     if (row.mirror_ok === 0)
-      return `${head} Se inclinaba ${lado}, pero el espejo no coincidió: no es una ocasión confiable, no entra.`
+      return `${head} Se inclinaba ${lado}${now ? ` (puntaje ${now})` : ''}, pero no es una ocasión confiable: el espejo repite el mismo lado o la diferencia es muy chica. No entra.`
+    if (neutral)
+      return `${head} Con el estado real quedó neutro (50/50) y el espejo no repite el lado: ocasión ${lado}${now ? ` de ${now}` : ''}${best ? `; la mejor candidata hasta ahora vale ${best}` : ''}. Espera una mejor antes de entrar.`
     if (now && best)
       return `${head} Esta ocasión vale ${now} y la mejor candidata hasta ahora vale ${best}: espera una mejor antes de entrar.`
     return `${head} Todavía no entra: espera una ocasión mejor.`

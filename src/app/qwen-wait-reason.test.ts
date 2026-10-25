@@ -127,6 +127,21 @@ describe('qwenAnalyses with reasons', () => {
 })
 
 describe('waitReason: ventana de oportunidad', () => {
+  it('explica el caso en que el real quedó neutro y el espejo no repite el lado', () => {
+    const text = waitReason({
+      chosen: 'ESPERAR',
+      override: 'ventana_mirando',
+      lean: 0.003,
+      lean_m: 0.95,
+      lean_num: -0.4735,
+      score: 0.4735,
+      best_score: 0.5,
+      mirror_ok: 1,
+    })
+    expect(text).toContain('quedó neutro (50/50)')
+    expect(text).toContain('ocasión CORTO de 0,47')
+  })
+
   it('dice cuánto vale la ocasión y cuál es la mejor hasta ahora', () => {
     const text = waitReason({
       chosen: 'ESPERAR',
@@ -149,7 +164,7 @@ describe('waitReason: ventana de oportunidad', () => {
       mirror_ok: 0,
     })
     expect(text).toContain('Se inclinaba CORTO')
-    expect(text).toContain('el espejo no coincidió')
+    expect(text).toContain('el espejo repite el mismo lado')
   })
 
   it('cuenta la entrada y deja legible la entrada forzada vieja', () => {

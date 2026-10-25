@@ -249,6 +249,8 @@
       ]
     },
     "force_window_h": 12,
-    "force_min_looks": 6
+    "force_min_looks": 6,
+    "force_neutral_lean": 0.05,
+    "force_min_score": 0.15
   }
 }
