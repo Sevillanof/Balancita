@@ -136,9 +136,13 @@ def _store_photos(pdb, photos):
 
 
 def run_exam(history, db_path, provider, cfg, holdout_ms, *, max_minutes=55.0, clock=time.monotonic, log=print,
-             on_progress=None):
+             on_progress=None, concurrent=True):
     """Asks Qwen about the photos not answered yet, inside ``max_minutes``. Returns
-    ``{stop_reason, answered, total, calls}``; ``stop_reason``: ``done``, ``budget``, ``model_down``."""
+    ``{stop_reason, answered, total, calls}``; ``stop_reason``: ``done``, ``budget``, ``model_down``.
+
+    ``concurrent``: with the factors question the real and the mirrored state of a photo are asked at the same time
+    (llama-server ``-np 2``); ``False`` asks them one after the other (``exam --sequential``). The letters question has its
+    own switch (``runtime.concurrent_orders`` in the config)."""
     if not provider.health():
         raise qt.TraderError("llama-server no responde en {}: arrancalo con el modelo local y volvé a lanzar `exam`. Este "
                              "comando no descarga ningún modelo y solo habla con 127.0.0.1.".format(
@@ -178,8 +182,9 @@ def run_exam(history, db_path, provider, cfg, holdout_ms, *, max_minutes=55.0, c
         if served and served not in pdb.meta().get("served_models", []):
             pdb.set_meta("served_models", pdb.meta().get("served_models", []) + [served])
         model = served or identity.get("model_ref") or "unknown"
-        decider = (fq.FactorsDecider if factors else qt.LlmDecider)(provider, cfg, store=pdb, clock=clock,
-                                                                   deadline=clock() + max_minutes * 60.0, model=model)
+        options = dict(store=pdb, clock=clock, deadline=clock() + max_minutes * 60.0, model=model)
+        decider = fq.FactorsDecider(provider, cfg, concurrent=concurrent, **options) if factors \
+            else qt.LlmDecider(provider, cfg, **options)
         questions = {}
         started, reason, handled = clock(), "done", 0
         log("examen: {} fotos, {} por preguntar, presupuesto {} min, modelo {}".format(
@@ -187,20 +192,28 @@ def run_exam(history, db_path, provider, cfg, holdout_ms, *, max_minutes=55.0, c
         if on_progress:
             on_progress(0, len(pending))
         for row in pending:
-            if factors:                                # one call per state: 8 gradients (real, then mirrored)
-                ask = lambda step, text: decider.ask(row["snap_id"], row["t_ms"], step, text)
-            else:
+            if not factors:
                 question = questions.setdefault(row["product"], qt.questions_for(cfg, row["product"])["flat"])
                 ask = lambda step, text: decider.ask(row["snap_id"], row["t_ms"], step, question, text)
             real_action, real_p, mirror_action, mirror_p = row["real_action"], row["real_p"], None, None
             try:
-                if real_action is None:
-                    real = ask("action", row["state_text"])
-                    real_action, real_p = real["chosen"], real["probabilities"][real["chosen"]]
-                mirror = ask("mirror", row["mirror_text"])
+                if factors:                            # one call per state: 8 gradients; real and mirror together
+                    if real_action is None:
+                        real, mirror = decider.ask_pair(row["snap_id"], row["t_ms"], row["state_text"], row["mirror_text"])
+                        real_action, real_p = real["chosen"], real["probabilities"][real["chosen"]]
+                    else:
+                        mirror = decider.ask(row["snap_id"], row["t_ms"], "mirror", row["mirror_text"])
+                else:
+                    if real_action is None:
+                        real = decider.ask(row["snap_id"], row["t_ms"], "action", question, row["state_text"])
+                        real_action, real_p = real["chosen"], real["probabilities"][real["chosen"]]
+                    mirror = decider.ask(row["snap_id"], row["t_ms"], "mirror", question, row["mirror_text"])
                 mirror_action, mirror_p = mirror["chosen"], mirror["probabilities"][mirror["chosen"]]
-            except qt.DecisionError:
-                pass                                   # kept as it is (None): counted in the report, never retried
+            except qt.DecisionError as error:
+                # kept as it is (None): counted in the report, never retried. A factors pair keeps the real answer if only the mirror failed
+                done = getattr(error, "answers", None) or {}
+                if real_action is None and "action" in done:
+                    real_action, real_p = done["action"]["chosen"], done["action"]["probabilities"][done["action"]["chosen"]]
             except qt.BudgetExhausted:
                 reason = "budget"
                 break
@@ -215,7 +228,7 @@ def run_exam(history, db_path, provider, cfg, holdout_ms, *, max_minutes=55.0, c
             if on_progress:
                 on_progress(handled, len(pending))
             if handled % 50 == 0:
-                log("progreso: {} de {} fotos pendientes, {} llamadas nuevas, {:.2f} s por llamada, {} transcurridos".format(
+                log("progreso: {} de {} fotos pendientes, {} llamadas nuevas, {:.2f} s de pared por llamada, {} transcurridos".format(
                     handled, len(pending), decider.calls, decider.mean_call(), qt._eta(clock() - started)))
         answered = pdb.db.execute("SELECT COUNT(*) FROM exam_answers").fetchone()[0]
         log("examen terminado ({}): {} de {} fotos contestadas, {} llamadas nuevas en {}".format(
@@ -278,7 +291,7 @@ def _write_state(path, state):
 
 
 def run_quick(history, db_path, provider, cfg, holdout_ms, *, snapshots=QUICK_SNAPSHOTS, max_minutes=55.0,
-              clock=time.monotonic, log=print, state_path=None, variant=None):
+              clock=time.monotonic, log=print, state_path=None, variant=None, concurrent=True):
     """Asks Qwen about a small stratified sample of the photos, in its own database (the full exam's is never touched),
     and leaves ``{state, answered, total, summary}`` in ``state_path`` for the screen. Every run starts from scratch: a
     changed prompt or model is exactly what it is for, and an old sample would be refused by the config identity."""
@@ -306,7 +319,7 @@ def run_quick(history, db_path, provider, cfg, holdout_ms, *, snapshots=QUICK_SN
                 _write_state(state_path, state)
 
         outcome = run_exam(history, db_path, provider, quick, holdout_ms, max_minutes=max_minutes, clock=clock, log=log,
-                           on_progress=progress)
+                           on_progress=progress, concurrent=concurrent)
         state.update(answered=outcome["answered"], total=outcome["total"])
         if outcome["stop_reason"] == "done":
             state.update(state="done", summary=quick_summary(db_path, quick))
