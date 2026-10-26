@@ -1,0 +1,23 @@
+odd/tasks/tailwind-design-system.md
+  s_e15f51fa943e1d::t_91a85e2d65a983 74,112,118-153,425-429
+scripts/design-system/export-tokens.node-test.mjs
+  s_e15f51fa943e1d::t_f0a3e1a88a13b3 2-3,7,61-89
+scripts/design-system/verify.mjs
+  s_e15f51fa943e1d::t_55ffeabbac8434 2,4,9-39,87-96,101-115,190,195
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "f321bbf66d408917b0db2fcc9bfc03938ccb24bf",
+  "prompts": {},
+  "sessions": {
+    "s_e15f51fa943e1d": {
+      "agent_id": {
+        "tool": "github-copilot-cli",
+        "id": "ff6016a2-cdbf-403f-99d2-004567e63f82",
+        "model": "unknown"
+      },
+      "human_author": "Franco Sevillano <79455847+Sevillanof@users.noreply.github.com>"
+    }
+  }
+}
