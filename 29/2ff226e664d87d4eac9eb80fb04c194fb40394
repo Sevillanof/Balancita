@@ -1,0 +1,31 @@
+scripts/design-system/catalog.html
+  s_e15f51fa943e1d::t_a650ed4d848c3d 1-587
+scripts/design-system/export-tokens.node-test.mjs
+  s_e15f51fa943e1d::t_1d148795a34617 1-58
+scripts/design-system/verify.mjs
+  s_e15f51fa943e1d::t_7096b41e1efece 1-143
+tsconfig.node.json
+  s_e15f51fa943e1d::t_9b5dd7ed00ded6 22-26
+package.json
+  s_e15f51fa943e1d::t_c9459e14ebede4 16-18
+scripts/design-system/runtime.mjs
+  s_e15f51fa943e1d::t_b6787584ae3bca 1-4
+scripts/design-system/tokens.usage.json
+  s_e15f51fa943e1d::t_53f4439b033b67 1-10
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "292ff226e664d87d4eac9eb80fb04c194fb40394",
+  "prompts": {},
+  "sessions": {
+    "s_e15f51fa943e1d": {
+      "agent_id": {
+        "tool": "github-copilot-cli",
+        "id": "ff6016a2-cdbf-403f-99d2-004567e63f82",
+        "model": "unknown"
+      },
+      "human_author": "Franco Sevillano <79455847+Sevillanof@users.noreply.github.com>"
+    }
+  }
+}
