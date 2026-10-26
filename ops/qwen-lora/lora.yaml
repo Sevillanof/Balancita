@@ -11,13 +11,16 @@ iters: 15200
 learning_rate: 2.0e-5
 steps_per_report: 50
 steps_per_eval: 1000
-val_batches: 50
+# 20 lotes de validación (~35 s) en vez de 50 (92 s medidos): la validación es solo para mirar.
+val_batches: 20
 save_every: 500
 # La ficha completa son ~1.000 tokens; 1.536 deja margen.
 max_seq_length: 1536
 # Solo se aprende la línea de respuesta: los tokens de la pregunta y del STATE no entran en la pérdida.
 mask_prompt: true
-grad_checkpoint: true
+# Medido en la Mac (26-oct, 30 pasos cada uno, con Qwen en vivo abierto): sin grad checkpointing 3,3 s/paso contra 3,8 con él (13 %
+# más rápido) y la memoria alcanzó; lote 4 no mejora los ejemplos por segundo (0,31 contra 0,30), así que queda lote 1.
+grad_checkpoint: false
 seed: 20261026
 lora_parameters:
   rank: 8

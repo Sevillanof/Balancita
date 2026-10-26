@@ -41,8 +41,9 @@ el LoRA se entrena igual por decisión de Fran.
    Q8 de llama-server no sirve para entrenar).
 3. `train.sh speed`: 50 pasos para medir tokens/s y memoria. El entrenamiento completo son ~16 millones de tokens.
 4. `train.sh train` de noche (reanudable: guarda el adaptador cada 500 pasos y retoma si se cortó). En la Mac de Fran un paso
-   (un ejemplo de ~1.000 tokens) tarda 3,3-4 s con Qwen en vivo abierto: la pasada completa (15.200 pasos) son ~16 h, así que se
-   parte en dos noches con `train.sh train 7600` (la segunda noche el mismo comando retoma el adaptador guardado). Hiperparámetros en
+   (un ejemplo de ~1.000 tokens) tarda ~3,3 s con Qwen en vivo abierto (medido 26-oct: sin grad checkpointing 3,3 s, con él 3,8 s;
+   lote 4 no mejora los ejemplos por segundo): la pasada completa (15.200 pasos) son ~14 h, así que se parte en dos noches con
+   `train.sh train 7600` (~7 h; la segunda noche el mismo comando retoma el adaptador guardado). Hiperparámetros en
    `ops/qwen-lora/lora.yaml`: rango 8 en las 7 proyecciones de las últimas 16 capas, lote 1, una pasada, solo la línea de
    respuesta entra en la pérdida (`mask_prompt`).
 5. `train.sh convert`: el adaptador de mlx-lm pasa al GGUF que llama-server carga (`futures_qwen_lora_adapter.py`).
