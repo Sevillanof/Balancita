@@ -33,9 +33,8 @@ case "${1:-help}" in
     echo "QLoRA: los pesos quedan congelados en 4 bits y solo se entrena el adaptador. (QWEN_LORA_HF=Qwen/Qwen3-4B para los pesos completos, ~8 GB.)"
     read -q "ok?¿Seguir? (y/n) " || { echo; exit 1; }
     echo
-    # el comando se llama `hf` en las versiones nuevas de huggingface_hub y `huggingface-cli` en las anteriores
-    if [ -x "$VENV/bin/hf" ]; then hf_cmd=$VENV/bin/hf; else hf_cmd=$VENV/bin/huggingface-cli; fi
-    "$hf_cmd" download "$HF_MODEL" --local-dir "$MODEL"
+    # por Python (snapshot_download viene siempre con huggingface_hub; el comando `hf` / `huggingface-cli` no siempre se instala)
+    "$VENV/bin/python" -c "from huggingface_hub import snapshot_download; import sys; print(snapshot_download(sys.argv[1], local_dir=sys.argv[2]))" "$HF_MODEL" "$MODEL"
     du -sh "$MODEL"
     [ -f "$MODEL/config.json" ] || { echo "la descarga no dejó config.json en $MODEL: revisá el error de arriba"; exit 1; }
     ;;
