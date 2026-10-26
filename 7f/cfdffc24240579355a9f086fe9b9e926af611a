@@ -1,0 +1,33 @@
+odd/tasks/tailwind-design-system.md
+  s_e15f51fa943e1d::t_3b02c474e9c2ed 72,131,200-201,213-225,302-309
+src/features/strategy-lab/presentation/ActivationDialog.tsx
+  s_e15f51fa943e1d::t_7a1e4d13b72f3f 3-8,28,33,38,40-41,46
+src/features/strategy-lab/presentation/AnalyzerModal.tsx
+  s_e15f51fa943e1d::t_c1638db83761b7 15-20,214,222,228,231,234,247,250,252,255,270,458,508,524,529
+src/features/strategy-lab/presentation/DeleteStrategyDialog.tsx
+  s_e15f51fa943e1d::t_ffd691f7bd3d36 9-14,75,81,85-86,92
+src/features/strategy-lab/presentation/StrategyDetailsModal.tsx
+  s_e15f51fa943e1d::t_0089cd0ea40097 24-31,157-158,162,167,175,182,203,221-222
+src/features/strategy-lab/presentation/StrategyEditorModal.tsx
+  s_e15f51fa943e1d::t_d20779d39be844 7-13,113,118,123,136,150,154-155,160
+src/features/strategy-lab/presentation/VectorbtModal.tsx
+  s_e15f51fa943e1d::t_69e7c26b7eb5e5 16-22,126,166,171,174,180,194,224,232,240,250,261,273,285,289-290,295
+src/features/strategy-lab/presentation/modal-styles.ts
+  s_e15f51fa943e1d::t_f679173fea9390 1-18
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "7fcfdffc24240579355a9f086fe9b9e926af611a",
+  "prompts": {},
+  "sessions": {
+    "s_e15f51fa943e1d": {
+      "agent_id": {
+        "tool": "github-copilot-cli",
+        "id": "ff6016a2-cdbf-403f-99d2-004567e63f82",
+        "model": "unknown"
+      },
+      "human_author": "Franco Sevillano <79455847+Sevillanof@users.noreply.github.com>"
+    }
+  }
+}
