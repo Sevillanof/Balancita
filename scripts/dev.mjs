@@ -97,7 +97,8 @@ if (!llmEnabled && (env.DECISIONS_ENABLED ?? '').trim() !== '0') {
 const liveDir = resolve(root, 'server/data/dev-live')
 mkdirSync(liveDir, { recursive: true })
 // Leftovers of an earlier `pnpm run dev` in this checkout (ports, writer
-// locks) are stopped; a port held by anything else is reported and we exit.
+// locks, and dev children such as forward or news that hold neither) are
+// stopped; a port held by anything else is reported and we exit.
 const sweepPorts = [
   ...Object.entries(DEV_PORTS).map(([name, port]) => ({ name, port })),
   ...(python.command === undefined
@@ -278,8 +279,14 @@ function shutdown(signal, code = 0) {
   })
 }
 
+// `on`, not `once`: a second Ctrl+C must not fall back to the default action
+// (instant death without the `exit` handler below, children left behind);
+// `shutdown` ignores repeats and the SIGKILL timer bounds the wait.
+// What no handler can cover: SIGKILL of this process, a crash of the machine.
+// Children then live on in their own groups; the next `pnpm dev` finds them
+// in `sweepStale` (dev.pid, locks, ports and the process pass).
 for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP'])
-  process.once(signal, () => shutdown(signal))
+  process.on(signal, () => shutdown(signal))
 // Safety net: whatever ends this process, no child group outlives it.
 process.on('exit', () => {
   removeDevPid(liveDir)
