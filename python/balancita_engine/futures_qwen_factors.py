@@ -75,8 +75,11 @@ def request_body(prompt, template):
     if template.get("system"):
         messages.append({"role": "system", "content": template["system"]})
     messages.append({"role": "user", "content": prompt})
-    return {"messages": messages, "max_tokens": MAX_TOKENS, "temperature": 0, "grammar": GRAMMAR, "logprobs": True,
+    body = {"messages": messages, "max_tokens": MAX_TOKENS, "temperature": 0, "grammar": GRAMMAR, "logprobs": True,
             "top_logprobs": llm.TOP_LOGPROBS, "chat_template_kwargs": {"enable_thinking": False}, "cache_prompt": True}
+    if template.get("lora"):
+        body["lora"] = template["lora"]          # only the exam with an adapter (``exam --lora``): llama-server applies it to this request
+    return body
 
 
 # --------------------------------------------------------------------------- reading the answer

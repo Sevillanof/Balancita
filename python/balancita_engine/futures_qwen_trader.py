@@ -189,7 +189,24 @@ def template_of(cfg):
            "prefill": prompt["prefill"]}
     if prompt.get("state_last"):
         out["state_last"] = True          # v2.1: fixed text first, the variable STATE last (llama-server prefix cache)
+    if lora_of(cfg):
+        out["lora"] = lora_of(cfg)        # the LoRA adapter(s) this run asks llama-server to apply (``exam --lora``)
     return out
+
+
+def lora_of(cfg):
+    """``[{id, scale}]`` of ``runtime.lora`` (the adapter llama-server applies to these requests only), or ``None``. Not part
+    of the config identity (``runtime``): the exam adds it to its own identity (``futures_qwen_trader_exam.exam_identity``)."""
+    return (cfg.get("runtime") or {}).get("lora") or None
+
+
+def parse_lora(text):
+    """``--lora ID[:SCALE]`` -> ``[{"id": ID, "scale": SCALE}]`` (scale 1.0 by default)."""
+    head, _, tail = text.partition(":")
+    try:
+        return [{"id": int(head), "scale": float(tail) if tail else 1.0}]
+    except ValueError:
+        raise TraderError("--lora espera ID o ID:ESCALA (por ejemplo 0 o 0:1.0), no {!r}".format(text))
 
 
 def build_prompt(state_text, question, template):
@@ -1683,6 +1700,13 @@ def _parser():
     ee.add_argument("--variant", default=None, metavar="ID",
                     help="a variant of config/qwen-quick-variants.json (other questions). With --quick each has its own "
                          "database and state file; for the full exam pass its own --exam-db")
+    ee.add_argument("--lora", default=None, metavar="ID[:SCALE]",
+                    help="ask with a LoRA adapter loaded in llama-server (--lora <file> --lora-init-without-apply; LLAMA_LORA in "
+                         "pnpm dev): every request carries lora=[{id, scale}] and the exam identity includes it, so pass its "
+                         "own --exam-db. Without this flag no request names an adapter (the live operator never does)")
+    ee.add_argument("--exam-from", default=None, metavar="YYYY-MM-DD",
+                    help="first day of the photos (default: practice.from of the config). The LoRA validation uses 2025-10-16 "
+                         "so that no training photo (before 2025-10-01) is in the exam. Changes the config identity")
     ee.add_argument("--quick", nargs="?", const=150, type=int, default=None, metavar="N",
                     help="quick test: only ~N photos (default 150), in its own database (exam-v3-rapida.sqlite); leaves "
                          "rapida-v3.json for the screen. Orientative: it is not the exam")
@@ -1690,6 +1714,8 @@ def _parser():
     common(er, "3", ("3", "live"))
     er.add_argument("--exam-db", default=None, help="default: exam-v3.sqlite for v3, exam-live.sqlite for live")
     er.add_argument("--variant", default=None, metavar="ID", help="report of an exam run with a variant of config/qwen-quick-variants.json")
+    er.add_argument("--lora", default=None, metavar="ID[:SCALE]", help="the same --lora the exam ran with")
+    er.add_argument("--exam-from", default=None, metavar="YYYY-MM-DD", help="the same --exam-from the exam ran with")
     er.add_argument("--out", default=os.path.join(DATA_DIR, "informe-examen-v3.md"))
     rp = sub.add_parser("report", help="Spanish markdown report (no model)")
     common(rp, "all", PRACTICE_VERSIONS + ("all",))
@@ -1718,6 +1744,11 @@ def main(argv=None):
             # and the gate only counts photos asked under the identity of the live database
             from .futures_qwen_live import apply_overrides
             cfg = apply_overrides(cfg)
+        if args.command in ("exam", "exam-report"):
+            if getattr(args, "exam_from", None):
+                cfg = dict(cfg, practice=dict(cfg["practice"], **{"from": args.exam_from}))
+            if getattr(args, "lora", None):
+                cfg = dict(cfg, runtime=dict(cfg.get("runtime") or {}, lora=parse_lora(args.lora)))
         holdout_ms = load_holdout_ms()
         if args.command == "compare-prompts":
             from .futures_qwen_trader_probe import compare_lines, compare_prompts
