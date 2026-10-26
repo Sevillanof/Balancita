@@ -808,6 +808,11 @@ export function devChildSpecs({
           '-np',
           (env.LLAMA_PARALLEL ?? '').trim() || '2',
           ...optionalFlag('-t', String(llamaThreads(env, platform) ?? '')),
+          // Prompt cache kept in RAM (MiB): the server default is 8192 and it
+          // grows to that on a long run; 1024 keeps the Mac's memory in check
+          // without changing any answer (LLAMA_CACHE_RAM overrides it).
+          '--cache-ram',
+          (env.LLAMA_CACHE_RAM ?? '').trim() || '1024',
           // Opt-in server flags for prompt reuse between option orders (see futures_qwen_prefill_probe.py).
           ...optionalFlag('-ub', env.LLAMA_UBATCH),
           ...optionalFlag('--ctx-checkpoints', env.LLAMA_CTX_CHECKPOINTS),

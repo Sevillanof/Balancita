@@ -723,6 +723,8 @@ describe('optional LLM decision children (llm and q)', () => {
       '8192',
       '-np',
       '2',
+      '--cache-ram',
+      '1024',
       '--no-mmproj',
       '--no-webui',
     ])
@@ -1036,6 +1038,20 @@ describe('llm child threads and priority', () => {
 
   it('passes no -t elsewhere unless LLAMA_THREADS is set', () => {
     assert.equal(threads(llmSpec({}, 'linux', plain)), undefined)
+  })
+
+  it('caps the prompt cache at 1024 MiB unless LLAMA_CACHE_RAM says otherwise', () => {
+    const cacheRam = (spec) => spec.args[spec.args.indexOf('--cache-ram') + 1]
+    assert.equal(cacheRam(llmSpec({}, 'linux', plain)), '1024')
+    assert.equal(cacheRam(llmSpec({}, 'darwin', plain)), '1024')
+    assert.equal(
+      cacheRam(llmSpec({ LLAMA_CACHE_RAM: ' 2048 ' }, 'darwin', plain)),
+      '2048',
+    )
+    assert.equal(
+      cacheRam(llmSpec({ LLAMA_CACHE_RAM: '' }, 'darwin', plain)),
+      '1024',
+    )
   })
 
   it('ignores an invalid LLAMA_THREADS', () => {
