@@ -1,0 +1,29 @@
+README.md
+  s_e15f51fa943e1d::t_6d1440b2aeeabc 14
+scripts/dev-provider-env.mjs
+  s_e15f51fa943e1d::t_569af620dccf04 638
+src/app/LaboratoryPage.tsx
+  s_e15f51fa943e1d::t_6b6bbdff1c8d39 15
+src/app/TerminalEntry.tsx
+  s_e15f51fa943e1d::t_e5d37e42bd73ee 15,26,108
+src/features/connected-trading/infrastructure/terminal-stream-client.test.ts
+  s_e15f51fa943e1d::t_a029670191128e 12-13
+src/features/connected-trading/infrastructure/terminal-stream-client.ts
+  s_e15f51fa943e1d::t_a6f30d5a05de4c 119-120
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "42cbda19d2ac4a3616bb87771da8098689554742",
+  "prompts": {},
+  "sessions": {
+    "s_e15f51fa943e1d": {
+      "agent_id": {
+        "tool": "github-copilot-cli",
+        "id": "ff6016a2-cdbf-403f-99d2-004567e63f82",
+        "model": "unknown"
+      },
+      "human_author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
