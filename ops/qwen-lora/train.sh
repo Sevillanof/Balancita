@@ -36,7 +36,7 @@ case "${1:-help}" in
     [ -f "$DATASET/train.jsonl" ] || { echo "falta $DATASET/train.jsonl (el dataset se arma en la nube y se copia aquí)"; exit 1; }
     "$VENV/bin/mlx_lm.lora" -c "$ROOT/ops/qwen-lora/lora.yaml" --model "$MODEL" --data "$DATASET" \
       --adapter-path "$DATA/adapters-prueba" --iters 50 --steps-per-report 10 --steps-per-eval 1000 --save-every 1000
-    echo "Con los tokens/s de arriba: el entrenamiento completo son ~12 millones de tokens (12.000.000 / tokens_s / 3600 = horas)."
+    echo "Con los tokens/s de arriba: el entrenamiento completo son ~16 millones de tokens (16.000.000 / tokens_s / 3600 = horas)."
     ;;
   train)
     [ -f "$DATASET/train.jsonl" ] || { echo "falta $DATASET/train.jsonl"; exit 1; }

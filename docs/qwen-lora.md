@@ -6,16 +6,28 @@ vivo: el adaptador se aplica solo a los pedidos que lo piden.
 
 ## Qué aprende
 
-La misma pregunta y el mismo STATE de la ficha (config `qwen-live.json`), y como respuesta la línea `F1:v … F8:v` que «debió»
+Dos preguntas por foto, las dos con la misma ficha (STATE) que ve en vivo:
+
+**La dirección.** La misma pregunta y el mismo STATE de la ficha (config `qwen-live.json`), y como respuesta la línea `F1:v … F8:v` que «debió»
 dar: los renglones que votan (F1 F2 F3 F4 F6 F7) llevan el signo de lo que hizo el precio en las 4 h siguientes, con ±2 si el
 movimiento fue grande (por encima de la mediana del producto) y ±1 si fue chico; F5 y F8 en 0. El espejo también se enseña (ficha
 dada vuelta, línea dada vuelta). Así el examen, la prueba rápida y la ventana en vivo leen la respuesta sin cambiar nada: la
 inclinación sale, como siempre, de las probabilidades de «+» y «−».
 
+**La entrada** (Fran, 26-oct: «hagamos las 3 igual»). Con el lado ya decidido, ¿cómo entrar? Una línea `E:v` con cinco opciones:
+`E:-2` orden límite esperando un retroceso grande (30 pb a favor, válida 2 h), `E:-1` orden límite con retroceso chico (10 pb, 1 h),
+`E:0` ya a mercado, `E:+1` esperar la vela de 15 min y entrar solo si confirma, `E:+2` esperar 1 h. La etiqueta es la opción que
+dejó el mejor neto a las 4 h con las velas que siguieron (orden límite: comisión maker 0,02 %, se llena si una vela la toca; el resto
+taker 0,05 %; una orden que no se llenó o una confirmación que no llegó vale 0). El espejo lleva el lado opuesto y la misma opción.
+Esta pregunta no existe en vivo ni en el examen: la contesta `ops/qwen-lora/entry_eval.py`. Las simulaciones sin modelo
+(`analisis/qwen-lora/informe-entrada.md`, `informe-momento.md`) dieron que ninguna de las tres formas de entrar gana por sí sola;
+el LoRA se entrena igual por decisión de Fran.
+
 ## Períodos
 
-- Entrenamiento: fotos cada 15 min de BTC y ETH de 2022-04-01 a 2025-09-30 (velas públicas de Kraken). Muestra de 3.000 fotos por
-  producto repartidas por mes (6.000 fotos, 12.000 ejemplos de ~1.000 tokens); los últimos 2 meses van a `valid.jsonl`.
+- Entrenamiento: fotos cada 15 min de BTC y ETH de 2022-04-01 a 2025-09-30 (velas públicas de Kraken). Muestra de 2.000 fotos por
+  producto repartidas por mes (4.000 fotos, 16.000 ejemplos de ~1.000 tokens: dirección y entrada, real y espejo); los últimos 2
+  meses van a `valid.jsonl`.
 - Validación: el examen en la ventana práctica 2025-10-16 a 2026-04-18 (`--exam-from 2025-10-16`), misma vara de siempre.
 - Holdout desde 2026-04-19: intacto (`History` no lee esas velas).
 
@@ -27,7 +39,7 @@ inclinación sale, como siempre, de las probabilidades de «+» y «−».
    `mlx-community/Qwen3-4B-4bit`, el mismo Qwen3-4B cuantizado a 4 bits para MLX, ~2,5 GB; pide confirmación. Los pesos quedan
    congelados en 4 bits y solo se entrena el adaptador; `QWEN_LORA_HF=Qwen/Qwen3-4B` usaría los pesos completos, ~8 GB. El GGUF
    Q8 de llama-server no sirve para entrenar).
-3. `train.sh speed`: 50 pasos para medir tokens/s y memoria. El entrenamiento completo son ~12 millones de tokens.
+3. `train.sh speed`: 50 pasos para medir tokens/s y memoria. El entrenamiento completo son ~16 millones de tokens.
 4. `train.sh train` de noche (reanudable: guarda el adaptador cada 500 pasos y retoma si se cortó). Hiperparámetros en
    `ops/qwen-lora/lora.yaml`: rango 8 en las 7 proyecciones de las últimas 16 capas, lote 1, una pasada, solo la línea de
    respuesta entra en la pérdida (`mask_prompt`).
@@ -38,7 +50,11 @@ inclinación sale, como siempre, de las probabilidades de «+» y «−».
 7. Examen con el adaptador, en su propia base:
    `python -m balancita_engine.futures_qwen_trader exam --version live --lora 0 --exam-from 2025-10-16 --exam-db data/qwen-trader/exam-lora.sqlite --quick 150`
    y después el completo (`--max-minutes 240`, sin `--quick`). Informe: `exam-report` con los mismos `--lora` y `--exam-from`.
-8. Solo si PASA, Fran decide si Qwen en vivo usa el adaptador (eso sería otro cambio: hoy el proceso en vivo nunca lo pide).
+8. La entrada, con el adaptador y sin él:
+   `python ops/qwen-lora/entry_eval.py --lora 0 -n 300` y `python ops/qwen-lora/entry_eval.py --no-lora -n 300`. Compara el neto a
+   4 h de la opción que eligió Qwen con entrar a mercado y con la mejor opción (oráculo), y cuántas veces eligió la mejor.
+9. Solo si PASA, Fran decide si Qwen en vivo usa el adaptador (eso sería otro cambio: hoy el proceso en vivo nunca lo pide; usar
+   la entrada elegida en paper sería otro más: hoy el operador solo entra a mercado).
 
 ## Memoria y tiempo en la Mac (24 GB)
 

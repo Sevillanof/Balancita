@@ -59,6 +59,77 @@ class LabelTests(unittest.TestCase):
         self.assertEqual(mirror["messages"][2]["content"], "F1:-1 F2:-1 F3:-1 F4:-1 F5:0 F6:-1 F7:-1 F8:0")
 
 
+def bars_from(day, closes, span=1.0, lead=0):
+    """Synthetic 5m candles from ``lead`` bars before ``day`` 00:00 with the given closes (high = close + span, low = close - span)."""
+    start = qt.date_ms(day) - lead * qt.BAR_MS
+    return [{"bucket_start": start + i * qt.BAR_MS, "open": str(c), "high": str(c + span), "low": str(c - span), "close": str(c),
+             "volume": "1"} for i, c in enumerate(closes)]
+
+
+class EntryTests(unittest.TestCase):
+    def test_the_nets_of_the_five_ways_in(self):
+        # price steps down to 99.5 at once and stays: the market entry loses 50 bp, waiting an hour enters at the bottom,
+        # the 15 min candle goes against the long so the confirmation does not enter, the limit orders fill on the first bar
+        nxt = [(100.0, 99.0, 99.5)] * lora.ENTRY_BARS
+        nets = lora.entry_nets(1, 100.0, nxt, "PF_XBTUSD")
+        self.assertAlmostEqual(nets[0], -50.0 - 10.12, places=6)
+        self.assertAlmostEqual(nets[2], -10.12, places=6)
+        self.assertEqual(nets[1], 0.0)
+        self.assertAlmostEqual(nets[-1], (99.5 / 99.9 - 1) * 1e4 - 7.06, places=6)
+        self.assertAlmostEqual(nets[-2], (99.5 / 99.7 - 1) * 1e4 - 7.06, places=6)
+        self.assertEqual(lora.entry_label(nets), 1)
+        # a short in the same path: the price went its way, the market entry wins 50 bp, the limits above never fill
+        nets = lora.entry_nets(-1, 100.0, nxt, "PF_XBTUSD")
+        self.assertAlmostEqual(nets[0], 50.0 - 10.12, places=6)
+        self.assertEqual((nets[-1], nets[-2]), (0.0, 0.0))
+        self.assertAlmostEqual(nets[1], -10.12, places=6)                 # confirmed at 99.5, flat afterwards
+        self.assertEqual(lora.entry_label(nets), 0)
+        with self.assertRaises(ValueError):
+            lora.entry_nets(1, 100.0, nxt[:10], "PF_XBTUSD")
+
+    def test_a_limit_fills_when_a_later_bar_touches_it_and_exits_four_hours_after_the_fill(self):
+        closes = [100.0] * 5 + [99.85] + [100.0] * 60 + [101.0] * 20     # bar 5 dips 15 bp (low 99.75): only the 10 bp order fills
+        nxt = [(c + 0.1, c - 0.1, c) for c in closes][:lora.ENTRY_BARS]
+        nets = lora.entry_nets(1, 100.0, nxt, "PF_ETHUSD")
+        exit_price = nxt[5 + 48][2]
+        self.assertAlmostEqual(nets[-1], (exit_price / 99.9 - 1) * 1e4 - (2 + 5 + 0.19), places=6)
+        self.assertEqual(nets[-2], 0.0)
+        self.assertEqual(lora.entry_label(nets), -1)
+
+    def test_ties_go_to_the_simplest_option(self):
+        self.assertEqual(lora.entry_label({-2: 0.0, -1: 0.0, 0: 0.0, 1: 0.0, 2: 0.0}), 0)
+        self.assertEqual(lora.entry_label({-2: 3.0, -1: 3.0, 0: 0.0, 1: 0.0, 2: 0.0}), -1)
+        self.assertEqual(lora.entry_label({-2: 3.0, -1: 1.0, 0: 0.0, 1: 0.0, 2: 3.0}), 2)
+
+    def test_the_entry_line_and_its_grammar(self):
+        for value in (-2, -1, 0, 1, 2):
+            self.assertEqual(lora.parse_entry_line(lora.entry_line(value)), value)
+        self.assertEqual(lora.entry_line(1), "E:+1")
+        self.assertIsNone(lora.parse_entry_line("E:+3"))
+        self.assertIsNone(lora.parse_entry_line("F1:+1"))
+        self.assertIn('"E:"', lora.ENTRY_GRAMMAR)
+
+    def test_an_entry_example_names_the_side_and_the_mirror_turns_the_side_but_not_the_option(self):
+        p = photo("PF_XBTUSD", "2024-01-01", 0, 20.0)
+        real, mirror = lora.entry_examples_of(LIVE, p, -1)
+        self.assertEqual(real["messages"][1]["content"], fq.build_prompt("STATE A", lora.entry_question(1)))
+        self.assertIn("LARGO", real["messages"][1]["content"])
+        self.assertIn("CORTO", mirror["messages"][1]["content"])
+        self.assertEqual(mirror["messages"][1]["content"], fq.build_prompt("STATE B", lora.entry_question(-1)))
+        self.assertEqual(real["messages"][2]["content"], "E:-1")
+        self.assertEqual(mirror["messages"][2]["content"], "E:-1")
+
+    def test_entry_labels_skip_flat_moves_and_photos_without_candles_ahead(self):
+        bars = bars_from("2024-01-01", [100.0] * 300, span=0.0)
+        photos = [photo("PF_XBTUSD", "2024-01-01", 1, 5.0), photo("PF_XBTUSD", "2024-01-01", 2, 0.0),
+                  photo("PF_XBTUSD", "2024-01-01", 24, 5.0), photo("PF_XBTUSD", "2023-12-31", 23, 5.0)]
+        labels = lora.entry_labels(photos, lambda product: lora.Bars(bars))
+        self.assertEqual(set(labels), {("PF_XBTUSD", photos[0]["t_ms"])})
+        # nothing moves: the market entries lose the cost, the limits never fill and the confirmation does not enter (0 each);
+        # the tie among those goes to the confirmation (ENTRY_TIE_ORDER)
+        self.assertEqual(labels[("PF_XBTUSD", photos[0]["t_ms"])], 1)
+
+
 class SamplingTests(unittest.TestCase):
     def photos(self):
         out = []
@@ -89,11 +160,24 @@ class SamplingTests(unittest.TestCase):
         self.assertEqual(lora.split_valid(self.photos(), 0)[1], [])
 
 
+class FakeHistory:
+    def __init__(self):
+        self.calls = []
+
+    def bars(self, product, from_ms, to_ms):
+        self.calls.append((product, from_ms, to_ms))
+        out = []
+        for day in ("2024-01-01", "2024-02-01", "2024-03-01"):
+            out += bars_from(day, [100.0 + 0.01 * i for i in range(300)], lead=12)   # the bar that closes at 00:00 too
+        return out
+
+
 class BuildTests(unittest.TestCase):
     def test_build_dataset_writes_jsonl_and_meta_without_touching_the_holdout(self):
         photos = {"PF_XBTUSD": [photo("PF_XBTUSD", "2024-0{}-01".format(m), h, (-1) ** h * (10.0 + h))
                                 for m in (1, 2, 3) for h in range(6)]}
         calls = []
+        history = FakeHistory()
 
         def fake_between(history, cfg, product, from_day, to_day, log=print):
             calls.append((product, from_day, to_day))
@@ -103,7 +187,7 @@ class BuildTests(unittest.TestCase):
         lora.photos_between = fake_between
         try:
             with tempfile.TemporaryDirectory() as tmp:
-                meta = lora.build_dataset(None, LIVE, tmp, products=("PF_XBTUSD",), from_day="2024-01-01",
+                meta = lora.build_dataset(history, LIVE, tmp, products=("PF_XBTUSD",), from_day="2024-01-01",
                                           to_day="2024-04-01", per_product=9, valid_months=1, log=lambda *a: None)
                 train, valid = read_jsonl(os.path.join(tmp, "train.jsonl")), read_jsonl(os.path.join(tmp, "valid.jsonl"))
                 with open(os.path.join(tmp, "meta.json"), encoding="utf-8") as handle:
@@ -111,14 +195,28 @@ class BuildTests(unittest.TestCase):
         finally:
             lora.photos_between = original
         self.assertEqual(calls, [("PF_XBTUSD", "2024-01-01", "2024-04-01")])
+        self.assertEqual(history.calls, [("PF_XBTUSD", qt.date_ms("2024-01-01") - LIVE["practice"]["warmup_days"] * qt.DAY_MS,
+                                          qt.date_ms("2024-04-01"))])
         self.assertEqual(meta["photos_sampled"], 9)
-        self.assertEqual(len(train) + len(valid), 18)                 # two examples per photo
-        self.assertEqual(len(valid), 6)                               # the 3 photos of March, twice
+        # four examples per photo: direction (real + mirror) and entry (real + mirror); every photo here has candles ahead
+        self.assertEqual(len(train) + len(valid), 36)
+        self.assertEqual(len(valid), 12)                              # the 3 photos of March, four times
+        self.assertEqual(meta["examples_by_question"]["train"], {"direccion": 12, "entrada": 12})
         self.assertEqual(stored["config_hash"], qt.config_hash(LIVE))
         self.assertEqual(stored["label_horizon_min"], 240)
         self.assertIn("PF_XBTUSD", stored["big_move_bp"])
+        self.assertEqual(set(stored["entry_options"]), {"-2", "-1", "0", "1", "2"})
+        self.assertAlmostEqual(sum(stored["entry_label_share"].values()), 1.0)
+        direction = entry = 0
         for row in train + valid:
-            self.assertIsNotNone(fq.parse_line(row["messages"][2]["content"]))
+            answer = row["messages"][2]["content"]
+            if fq.parse_line(answer) is not None:
+                direction += 1
+            else:
+                self.assertIsNotNone(lora.parse_entry_line(answer))
+                self.assertIn("El lado ya esta decidido", row["messages"][1]["content"])
+                entry += 1
+        self.assertEqual((direction, entry), (18, 18))
 
     def test_the_cli_refuses_a_period_that_reaches_the_holdout(self):
         holdout = qt.stamp(qt.load_holdout_ms())[:10]
