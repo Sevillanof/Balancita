@@ -13,6 +13,13 @@ import {
 import type { StrategySpec } from '../domain/strategy-spec.ts'
 import type { VbtRequest } from '../infrastructure/vectorbt-api.ts'
 import ModalFrame from './ModalFrame.tsx'
+import {
+  MODAL_ACTIONS,
+  MODAL_BUTTON,
+  MODAL_HINT,
+  MODAL_NOTICE,
+  MODAL_FIELD,
+} from './modal-styles.ts'
 import './VectorbtPanel.css'
 
 type Props = {
@@ -116,7 +123,7 @@ export default function VectorbtModal({
   return (
     <ModalFrame label="Explorar con VectorBT" onClose={onClose} wide>
       <h2>Explorar «{strategyName}» con VectorBT</h2>
-      <p className="smodal__hint">
+      <p className={MODAL_HINT}>
         Una prueba rápida con un simulador aparte, para ver qué funciona y qué
         falla antes de gastar una prueba completa. Usa datos hasta el
         19-abr-2026: el examen queda intacto. Lo que sale son hipótesis, no un
@@ -156,21 +163,21 @@ export default function VectorbtModal({
       {mode === 'variants' && (
         <div className="vbt-variants">
           {specError && (
-            <p role="alert" className="smodal__notice" data-tone="warn">
+            <p role="alert" className={MODAL_NOTICE} data-tone="warn">
               No se pudo leer la estrategia: {specError}
             </p>
           )}
           {!specError && variables === null && (
-            <p className="smodal__hint">Leyendo la estrategia…</p>
+            <p className={MODAL_HINT}>Leyendo la estrategia…</p>
           )}
           {variables !== null && variables.length === 0 && (
-            <p className="smodal__notice" data-tone="warn">
+            <p className={MODAL_NOTICE} data-tone="warn">
               Esta estrategia no tiene números que se puedan variar.
             </p>
           )}
           {variables !== null && variables.length > 0 && (
             <>
-              <label className="smodal__field">
+              <label className={MODAL_FIELD}>
                 ¿Qué querés cambiar?
                 <select
                   value={vary}
@@ -184,7 +191,7 @@ export default function VectorbtModal({
                 </select>
               </label>
               {chosen && (
-                <p className="smodal__hint" data-testid="vbt-current">
+                <p className={MODAL_HINT} data-testid="vbt-current">
                   {chosen.hint} Ahora vale{' '}
                   <b>{chosen.base.replace('.', ',')}</b>.
                 </p>
@@ -214,7 +221,7 @@ export default function VectorbtModal({
 
               {source === 'range' ? (
                 <div className="vbt-range">
-                  <label className="smodal__field">
+                  <label className={MODAL_FIELD}>
                     Mínimo
                     <input
                       inputMode="decimal"
@@ -222,7 +229,7 @@ export default function VectorbtModal({
                       onChange={(event) => setMin(event.target.value)}
                     />
                   </label>
-                  <label className="smodal__field">
+                  <label className={MODAL_FIELD}>
                     Máximo
                     <input
                       inputMode="decimal"
@@ -230,7 +237,7 @@ export default function VectorbtModal({
                       onChange={(event) => setMax(event.target.value)}
                     />
                   </label>
-                  <label className="smodal__field">
+                  <label className={MODAL_FIELD}>
                     Paso
                     <input
                       inputMode="decimal"
@@ -240,7 +247,7 @@ export default function VectorbtModal({
                   </label>
                 </div>
               ) : (
-                <label className="smodal__field">
+                <label className={MODAL_FIELD}>
                   Valores, separados por punto y coma
                   <input
                     value={list}
@@ -251,7 +258,7 @@ export default function VectorbtModal({
               )}
 
               {typed && result && result.error && (
-                <p role="alert" className="smodal__notice" data-tone="warn">
+                <p role="alert" className={MODAL_NOTICE} data-tone="warn">
                   {result.error}
                 </p>
               )}
@@ -263,7 +270,7 @@ export default function VectorbtModal({
                   {result.values.map((v) => v.replace('.', ',')).join(' · ')}
                 </p>
               )}
-              <p className="smodal__hint">
+              <p className={MODAL_HINT}>
                 Una sola condición por vez: todo lo demás queda igual.{' '}
                 {attempts !== null
                   ? `Llevás ${attempts} ${attempts === 1 ? 'intento' : 'intentos'} con esta estrategia y cada variante nueva suma uno: probar muchas hace más fácil que alguna salga bien por casualidad.`
@@ -275,17 +282,17 @@ export default function VectorbtModal({
       )}
 
       {error && (
-        <p role="alert" className="smodal__notice" data-tone="warn">
+        <p role="alert" className={MODAL_NOTICE} data-tone="warn">
           {error}
         </p>
       )}
-      <div className="smodal__actions">
-        <button type="button" className="smodal__button" onClick={onClose}>
+      <div className={MODAL_ACTIONS}>
+        <button type="button" className={MODAL_BUTTON} onClick={onClose}>
           Cancelar
         </button>
         <button
           type="button"
-          className="smodal__button"
+          className={MODAL_BUTTON}
           data-primary="true"
           disabled={!ready || busy}
           onClick={() => void launch()}

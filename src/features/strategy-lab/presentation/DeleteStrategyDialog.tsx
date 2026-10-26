@@ -6,6 +6,12 @@ import type {
 } from '../infrastructure/strategy-api.ts'
 import { describeFailure } from './describe-failure.ts'
 import ModalFrame from './ModalFrame.tsx'
+import {
+  MODAL_ACTIONS,
+  MODAL_BUTTON,
+  MODAL_HINT,
+  MODAL_NOTICE,
+} from './modal-styles.ts'
 
 type Props = {
   api: StrategyApi
@@ -66,24 +72,24 @@ export default function DeleteStrategyDialog({
         <p>¿Está seguro que quiere eliminar «{name}»?</p>
       )}
       {preview && !operating && !blocked && (
-        <p className="smodal__hint">
+        <p className={MODAL_HINT}>
           Se borra todo lo suyo: versiones, pruebas y resultados. El examen que
           ya rindió queda anotado para que no se pueda repetir.
         </p>
       )}
       {error && (
-        <p role="alert" className="smodal__notice" data-tone="warn">
+        <p role="alert" className={MODAL_NOTICE} data-tone="warn">
           {error}
         </p>
       )}
-      <div className="smodal__actions">
-        <button type="button" className="smodal__button" onClick={onClose}>
+      <div className={MODAL_ACTIONS}>
+        <button type="button" className={MODAL_BUTTON} onClick={onClose}>
           {operating || blocked ? 'Cerrar' : 'Cancelar'}
         </button>
         {!operating && !blocked && (
           <button
             type="button"
-            className="smodal__button"
+            className={MODAL_BUTTON}
             data-danger="true"
             disabled={busy || !preview}
             onClick={() => void accept()}

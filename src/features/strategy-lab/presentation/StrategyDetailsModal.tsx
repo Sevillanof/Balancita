@@ -21,6 +21,14 @@ import type {
   StrategyDetail,
 } from '../infrastructure/strategy-api.ts'
 import ModalFrame from './ModalFrame.tsx'
+import {
+  MODAL_ACTIONS,
+  MODAL_BUTTON,
+  MODAL_HINT,
+  MODAL_NOTICE,
+  MODAL_RUN,
+  MODAL_VERDICT,
+} from './modal-styles.ts'
 
 type Props = {
   api: StrategyApi
@@ -146,17 +154,17 @@ export default function StrategyDetailsModal({
           </>
         )}
       </dl>
-      {row.description && <p className="smodal__hint">{row.description}</p>}
-      {row.research.text && <p className="smodal__hint">{row.research.text}</p>}
+      {row.description && <p className={MODAL_HINT}>{row.description}</p>}
+      {row.research.text && <p className={MODAL_HINT}>{row.research.text}</p>}
 
       <h3>Pruebas y examen</h3>
       {overviewError && (
-        <p className="smodal__notice" data-tone="warn">
+        <p className={MODAL_NOTICE} data-tone="warn">
           {overviewError}
         </p>
       )}
       {overview && runs.length === 0 && (
-        <p className="smodal__hint">Todavía no tiene pruebas.</p>
+        <p className={MODAL_HINT}>Todavía no tiene pruebas.</p>
       )}
       {runs.map((run) => {
         const summary = summaries[run.id] ?? null
@@ -164,14 +172,14 @@ export default function StrategyDetailsModal({
         const verdict = summary?.verdict ?? run.verdict
         const range = windowOf(run)
         return (
-          <div className="smodal__run" key={run.id}>
+          <div className={MODAL_RUN} key={run.id}>
             <p>
               <strong>{runName(run)}</strong>
               {range ? ` · ${range}` : ''}
               {run.same_version === false ? ' · de una versión anterior' : ''}
               {' · '}
               {run.status === 'done' && verdict ? (
-                <span className="smodal__verdict" data-verdict={verdict}>
+                <span className={MODAL_VERDICT} data-verdict={verdict}>
                   {verdict}
                 </span>
               ) : run.status === 'running' ? (
@@ -192,7 +200,7 @@ export default function StrategyDetailsModal({
                     ))}
                   </ul>
                 ) : (
-                  <p className="smodal__hint">
+                  <p className={MODAL_HINT}>
                     {summary
                       ? 'No quedó guardado el detalle de en qué falló.'
                       : 'Esta prueba no guardó su detalle, así que no se puede ver en qué falló.'}
@@ -210,8 +218,8 @@ export default function StrategyDetailsModal({
           <pre>{JSON.stringify(detail.spec, null, 2)}</pre>
         </>
       )}
-      <div className="smodal__actions">
-        <button type="button" className="smodal__button" onClick={onClose}>
+      <div className={MODAL_ACTIONS}>
+        <button type="button" className={MODAL_BUTTON} onClick={onClose}>
           Cerrar
         </button>
       </div>

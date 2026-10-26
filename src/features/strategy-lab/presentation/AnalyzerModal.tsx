@@ -12,6 +12,12 @@ import type {
 } from '../infrastructure/analyzer-api.ts'
 import { dayText } from '../domain/vectorbt-format.ts'
 import ModalFrame from './ModalFrame.tsx'
+import {
+  MODAL_ACTIONS,
+  MODAL_BUTTON,
+  MODAL_HINT,
+  MODAL_NOTICE,
+} from './modal-styles.ts'
 import './AnalyzerModal.css'
 
 type Props = {
@@ -205,7 +211,7 @@ export default function AnalyzerModal({ api, onClose }: Props) {
         <button
           ref={closeRef}
           type="button"
-          className="smodal__button"
+          className={MODAL_BUTTON}
           onClick={onClose}
         >
           Cerrar
@@ -213,19 +219,19 @@ export default function AnalyzerModal({ api, onClose }: Props) {
       </div>
 
       {loaded.kind === 'loading' && (
-        <p role="status" className="smodal__hint">
+        <p role="status" className={MODAL_HINT}>
           Cargando el estudio…
         </p>
       )}
       {loaded.kind === 'error' && (
         <div>
-          <p role="alert" className="smodal__notice" data-tone="warn">
+          <p role="alert" className={MODAL_NOTICE} data-tone="warn">
             No se pudo leer el estudio: {loaded.text}
           </p>
-          <div className="smodal__actions">
+          <div className={MODAL_ACTIONS}>
             <button
               type="button"
-              className="smodal__button"
+              className={MODAL_BUTTON}
               onClick={() => {
                 setLoaded({ kind: 'loading' })
                 setAttempt((value) => value + 1)
@@ -238,15 +244,15 @@ export default function AnalyzerModal({ api, onClose }: Props) {
       )}
       {loaded.kind === 'done' && !loaded.response.available && (
         <div className="analyzer__off" data-testid="analyzer-off">
-          <p className="smodal__notice" data-tone="warn">
+          <p className={MODAL_NOTICE} data-tone="warn">
             {loaded.response.reason}
           </p>
-          <p className="smodal__hint">Para generarlo, corré este comando:</p>
+          <p className={MODAL_HINT}>Para generarlo, corré este comando:</p>
           <pre aria-label="Comando">{loaded.response.command}</pre>
-          <div className="smodal__actions">
+          <div className={MODAL_ACTIONS}>
             <button
               type="button"
-              className="smodal__button"
+              className={MODAL_BUTTON}
               onClick={() =>
                 loaded.response.available
                   ? undefined
@@ -261,7 +267,7 @@ export default function AnalyzerModal({ api, onClose }: Props) {
 
       {data && layout && summary && (
         <>
-          <p className="smodal__hint">
+          <p className={MODAL_HINT}>
             Son hipótesis con datos de práctica del {dayText(data.window.from)}{' '}
             al {dayText(lastDayOf(data.window.to))}, no una aprobación.
           </p>
@@ -449,7 +455,7 @@ export default function AnalyzerModal({ api, onClose }: Props) {
                 aria-label="Detalle de la combinación"
               >
                 <h3>{rowLabel(selected)}</h3>
-                <p className="smodal__hint">Mantener {selected.horizon} min</p>
+                <p className={MODAL_HINT}>Mantener {selected.horizon} min</p>
                 <div className="analyzer__bigs">
                   <div>
                     <span>Antes de costes</span>
@@ -499,7 +505,7 @@ export default function AnalyzerModal({ api, onClose }: Props) {
                 {detail.liquidations > 0 && (
                   <p
                     role="alert"
-                    className="smodal__notice"
+                    className={MODAL_NOTICE}
                     data-tone="warn"
                     data-testid="detail-alert"
                   >
@@ -515,12 +521,12 @@ export default function AnalyzerModal({ api, onClose }: Props) {
 
           <div className="analyzer__notes">
             {data.funding_complete === false && (
-              <p className="smodal__notice" data-tone="warn">
+              <p className={MODAL_NOTICE} data-tone="warn">
                 El funding está incompleto en parte del período: el resultado
                 puede estar algo errado.
               </p>
             )}
-            <p className="smodal__hint">
+            <p className={MODAL_HINT}>
               Los costes están medidos para operaciones de unos 1.000 USD; con
               posiciones mucho más grandes el costo real sería peor. La
               liquidación es una aproximación (se pierde todo el margen cuando

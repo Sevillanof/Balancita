@@ -69,7 +69,7 @@ The status pill formula (10% fill, 25% border, full-strength text) becomes `bg-l
 | T3  | S4             | inline | local done; publication pending | 292ff226 |
 | T4  | S2, S3         | inline | done                            | 6b727b23 |
 | T5  | S1, S2, S5, S6 | inline | done                            | 694e81a3 |
-| T6  | S1, S2, S5, S6 | inline | in progress; T6a local done     | —        |
+| T6  | S1, S2, S5, S6 | inline | in progress; T6b local done     | —        |
 | T7  | S1, S2, S5     | inline | pending                         | —        |
 | T8  | S1             | inline | pending                         | —        |
 
@@ -128,7 +128,7 @@ pnpm exec vitest run --dir src --exclude '.claude/**' --exclude '**/node_modules
 
 The test uses the existing TypeScript compiler to inspect JSX `className` values and reachable static strings (templates, branches, aliases, imported variant maps and class-helper arguments). It ignores comments, display text and unrelated strings such as chart colors. Tests/specs are excluded from the application-source scan so negative fixtures do not flag themselves. This is a static guard, not a runtime evaluator: classes assembled from arbitrary runtime data or custom function return values still require review.
 
-Only `theme.css` and the 8 explicitly listed legacy source stylesheets are allowed. New or renamed CSS files under `src` fail; when retiring a legacy stylesheet, remove its entry from `LEGACY_CSS` in the same slice. Stale entries fail too, preventing retired paths from silently remaining exempt. The standalone T3 catalog is tooling under `scripts/design-system`, outside this app-source rule.
+Only `theme.css` and the 7 explicitly listed legacy source stylesheets are allowed. New or renamed CSS files under `src` fail; when retiring a legacy stylesheet, remove its entry from `LEGACY_CSS` in the same slice. Stale entries fail too, preventing retired paths from silently remaining exempt. The standalone T3 catalog is tooling under `scripts/design-system`, outside this app-source rule.
 
 ### T5 — Terminal screens
 
@@ -197,8 +197,8 @@ T6 follows the same independent-unit boundary as T5:
 
 | Unit | Scope                                                                | Status                          |
 | ---- | -------------------------------------------------------------------- | ------------------------------- |
-| T6a  | Strategy list, responsive composition, row menus and notices         | Local done; pending user commit |
-| T6b  | Shared strategy dialogs, editor, details and lifecycle confirmations | Pending                         |
+| T6a  | Strategy list, responsive composition, row menus and notices         | Done; ecaf7b4a                  |
+| T6b  | Shared strategy dialogs, editor, details and lifecycle confirmations | Local done; pending user commit |
 | T6c  | Strategy-run detail, test stages, results and chart composition      | Pending                         |
 | T6d  | Signal analyzer and VectorBT panels                                  | Pending                         |
 
@@ -209,6 +209,19 @@ and unknown colors; unknown stays neutral. New menu-shadow, section-tracking
 and unit-line-height tokens retain the previous values. The strategy grid keeps
 the inclusive 900 px breakpoint. Registry, grouping, permissions, lifecycle
 requests and polling are unchanged; no strategies are edited by validation.
+
+T6b retires the 185-line `StrategyModals.css`. `ModalFrame` owns the common
+backdrop, three responsive widths, bounded scrolling and content defaults;
+`modal-styles.ts` shares fields, notices, actions, buttons and verdict tones.
+Analyzer/VectorBT consume these same styles, so their shared-control markup
+migrates now; their own stylesheets and behavior remain for T6d.
+
+Dialog widths retain `min(token, 100%)`: fixed width plus `max-width: 100%`
+is not equivalent inside an intrinsic grid track and can overflow on phones.
+Native field/button overrides and modal paragraph margins temporarily need
+important utilities while unlayered legacy styles remain. These preserve
+the old cascade, including the analyzer legend's zero margin, rather than
+introducing new behavior. Primary/danger text and backdrop colors are tokens.
 
 ### T7 — Observability screens
 
@@ -286,4 +299,11 @@ Each task or explicitly named sub-unit is one work-unit commit; report slices ov
   - Runtime measurement: six live strategy selections (Qwen/Kronos/C29/C30/Qwen/C29), **59.8 FPS both versions**, maximum frame **50.0 ms before / 33.3 ms after**, zero frames strictly over 50 ms, zero long tasks/runtime errors. Browser task CPU **2.78% before / 3.00% after**; this is not a CPU optimization. This checks the selected strategies' currently available states, not every possible populated run-detail state; T6c will repeat the relevant chart/results boundary.
   - Catalog rebuilt: **79 source tokens**, seven previews/variants at 1440/768/390 px, no external requests; three exporter tests pass. No dependencies, ports, services or real strategy state changed.
   - Rollback boundary: restore both deleted stylesheets/imports and guard entries; restore T6a changes in `StrategiesPage.tsx`, its test, `StrategyLab.tsx`, `PurgeNotice.tsx`, theme and this plan; remove `strategy-list-styles.ts`. T5 remains independent. No Git writes; the user commits/pushes.
-- **Next step:** user reviews/commits T6a; continue with T6b strategy dialogs. External T3 publication and React 18 host validation remain pending.
+- **L13 (T6b local delivery):** T6a was committed by the user as `ecaf7b4a`. Migrated the shared modal frame, editor, details, delete/activation dialogs and their shared controls in Analyzer/VectorBT. Deleted **185 CSS lines**, the frame import and guard entry. No request handlers, lifecycle rules, numerical calculations or modal-dismissal behavior changed.
+  - Review first: `modal-styles.ts` and `ModalFrame.tsx` against the deleted CSS; then the mechanical consumer substitutions and seven new frame tests. **485 changed lines before this documentation update** exceed the ~400-line target: 185 are deleted CSS and 72 are regression tests. Keeping all shared-style consumers with the stylesheet retirement prevents a broken intermediate state.
+  - Validation: **211/211 tests across nine files**, including size/accessibility contracts, Escape vs other keys, outside vs inside mouse events, listener cleanup and updated callbacks. Existing suites cover create/rename/version-save, delete confirmation, details, analyzer calculations and VectorBT inputs. Typecheck, production build, focused ESLint, Prettier, editor diagnostics and whitespace checks pass. Existing production chunk-size advisory remains.
+  - Isolated production harness: **270 before/after scenarios** across **1600/1120/901/900/861/860/760/601/600/390 px**. Uses real components with synthetic local APIs: pending/passed/failed/busy activation; loading/operating/blocked/error/ready delete; create/edit/loading/error editor, invalid JSON and keyboard focus; populated/empty/error details and all verdicts; analyzer loading/error/unavailable/populated with liquidation warnings; VectorBT diagnostic/variants/range fields/launch failure. All geometry and computed visual styles match. **12 additional short-screen scenarios** at 760/390 by 600 px verify the 90vh limit and internal scrolling. Screenshots reviewed; no browser runtime errors.
+  - Live integration harness: **18 additional comparisons** for the strategy list, create/edit/details/delete-preview dialogs and Terminal at 1600/760/390 px, replaying the same GET responses/public snapshot. No differences. The harness rejects non-GET API requests; it never accepts a real create, edit, activation or delete.
+  - Runtime measurement: six real create/edit/details open-and-close transitions per version, **60 FPS**, max frame **16.8 ms**, zero frames >50 ms, long tasks or runtime errors. Browser task CPU **2.06% before / 2.44% after**; no optimization is claimed. No service restarts, new ports, dependencies or strategy/data writes.
+  - Catalog rebuilt: **85 source tokens**, seven previews/variants at 1440/768/390 px, no external requests; three exporter tests pass. Rollback: restore `StrategyModals.css`, its `ModalFrame` import/guard entry, T6b consumer/theme/frame edits and this plan; remove `modal-styles.ts` and `ModalFrame.test.tsx`. T6a remains independent. Local-only; user owns all Git writes.
+- **Next step:** user reviews/commits T6b; continue with T6c strategy-run detail. External T3 publication and React 18 host validation remain pending.

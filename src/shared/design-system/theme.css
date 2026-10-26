@@ -43,6 +43,9 @@
   /* About 2.6:1 on the canvas: decoration only, never text. */
   --color-ink-3: #475569;
   --color-on-long: #0a0d14;
+  --color-modal-overlay: rgb(0 0 0 / 55%);
+  --color-on-primary: oklch(0.2 0.04 170);
+  --color-on-danger: #fff;
 
   --spacing: 4px;
   --spacing-chart-unit: 0.1rem;
@@ -93,6 +96,9 @@
   --tracking-eyebrow: 0.09em;
   --tracking-section: 0.08em;
   --container-shell: 1800px;
+  --container-dialog: 560px;
+  --container-dialog-wide: 760px;
+  --container-dialog-xwide: 1120px;
 
   --leading-*: initial;
   --leading-normal: 1.5;
@@ -164,6 +170,38 @@
 @custom-variant data-closed (&[data-state='closed']);
 @custom-variant data-off (&[data-state='off']);
 @custom-variant data-inactive (&[data-state='inactive']);
+@custom-variant data-primary (&[data-primary='true']);
+@custom-variant data-danger (&[data-danger='true']);
+@custom-variant data-passed (&[data-verdict='PASA']);
+@custom-variant data-failed (&[data-verdict='NO PASA']);
+@custom-variant data-inconclusive (&[data-verdict='INCONCLUSO']);
+@custom-variant modal-copy (& h2, & h3, & p);
+@custom-variant modal-h2 (& h2);
+@custom-variant modal-h3 (& h3);
+@custom-variant modal-dl (& dl);
+@custom-variant modal-dt (& dt);
+@custom-variant modal-dd (& dd);
+@custom-variant modal-ul (& ul);
+@custom-variant modal-pre (& pre);
+@custom-variant field-control (& input, & textarea);
+@custom-variant field-input (& input);
+@custom-variant field-textarea (& textarea);
+
+@utility max-h-dialog {
+  max-height: 90vh;
+}
+
+@utility w-modal {
+  width: min(var(--container-dialog), 100%);
+}
+
+@utility w-modal-wide {
+  width: min(var(--container-dialog-wide), 100%);
+}
+
+@utility w-modal-xwide {
+  width: min(var(--container-dialog-xwide), 100%);
+}
 
 @utility font-features-terminal {
   font-feature-settings: 'tnum', 'cv05', 'cv11';
@@ -183,6 +221,10 @@
 
 @utility grid-cols-account {
   grid-template-columns: 1fr auto;
+}
+
+@utility grid-cols-modal-facts {
+  grid-template-columns: max-content minmax(0, 1fr);
 }
 
 @utility grid-cols-strategies {
