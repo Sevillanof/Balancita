@@ -47,6 +47,7 @@
   --color-on-primary: oklch(0.2 0.04 170);
   --color-on-danger: #fff;
   --color-line-quick: rgba(128, 128, 128, 0.3);
+  --color-health-overlay: rgb(8 10 15 / 70%);
 
   --spacing: 4px;
   --spacing-chart-unit: 0.1rem;
@@ -92,6 +93,10 @@
   --text-run-title: 22px;
   --text-run-value: 30px;
   --text-section: 15px;
+  --text-health-summary: 12.5px;
+  --text-health-detail: 11.5px;
+  --text-observer-label: 10.5px;
+  --text-observer-heading: 0.95rem;
   --spacing-legend: 1.4em;
 
   --tracking-label: 0.04em;
@@ -100,6 +105,8 @@
   --tracking-market: 0.06em;
   --tracking-eyebrow: 0.09em;
   --tracking-section: 0.08em;
+  --tracking-health: 0.03em;
+  --tracking-observer: 0.07em;
   --container-shell: 1800px;
   --container-dialog: 560px;
   --container-dialog-wide: 760px;
@@ -112,6 +119,7 @@
   --leading-none: 1;
   --leading-kpi: 1.1;
   --leading-emphasis: 1.2;
+  --leading-flow: 1.45;
 
   --shadow-*: initial;
   --shadow-popover: 0 8px 24px -4px rgb(0 0 0 / 60%);
@@ -167,7 +175,7 @@
 @custom-variant portfolio-summary (& > div:last-child);
 @custom-variant portfolio-value (& strong);
 @custom-variant terminal-last (& > :last-child);
-@custom-variant observer-history (&:where(.obs-history *));
+@custom-variant observer-history (&:where(.group\/observer-history *));
 @custom-variant data-warn (&[data-tone='warn']);
 @custom-variant data-active (&[data-state='active']);
 @custom-variant data-tracking (&[data-state='tracking']);
@@ -228,6 +236,85 @@
 @custom-variant vbt-legend (& legend);
 @custom-variant vbt-choice-copy (& label span);
 @custom-variant vbt-summary (& summary);
+@custom-variant health-summary (& summary);
+@custom-variant health-item (& li);
+@custom-variant health-ok (&[data-status='ok']);
+@custom-variant health-warning (&[data-status='warning']);
+@custom-variant health-error (&[data-status='error']);
+@custom-variant health-row-summary (& > p);
+@custom-variant health-row-title (& h3);
+@custom-variant health-row-details (& details);
+@custom-variant health-row-details-summary (& details summary);
+@custom-variant flow-content (& details > :not(summary));
+@custom-variant flow-warn (&[data-level='warn']);
+@custom-variant flow-bad (&[data-level='bad']);
+@custom-variant observer-long (& [data-action='LONG']);
+@custom-variant observer-short (& [data-action='SHORT']);
+
+@utility health-beacon {
+  --health-tone: var(--color-ink-2);
+  border-color: color-mix(in oklab, var(--health-tone) 25%, var(--color-line));
+  background: color-mix(
+    in oklab,
+    var(--health-tone) 10%,
+    var(--color-surface-1)
+  );
+  &:hover {
+    background: color-mix(
+      in oklab,
+      var(--health-tone) 16%,
+      var(--color-surface-1)
+    );
+  }
+  &[data-tone='ok'] {
+    --health-tone: var(--color-long);
+  }
+  &[data-tone='warning'] {
+    --health-tone: var(--color-warn);
+  }
+  &[data-tone='error'] {
+    --health-tone: var(--color-short);
+  }
+}
+
+@utility bg-health-tone {
+  background: var(--health-tone);
+}
+
+@utility border-health-warning {
+  border-color: color-mix(in srgb, var(--color-warn) 45%, transparent);
+}
+
+@utility border-health-error {
+  border-color: color-mix(in srgb, var(--color-short) 45%, transparent);
+}
+
+@utility bg-health-warning {
+  background: color-mix(in srgb, var(--color-warn) 6%, var(--color-surface-2));
+}
+
+@utility bg-health-error {
+  background: color-mix(in srgb, var(--color-short) 7%, var(--color-surface-2));
+}
+
+@utility bg-observer-selected {
+  background: color-mix(in srgb, var(--color-long) 12%, transparent);
+}
+
+@utility max-h-inspector {
+  max-height: calc(100vh - 48px);
+}
+
+@utility grid-cols-health-row {
+  grid-template-columns: 19rem minmax(0, 1fr);
+}
+
+@utility observer-height {
+  height: calc(var(--terminal-chart-height, 560px) + 60px);
+  @media (width >= 901px) {
+    height: calc(100vh - 160px);
+  }
+}
 
 @utility grid-cols-analyzer {
   grid-template-columns: minmax(0, 1.5fr) minmax(260px, 1fr);

@@ -1,5 +1,5 @@
+import { OBS } from './observability-styles.ts'
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
-import './observability.css'
 import { StatusPill, DataState } from '../../../shared/mission-control/index.ts'
 import {
   type HealthComponent,
@@ -28,20 +28,20 @@ function ComponentRow({
   )
   return (
     <li
-      className="obs-row"
+      className={OBS.row}
       data-status={component.status}
       data-testid={`health-${component.id}`}
     >
-      <div className="obs-row__head">
-        <h3 className="obs-row__title">
+      <div className={OBS.rowHead}>
+        <h3 className={OBS.rowTitle}>
           {index}. {component.label}
         </h3>
         <StatusPill tone={TONE[component.status]}>
           {LABEL[component.status]}
         </StatusPill>
       </div>
-      <p className="obs-row__summary">{component.summary}</p>
-      <details className="obs-details">
+      <p className={OBS.rowSummary}>{component.summary}</p>
+      <details className={OBS.details}>
         <summary>
           {failing.length > 0
             ? 'Comprobaciones, regla y evidencia'
@@ -50,26 +50,24 @@ function ComponentRow({
           {component.evidence.length} fuentes)
         </summary>
         {component.checks.length > 0 && (
-          <ul className="obs-checks">
+          <ul className={OBS.checks}>
             {component.checks.map((check) => (
               <li key={check.id} data-status={check.status}>
-                <span className="obs-checks__label">
+                <span className={OBS.checkLabel}>
                   {check.label}
                   {check.required ? '' : ' (informativa)'}
                 </span>
                 <StatusPill tone={TONE[check.status]}>
                   {LABEL[check.status]}
                 </StatusPill>
-                <span className="obs-checks__rule">{check.rule}</span>
-                {check.detail && (
-                  <span className="obs-checks__detail">{check.detail}</span>
-                )}
+                <span className={OBS.checkRule}>{check.rule}</span>
+                {check.detail && <span>{check.detail}</span>}
               </li>
             ))}
           </ul>
         )}
         {component.evidence.length > 0 && (
-          <dl className="obs-evidence">
+          <dl className={OBS.evidence}>
             {component.evidence.map((item) => (
               <div key={`${item.source}|${item.origin ?? ''}`}>
                 <dt>{item.source}</dt>
@@ -87,8 +85,8 @@ function ComponentRow({
           </dl>
         )}
         {component.limitations.length > 0 && (
-          <div className="obs-limitations">
-            <p className="obs-limitations__title">Limitaciones</p>
+          <div className={OBS.limitations}>
+            <p className={OBS.limitationsTitle}>Limitaciones</p>
             <ul>
               {component.limitations.map((text) => (
                 <li key={text}>{text}</li>
@@ -132,23 +130,23 @@ function Inspector({
   const groups = report ? componentOrder(report.components) : []
   return (
     <div
-      className="obs-backdrop"
+      className={OBS.backdrop}
       onMouseDown={(event) => {
         if (event.target === event.currentTarget) onClose()
       }}
     >
       <div
-        className="obs-inspector"
+        className={OBS.inspector}
         role="dialog"
         aria-modal="true"
         aria-label="Salud del sistema"
         data-testid="health-inspector"
       >
-        <header className="obs-inspector__head">
+        <header className={OBS.inspectorHead}>
           <div>
             <h2>Salud del sistema</h2>
             {report && (
-              <p className="obs-inspector__meta">
+              <p className={OBS.meta}>
                 Generación: {ageLabel(timing?.generationAge ?? null)} ·{' '}
                 Recepción: {ageLabel(timing?.receiptAge ?? null)} · hora
                 gateway:{' '}
@@ -165,9 +163,9 @@ function Inspector({
             </StatusPill>
           )}
         </header>
-        <div className="obs-inspector__body">
+        <div className={OBS.inspectorBody}>
           {extra && (
-            <section className="obs-flow" aria-label="Flujo y uso">
+            <section className={OBS.flowPanel} aria-label="Flujo y uso">
               {extra}
             </section>
           )}
@@ -192,23 +190,20 @@ function Inspector({
           {applicable && report ? (
             <>
               {qualification && (
-                <p className="obs-inspector__meta">
+                <p className={OBS.meta}>
                   Lectura anterior: {qualification}. Estados, conteos y motivos
                   de abajo son evidencia previa, no una evaluación actual.
                 </p>
               )}
-              <p
-                className="obs-inspector__overall"
-                data-testid="health-overall"
-              >
+              <p className={OBS.overall} data-testid="health-overall">
                 {report.overall.reason}
               </p>
               {groups.map((group) => (
                 <section key={group.title} aria-label={group.title}>
-                  <p className="obs-group">
+                  <p className={OBS.group}>
                     {group.title} ({group.items.length})
                   </p>
-                  <ul className="obs-rows">
+                  <ul className={OBS.rows}>
                     {group.items.map(({ component, index }) => (
                       <ComponentRow
                         key={component.id}
@@ -225,11 +220,16 @@ function Inspector({
             applicable && error === null && <DataState kind="loading" />
           )}
         </div>
-        <footer className="obs-inspector__foot">
+        <footer className={OBS.inspectorFoot}>
           <span>
             Solo lectura: el inspector no reinicia ni controla procesos.
           </span>
-          <button ref={closeButton} type="button" onClick={onClose}>
+          <button
+            ref={closeButton}
+            className={OBS.close}
+            type="button"
+            onClick={onClose}
+          >
             Cerrar
           </button>
         </footer>
@@ -315,7 +315,7 @@ export default function HealthIndicator({
     <>
       <button
         type="button"
-        className="obs-health"
+        className={OBS.health}
         data-tone={tone}
         aria-haspopup="dialog"
         aria-expanded={open}
@@ -327,18 +327,18 @@ export default function HealthIndicator({
             : 'Abrir el estado del sistema'
         }
       >
-        <span className="obs-health__dot" aria-hidden="true" />
+        <span className={OBS.dot} aria-hidden="true" />
         {applicable && <span>{text}</span>}
         {flow && (
           <>
             <span
-              className="obs-health__flow"
+              className={OBS.flow}
               data-level={flow.level}
               data-testid="flow-status"
             >
               {flow.text}
             </span>
-            <span className="obs-health__mode">{flow.mode}</span>
+            <span className={OBS.mode}>{flow.mode}</span>
           </>
         )}
       </button>

@@ -4,7 +4,6 @@ import { describe, expect, it } from 'vitest'
 // This list may only shrink as T5-T8 remove the legacy stylesheets.
 const LEGACY_CSS = new Set([
   'src/index.css',
-  'src/features/observability/presentation/observability.css',
   'src/shared/mission-control/mission-control.css',
   'src/shared/styles/ui.css',
 ])

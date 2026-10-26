@@ -69,8 +69,8 @@ The status pill formula (10% fill, 25% border, full-strength text) becomes `bg-l
 | T3  | S4             | inline | local done; publication pending | 292ff226 |
 | T4  | S2, S3         | inline | done                            | 6b727b23 |
 | T5  | S1, S2, S5, S6 | inline | done                            | 694e81a3 |
-| T6  | S1, S2, S5, S6 | inline | local done; pending user commit | —        |
-| T7  | S1, S2, S5     | inline | pending                         | —        |
+| T6  | S1, S2, S5, S6 | inline | done                            | 3074d370 |
+| T7  | S1, S2, S5     | inline | local done; pending user commit | —        |
 | T8  | S1             | inline | pending                         | —        |
 
 ### T1 — Tailwind and the single theme (no visual change)
@@ -128,7 +128,7 @@ pnpm exec vitest run --dir src --exclude '.claude/**' --exclude '**/node_modules
 
 The test uses the existing TypeScript compiler to inspect JSX `className` values and reachable static strings (templates, branches, aliases, imported variant maps and class-helper arguments). It ignores comments, display text and unrelated strings such as chart colors. Tests/specs are excluded from the application-source scan so negative fixtures do not flag themselves. This is a static guard, not a runtime evaluator: classes assembled from arbitrary runtime data or custom function return values still require review.
 
-Only `theme.css` and the 4 explicitly listed legacy source stylesheets are allowed. New or renamed CSS files under `src` fail; when retiring a legacy stylesheet, remove its entry from `LEGACY_CSS` in the same slice. Stale entries fail too, preventing retired paths from silently remaining exempt. The standalone T3 catalog is tooling under `scripts/design-system`, outside this app-source rule.
+Only `theme.css` and the 3 explicitly listed legacy source stylesheets are allowed. New or renamed CSS files under `src` fail; when retiring a legacy stylesheet, remove its entry from `LEGACY_CSS` in the same slice. Stale entries fail too, preventing retired paths from silently remaining exempt. The standalone T3 catalog is tooling under `scripts/design-system`, outside this app-source rule.
 
 ### T5 — Terminal screens
 
@@ -195,12 +195,12 @@ applies the responsive height through a named descendant variant.
 
 T6 follows the same independent-unit boundary as T5:
 
-| Unit | Scope                                                                | Status                          |
-| ---- | -------------------------------------------------------------------- | ------------------------------- |
-| T6a  | Strategy list, responsive composition, row menus and notices         | Done; ecaf7b4a                  |
-| T6b  | Shared strategy dialogs, editor, details and lifecycle confirmations | Done; 7fcfdffc                  |
-| T6c  | Strategy-run detail, test stages, results and chart composition      | Done; 0f577780                  |
-| T6d  | Signal analyzer and VectorBT panels                                  | Local done; pending user commit |
+| Unit | Scope                                                                | Status         |
+| ---- | -------------------------------------------------------------------- | -------------- |
+| T6a  | Strategy list, responsive composition, row menus and notices         | Done; ecaf7b4a |
+| T6b  | Shared strategy dialogs, editor, details and lifecycle confirmations | Done; 7fcfdffc |
+| T6c  | Strategy-run detail, test stages, results and chart composition      | Done; 0f577780 |
+| T6d  | Signal analyzer and VectorBT panels                                  | Done; 3074d370 |
 
 T6a retires `StrategiesPage.css` (166 actual lines) and `StrategyLab.css` (5).
 List/menu button styles and success/purge/error notices share local constants.
@@ -256,8 +256,11 @@ utilities reference source colors directly, without unresolved catalog tokens.
 
 ### T7 — Observability screens
 
-- Migrate `observability.css` (619) and `decisions.css` (411) under `src/features/observability/presentation/`.
-- Check: screenshots.
+- Retire the remaining `observability.css` (552 actual lines). `decisions.css` was already retired in T5c; no second migration or replacement page is needed.
+- `observability-styles.ts` owns the health beacon, inspector, evidence rows, flow diagnosis and observer composition; `HealthIndicator`, `ObserverPanel` and `AppStatusChips` consume it.
+- Preserve the inclusive 900/901 px transition, 760 px inspector width, viewport/internal-scroll limits, source freshness and all read-only behavior. The named `group/observer-history` marker keeps the embedded decisions list's 260 px bound without a legacy class hook.
+- The only intended visual change is decoration-only `ink-3` text becoming readable `ink-2`, including source labels, no-data messages and quiet evidence summaries. Unknown data remains neutral, never green.
+- Check: responsive before/after production comparisons, exact height/width thresholds, focused tests and read-only interaction performance.
 
 ### T8 — Retire the legacy layer
 
@@ -359,4 +362,14 @@ Each task or explicitly named sub-unit is one work-unit commit; report slices ov
   - Session evidence: `t6d-dialogs.json`, `t6d-runview.json`, `t6d-visual.json`, `t6d-semantics.json`, `t6d-perf.json`, `t6d-analyzer-perf.json` and screenshots in the same session files directory as L14. Commands: `SLICE=t6d MODES=analyzer-data,analyzer-full,analyzer-loading,analyzer-error,analyzer-off,analyzer-empty,analyzer-no-trades,vectorbt,vectorbt-spec-loading,vectorbt-spec-error,vectorbt-spec-empty,vectorbt-busy WIDTHS=1600,1120,901,900,861,860,761,760,721,720,601,600,390 node "$SESSION_FILES/t6b-dialogs.mjs"`; `SLICE=t6d MODES=ready,running,vbt-off,vbt-report,vbt-variants,vbt-positive,vbt-no-trades,vbt-unsupported,compare-error,compare-loading,vbt-history,origin-ready,origin-pending WIDTHS=1600,1120,861,860,761,760,721,720,390 node "$SESSION_FILES/t6c-runview.mjs"`; `SLICE=t6d SCENARIOS=strategies,strategy-analyzer,strategy-run-chart,live WIDTHS=1600,861,860,721,720,390 node "$SESSION_FILES/t5b-visual.mjs"`; `node "$SESSION_FILES/t6d-semantics.mjs"`; `SLICE=t6d STRATEGIES=1 node "$SESSION_FILES/t5b-perf.mjs"`; `SLICE=t6d ANALYZER=1 REPORT_NAME=t6d-analyzer-perf node "$SESSION_FILES/t5b-perf.mjs"`. Live harnesses reject non-GET API calls; synthetic form failures never reach live APIs. No services/ports/dependencies or real strategy/data writes.
   - Offline catalog rebuilt/verified: **92 source tokens**, seven previews and variants at 1440/768/390 px, three exporter tests, no external requests or screen CSS.
   - Rollback boundary: restore both retired stylesheets/imports/guard entries, the six consumer migrations, three analyzer-test additions, theme changes and this plan; remove the two new style maps. T6a/T6b/T6c remain independent. Local-only; the user owns all Git writes.
-- **Next step:** user reviews/commits T6d; continue with T7 Observability, then T8 legacy globals. External T3 publication and React 18 host validation remain pending.
+- **L16 (T7 local delivery):** T6d was committed by the user as `3074d370`. Retired the remaining **552-line `observability.css`**, both component imports and its guard entry. Migrated the health beacon/inspector, all evidence and incident states, flow/usage diagnosis and the observer's current decision/results/history composition. Three legacy source stylesheets remain: `index.css`, `mission-control.css`, `ui.css`.
+  - Review first: `observability-styles.ts` and theme variants against the removed CSS, then the three mechanical consumers and tests. **927 changed source lines before this documentation update**, including the new style map, exceed the ~400-line target: 552 are CSS deletions and 68 are added regression-test lines. One stylesheet retirement needs every active consumer; no formatting compression or unrelated cleanup was used to fit the budget. Unused selectors for obsolete sublabels/detail hooks were not recreated.
+  - Logic: transpiled ASTs of `HealthIndicator`, `ObserverPanel` and `AppStatusChips` match HEAD after removing only class attributes/style imports and normalizing redundant parentheses. Source validity/freshness, proposal vs operation labeling, read-only fetches, timers, window/product isolation, polling, lifecycle and paper calculations are unchanged. Unknown states stay neutral. Only low-contrast `ink-3` text changes to `ink-2`; inherited non-rendered border/outline colors follow that text change.
+  - Tests: **183/183 across six files**, including three new cases for inspector initial/keyboard-close focus and expanded state, inside vs backdrop mouse events/listener cleanup, and opening flow diagnosis without network/process writes. Command: `npx vitest run --dir src --exclude '.claude/**' --exclude '**/node_modules/**' src/features/observability/presentation src/shared/design-system/guardrails.test.ts src/shared/mission-control/mission-control.test.tsx src/app/AppStatusChips.test.tsx src/app/FuturesTerminal.test.tsx`. `npx tsc -b`, focused ESLint, production build, Prettier, editor diagnostics and `git diff --check` pass; the existing chunk-size advisory remains.
+  - Browser fixture: **693 comparisons** at **1600/1120/901/900/761/760/721/720/390 px**. Covers healthy/degraded/stale/previous-error/loading/error/not-applicable health, flow diagnosis, folded/expanded evidence and keyboard focus; current LONG/SHORT/WAIT, unconfirmed/historic/empty decisions, unavailable/loading/error activity, source/limitation disclosures and 3 h/24 h selection with the real embedded decisions component. **34 short-screen comparisons** at 900/390 by 600 px and **90 additional correct/warning beacon comparisons** (including hover) pass.
+  - Exact assertions preserve inspector width `min(760px, available width)` and height at most `100vh - 48px`; observer height 620 px below 901 px in the no-chart fixture, otherwise `max(480px, 100vh - 160px)`; embedded history `max-height: 260px`. Live production integration adds **35 comparisons** for Terminal, expanded observer/24 h, flow/usage inspector, all health evidence and Estrategias at 1600/1120/901/900/761/760/390 px. All **852 comparisons** pass with no unexpected style/geometry differences or runtime errors; screenshots reviewed. Both builds receive identical replayed GET responses/public snapshots. No real strategy/process/data writes.
+  - Runtime: six live actions (open inspector, expand flow/usage, close, 24 h, 3 h, reopen), **59.9 FPS before / 60.0 after**, maximum frame **16.8 ms** both, **zero frames >50 ms, long tasks or runtime errors**. Browser task CPU **3.31% / 3.63%**; no optimization is claimed. Settled timings include deliberate harness waits. Measurement runs without concurrent browser suites.
+  - Evidence in the same session files directory as L15: `t7-observability.json`, `t7-short.json`, `t7-tones.json`, `t7-visual.json`, `t7-semantics.json`, `t7-perf.json` and screenshots. Commands: `WIDTHS=1600,1120,901,900,761,760,721,720,390 node "$SESSION_FILES/t7-observability.mjs"`; `HEIGHT=600 MODES=health-degraded,health-healthy,health-flow,observer-long WIDTHS=900,390 REPORT_NAME=t7-short node "$SESSION_FILES/t7-observability.mjs"`; `MODES=health-ok,health-warning STATES=initial,hover,open,details,focus WIDTHS=1600,1120,901,900,761,760,721,720,390 REPORT_NAME=t7-tones node "$SESSION_FILES/t7-observability.mjs"`; `SLICE=t7 SCENARIOS=live,observer-details,inspector,inspector-health,strategies WIDTHS=1600,1120,901,900,761,760,390 node "$SESSION_FILES/t5b-visual.mjs"`; `node "$SESSION_FILES/t7-semantics.mjs"`; `SLICE=t7 OBSERVABILITY=1 node "$SESSION_FILES/t5b-perf.mjs"`. Harnesses use standards-mode HTML and the existing localhost origin, rejecting non-GET API calls. No ports, restarts, dependencies or uploads.
+  - Offline catalog: **100 source tokens**, seven real previews/variants at 1440/768/390 px, three exporter tests, no horizontal overflow, external requests or screen CSS.
+  - Rollback: restore `observability.css`, its two imports/guard entry, the three consumers, theme additions/history variant, the three new test cases and this plan; remove `observability-styles.ts`. T1-T6 remain independent. User alone runs all Git writes.
+- **Next step:** user reviews/commits T7; continue with T8, retiring legacy globals and compatibility aliases. External T3 publication and React 18 host validation remain pending.

@@ -1,6 +1,6 @@
+import { OBS } from './observability-styles.ts'
 import { APPROVED_TERMINAL_STRATEGIES } from '../../../app/terminal-approved.ts'
 import { useCallback, useState, type ReactNode } from 'react'
-import './observability.css'
 import { DataState, StatusPill } from '../../../shared/mission-control/index.ts'
 import { TERMINAL_FRAME } from '../../../shared/design-system/terminal-styles.ts'
 import {
@@ -120,9 +120,9 @@ function Now({
       : null
   const windowLabel = report ? WINDOW_LABELS[report.window] : null
   return (
-    <section className="obs-now" aria-label="Ahora" data-testid="observer-now">
-      <p className="obs-card__label">Ahora</p>
-      <p className="obs-card__big" data-testid="last-decision">
+    <section className={OBS.now} aria-label="Ahora" data-testid="observer-now">
+      <p className={OBS.nowLabel}>Ahora</p>
+      <p className={OBS.big} data-testid="last-decision">
         Última decisión:{' '}
         {latest ? (
           <>
@@ -130,16 +130,16 @@ function Now({
               {decisionLabel(latest.action)}
             </strong>
             {latest.action === 'LONG' || latest.action === 'SHORT' ? (
-              <small className="obs-now__kind"> propuesta, no operación</small>
+              <small className={OBS.nowKind}> propuesta, no operación</small>
             ) : null}
           </>
         ) : unconfirmed ? (
           <strong data-testid="now-unconfirmed-label">Sin confirmar</strong>
         ) : (
-          <span className="obs-na">No disponible</span>
+          <span className={OBS.unavailable}>No disponible</span>
         )}
-        <span className="obs-card__pill" data-testid="source-health">
-          <span className="obs-card__pill-label">
+        <span className={OBS.pill} data-testid="source-health">
+          <span className={OBS.pillLabel}>
             Salud de la fuente{product ? ` · ${shortProduct(product)}` : ''}
           </span>
           {source ? (
@@ -147,9 +147,12 @@ function Now({
               {LABEL[source.status]}
             </StatusPill>
           ) : sourceRead.confirmed ? (
-            <span className="obs-na">Sin datos</span>
+            <span className={OBS.unavailable}>Sin datos</span>
           ) : (
-            <span className="obs-na" data-testid="source-health-unconfirmed">
+            <span
+              className={OBS.unavailable}
+              data-testid="source-health-unconfirmed"
+            >
               Sin confirmar
             </span>
           )}
@@ -157,7 +160,7 @@ function Now({
       </p>
       {unconfirmed && actuality && (
         <p
-          className="obs-summary"
+          className={OBS.summary}
           data-testid="now-unconfirmed"
           data-standing="unconfirmed"
         >
@@ -172,7 +175,7 @@ function Now({
           {' · '}
           {utcDateTime(unconfirmed.decisionTimeMs)} · hace{' '}
           {duration(nowMs - unconfirmed.decisionTimeMs)} ({clockNote})
-          <small className="obs-now__source" data-testid="now-blockers">
+          <small className={OBS.nowSource} data-testid="now-blockers">
             {' '}
             Falta confirmar:{' '}
             {actuality.blockers.map((b) => BLOCKER_TEXT[b]).join('; ')}.
@@ -181,7 +184,7 @@ function Now({
       )}
       {latest && (
         <p
-          className="obs-summary"
+          className={OBS.summary}
           data-testid="now-detail"
           data-standing={standing}
         >
@@ -190,7 +193,7 @@ function Now({
           {' · '}
           {utcDateTime(latest.decisionTimeMs)} · hace{' '}
           {duration(nowMs - latest.decisionTimeMs)} ({clockNote})
-          <small className="obs-now__source" data-testid="now-source">
+          <small className={OBS.nowSource} data-testid="now-source">
             {' '}
             Fuente: veredicto del flujo en vivo del gateway; no describe el
             estado del forward.
@@ -201,7 +204,7 @@ function Now({
         </p>
       )}
       {historic && (
-        <p className="obs-summary" data-testid="now-historic">
+        <p className={OBS.summary} data-testid="now-historic">
           Última decisión conocida (histórica, no es el estado actual):{' '}
           {decisionLabel(historic.action)}
           {historic.reasonCode ? (
@@ -213,7 +216,7 @@ function Now({
           {' · '}
           {utcDateTime(historic.decisionTimeMs)} · hace{' '}
           {duration(nowMs - historic.decisionTimeMs)} ({clockNote})
-          <small className="obs-now__source">
+          <small className={OBS.nowSource}>
             {' '}
             Fuente: veredicto guardado en el histórico del gateway; el flujo en
             vivo no entregó uno reciente.
@@ -221,7 +224,7 @@ function Now({
         </p>
       )}
       {report && mine && report.signals.state === 'ok' && (
-        <p className="obs-summary" data-testid="window-summary">
+        <p className={OBS.summary} data-testid="window-summary">
           Últimas {windowLabel} · {mine.count}{' '}
           {mine.count === 1 ? 'evaluación' : 'evaluaciones'} ·{' '}
           {report.signals.total}{' '}
@@ -230,16 +233,16 @@ function Now({
             : 'propuestas direccionales'}
         </p>
       )}
-      <details className="obs-details obs-details--inline">
+      <details className={OBS.inlineDetails}>
         <summary>Qué fuentes respaldan esto</summary>
-        <p className="obs-note">
+        <p className={OBS.note}>
           {latest
             ? 'La última decisión es la del último veredicto que el flujo en vivo del gateway entregó para este producto; solo se presenta como actual con la conexión WebSocket activa, la hora del servidor válida y una lectura reciente de B1 que coincide con ese veredicto. Los agregados de B2 no se usan para deducirla. '
             : 'Ninguna fuente verificable entrega la última decisión individual de este producto (llegará con B3). '}
           «Salud de la fuente» es la lectura de B1 de la fuente de decisiones
           para este producto; la salud global sigue en la cabecera.
         </p>
-        <p className="obs-note">
+        <p className={OBS.note}>
           Última evaluación registrada:{' '}
           {report && mine?.lastBucketMs != null
             ? momentLabel(mine.lastBucketMs, report.generatedAtMs)
@@ -267,8 +270,8 @@ function Results({ report }: { report: ActivityReport }) {
         )
       : null
   return (
-    <section className="obs-card" aria-label="Operaciones almacenadas">
-      <p className="obs-card__label">
+    <section className={OBS.card} aria-label="Operaciones almacenadas">
+      <p className={OBS.cardLabel}>
         Resultados · operaciones almacenadas en la ventana
         <strong data-testid="stored-total">
           {stored === null ? 'Sin datos' : stored}
@@ -279,12 +282,12 @@ function Results({ report }: { report: ActivityReport }) {
       ) : (
         <>
           {stored === 0 && (
-            <p className="obs-note">
+            <p className={OBS.note}>
               Sin entradas almacenadas en la ventana. Una propuesta no es una
               operación.
             </p>
           )}
-          <ul className="obs-exps" data-testid="activity-experiments">
+          <ul className={OBS.experiments} data-testid="activity-experiments">
             {shownBooks(operations.experiments).map((e) => (
               <li key={e.experimentId}>
                 <strong>{e.experimentId}</strong>
@@ -348,13 +351,17 @@ export default function ObserverPanel({
     data && data.window === window && data.product === product ? data : null
   return (
     <section
-      className={`${TERMINAL_FRAME} obs-observer`}
+      className={`${TERMINAL_FRAME} ${OBS.observer}`}
       aria-label="Decisiones de Qwen"
       data-testid="activity-panel"
     >
-      <div className="obs-observer__head">
+      <div className={OBS.observerHead}>
         <h2>Decisiones de Qwen</h2>
-        <div role="group" aria-label="Ventana de tiempo" className="obs-seg">
+        <div
+          role="group"
+          aria-label="Ventana de tiempo"
+          className={OBS.segment}
+        >
           {ACTIVITY_WINDOWS.map((w) => (
             <button
               key={w}
@@ -377,7 +384,7 @@ export default function ObserverPanel({
         clock={clock}
         localNowMs={localNowMs}
       />
-      <div className="obs-observer__body">
+      <div className={OBS.observerBody}>
         {error !== null && (
           <DataState
             kind="error"
@@ -396,11 +403,14 @@ export default function ObserverPanel({
         ) : (
           error === null && <DataState kind="loading" />
         )}
-        <section className="obs-card obs-history" aria-label="Historial">
-          <p className="obs-card__label">Historial · decisiones del terminal</p>
+        <section
+          className={`${OBS.card} group/observer-history`}
+          aria-label="Historial"
+        >
+          <p className={OBS.cardLabel}>Historial · decisiones del terminal</p>
           {children}
         </section>
-        <details className="obs-details obs-details--panel">
+        <details className={OBS.panelDetails}>
           <summary>Limitaciones de esta lectura</summary>
           <ul>
             <li>

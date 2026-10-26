@@ -1,3 +1,4 @@
+import { OBS } from '../features/observability/presentation/observability-styles.ts'
 import { useEffect, useState, type ReactNode } from 'react'
 import { record } from '../shared/wire/decode.ts'
 import HealthIndicator, {
@@ -103,8 +104,8 @@ export default function AppStatusChips({
       extra={
         <>
           <p>
-            <strong className="obs-flow__title">{flow.label}</strong>{' '}
-            <span className="obs-flow__scope">
+            <strong className={OBS.flowTitle}>{flow.label}</strong>{' '}
+            <span className={OBS.flowScope}>
               (solo el flujo de datos del gateway)
             </span>
           </p>

@@ -236,6 +236,47 @@ describe('HealthIndicator (header)', () => {
     expect(screen.queryByRole('dialog')).toBeNull()
   })
 
+  it('focuses Cerrar and ignores mouse events inside the inspector', async () => {
+    const user = userEvent.setup()
+    render(<HealthIndicator data={decodeHealth(healthHealthy)} error={null} />)
+    const indicator = screen.getByTestId('health-indicator')
+    expect(indicator).toHaveAttribute('aria-expanded', 'false')
+    await user.click(indicator)
+    const dialog = screen.getByRole('dialog', { name: 'Salud del sistema' })
+    expect(within(dialog).getByRole('button', { name: 'Cerrar' })).toHaveFocus()
+    expect(indicator).toHaveAttribute('aria-expanded', 'true')
+    fireEvent.mouseDown(within(dialog).getByRole('heading', { level: 2 }))
+    expect(dialog).toBeInTheDocument()
+    await user.keyboard('{Enter}')
+    expect(screen.queryByRole('dialog')).toBeNull()
+    expect(indicator).toHaveAttribute('aria-expanded', 'false')
+  })
+
+  it('closes only on the backdrop and removes the Escape listener on unmount', async () => {
+    const user = userEvent.setup()
+    const removeListener = vi.spyOn(document, 'removeEventListener')
+    const { unmount } = render(
+      <HealthIndicator data={decodeHealth(healthHealthy)} error={null} />,
+    )
+    try {
+      await user.click(screen.getByTestId('health-indicator'))
+      const dialog = screen.getByRole('dialog')
+      expect(dialog.parentElement).not.toBeNull()
+      fireEvent.mouseDown(dialog.parentElement!)
+      expect(screen.queryByRole('dialog')).toBeNull()
+      await user.click(screen.getByTestId('health-indicator'))
+      removeListener.mockClear()
+      unmount()
+      expect(removeListener).toHaveBeenCalledWith(
+        'keydown',
+        expect.any(Function),
+      )
+      expect(screen.queryByRole('dialog')).toBeNull()
+    } finally {
+      removeListener.mockRestore()
+    }
+  })
+
   it('keeps the previous read but flags it when a refresh fails', async () => {
     let fail = false
     serve({
