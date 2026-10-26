@@ -10,8 +10,16 @@ Períodos: se entrena con fotos ANTERIORES a la ventana práctica (``TRAIN_FROM`
 valida con el examen en la ventana práctica (2025-10-16 a 2026-04-18, config ``qwen-lora-exam.json``). El holdout no se lee
 nunca (``History`` lo rechaza).
 
+Segunda pregunta por foto, la ENTRADA (Fran, 26-oct: «hagamos las 3 igual»): con el lado ya decidido, ¿cómo entrar? Una línea
+``E:v`` con cinco opciones: orden límite esperando un retroceso grande (E:-2: 30 pb, válida 2 h) o chico (E:-1: 10 pb, 1 h),
+entrar ya a mercado (E:0), esperar la vela de 15 min y entrar solo si confirma (E:+1), o esperar 1 h (E:+2). La etiqueta es la
+opción que dejó el mejor neto a las 4 h con las velas que siguieron (comisión maker 0,02 % para la orden límite, taker 0,05 % para
+el resto, impacto del producto; una orden que no se llenó vale 0). El espejo lleva el lado opuesto y la misma opción. Esta pregunta
+no existe en vivo ni en el examen: la contesta solo ``ops/qwen-lora/entry_eval.py`` (gramática ``ENTRY_GRAMMAR``).
+
 Salida (``dataset``): ``train.jsonl`` y ``valid.jsonl`` en el formato «chat» de mlx-lm (``{"messages": [system, user,
-assistant]}``) más ``meta.json`` (períodos, muestra, umbral de movimiento grande por producto, hash de la config).
+assistant]}``, cuatro ejemplos por foto: dirección y entrada, real y espejo) más ``meta.json`` (períodos, muestra, umbral de
+movimiento grande por producto, reparto de etiquetas, hash de la config).
 ``numbers``: una línea JSON por foto con los números de la ficha (F1..F7) y los movimientos, para estudios sin modelo.
 
 Comandos: ``python -m balancita_engine.futures_qwen_lora dataset|numbers``. Nada de esto toca Qwen en vivo ni descarga modelos.
@@ -22,20 +30,36 @@ import copy
 import json
 import os
 import random
+import re
 import time
 
 from . import futures_qwen_factors as fq
 from . import futures_qwen_trader as qt
 from . import futures_qwen_trader_exam as ex
+from .futures_costs import fee_rate, side_impact_bps
 from .futures_qwen_ficha import FACTORS, VOTING
 
 LABEL_HORIZON_MIN = 240                      # la etiqueta: el movimiento a 4 h (el plazo al que opera y cierra Qwen en vivo)
 TRAIN_FROM, TRAIN_TO = "2022-04-01", "2025-10-01"   # fotos anteriores a la ventana práctica (2025-10-16)
 VALID_MONTHS = 2                             # los últimos meses del período van a valid.jsonl (solo para mirar la pérdida)
-DEFAULT_PER_PRODUCT = 3000
+DEFAULT_PER_PRODUCT = 2000                   # 4 ejemplos por foto (dirección y entrada, real y espejo): ~16.000 ejemplos
 DEFAULT_PRODUCTS = ("PF_XBTUSD", "PF_ETHUSD")
 DEFAULT_OUT = os.path.join(qt.DATA_DIR, "lora")
-DATASET_SCHEMA = "balancita-qwen-lora-dataset.v1"
+DATASET_SCHEMA = "balancita-qwen-lora-dataset.v2"
+
+# La entrada: valor de la línea E -> nombre; velas de 5 min que hacen falta después de la foto para etiquetarla.
+ENTRY_OPTIONS = {-2: "limite_30pb_120min", -1: "limite_10pb_60min", 0: "mercado", 1: "confirma_15min", 2: "espera_60min"}
+ENTRY_BARS = 24 + LABEL_HORIZON_MIN // 5     # la espera más larga (2 h) y las 4 h de la operación
+ENTRY_QUESTION = (
+    "El lado ya esta decidido: {side}. Elegi como entrar, mirando el STATE. Contesta una sola linea E:v con v entre -2 y +2. "
+    "E:-2 = dejar una orden limite esperando un retroceso grande (30 pb a favor, valida 2 h; si el precio no llega, no se entra). "
+    "E:-1 = orden limite esperando un retroceso chico (10 pb a favor, valida 1 h). "
+    "E:0 = entrar ya a mercado. "
+    "E:+1 = esperar la vela de 15 min y entrar a mercado solo si va a favor del lado. "
+    "E:+2 = esperar 1 h y entrar a mercado. "
+    "La orden limite paga comision 0,02 %; el resto 0,05 %. Elegi la opcion que deje el mejor resultado neto a las 4 h.")
+ENTRY_GRAMMAR = 'root ::= "E:" v\nv ::= ("+" | "-") ("1" | "2") | "0"'
+ENTRY_LINE = re.compile(r"^E:(0|[+-][12])$")
 
 
 # --------------------------------------------------------------------------- photos and labels
@@ -89,6 +113,101 @@ def examples_of(cfg, photo, big_bp):
     """The two examples of one photo: the real sheet with the real line and the mirrored sheet with the line turned over."""
     values = label_values(photo["moves"][str(LABEL_HORIZON_MIN)], big_bp)
     return [example(cfg, photo["state_text"], values), example(cfg, photo["mirror_text"], [-v for v in values])]
+
+
+# --------------------------------------------------------------------------- the entry
+
+
+def entry_nets(side, c0, nxt, product):
+    """Net result (bp) of every entry option for ``side`` (+1 long, -1 short) decided at price ``c0``, given the bars that
+    followed (``nxt``: at least ``ENTRY_BARS`` rows ``(high, low, close)``, the first one closing 5 min after the decision).
+    Market entries pay taker fee and impact on both sides; the limit order pays maker fee on entry and fills at its own price
+    when a later bar touches it (no impact); an order that never fills, or a confirmation that fails, is 0 (no trade). Every
+    trade exits at market ``LABEL_HORIZON_MIN`` after its entry."""
+    if len(nxt) < ENTRY_BARS:
+        raise ValueError("entry_nets needs {} bars, got {}".format(ENTRY_BARS, len(nxt)))
+    hold = LABEL_HORIZON_MIN // 5
+    impact = float(side_impact_bps(product))
+    taker_bp, maker_bp = float(fee_rate("taker")) * 1e4, float(fee_rate("maker")) * 1e4
+    market_cost, limit_cost = 2 * taker_bp + 2 * impact, maker_bp + taker_bp + impact
+
+    def at_market(k):                                     # enter at the close of bar ``k`` (-1: now, at c0)
+        price = c0 if k < 0 else nxt[k][2]
+        return side * (nxt[k + hold][2] / price - 1) * 1e4 - market_cost
+
+    nets = {0: at_market(-1), 2: at_market(11)}
+    nets[1] = at_market(2) if side * (nxt[2][2] - c0) > 0 else 0.0
+    for value, depth_bp, bars in ((-1, 10, 12), (-2, 30, 24)):
+        limit = c0 * (1 - side * depth_bp / 1e4)
+        fill = next((k for k in range(bars) if (nxt[k][1] <= limit if side > 0 else nxt[k][0] >= limit)), None)
+        nets[value] = 0.0 if fill is None else side * (nxt[fill + hold][2] / limit - 1) * 1e4 - limit_cost
+    return nets
+
+
+ENTRY_TIE_ORDER = (0, 1, 2, -1, -2)                # a tie goes to the simplest way in: market, confirmation, wait, then the limits
+
+
+def entry_label(nets):
+    """The option with the best net; a tie goes to the simplest option (``ENTRY_TIE_ORDER``)."""
+    return max(nets, key=lambda v: (round(nets[v], 9), -ENTRY_TIE_ORDER.index(v)))
+
+
+def entry_line(value):
+    return "E:{}".format("0" if value == 0 else "{:+d}".format(value))
+
+
+def parse_entry_line(text):
+    match = ENTRY_LINE.match(text.strip())
+    return None if match is None else int(match.group(1))
+
+
+def entry_question(side):
+    return ENTRY_QUESTION.format(side="LARGO" if side > 0 else "CORTO")
+
+
+def entry_example(cfg, state_text, side, value):
+    return {"messages": [{"role": "system", "content": cfg["prompt"]["system"]},
+                         {"role": "user", "content": fq.build_prompt(state_text, entry_question(side))},
+                         {"role": "assistant", "content": entry_line(value)}]}
+
+
+def entry_examples_of(cfg, photo, value):
+    """The real sheet with its side and the mirrored sheet with the opposite side: the best way in is the same."""
+    side = 1 if photo["moves"][str(LABEL_HORIZON_MIN)] > 0 else -1
+    return [entry_example(cfg, photo["state_text"], side, value), entry_example(cfg, photo["mirror_text"], -side, value)]
+
+
+class Bars:
+    """The candles of one product as ``(high, low, close)`` rows, addressed by the time a photo was taken."""
+
+    def __init__(self, bars):
+        self.rows = [(float(b["high"]), float(b["low"]), float(b["close"])) for b in bars]
+        self.index = {int(b["bucket_start"]) + qt.BAR_MS: i for i, b in enumerate(bars)}
+
+    def after(self, t_ms):
+        """``(close at t_ms, the next ENTRY_BARS rows)`` or ``None`` when the candles do not reach that far."""
+        i = self.index.get(t_ms)
+        if i is None or i + 1 + ENTRY_BARS > len(self.rows):
+            return None
+        return self.rows[i][2], self.rows[i + 1:i + 1 + ENTRY_BARS]
+
+
+def entry_labels(photos, bars_of):
+    """``{(product, t_ms): value}`` for the photos whose price moved and whose candles reach 6 h ahead. ``bars_of(product)``
+    gives the ``Bars`` of a product."""
+    out, cache = {}, {}
+    for photo in photos:
+        move = photo["moves"][str(LABEL_HORIZON_MIN)]
+        if move == 0:
+            continue
+        if photo["product"] not in cache:
+            cache[photo["product"]] = bars_of(photo["product"])
+        found = cache[photo["product"]].after(photo["t_ms"])
+        if found is None:
+            continue
+        c0, nxt = found
+        out[(photo["product"], photo["t_ms"])] = entry_label(entry_nets(1 if move > 0 else -1, c0, nxt, photo["product"]))
+    return out
 
 
 # --------------------------------------------------------------------------- sampling
@@ -149,19 +268,27 @@ def build_dataset(history, cfg, out_dir, *, products=DEFAULT_PRODUCTS, from_day=
         photos += photos_between(history, cfg, product, from_day, to_day, log=log)
     chosen = sample_photos(photos, per_product, rng_seed)
     big = {product: big_threshold([p for p in chosen if p["product"] == product]) for product in products}
+    warm = qt.date_ms(from_day) - cfg["practice"]["warmup_days"] * qt.DAY_MS
+    entries = entry_labels(chosen, lambda product: Bars(history.bars(product, warm, qt.date_ms(to_day))))
     train, valid = split_valid(chosen, valid_months)
-    rows = {"train": [e for p in train for e in examples_of(cfg, p, big[p["product"]])],
-            "valid": [e for p in valid for e in examples_of(cfg, p, big[p["product"]])]}
-    for name in ("train", "valid"):
-        random.Random(rng_seed + name).shuffle(rows[name])     # mlx-lm reads the file in order: mixed products and months
+    rows, counts = {}, {}
+    for name, part in (("train", train), ("valid", valid)):
+        rows[name] = [e for p in part for e in examples_of(cfg, p, big[p["product"]])]
+        counts[name] = {"direccion": len(rows[name])}
+        rows[name] += [e for p in part if (p["product"], p["t_ms"]) in entries
+                       for e in entry_examples_of(cfg, p, entries[(p["product"], p["t_ms"])])]
+        counts[name]["entrada"] = len(rows[name]) - counts[name]["direccion"]
+        random.Random(rng_seed + name).shuffle(rows[name])     # mlx-lm reads the file in order: mixed products, months, questions
         write_jsonl(os.path.join(out_dir, name + ".jsonl"), rows[name])
     meta = {"schema": DATASET_SCHEMA, "config_hash": qt.config_hash(cfg), "prompt_version": cfg["prompt"]["version"],
             "label_horizon_min": LABEL_HORIZON_MIN, "from": from_day, "to": to_day, "products": list(products),
             "photos_available": len(photos), "photos_sampled": len(chosen), "per_product": per_product, "seed": seed,
             "valid_months": valid_months, "big_move_bp": big, "examples": {k: len(v) for k, v in rows.items()},
-            "label_share": _label_share(chosen),
-            "note": "Cada foto da dos ejemplos (ficha real y espejo). Etiqueta: signo del movimiento a 4 h en F1 F2 F3 F4 F6 F7, "
-                    "+-2 si |movimiento| >= big_move_bp del producto, +-1 si no; F5 y F8 en 0."}
+            "examples_by_question": counts, "label_share": _label_share(chosen),
+            "entry_options": {str(k): v for k, v in sorted(ENTRY_OPTIONS.items())}, "entry_label_share": _entry_share(entries),
+            "note": "Cada foto da cuatro ejemplos: direccion (ficha real y espejo; signo del movimiento a 4 h en F1 F2 F3 F4 F6 F7, "
+                    "+-2 si |movimiento| >= big_move_bp del producto, +-1 si no; F5 y F8 en 0) y entrada (E:v, la opcion con mejor "
+                    "neto a 4 h con las velas que siguieron; el espejo lleva el lado opuesto y la misma opcion)."}
     with open(os.path.join(out_dir, "meta.json"), "w", encoding="utf-8") as handle:
         json.dump(meta, handle, indent=1, ensure_ascii=False)
     log("dataset: {} fotos de {} ({} ejemplos de entrenamiento, {} de validación) en {}".format(
@@ -173,6 +300,11 @@ def _label_share(photos):
     moves = [p["moves"][str(LABEL_HORIZON_MIN)] for p in photos]
     n = len(moves) or 1
     return {"up": sum(1 for m in moves if m > 0) / n, "down": sum(1 for m in moves if m < 0) / n}
+
+
+def _entry_share(entries):
+    n = len(entries) or 1
+    return {ENTRY_OPTIONS[v]: sum(1 for x in entries.values() if x == v) / n for v in sorted(ENTRY_OPTIONS)}
 
 
 def numbers_rows(photos):
