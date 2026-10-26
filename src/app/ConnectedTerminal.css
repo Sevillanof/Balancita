@@ -243,12 +243,6 @@
   border-color: var(--mc-short);
 }
 
-.connected-terminal__reset {
-  margin-top: 12px;
-  padding-top: 12px;
-  border-top: 1px solid var(--mc-border);
-}
-
 /* One-line market strip above the chart: pair, price, 24 h change, age. */
 
 .connected-terminal__strip {
