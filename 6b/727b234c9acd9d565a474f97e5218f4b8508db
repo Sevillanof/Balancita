@@ -1,0 +1,25 @@
+src/shared/design-system/guardrails.test.ts
+  s_e15f51fa943e1d::t_3b6caf3f4b5d32 1-293
+odd/tasks/tailwind-design-system.md
+  s_e15f51fa943e1d::t_2ee270acbff9da 69-70,123-132,185-189
+src/shared/design-system/theme.css
+  s_e15f51fa943e1d::t_edd70362554d20 13-17
+vite.design-system.config.ts
+  s_e15f51fa943e1d::t_40507a100159ce 37-38
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "6b727b234c9acd9d565a474f97e5218f4b8508db",
+  "prompts": {},
+  "sessions": {
+    "s_e15f51fa943e1d": {
+      "agent_id": {
+        "tool": "github-copilot-cli",
+        "id": "ff6016a2-cdbf-403f-99d2-004567e63f82",
+        "model": "unknown"
+      },
+      "human_author": "Franco Sevillano <79455847+Sevillanof@users.noreply.github.com>"
+    }
+  }
+}
