@@ -1,0 +1,31 @@
+index.html
+  s_e15f51fa943e1d::t_d4b83bbaf16dc3 2
+odd/tasks/tailwind-design-system.md
+  s_e15f51fa943e1d::t_dee6b2a670a561 8-10,28,40,73-74,111,131,182-184,268-272,378-389
+src/features/trading-view/presentation/ApprovedTerminalChart.test.tsx
+  s_e15f51fa943e1d::t_0336451e4b1741 119,135-179
+src/features/trading-view/presentation/ApprovedTerminalChart.tsx
+  s_e15f51fa943e1d::t_8fff9c200f2d8f 265-271,539-540,603-607
+src/features/trading-view/presentation/TerminalChartPanel.tsx
+  s_e15f51fa943e1d::t_6ec98ec03c1c71 446-450
+src/shared/design-system/guardrails.test.ts
+  s_e15f51fa943e1d::t_3db8575c492a9a 8,239-241,268,273-287
+src/shared/design-system/theme.css
+  s_e15f51fa943e1d::t_277740e6f77031 6-8,50-58,137,152-239
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "83b544da9fde82024eacaafcc818ee873daa7aa6",
+  "prompts": {},
+  "sessions": {
+    "s_e15f51fa943e1d": {
+      "agent_id": {
+        "tool": "github-copilot-cli",
+        "id": "ff6016a2-cdbf-403f-99d2-004567e63f82",
+        "model": "unknown"
+      },
+      "human_author": "Franco Sevillano <79455847+Sevillanof@users.noreply.github.com>"
+    }
+  }
+}
