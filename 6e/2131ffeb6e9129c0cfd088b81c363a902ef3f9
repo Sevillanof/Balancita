@@ -1,0 +1,19 @@
+src/shared/finance/format.ts
+  s_e15f51fa943e1d::t_0f152e20db8748 1-17,22-34,37,42,54,65,74
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "6e2131ffeb6e9129c0cfd088b81c363a902ef3f9",
+  "prompts": {},
+  "sessions": {
+    "s_e15f51fa943e1d": {
+      "agent_id": {
+        "tool": "github-copilot-cli",
+        "id": "ff6016a2-cdbf-403f-99d2-004567e63f82",
+        "model": "unknown"
+      },
+      "human_author": "Franco Sevillano <79455847+Sevillanof@users.noreply.github.com>"
+    }
+  }
+}
