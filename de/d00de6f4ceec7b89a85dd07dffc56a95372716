@@ -1,0 +1,23 @@
+src/features/observability/presentation/observability.css
+  s_e15f51fa943e1d::t_95ec2e0ee2a254 192
+src/features/strategy-lab/testing/inventory-fixture.ts
+  s_e15f51fa943e1d::t_bb2d67db5f27ef 1
+src/shared/styles/ui.css
+  s_e15f51fa943e1d::t_39db2c484ba26e 173
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "ded00de6f4ceec7b89a85dd07dffc56a95372716",
+  "prompts": {},
+  "sessions": {
+    "s_e15f51fa943e1d": {
+      "agent_id": {
+        "tool": "github-copilot-cli",
+        "id": "ff6016a2-cdbf-403f-99d2-004567e63f82",
+        "model": "unknown"
+      },
+      "human_author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
