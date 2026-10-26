@@ -116,11 +116,8 @@ export function parseTerminalEnvelope(value: unknown): TerminalEnvelope | null {
   return value as unknown as TerminalEnvelope
 }
 
-/** Data source behind the terminal: the live gateway. */
-export type TerminalSource = 'live'
-
-export function terminalApiBase(source: TerminalSource): string {
-  void source
+/** The terminal always reads the live gateway (paper orders, public Kraken data). */
+export function terminalApiBase(): string {
   return '/api-live'
 }
 

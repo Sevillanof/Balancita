@@ -1,24 +1,10 @@
 import { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
 import {
-  devEnvironment,
   onlyChildSpecs,
   serverEnvironment,
   serverNodeArgs,
 } from './dev-provider-env.mjs'
-
-describe('devEnvironment', () => {
-  it('defaults only the root development environment to Kraken', () => {
-    assert.equal(devEnvironment({}).VITE_MARKET_DATA_PROVIDER, 'kraken')
-  })
-
-  it('preserves an explicit mock override and all other environment values', () => {
-    assert.deepEqual(
-      devEnvironment({ VITE_MARKET_DATA_PROVIDER: 'mock', OTHER: 'value' }),
-      { VITE_MARKET_DATA_PROVIDER: 'mock', OTHER: 'value' },
-    )
-  })
-})
 
 describe('serverNodeArgs', () => {
   const serverArgs = [

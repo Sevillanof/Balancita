@@ -5,14 +5,6 @@ import { createServer } from 'node:net'
 import { delimiter, join } from 'node:path'
 import { parseEnv } from 'node:util'
 
-export function devEnvironment(environment) {
-  return {
-    ...environment,
-    VITE_MARKET_DATA_PROVIDER:
-      environment.VITE_MARKET_DATA_PROVIDER || 'kraken',
-  }
-}
-
 export function serverEnvironment(environment) {
   return {
     ...environment,
@@ -534,7 +526,6 @@ const POSITIONING_ARGS = [
 
 /**
  * Pure description of the `pnpm run dev` children:
- * - (the MOCK source is no longer started: the terminal always reads `live`),
  * - capture: Kraken public WS -> live market DB (sole writer, no HTTP/engine),
  * - live: read-only gateway on 8789 tailing that DB plus the paper account and
  *   verdicts DBs (no collector, no engine),
@@ -644,7 +635,7 @@ export function devChildSpecs({
       name: 'vite',
       cwd: root,
       args: [`${root}/node_modules/vite/bin/vite.js`],
-      env: devEnvironment(env),
+      env,
     },
   ]
   const marketDb = liveDb('futures-market.sqlite')

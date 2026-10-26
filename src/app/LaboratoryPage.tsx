@@ -12,7 +12,7 @@ export default function LaboratoryPage() {
       brandHref="/terminal"
       brandLabel="Balancita, ir a la terminal"
       navigation={appNavigation('estrategias')}
-      status={<AppStatusChips apiBase={terminalApiBase('live')} b1={health} />}
+      status={<AppStatusChips apiBase={terminalApiBase()} b1={health} />}
     >
       <StrategyLab />
     </AppShell>

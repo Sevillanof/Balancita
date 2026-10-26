@@ -81,20 +81,6 @@ describe('TerminalEntry', () => {
     expect(screen.queryByRole('radiogroup')).toBeNull()
   })
 
-  it('ignores ?source=mock: MOCK is not used any more', async () => {
-    window.history.pushState({}, '', '/terminal?source=mock')
-    const fetchMock = stubFetch(() => ({
-      status: 200,
-      body: bootstrapBody('paper_live'),
-    }))
-    render(<TerminalEntry />)
-    await screen.findByTestId('futures-terminal')
-    expect(fetchMock).toHaveBeenCalledWith(
-      '/api-live/terminal/bootstrap',
-      expect.anything(),
-    )
-  })
-
   it('reports an unreachable backend without falling back to anything else', async () => {
     stubFetch(() => ({ status: 503 }))
     render(<TerminalEntry />)

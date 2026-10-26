@@ -9,8 +9,8 @@ import {
 describe('terminal API base selection', () => {
   afterEach(() => vi.unstubAllGlobals())
 
-  it('maps the only source (live) to its proxy prefix', () => {
-    expect(terminalApiBase('live')).toBe('/api-live')
+  it('maps the terminal to the live gateway proxy prefix', () => {
+    expect(terminalApiBase()).toBe('/api-live')
   })
 
   it('builds the websocket URL from the selected base and defaults to /api', () => {

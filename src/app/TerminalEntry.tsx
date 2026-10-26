@@ -6,18 +6,13 @@ import FuturesTerminal from './FuturesTerminal.tsx'
 import {
   loadTerminalBootstrap,
   terminalApiBase,
-  type TerminalSource,
 } from '../features/connected-trading/infrastructure/terminal-stream-client.ts'
-
-// The terminal always reads the live gateway (paper orders, public Kraken
-// data).
-const SOURCE: TerminalSource = 'live'
 
 // A slow or failed bootstrap is usually transient (busy gateway), so the
 // terminal keeps retrying on its own instead of staying "unavailable".
 export const TERMINAL_RETRY_MS = 3_000
 
-function SourceView({ source }: { source: TerminalSource }) {
+function TerminalView() {
   const [product, setProduct] = useState<string | undefined>(undefined)
   const [state, setState] = useState<
     | { kind: 'loading' }
@@ -28,7 +23,7 @@ function SourceView({ source }: { source: TerminalSource }) {
     | { kind: 'unavailable' }
   >({ kind: 'loading' })
   const [attempt, setAttempt] = useState(0)
-  const apiBase = terminalApiBase(source)
+  const apiBase = terminalApiBase()
   useEffect(() => {
     let active = true
     let retry: ReturnType<typeof setTimeout> | undefined
@@ -110,5 +105,5 @@ function SwitchBar({ children }: { children: ReactNode }) {
 }
 
 export default function TerminalEntry() {
-  return <SourceView source={SOURCE} />
+  return <TerminalView />
 }
