@@ -1,0 +1,41 @@
+odd/tasks/tailwind-design-system.md
+  s_e15f51fa943e1d::t_1c463e6a0cdc05 65-74,131,141-145,158-159,161-163,177-190,257-265
+src/app/FuturesTerminal.tsx
+  s_e15f51fa943e1d::t_d026a160355504 12-15,413,540,543,546
+src/app/GatewayHistory.tsx
+  s_e15f51fa943e1d::t_d21861aaa2dd1c 3,22
+src/app/TerminalDecisions.test.tsx
+  s_e15f51fa943e1d::t_c52ee70a53c7f2 1-170
+src/features/trading-view/presentation/ApprovedTerminalLayout.tsx
+  s_e15f51fa943e1d::t_7d33d42c366bbc 13-16
+src/app/PaperAccountPanel.tsx
+  s_e15f51fa943e1d::t_debbd4fa54a8be 2,19
+src/app/QwenTradesPanel.tsx
+  s_e15f51fa943e1d::t_b22df05e821c37 4,41,69
+src/app/TerminalEntry.tsx
+  s_e15f51fa943e1d::t_c0dd3dfa907be2 100
+src/app/TerminalMarketChart.tsx
+  s_e15f51fa943e1d::t_64dc04e64a5cfc 164
+src/features/observability/presentation/ObserverPanel.tsx
+  s_e15f51fa943e1d::t_e8cde96afc4597 5,351
+src/features/trading-view/presentation/ApprovedTerminalChart.tsx
+  s_e15f51fa943e1d::t_1a5b8f498fdfbb 3,834,849
+src/features/trading-view/presentation/TerminalChartPanel.tsx
+  s_e15f51fa943e1d::t_ac8167fe0e95fa 737
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "694e81a3b4df8dcd53c65c25f36438cc2968d338",
+  "prompts": {},
+  "sessions": {
+    "s_e15f51fa943e1d": {
+      "agent_id": {
+        "tool": "github-copilot-cli",
+        "id": "ff6016a2-cdbf-403f-99d2-004567e63f82",
+        "model": "unknown"
+      },
+      "human_author": "Franco Sevillano <79455847+Sevillanof@users.noreply.github.com>"
+    }
+  }
+}
