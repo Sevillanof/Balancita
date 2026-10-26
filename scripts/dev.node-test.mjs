@@ -707,7 +707,9 @@ describe('optional LLM decision children (llm and q)', () => {
   })
 
   it('runs llama-server offline on loopback with the guide flags', () => {
-    const { llm: spec } = byName(devChildSpecs({ ...base, env: local, llm }))
+    const { llm: spec } = byName(
+      devChildSpecs({ ...base, env: local, llm, platform: 'linux' }),
+    )
     assert.equal(spec.command, 'llama-server')
     assert.deepEqual(spec.args, [
       '-m',
@@ -940,6 +942,112 @@ describe('resolveLlamaServer', () => {
       run: (command, args) => (calls.push([command, args]), found()),
     })
     assert.equal(calls[0][0], 'llama-server')
+  })
+})
+
+describe('resolveLlamaServer priority (taskpolicy)', () => {
+  const calls = []
+  const ok = (command, args) => (calls.push([command, args]), { status: 0 })
+  const noTaskpolicy = (command, args) => (
+    calls.push([command, args]),
+    command === 'taskpolicy'
+      ? { error: new Error('spawn taskpolicy ENOENT') }
+      : { status: 0 }
+  )
+
+  it('runs through taskpolicy -b on macOS when it is available', () => {
+    const result = resolveLlamaServer({
+      env: {},
+      run: ok,
+      platform: 'darwin',
+    })
+    assert.equal(result.command, 'taskpolicy')
+    assert.deepEqual(result.prefixArgs, ['-b', 'llama-server'])
+    assert.match(result.message, /prioridad de fondo/)
+    assert.match(result.message, /6 hilos/)
+  })
+
+  it('falls back to plain llama-server on macOS without taskpolicy', () => {
+    const result = resolveLlamaServer({
+      env: {},
+      run: noTaskpolicy,
+      platform: 'darwin',
+    })
+    assert.equal(result.command, 'llama-server')
+    assert.deepEqual(result.prefixArgs, [])
+    assert.match(result.message, /prioridad normal/)
+  })
+
+  it('uses plain llama-server on other systems without probing taskpolicy', () => {
+    calls.length = 0
+    const result = resolveLlamaServer({ env: {}, run: ok, platform: 'linux' })
+    assert.equal(result.command, 'llama-server')
+    assert.deepEqual(result.prefixArgs, [])
+    assert.match(result.message, /hilos del servidor/)
+    assert.ok(!calls.some(([command]) => command === 'taskpolicy'))
+  })
+})
+
+describe('llm child threads and priority', () => {
+  const base = {
+    root,
+    allowedFlags: noFlags,
+    python: { command: 'python3', prefixArgs: [] },
+  }
+  const env = { LLAMA_MODEL_PATH: '/models/q.gguf' }
+  const llmSpec = (extraEnv, platform, llm) =>
+    devChildSpecs({
+      ...base,
+      env: { ...env, ...extraEnv },
+      platform,
+      llm,
+    }).find((s) => s.name === 'llm')
+  const plain = { command: 'llama-server', prefixArgs: [] }
+  const threads = (spec) => {
+    const i = spec.args.indexOf('-t')
+    return i === -1 ? undefined : spec.args[i + 1]
+  }
+
+  it('prefixes the model args with the taskpolicy arguments', () => {
+    const spec = llmSpec({}, 'darwin', {
+      command: 'taskpolicy',
+      prefixArgs: ['-b', 'llama-server'],
+    })
+    assert.equal(spec.command, 'taskpolicy')
+    assert.deepEqual(spec.args.slice(0, 4), [
+      '-b',
+      'llama-server',
+      '-m',
+      '/models/q.gguf',
+    ])
+  })
+
+  it('defaults to 6 threads on macOS and honours LLAMA_THREADS', () => {
+    assert.equal(threads(llmSpec({}, 'darwin', plain)), '6')
+    assert.equal(
+      threads(llmSpec({ LLAMA_THREADS: '12' }, 'darwin', plain)),
+      '12',
+    )
+    assert.equal(
+      threads(llmSpec({ LLAMA_THREADS: ' 3 ' }, 'linux', plain)),
+      '3',
+    )
+  })
+
+  it('passes no -t elsewhere unless LLAMA_THREADS is set', () => {
+    assert.equal(threads(llmSpec({}, 'linux', plain)), undefined)
+  })
+
+  it('ignores an invalid LLAMA_THREADS', () => {
+    for (const bad of ['abc', '0', '-2', '1.5', ' '])
+      assert.equal(
+        threads(llmSpec({ LLAMA_THREADS: bad }, 'darwin', plain)),
+        '6',
+      )
+    assert.equal(
+      threads(llmSpec({ LLAMA_THREADS: 'abc' }, 'linux', plain)),
+      undefined,
+    )
   })
 })
 

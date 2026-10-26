@@ -303,10 +303,19 @@ export function resolveLlamaModel({ env, findModel = () => undefined }) {
 /**
  * Decides whether the optional `llm` (llama-server) and `q` children start:
  * only when `DECISIONS_ENABLED` is not `0` and the `llama-server` binary runs
- * from PATH. Never throws and never blocks startup: returns `{ command }` or
- * `{ message }` (one line for `[dev]`).
+ * from PATH. Never throws and never blocks startup: returns
+ * `{ command, prefixArgs, message }` (`message` is the `[dev]` line saying how
+ * the child will run) or `{ message }` alone when it cannot start.
+ *
+ * On macOS the server runs through `taskpolicy -b` (background priority) so
+ * the Mac stays usable while the model works; without `taskpolicy` or on any
+ * other OS it is plain `llama-server`.
  */
-export function resolveLlamaServer({ env, run = defaultRun }) {
+export function resolveLlamaServer({
+  env,
+  run = defaultRun,
+  platform = process.platform,
+}) {
   if ((env.DECISIONS_ENABLED ?? '').trim() === '0')
     return {
       message:
@@ -318,7 +327,38 @@ export function resolveLlamaServer({ env, run = defaultRun }) {
       message:
         'llama-server was not found on PATH; llm and q (LLM decisions) will not start. Install llama.cpp (brew install llama.cpp) or set DECISIONS_ENABLED=0 to silence this.',
     }
-  return { command: 'llama-server' }
+  const threads = llamaThreads(env, platform)
+  const threadsText =
+    threads === undefined
+      ? 'hilos del servidor'
+      : `${threads} hilos (LLAMA_THREADS)`
+  if (platform === 'darwin' && !run('taskpolicy', ['-b', 'true']).error)
+    return {
+      command: 'taskpolicy',
+      prefixArgs: ['-b', 'llama-server'],
+      message: `[dev] llm: prioridad de fondo (taskpolicy -b), ${threadsText}`,
+    }
+  return {
+    command: 'llama-server',
+    prefixArgs: [],
+    message: `[dev] llm: prioridad normal (sin taskpolicy), ${threadsText}`,
+  }
+}
+
+/**
+ * Threads for `llama-server -t`: `LLAMA_THREADS` when it is an integer >= 1,
+ * else 6 on macOS (light on the Mac), else undefined (the server decides).
+ * An invalid value is ignored, never an error.
+ */
+export function llamaThreads(env, platform = process.platform) {
+  const raw = (env.LLAMA_THREADS ?? '').trim()
+  if (
+    /^\d+$/.test(raw) &&
+    Number(raw) >= 1 &&
+    Number.isSafeInteger(Number(raw))
+  )
+    return Number(raw)
+  return platform === 'darwin' ? 6 : undefined
 }
 
 export const DEV_PORTS = { vite: 5173, live: 8789 }
@@ -584,12 +624,13 @@ export function devChildSpecs({
   python = { command: 'python3', prefixArgs: [] },
   // Injectable so the function stays pure; `.env` is looked up in `server/`.
   exists = existsSync,
-  // `{ command }` from `resolveLlamaServer`; absent/`null` leaves llm and q out.
+  // `{ command, prefixArgs }` from `resolveLlamaServer`; absent/`null` leaves llm and q out.
   llm = null,
   // Injectable local-model search (`findQwenModel`); none found by default so
   // the function stays pure.
   findModel = () => undefined,
   qwenExit = qwenExitSwitch(root),
+  platform = process.platform,
 }) {
   const serverCwd = `${root}/server`
   const hasEnvFile = exists(`${serverCwd}/.env`)
@@ -754,6 +795,7 @@ export function devChildSpecs({
         command: llm.command,
         cwd: root,
         args: [
+          ...(llm.prefixArgs ?? []),
           ...model,
           // The model runs fully offline: never reach the network.
           '--offline',
@@ -765,6 +807,7 @@ export function devChildSpecs({
           (env.LLAMA_CTX ?? '').trim() || '8192',
           '-np',
           (env.LLAMA_PARALLEL ?? '').trim() || '2',
+          ...optionalFlag('-t', String(llamaThreads(env, platform) ?? '')),
           // Opt-in server flags for prompt reuse between option orders (see futures_qwen_prefill_probe.py).
           ...optionalFlag('-ub', env.LLAMA_UBATCH),
           ...optionalFlag('--ctx-checkpoints', env.LLAMA_CTX_CHECKPOINTS),
