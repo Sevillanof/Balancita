@@ -17,6 +17,10 @@ DATASET=${QWEN_LORA_DATASET:-$DATA/dataset}
 ADAPTERS=$DATA/adapters
 mkdir -p "$DATA"
 
+need_model() {
+  [ -f "$MODEL/config.json" ] || { echo "falta el modelo en $MODEL (no hay config.json): corré ops/qwen-lora/train.sh download"; exit 1; }
+}
+
 case "${1:-help}" in
   setup)
     [ -x "$VENV/bin/python" ] || python3 -m venv "$VENV"
@@ -29,16 +33,20 @@ case "${1:-help}" in
     echo "QLoRA: los pesos quedan congelados en 4 bits y solo se entrena el adaptador. (QWEN_LORA_HF=Qwen/Qwen3-4B para los pesos completos, ~8 GB.)"
     read -q "ok?¿Seguir? (y/n) " || { echo; exit 1; }
     echo
-    "$VENV/bin/hf" download "$HF_MODEL" --local-dir "$MODEL" --include "*.json" "*.safetensors" "merges.txt" "vocab.json"
+    # por Python (snapshot_download viene siempre con huggingface_hub; el comando `hf` / `huggingface-cli` no siempre se instala)
+    "$VENV/bin/python" -c "from huggingface_hub import snapshot_download; import sys; print(snapshot_download(sys.argv[1], local_dir=sys.argv[2]))" "$HF_MODEL" "$MODEL"
     du -sh "$MODEL"
+    [ -f "$MODEL/config.json" ] || { echo "la descarga no dejó config.json en $MODEL: revisá el error de arriba"; exit 1; }
     ;;
   speed)
+    need_model
     [ -f "$DATASET/train.jsonl" ] || { echo "falta $DATASET/train.jsonl (el dataset se arma en la nube y se copia aquí)"; exit 1; }
     "$VENV/bin/mlx_lm.lora" -c "$ROOT/ops/qwen-lora/lora.yaml" --model "$MODEL" --data "$DATASET" \
       --adapter-path "$DATA/adapters-prueba" --iters 50 --steps-per-report 10 --steps-per-eval 1000 --save-every 1000
     echo "Con los tokens/s de arriba: el entrenamiento completo son ~16 millones de tokens (16.000.000 / tokens_s / 3600 = horas)."
     ;;
   train)
+    need_model
     [ -f "$DATASET/train.jsonl" ] || { echo "falta $DATASET/train.jsonl"; exit 1; }
     resume=()
     [ -f "$ADAPTERS/adapters.safetensors" ] && resume=(--resume-adapter-file "$ADAPTERS/adapters.safetensors") && echo "retoma desde $ADAPTERS/adapters.safetensors"
