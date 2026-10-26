@@ -205,7 +205,7 @@ test('Terminal on the real gateway: every interaction answers without 404', asyn
   await page.getByText('Más datos del mercado').click()
 
   // Decisions list: pick a row when the gateway served analyses.
-  const rows = page.locator('.connected-terminal__decision-list li button')
+  const rows = page.locator('[aria-label="Lista de decisiones"] li button')
   if ((await rows.count()) > 0) await rows.first().click()
 
   // Terminal <-> Estrategias (registry S is up in this run).
