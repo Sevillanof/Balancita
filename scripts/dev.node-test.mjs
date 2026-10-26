@@ -749,7 +749,11 @@ describe('optional LLM decision children (llm and q)', () => {
     assert.ok(!spec.args.includes('-ub'))
     assert.ok(!spec.args.includes('--lora'))
     const lora = byName(
-      devChildSpecs({ ...base, env: { ...env, LLAMA_LORA: ' /models/qwen-lora.gguf ' }, llm }),
+      devChildSpecs({
+        ...base,
+        env: { ...env, LLAMA_LORA: ' /models/qwen-lora.gguf ' },
+        llm,
+      }),
     ).llm.args
     assert.equal(lora[lora.indexOf('--lora') + 1], '/models/qwen-lora.gguf')
     assert.ok(lora.includes('--lora-init-without-apply'))
