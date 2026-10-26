@@ -1,0 +1,37 @@
+src/features/strategy-lab/presentation/RunProgress.test.tsx
+  s_e15f51fa943e1d::t_a99a9fa34f2ea6 1-84
+src/features/strategy-lab/presentation/StrategyRunView.tsx
+  s_e15f51fa943e1d::t_3c3e13b0ef330c 1,784,788,790,793,800-801,804,882,897,908,915,926,931,938,946,951,955,959-960,971,1000,1014,1019,1062,1083,1085-1086,1088,1102,1117,1122,1128,1131-1132,1142,1149,1156,1161,1164,1173,1183,1187,1223,1229,1235,1241,1249,1254,1260,1266,1271,1273,1276,1284,1320-1322,1325,1362,1366,1445,1465-1466,1503,1519-1520,1543
+src/features/strategy-lab/presentation/VectorbtCompare.tsx
+  s_e15f51fa943e1d::t_db8a2516df633a 1,116,120,123-124,132,135,138,147-149,155,170
+src/features/strategy-lab/presentation/VectorbtProgress.tsx
+  s_e15f51fa943e1d::t_affc4d44e520ba 1,32,42
+src/features/strategy-lab/presentation/VectorbtReportPanel.tsx
+  s_e15f51fa943e1d::t_713b4570b0d02d 1,121,128,154,158,161,175,209,221,226-227,232,235,238,241,250-253,261-262,267,270,273,276,285-288,335-336,344-345,350,353,356,359,381,385,390,393-395
+src/features/strategy-lab/presentation/VectorbtVariantLink.tsx
+  s_e15f51fa943e1d::t_2eea74808c7aef 1,82
+src/features/strategy-lab/presentation/RunProgress.tsx
+  s_e15f51fa943e1d::t_c566b8a6fd3054 1,37,46,50,60-61,70,72-73
+src/features/strategy-lab/presentation/StrategyRunView.test.tsx
+  s_e15f51fa943e1d::t_6d58c980be6efa 661
+src/features/strategy-lab/presentation/StrategyRunView.vectorbt.test.tsx
+  s_e15f51fa943e1d::t_84d8589681424e 317
+src/features/trading-view/presentation/ApprovedTerminalChart.tsx
+  s_e15f51fa943e1d::t_05b3279cb8c9cd 834
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "0f5777803d12444a07f1907238149174bd3d0629",
+  "prompts": {},
+  "sessions": {
+    "s_e15f51fa943e1d": {
+      "agent_id": {
+        "tool": "github-copilot-cli",
+        "id": "ff6016a2-cdbf-403f-99d2-004567e63f82",
+        "model": "unknown"
+      },
+      "human_author": "Franco Sevillano <79455847+Sevillanof@users.noreply.github.com>"
+    }
+  }
+}
