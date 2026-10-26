@@ -129,7 +129,7 @@ pnpm install
 pnpm dev          # abre http://localhost:5173
 ```
 
-`pnpm dev` comprueba los puertos 5173, 8789 y 8790 antes de arrancar; si uno está ocupado dice cuál y sale con código 1 (`lsof -ti tcp:<puerto> | xargs kill`). Cada proceso tiene su log con prefijo, Ctrl+C detiene todo el grupo y los restos de un `dev` anterior en este checkout se limpian solos. El estado de cada proceso se escribe en `server/data/dev-live/dev-health.json`.
+`pnpm dev` comprueba los puertos 5173, 8789 y 8790 antes de arrancar; si uno está ocupado dice cuál y sale con código 1 (`lsof -ti tcp:<puerto> | xargs kill`). Cada proceso tiene su log con prefijo, Ctrl+C detiene todo el grupo y los restos de un `dev` anterior en este checkout se limpian solos: al arrancar cierra las copias viejas de sus propios hijos (forward, news, Qwen, capture, vite, llama-server...) de este mismo checkout, y nada más. El estado de cada proceso se escribe en `server/data/dev-live/dev-health.json`.
 
 Sin red, `capture` y la fuente Real avisan; `vite` y el resto siguen funcionando.
 
