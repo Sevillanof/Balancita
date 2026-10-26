@@ -69,7 +69,7 @@ The status pill formula (10% fill, 25% border, full-strength text) becomes `bg-l
 | T3  | S4             | inline | local done; publication pending | 292ff226 |
 | T4  | S2, S3         | inline | done                            | 6b727b23 |
 | T5  | S1, S2, S5, S6 | inline | done                            | 694e81a3 |
-| T6  | S1, S2, S5, S6 | inline | in progress; T6c local done     | —        |
+| T6  | S1, S2, S5, S6 | inline | local done; pending user commit | —        |
 | T7  | S1, S2, S5     | inline | pending                         | —        |
 | T8  | S1             | inline | pending                         | —        |
 
@@ -128,7 +128,7 @@ pnpm exec vitest run --dir src --exclude '.claude/**' --exclude '**/node_modules
 
 The test uses the existing TypeScript compiler to inspect JSX `className` values and reachable static strings (templates, branches, aliases, imported variant maps and class-helper arguments). It ignores comments, display text and unrelated strings such as chart colors. Tests/specs are excluded from the application-source scan so negative fixtures do not flag themselves. This is a static guard, not a runtime evaluator: classes assembled from arbitrary runtime data or custom function return values still require review.
 
-Only `theme.css` and the 6 explicitly listed legacy source stylesheets are allowed. New or renamed CSS files under `src` fail; when retiring a legacy stylesheet, remove its entry from `LEGACY_CSS` in the same slice. Stale entries fail too, preventing retired paths from silently remaining exempt. The standalone T3 catalog is tooling under `scripts/design-system`, outside this app-source rule.
+Only `theme.css` and the 4 explicitly listed legacy source stylesheets are allowed. New or renamed CSS files under `src` fail; when retiring a legacy stylesheet, remove its entry from `LEGACY_CSS` in the same slice. Stale entries fail too, preventing retired paths from silently remaining exempt. The standalone T3 catalog is tooling under `scripts/design-system`, outside this app-source rule.
 
 ### T5 — Terminal screens
 
@@ -199,8 +199,8 @@ T6 follows the same independent-unit boundary as T5:
 | ---- | -------------------------------------------------------------------- | ------------------------------- |
 | T6a  | Strategy list, responsive composition, row menus and notices         | Done; ecaf7b4a                  |
 | T6b  | Shared strategy dialogs, editor, details and lifecycle confirmations | Done; 7fcfdffc                  |
-| T6c  | Strategy-run detail, test stages, results and chart composition      | Local done; pending user commit |
-| T6d  | Signal analyzer and VectorBT panels                                  | Pending                         |
+| T6c  | Strategy-run detail, test stages, results and chart composition      | Done; 0f577780                  |
+| T6d  | Signal analyzer and VectorBT panels                                  | Local done; pending user commit |
 
 T6a retires `StrategiesPage.css` (166 actual lines) and `StrategyLab.css` (5).
 List/menu button styles and success/purge/error notices share local constants.
@@ -238,6 +238,21 @@ important utilities bridge unlayered VectorBT/native controls until T6d/T8.
 Only the pending-stage and progress-copy text intentionally changes from
 decoration-only `ink-3` to readable `ink-2`. Progress remains bounded to 0–100,
 uses the previously winning 0.6 s transition and honors reduced motion.
+
+T6d retires `AnalyzerModal.css` (254 lines) and the remaining 225 lines of
+`VectorbtPanel.css`. Local `analyzer-styles.ts` and `vectorbt-styles.ts` share
+the heatmap, controls, SVG curves, installation help, diagnostic reports,
+ranking, comparison and exploration-form styles. No feature is removed.
+Heat intensity still uses the existing `--k` value and semantic gain/loss
+colors; no-event cells stay neutral. The analyzer stacks at 860 px inclusive;
+VectorBT keeps its inclusive 720 px breakpoint.
+
+The real application uses standards mode: analyzer table text retains 1.5
+line-height, not the `normal` value a doctype-less fixture would produce.
+Browser fixtures now explicitly use the same doctype as the app. Native/shared
+focus remains green, and ranking actions retain the existing run-table
+typography and unboxed blue appearance. Derived neutral-fill and chip-shadow
+utilities reference source colors directly, without unresolved catalog tokens.
 
 ### T7 — Observability screens
 
@@ -333,4 +348,15 @@ Each task or explicitly named sub-unit is one work-unit commit; report slices ov
   - Local harness evidence lives in session `ff6016a2-cdbf-403f-99d2-004567e63f82/files` under `~/.copilot/session-state/`. Commands: `node "$SESSION_FILES/t6c-runview.mjs"`; `MODES=vbt-positive,vbt-no-trades,vbt-unsupported WIDTHS=1600,720,390 REPORT_NAME=t6c-edge node "$SESSION_FILES/t6c-runview.mjs"`; `REDUCED=1 MODES=running,vbt-running,quick-running WIDTHS=1600,720,390 REPORT_NAME=t6c-reduced node "$SESSION_FILES/t6c-runview.mjs"`; `SLICE=t6c SCENARIOS=strategies,strategy-select,strategy-run-chart,strategy-run-series,live WIDTHS=1600,721,720,390 node "$SESSION_FILES/t5b-visual.mjs"`; `SLICE=t6c STRATEGIES=1 node "$SESSION_FILES/t5b-perf.mjs"`. `$SESSION_FILES` denotes that session's absolute files directory. Harnesses intercept the existing localhost origin; no new ports or service restarts.
   - Offline catalog: **91 source tokens**, seven previews/variants at 1440/768/390 px, no external requests, three exporter tests pass. No dependencies or real strategy/data writes.
   - Rollback: restore `StrategyRunView.css`, its import/guard entry, the 36 removed `VectorbtPanel.css` lines, the shared chart hook, six consumers, both existing test-selector edits, theme additions and this plan; remove `run-view-styles.ts` and `RunProgress.test.tsx`. T6a/T6b remain independent. Local-only; user performs all Git writes.
-- **Next step:** user reviews/commits T6c; continue with T6d analyzer and remaining VectorBT panels. External T3 publication and React 18 host validation remain pending.
+- **L15 (T6d local delivery):** T6c was committed by the user as `0f577780`. Completed the analyzer and all remaining VectorBT presentation, including the variant-origin card. Deleted **479 CSS lines** (254 analyzer + 225 remaining VectorBT), both imports and guard entries. T6 is locally complete; four legacy source stylesheets remain.
+  - Review first: `analyzer-styles.ts`, `vectorbt-styles.ts` and theme variants against the two deleted stylesheets; then the six mechanical consumers and three added analyzer tests. **755 changed source lines before this documentation update**, including new style maps, exceed the ~400-line target: 479 are CSS deletions and 50 are regression-test additions. Keeping all consumers with their stylesheet retirement avoids an incomplete cascade. No strategy, simulation, API, polling, lifecycle or chart-data logic changes.
+  - Semantic check: transpiled ASTs of `AnalyzerModal`, `VectorbtModal`, `StrategyRunView`, `VectorbtReportPanel`, `VectorbtCompare` and `VectorbtVariantLink` match HEAD after removing only class attributes/style imports and normalizing redundant parentheses. The variant-origin card shares the named `group/vbt-report` marker so its nested comparison table retains the same 340 px limit as a main report.
+  - Tests: **223/223 across ten files**, including new assertions for local controls not refetching, accessible selected state, neutral no-event cells and restoring focus to the opener. Exact suite command remains the L14 command. Typecheck, focused ESLint, production build, Prettier, editor diagnostics and `git diff --check` pass. The existing production chunk-size advisory remains.
+  - Standards-mode dialog harness: **442 comparisons** at **1600/1120/901/900/861/860/761/760/721/720/601/600/390 px**, covering small/full 78-cell studies, leverage, entry size, gross/net, selected cells, keyboard focus, loading/error/unavailable/empty/no-trade states; diagnostic/variant forms, range/manual-list inputs, invalid values, spec loading/error/empty, busy launch and explicit synthetic launch failure.
+  - Run/report harness: **270 comparisons** at **1600/1120/861/860/761/760/721/720/390 px**. Includes existing chart/results controls, expanded installation help, diagnostics/ranking/positive/no-trade/unsupported reports, report history/select focus, comparison loading/error, and variant-origin cards before/after practice plus open/closed comparisons. **24 live integration comparisons** cover Estrategias, the real populated analyzer, C29 detail/chart and Terminal at 1600/861/860/721/720/390 px. All **736 comparisons** pass with no unexpected computed-style/geometry differences or browser runtime errors; screenshots reviewed.
+  - The live check exposed a doctype-less fixture's quirks-mode table typography: fixed the fixture to match the application and retained the real analyzer's 1.5 line-height. Also preserved shared green keyboard focus, centered empty cells, exact neutral srgb fill and the existing unboxed ranking-action typography. The catalog rejects unresolved `var()` token values; derived fills/shadows therefore remain named utilities referencing the original color tokens instead of duplicating colors or weakening the exporter.
+  - Runtime, measured without concurrent browser suites: six real strategy selections, **60.1 FPS before / 60.0 after**, maximum frame **16.8 / 33.2 ms**, task CPU **2.98% / 3.20%**. Six populated-analyzer interactions (leverage, entry, net, cell, gross, reset), **60.1 / 60.0 FPS**, maximum frame **16.8 ms** both, task CPU **1.83% / 1.90%**. Both measurements have **zero frames >50 ms, long tasks or runtime errors**. No performance improvement is claimed; settled timings include deliberate harness waits.
+  - Session evidence: `t6d-dialogs.json`, `t6d-runview.json`, `t6d-visual.json`, `t6d-semantics.json`, `t6d-perf.json`, `t6d-analyzer-perf.json` and screenshots in the same session files directory as L14. Commands: `SLICE=t6d MODES=analyzer-data,analyzer-full,analyzer-loading,analyzer-error,analyzer-off,analyzer-empty,analyzer-no-trades,vectorbt,vectorbt-spec-loading,vectorbt-spec-error,vectorbt-spec-empty,vectorbt-busy WIDTHS=1600,1120,901,900,861,860,761,760,721,720,601,600,390 node "$SESSION_FILES/t6b-dialogs.mjs"`; `SLICE=t6d MODES=ready,running,vbt-off,vbt-report,vbt-variants,vbt-positive,vbt-no-trades,vbt-unsupported,compare-error,compare-loading,vbt-history,origin-ready,origin-pending WIDTHS=1600,1120,861,860,761,760,721,720,390 node "$SESSION_FILES/t6c-runview.mjs"`; `SLICE=t6d SCENARIOS=strategies,strategy-analyzer,strategy-run-chart,live WIDTHS=1600,861,860,721,720,390 node "$SESSION_FILES/t5b-visual.mjs"`; `node "$SESSION_FILES/t6d-semantics.mjs"`; `SLICE=t6d STRATEGIES=1 node "$SESSION_FILES/t5b-perf.mjs"`; `SLICE=t6d ANALYZER=1 REPORT_NAME=t6d-analyzer-perf node "$SESSION_FILES/t5b-perf.mjs"`. Live harnesses reject non-GET API calls; synthetic form failures never reach live APIs. No services/ports/dependencies or real strategy/data writes.
+  - Offline catalog rebuilt/verified: **92 source tokens**, seven previews and variants at 1440/768/390 px, three exporter tests, no external requests or screen CSS.
+  - Rollback boundary: restore both retired stylesheets/imports/guard entries, the six consumer migrations, three analyzer-test additions, theme changes and this plan; remove the two new style maps. T6a/T6b/T6c remain independent. Local-only; the user owns all Git writes.
+- **Next step:** user reviews/commits T6d; continue with T7 Observability, then T8 legacy globals. External T3 publication and React 18 host validation remain pending.

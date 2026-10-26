@@ -1,3 +1,4 @@
+import { VBT } from './vectorbt-styles.ts'
 import { RUN } from './run-view-styles.ts'
 import { useState } from 'react'
 import { count } from '../domain/strategy-format.ts'
@@ -84,11 +85,11 @@ export default function VectorbtReportPanel({
 
   return (
     <section
-      className="vbt-report"
+      className={VBT.report}
       aria-label="Reporte de VectorBT"
       data-testid="vbt-report"
     >
-      <div className="vbt-report__head">
+      <div className={VBT.reportHead}>
         <h4>Reporte de VectorBT</h4>
         {choices.length > 1 && (
           <select
@@ -123,7 +124,7 @@ export default function VectorbtReportPanel({
         queda intacto). Es un diagnóstico rápido, no un veredicto.
       </p>
       {open && (
-        <div className="vbt-report__body">
+        <div className={VBT.body}>
           {report.status === 'unsupported' || report.diagnostic === null ? (
             <p className={RUN.hint} data-testid="vbt-unsupported">
               VectorBT no puede reproducir esta estrategia:{' '}
@@ -196,11 +197,11 @@ function Diagnostic({ diagnostic }: { diagnostic: VbtDiagnostic }) {
           <dd>{shareText(totals.hit_rate)}</dd>
         </div>
       </dl>
-      <div className="vbt-report__twin">
+      <div className={VBT.twin}>
         <div>
           <h5>Qué funciona</h5>
           {diagnostic.works.length > 0 ? (
-            <ul className="vbt-list">
+            <ul className={VBT.list}>
               {diagnostic.works.map((sentence) => (
                 <li key={sentence}>{sentence}</li>
               ))}
@@ -212,7 +213,7 @@ function Diagnostic({ diagnostic }: { diagnostic: VbtDiagnostic }) {
         <div>
           <h5>Qué falla</h5>
           {diagnostic.fails.length > 0 ? (
-            <ul className="vbt-list">
+            <ul className={VBT.list}>
               {diagnostic.fails.map((sentence) => (
                 <li key={sentence}>{sentence}</li>
               ))}
@@ -293,10 +294,7 @@ function Diagnostic({ diagnostic }: { diagnostic: VbtDiagnostic }) {
         </div>
       )}
       {diagnostic.notes.length > 0 && (
-        <ul
-          className="vbt-list vbt-list--notes"
-          aria-label="Avisos sobre los datos"
-        >
+        <ul className={VBT.notes} aria-label="Avisos sobre los datos">
           {diagnostic.notes.map((note) => (
             <li key={note}>{note}</li>
           ))}
@@ -330,7 +328,7 @@ function Ranking({
   onCompare: (value: string | null) => void
 }) {
   return (
-    <div className="vbt-ranking" data-testid="vbt-ranking">
+    <div className={VBT.ranking} data-testid="vbt-ranking">
       <h5>Ranking de variantes · {label}</h5>
       {headline && <p className={RUN.hint}>{headline}</p>}
       <p className={RUN.hint} data-testid="vbt-attempts">
@@ -395,7 +393,7 @@ function Ranking({
                       <td className={RUN.num}>{shareText(row.hit_rate)}</td>
                     </>
                   )}
-                  <td className="vbt-ranking__action">
+                  <td className={VBT.rankingAction}>
                     {canConfirm && (
                       <button
                         type="button"
@@ -407,9 +405,7 @@ function Ranking({
                           : 'Confirmar en simulador'}
                       </button>
                     )}
-                    {created && (
-                      <span className="vbt-ranking__made">Ya creada</span>
-                    )}
+                    {created && <span className={VBT.made}>Ya creada</span>}
                     {(created || (row.is_base && row.status === 'ok')) && (
                       <button
                         type="button"

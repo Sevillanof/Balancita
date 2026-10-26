@@ -150,6 +150,56 @@ describe('Analizador de señales', () => {
     await user.keyboard('{Escape}')
     expect(onClose).toHaveBeenCalled()
   })
+
+  it('los controles locales no vuelven a pedir el estudio y mantienen la selección accesible', async () => {
+    const user = userEvent.setup()
+    const api = small()
+    await open(api)
+    await user.click(leverage('10×'))
+    await user.click(screen.getByRole('button', { name: /^1\.?000$/ }))
+    await user.selectOptions(screen.getByLabelText('Ver'), 'net')
+    const cell = screen.getByRole('button', {
+      name: /BTC · movimiento 5 min · revertir · 5 min/,
+    })
+    await user.click(cell)
+    expect(cell).toHaveAttribute('aria-pressed', 'true')
+    expect(leverage('10×')).toHaveAttribute('aria-pressed', 'true')
+    expect(leverage('1×')).toHaveAttribute('aria-pressed', 'false')
+    expect(api.events).toHaveBeenCalledTimes(1)
+  })
+
+  it('mantiene la tabla y explica las combinaciones sin operaciones', async () => {
+    await open(
+      apiOf({
+        available: true,
+        data: { ...smallAnalyzerData(), events: {} },
+      }),
+    )
+    const table = screen.getByRole('table')
+    expect(within(table).getAllByRole('button')).toHaveLength(3)
+    expect(within(table).getAllByText('sin datos')).toHaveLength(3)
+    expect(screen.getByTestId('detail-liquidated')).toHaveTextContent('0')
+    expect(screen.queryByTestId('detail-alert')).not.toBeInTheDocument()
+  })
+
+  it('devuelve el foco al elemento que abrió el analizador al desmontarse', async () => {
+    const opener = document.createElement('button')
+    opener.textContent = 'Abrir analizador'
+    document.body.append(opener)
+    opener.focus()
+    try {
+      const { unmount } = render(
+        <AnalyzerModal api={small()} onClose={vi.fn()} />,
+      )
+      await screen.findByTestId('analyzer-summary')
+      expect(screen.getByRole('button', { name: 'Cerrar' })).toHaveFocus()
+      unmount()
+      expect(opener).toHaveFocus()
+    } finally {
+      opener.remove()
+    }
+  })
+
   it('separa los miles siempre y explica la caída máxima acumulada', async () => {
     const user = userEvent.setup()
     await open(apiOf({ available: true, data: fullAnalyzerData() }))

@@ -1,3 +1,4 @@
+import { VBT } from './vectorbt-styles.ts'
 import { useEffect, useMemo, useState } from 'react'
 import {
   isIntegerText,
@@ -20,7 +21,6 @@ import {
   MODAL_NOTICE,
   MODAL_FIELD,
 } from './modal-styles.ts'
-import './VectorbtPanel.css'
 
 type Props = {
   strategyName: string
@@ -130,7 +130,7 @@ export default function VectorbtModal({
         veredicto.
       </p>
 
-      <fieldset className="vbt-choice">
+      <fieldset className={VBT.choice}>
         <legend>¿Qué querés hacer?</legend>
         <label>
           <input
@@ -161,7 +161,7 @@ export default function VectorbtModal({
       </fieldset>
 
       {mode === 'variants' && (
-        <div className="vbt-variants">
+        <div className={VBT.variants}>
           {specError && (
             <p role="alert" className={MODAL_NOTICE} data-tone="warn">
               No se pudo leer la estrategia: {specError}
@@ -197,7 +197,7 @@ export default function VectorbtModal({
                 </p>
               )}
 
-              <fieldset className="vbt-choice vbt-choice--row">
+              <fieldset className={VBT.choiceRow}>
                 <legend>¿Entre qué valores?</legend>
                 <label>
                   <input
@@ -220,7 +220,7 @@ export default function VectorbtModal({
               </fieldset>
 
               {source === 'range' ? (
-                <div className="vbt-range">
+                <div className={VBT.range}>
                   <label className={MODAL_FIELD}>
                     Mínimo
                     <input
@@ -263,7 +263,7 @@ export default function VectorbtModal({
                 </p>
               )}
               {result && result.error === null && (
-                <p className="vbt-count" data-testid="vbt-count">
+                <p className={VBT.count} data-testid="vbt-count">
                   Saldrían <b>{result.count}</b>{' '}
                   {result.count === 1 ? 'variante' : 'variantes'} (máximo{' '}
                   {MAX_VALUES}):{' '}

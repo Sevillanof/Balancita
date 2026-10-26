@@ -111,6 +111,7 @@
   --leading-browser: normal;
   --leading-none: 1;
   --leading-kpi: 1.1;
+  --leading-emphasis: 1.2;
 
   --shadow-*: initial;
   --shadow-popover: 0 8px 24px -4px rgb(0 0 0 / 60%);
@@ -202,7 +203,7 @@
 @custom-variant run-symbol (& b);
 @custom-variant run-bad (& dd[data-tone='bad']);
 @custom-variant run-good (& dd[data-tone='good']);
-@custom-variant run-report-table (&:where(.vbt-report *));
+@custom-variant run-report-table (&:where(.group\/vbt-report *));
 @custom-variant run-caption (& caption);
 @custom-variant run-cell (& th, & td);
 @custom-variant run-th (& th);
@@ -210,6 +211,58 @@
 @custom-variant run-button (& button);
 @custom-variant run-label (& label);
 @custom-variant run-copy (& p, & ul);
+@custom-variant field-select (& select);
+@custom-variant analyzer-stack (@media (width <= 860px));
+@custom-variant analyzer-row (& tbody th);
+@custom-variant analyzer-td (& td);
+@custom-variant analyzer-value-label (& span);
+@custom-variant analyzer-value (& strong);
+@custom-variant analyzer-gain (& strong[data-tone='gain']);
+@custom-variant analyzer-loss (& strong[data-tone='loss']);
+@custom-variant analyzer-svg (& svg);
+@custom-variant analyzer-caption (& figcaption);
+@custom-variant data-gain (&[data-tone='gain']);
+@custom-variant data-loss (&[data-tone='loss']);
+@custom-variant vbt-heading (& h4, & h5);
+@custom-variant vbt-subhead (& h5);
+@custom-variant vbt-legend (& legend);
+@custom-variant vbt-choice-copy (& label span);
+@custom-variant vbt-summary (& summary);
+
+@utility grid-cols-analyzer {
+  grid-template-columns: minmax(0, 1.5fr) minmax(260px, 1fr);
+}
+
+@utility shadow-chip {
+  box-shadow: inset 0 -2px 0 var(--color-long);
+}
+
+@utility analyzer-cell-tone {
+  background: color-mix(in srgb, var(--color-ink-2) 14%, transparent);
+
+  &[data-tone='gain'] {
+    background: color-mix(
+      in srgb,
+      var(--color-long) calc(var(--k) * 100%),
+      transparent
+    );
+  }
+  &[data-tone='loss'] {
+    background: color-mix(
+      in srgb,
+      var(--color-short) calc(var(--k) * 100%),
+      transparent
+    );
+  }
+}
+
+@utility stroke-dashes {
+  stroke-dasharray: 3 3;
+}
+
+@utility stroke-round {
+  stroke-linejoin: round;
+}
 
 @utility strategy-chart-height {
   --terminal-chart-height: clamp(380px, 56vh, 600px);

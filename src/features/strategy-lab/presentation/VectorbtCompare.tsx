@@ -1,3 +1,4 @@
+import { VBT } from './vectorbt-styles.ts'
 import { RUN } from './run-view-styles.ts'
 import { useEffect, useState } from 'react'
 import {
@@ -103,8 +104,8 @@ export default function VectorbtCompare({
   }, [api, strategyId, explorationId, value, runId])
 
   return (
-    <section className="vbt-compare" aria-label="VectorBT contra el simulador">
-      <div className="vbt-compare__head">
+    <section className={VBT.compare} aria-label="VectorBT contra el simulador">
+      <div className={VBT.compareHead}>
         <h5>VectorBT vs simulador{data ? ` · ${data.label}` : ''}</h5>
         {onClose && (
           <button type="button" onClick={onClose}>
@@ -160,7 +161,7 @@ export default function VectorbtCompare({
             {data.run_id}.
           </p>
           {data.explanation.length > 0 && (
-            <ul className="vbt-list" aria-label="Por qué difieren">
+            <ul className={VBT.list} aria-label="Por qué difieren">
               {data.explanation.map((sentence) => (
                 <li key={sentence}>{sentence}</li>
               ))}

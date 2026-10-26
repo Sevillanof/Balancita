@@ -1,3 +1,4 @@
+import { VBT } from './vectorbt-styles.ts'
 import { RUN } from './run-view-styles.ts'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import ApprovedTerminalChart from '../../trading-view/presentation/ApprovedTerminalChart.tsx'
@@ -71,7 +72,6 @@ import VectorbtProgress from './VectorbtProgress.tsx'
 import VectorbtReportPanel from './VectorbtReportPanel.tsx'
 import VectorbtVariantLink from './VectorbtVariantLink.tsx'
 import { useVectorbt } from './use-vectorbt.ts'
-import './VectorbtPanel.css'
 
 const STAGE_LABEL = [
   'En hipótesis',
@@ -933,7 +933,7 @@ export default function StrategyRunView({
         </p>
       )}
       {vbtState && !vbtState.available && vbtState.reason && (
-        <details className="vbt-install" data-testid="vbt-install">
+        <details className={VBT.install} data-testid="vbt-install">
           <summary>Cómo instalar VectorBT</summary>
           <p className={RUN.hint}>{vbtState.reason}</p>
           <pre aria-label="Comandos de instalación">{commands.join('\n')}</pre>
