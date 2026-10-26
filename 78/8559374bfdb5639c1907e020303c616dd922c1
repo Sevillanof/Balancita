@@ -1,0 +1,29 @@
+src/app/ConnectedTerminal.css
+  s_e15f51fa943e1d::t_c68117f51e6889 320-321,331
+src/app/FuturesTerminal.stream.test.tsx
+  s_e15f51fa943e1d::t_0893151621a5f9 294,318,321-323,330
+src/app/FuturesTerminal.test.tsx
+  s_e15f51fa943e1d::t_b72b001317e147 495,725,733-734,736,1361,1370,1372
+src/app/useTerminalStream.ts
+  s_e15f51fa943e1d::t_384ca1b0487bf8 1,15,40,68,74,94,101-102,113,119-120,136,140,180
+src/features/connected-trading/infrastructure/terminal-state.test.ts
+  s_e15f51fa943e1d::t_5b1d591aeca416 5-7,10,13-14,16-17,19-22
+src/app/FuturesTerminal.tsx
+  s_e15f51fa943e1d::t_14c7daa0c0cd2a 131
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "788559374bfdb5639c1907e020303c616dd922c1",
+  "prompts": {},
+  "sessions": {
+    "s_e15f51fa943e1d": {
+      "agent_id": {
+        "tool": "github-copilot-cli",
+        "id": "ff6016a2-cdbf-403f-99d2-004567e63f82",
+        "model": "unknown"
+      },
+      "human_author": "Franco Sevillano <franciscose@ext.inditex.com>"
+    }
+  }
+}
