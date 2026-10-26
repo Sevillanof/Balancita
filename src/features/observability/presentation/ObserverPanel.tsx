@@ -396,18 +396,7 @@ export default function ObserverPanel({
           error === null && <DataState kind="loading" />
         )}
         <section className="obs-card obs-history" aria-label="Historial">
-          <p className="obs-card__label">
-            Historial · decisiones del terminal
-            {product && (
-              <a
-                className="obs-card__link"
-                href={`/investigacion?product=${encodeURIComponent(product)}`}
-                data-testid="open-investigation"
-              >
-                Investigar decisiones
-              </a>
-            )}
-          </p>
+          <p className="obs-card__label">Historial · decisiones del terminal</p>
           {children}
         </section>
         <details className="obs-details obs-details--panel">

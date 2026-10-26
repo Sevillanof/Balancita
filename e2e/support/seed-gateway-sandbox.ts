@@ -26,25 +26,9 @@ seedMarket(box.marketDb, {
   // The base fixture's candle gets a price of the same order as the chart's.
   candlePrices: { open: '100.2', high: '100.9', low: '99.9', close: '100.5' },
 })
-// B6: 40 synthetic closed 15 m official candles of PF_XBTUSD with two holes.
-const QUARTER = 15 * MINUTE
-const lastQuarter = now - (now % QUARTER) - QUARTER
-const candleHoles = [5, 6, 20]
-seedOfficialCandles(
-  box.marketDb,
-  Array.from({ length: 40 }, (_, i) => i)
-    .filter((i) => !candleHoles.includes(i))
-    .map((i) => ({
-      product: 'PF_XBTUSD',
-      intervalMs: QUARTER,
-      bucket: lastQuarter - i * QUARTER,
-      close: String(100 + i),
-    })),
-)
 const bucket = now - (now % MINUTE) - MINUTE
-// SYNTHETIC 1 m official candles of PF_XBTUSD for the decision context chart:
-// the newest two minutes have none (a recent verdict has no candle yet), and
-// four more minutes are holes. Invented numbers, drawn as example data.
+// SYNTHETIC 1 m official candles of PF_XBTUSD: the newest two minutes have
+// none and four more minutes are holes. Invented numbers, example data.
 const minuteHoles = [10, 11, 12, 50]
 const shape = (i: number) => {
   const open = 100 + 0.8 * Math.sin((i + 1) / 4)
@@ -67,8 +51,7 @@ seedOfficialCandles(
       ...shape(i),
     })),
 )
-// SYNTHETIC verdicts (engine payload shape, invented numbers): the page shows
-// them as example data. XBT has 120 minutes so the list needs a second page.
+// SYNTHETIC verdicts (engine payload shape, invented numbers), example data.
 seedSyntheticVerdicts(
   box.verdictsDb,
   PRODUCTS.flatMap((product) =>
@@ -99,7 +82,5 @@ console.log(
     FUTURES_MARKET_DB_PATH: box.marketDb,
     FUTURES_VERDICTS_DB_PATH: box.verdictsDb,
     FUTURES_DECISIONS_DB_PATH: box.decisionsDb,
-    candlesLastBucket: lastQuarter,
-    candlesHoles: candleHoles,
   }),
 )
