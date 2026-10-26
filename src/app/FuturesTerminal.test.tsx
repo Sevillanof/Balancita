@@ -416,7 +416,6 @@ describe('FuturesTerminal presentation', () => {
     expect(await screen.findByText('Vela en formación')).toBeTruthy()
     expect(screen.getByText(/100\.150/)).toBeTruthy()
     // No fabricated engine state while the engine is off.
-    expect(screen.queryByText('Herramientas de simulación')).toBeNull()
     expect(screen.queryByText('Saldo USD')).toBeNull()
     expect(screen.queryByText('Aún no hay análisis registrados.')).toBeNull()
     expect(screen.queryByText('Posiciones y operaciones')).toBeNull()
@@ -493,7 +492,7 @@ describe('FuturesTerminal presentation', () => {
     ).toBeNull()
   })
 
-  it('renders the entries-paused analysis reason in Spanish and reports a command that was not applied', async () => {
+  it('renders the entries-paused analysis reason in Spanish', async () => {
     vi.stubGlobal('WebSocket', TestWebSocket)
     render(
       <FuturesTerminal
@@ -529,15 +528,6 @@ describe('FuturesTerminal presentation', () => {
       screen.getAllByText(/Entradas pausadas: el motor no abre nuevas/).length,
     ).toBeGreaterThan(0)
     expect(screen.queryByText('entries_paused')).toBeNull()
-    await act(async () =>
-      socket.receive(
-        envelope('command.result', 1, {
-          command_id: 'c1',
-          result: { result: { status: 'superseded' } },
-        }),
-      ),
-    )
-    expect(screen.getByText(/Comando no aplicado: superseded/)).toBeTruthy()
   })
 })
 
@@ -732,7 +722,7 @@ describe('FuturesTerminal on the live gateway with paper execution', () => {
     ).toEqual(['W', 'C25 LONG', 'C25 SHORT propuesta'])
   })
 
-  it('keeps pause, resume and close visibly disabled with the PS-06 notice, and sends nothing', async () => {
+  it('shows no paper.* controls and sends nothing', async () => {
     await renderLive()
     const socket = TerminalSocket.latest!
     const send = vi.spyOn(socket, 'send')
@@ -740,18 +730,11 @@ describe('FuturesTerminal on the live gateway with paper execution', () => {
       'Pausar entradas',
       'Reanudar entradas',
       'Cerrar posición',
+      'Iniciar simulación',
+      'Nueva cuenta/run',
     ]) {
-      const button = screen.getByRole('button', { name }) as HTMLButtonElement
-      expect(button.disabled).toBe(true)
-      button.click()
+      expect(screen.queryByRole('button', { name })).toBeNull()
     }
-    expect(
-      screen.queryByRole('button', { name: 'Iniciar simulación' }),
-    ).toBeNull()
-    expect(
-      screen.queryByRole('button', { name: 'Nueva cuenta/run' }),
-    ).toBeNull()
-    expect(screen.getByText(/llegarán en PS-06/)).toBeTruthy()
     expect(send).not.toHaveBeenCalled()
   })
 
@@ -1375,7 +1358,7 @@ describe('FuturesTerminal on the live gateway with paper execution', () => {
         ).toBe(true)
     })
 
-    it('puts the tools in a secondary row below the chart, naming the run they act on', async () => {
+    it('puts the position in a secondary row below the chart, without paper controls', async () => {
       await renderLive()
       const secondary = screen.getByTestId('terminal-secondary')
       const layout = screen.getByTestId('approved-terminal-layout')
@@ -1383,26 +1366,10 @@ describe('FuturesTerminal on the live gateway with paper execution', () => {
         layout.compareDocumentPosition(secondary) &
           Node.DOCUMENT_POSITION_FOLLOWING,
       ).toBeTruthy()
-      const tools = within(
-        within(secondary).getByRole('region', {
-          name: 'Herramientas de simulación',
-        }),
-      )
-      expect(tools.getByText('live-market-view')).toBeTruthy()
       expect(
-        tools.getByText(/no controlan los experimentos forward/),
+        within(secondary).getByRole('region', { name: 'Posición actual' }),
       ).toBeTruthy()
-      // The current-position block comes before the tools.
-      const position = within(secondary).getByRole('region', {
-        name: 'Posición actual',
-      })
-      expect(
-        position.compareDocumentPosition(
-          within(secondary).getByRole('region', {
-            name: 'Herramientas de simulación',
-          }),
-        ) & Node.DOCUMENT_POSITION_FOLLOWING,
-      ).toBeTruthy()
+      expect(screen.queryByText('Herramientas de simulación')).toBeNull()
     })
 
     it('collapses the history at first and keeps its provenance once expanded', async () => {

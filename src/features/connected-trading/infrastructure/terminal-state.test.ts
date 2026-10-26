@@ -2,47 +2,28 @@ import { describe, expect, it } from 'vitest'
 import { applyTerminalEvent } from './terminal-state.ts'
 
 describe('terminal state event projection', () => {
-  it('applies the nested durable command result version and tick analyses', () => {
-    const first = applyTerminalEvent(
-      { state_version: 0 },
+  it('appends tick analyses', () => {
+    const advanced = applyTerminalEvent(
+      {},
       {
         schema_version: 1,
-        event_id: 'command-result',
+        event_id: 'scheduled-analysis',
         stream_id: 'stream',
         run_id: 'run',
-        seq: 1,
-        type: 'command.result',
+        seq: 2,
+        type: 'analysis.completed',
         instrument_id: 'kraken-futures:PF_XBTUSD',
-        event_time: 1,
-        published_at: 1,
+        event_time: 1_791_197_302_785,
+        published_at: 1_791_197_302_785,
         data: {
-          result: {
-            result: { applied_state_version: 1 },
+          analysis: {
+            analysis_id: 'analysis',
+            reason_codes: ['position_owned'],
+            decision_time_ms: 21_600_000,
           },
         },
       },
     )
-    expect(first.state_version).toBe(1)
-
-    const advanced = applyTerminalEvent(first, {
-      schema_version: 1,
-      event_id: 'scheduled-analysis',
-      stream_id: 'stream',
-      run_id: 'run',
-      seq: 2,
-      type: 'analysis.completed',
-      instrument_id: 'kraken-futures:PF_XBTUSD',
-      event_time: 1_791_197_302_785,
-      published_at: 1_791_197_302_785,
-      data: {
-        analysis: {
-          analysis_id: 'analysis',
-          reason_codes: ['position_owned'],
-          decision_time_ms: 21_600_000,
-        },
-      },
-    })
-    expect(advanced.state_version).toBe(2)
     expect(advanced.analyses).toEqual([
       {
         analysis_id: 'analysis',

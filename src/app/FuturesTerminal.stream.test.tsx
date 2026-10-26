@@ -291,7 +291,7 @@ describe('FuturesTerminal WebSocket protocol (characterization)', () => {
     expect(screen.queryByText(/Se detectó un salto/)).toBeNull()
   })
 
-  it('ignores another run unless a new run was requested', async () => {
+  it('ignores another run', async () => {
     const socket = await mountConnected()
     await act(async () => socket.receive(orderAt(1, 'o1')))
 
@@ -315,56 +315,22 @@ describe('FuturesTerminal WebSocket protocol (characterization)', () => {
     expect(screen.getAllByText(/0\.01 · o2/).length).toBeGreaterThan(0)
   })
 
-  it('reports protocol.error with its code and clears the pending new-run request', async () => {
+  it('reports protocol.error with its code', async () => {
     const socket = await mountConnected()
-
     await act(async () =>
-      screen.getByRole('button', { name: 'Nueva cuenta/run' }).click(),
-    )
-    await act(async () =>
-      screen.getByRole('button', { name: 'Confirmar nueva cuenta' }).click(),
-    )
-    expect(socket.lastSent).toMatchObject({ action: 'paper.new_run' })
-
-    await act(async () =>
-      socket.receive(envelope('protocol.error', 1, { code: 'stale_version' })),
+      socket.receive(
+        envelope('protocol.error', 1, { code: 'invalid_message' }),
+      ),
     )
     expect(
       screen.getAllByRole('alert').map((alert) => alert.textContent),
     ).toEqual(
       expect.arrayContaining([
         expect.stringContaining(
-          'Comando rechazado por el servidor: stale_version',
+          'Mensaje rechazado por el servidor: invalid_message',
         ),
       ]),
     )
-
-    // The request was cancelled, so a snapshot of another run is ignored again.
-    await act(async () => socket.receive(snapshot(4, 'run-2')))
-    openStatus()
-    expect(screen.getByText(`Run: ${RUN}`)).toBeTruthy()
-    expect(screen.queryByText('Run: run-2')).toBeNull()
-  })
-
-  it('follows a requested new run, then keeps the sequence of the new run', async () => {
-    const socket = await mountConnected()
-    await act(async () =>
-      screen.getByRole('button', { name: 'Nueva cuenta/run' }).click(),
-    )
-    await act(async () =>
-      screen.getByRole('button', { name: 'Confirmar nueva cuenta' }).click(),
-    )
-    await act(async () => socket.receive(snapshot(4, 'run-2')))
-    openStatus()
-    expect(screen.getByText('Run: run-2')).toBeTruthy()
-
-    // run-2 continues at 5; run-1 events no longer apply.
-    await act(async () =>
-      socket.receive({ ...orderAt(5, 'o5'), run_id: 'run-2' }),
-    )
-    expect(screen.getAllByText(/0\.01 · o5/).length).toBeGreaterThan(0)
-    await act(async () => socket.receive(orderAt(6, 'oOld')))
-    expect(screen.queryByText(/oOld/)).toBeNull()
   })
 
   it('reconnects with exponential backoff from 500 ms, capped at 10 s, and resets after opening', async () => {

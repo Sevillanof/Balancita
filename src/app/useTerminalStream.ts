@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 import {
   parseTerminalEnvelope,
   terminalWebSocketUrl,
@@ -12,8 +12,7 @@ import type { GatewayClock } from '../features/observability/presentation/latest
 export type ViewState = Record<string, unknown>
 
 /**
- * The terminal's WebSocket session: connection, resync, run switching and paper
- * commands. Extracted verbatim from FuturesTerminal (Mission Control Fase 2.2);
+ * The terminal's WebSocket session: connection and resync. Extracted verbatim from FuturesTerminal (Mission Control Fase 2.2);
  * the protocol is pinned by FuturesTerminal.stream.test.tsx.
  */
 export function useTerminalStream({
@@ -35,16 +34,10 @@ export function useTerminalStream({
   // Browser time the current connection opened; null while disconnected.
   const [connectedAtMs, setConnectedAtMs] = useState<number | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const [commandPending, setCommandPending] = useState(false)
-  const [commandStatus, setCommandStatus] = useState('')
-  const [commandVersion, setCommandVersion] = useState(0)
   const [selectedAnalysisId, setSelectedAnalysisId] = useState<string | null>(
     null,
   )
-  const socketRef = useRef<WebSocket | null>(null)
-  const [activeRunId, setActiveRunId] = useState(bootstrap.active_run_id)
-  const activeRunRef = useRef(bootstrap.active_run_id)
-  const awaitingNewRunRef = useRef(false)
+  const activeRunId = bootstrap.active_run_id
 
   useEffect(() => {
     let cancelled = false
@@ -61,7 +54,6 @@ export function useTerminalStream({
     const openSocket = () => {
       if (cancelled) return
       socket = new WebSocket(terminalWebSocketUrl(apiBase, product))
-      socketRef.current = socket
       socket.onopen = () => {
         setServerClock(null)
         setConnectedAtMs(Date.now())
@@ -73,13 +65,13 @@ export function useTerminalStream({
               ? {
                   schema_version: 1,
                   type: 'resume',
-                  run_id: activeRunRef.current,
+                  run_id: activeRunId,
                   last_seq: lastSeq,
                 }
               : {
                   schema_version: 1,
                   type: 'subscribe',
-                  run_id: activeRunRef.current,
+                  run_id: activeRunId,
                 },
           ),
         )
@@ -99,23 +91,16 @@ export function useTerminalStream({
         }
         if (
           (event.type === 'snapshot' || event.type === 'heartbeat') &&
-          event.run_id === activeRunRef.current
+          event.run_id === activeRunId
         )
           setServerClock({
             publishedAtMs: event.published_at,
             receivedAtMs: Date.now(),
           })
         if (event.type === 'snapshot') {
-          if (event.run_id !== activeRunRef.current) {
-            // Only a requested new run may move the view to another run.
-            if (!awaitingNewRunRef.current) return
-            awaitingNewRunRef.current = false
-            activeRunRef.current = event.run_id
-            setActiveRunId(event.run_id)
-            setSelectedAnalysisId(null)
-          }
+          // The view never moves to another run.
+          if (event.run_id !== activeRunId) return
           batcher.reset()
-          const originalRun = event.run_id === bootstrap.active_run_id
           const watermark = event.data.watermark as number
           streamId = event.stream_id
           lastSeq = watermark
@@ -125,19 +110,17 @@ export function useTerminalStream({
           setState({
             ...snapshotState,
             market: {
-              ...(originalRun ? record(bootstrap.market) : {}),
+              ...record(bootstrap.market),
               ...record(snapshotState.market),
             },
             terminal_market:
               market.schema_version === 'futures-terminal-market.v1'
                 ? market
-                : originalRun &&
-                    record(bootstrap.terminal_market).schema_version ===
-                      'futures-terminal-market.v1'
+                : record(bootstrap.terminal_market).schema_version ===
+                    'futures-terminal-market.v1'
                   ? bootstrap.terminal_market
                   : null,
           })
-          setCommandVersion(Number(snapshotState.state_version ?? 0))
           setError(null)
           return
         }
@@ -148,35 +131,13 @@ export function useTerminalStream({
           socket?.close()
           return
         }
-        if (event.type === 'command.ack')
-          setCommandStatus(
-            `Comando ${String(event.data.status ?? 'recibido')}; sin fill confirmado.`,
-          )
-        if (event.type === 'command.result') {
-          setCommandPending(false)
-          const result = record(record(event.data.result).result)
-          if (
-            record(event.data.result).status === 'failed' ||
-            result.status === 'failed'
-          )
-            awaitingNewRunRef.current = false
-          const outcome = String(result.status ?? 'registrado')
-          setCommandStatus(
-            outcome === 'failed' || outcome === 'superseded'
-              ? `Comando no aplicado: ${outcome}. Vuelve a intentarlo.`
-              : `Resultado durable recibido: ${outcome}.`,
-          )
-        }
         if (event.type === 'protocol.error') {
-          awaitingNewRunRef.current = false
-          setCommandPending(false)
           setError(
-            `Comando rechazado por el servidor: ${String(event.data.code ?? 'error')}`,
+            `Mensaje rechazado por el servidor: ${String(event.data.code ?? 'error')}`,
           )
           return
         }
-        if (event.run_id !== activeRunRef.current || seen.has(event.event_id))
-          return
+        if (event.run_id !== activeRunId || seen.has(event.event_id)) return
         if (event.type === 'engine.status')
           setState((previous) => ({
             ...(previous ?? {}),
@@ -197,15 +158,6 @@ export function useTerminalStream({
         seen.add(event.event_id)
         if (seen.size > 2000) seen.clear()
         lastSeq = event.seq
-        if (event.type === 'analysis.completed')
-          setCommandVersion((version) => version + 1)
-        if (event.type === 'command.result') {
-          const appliedVersion = record(
-            record(event.data.result).result,
-          ).applied_state_version
-          if (Number.isSafeInteger(appliedVersion))
-            setCommandVersion(Number(appliedVersion))
-        }
         batcher.push(event)
       }
       socket.onclose = () => {
@@ -224,29 +176,8 @@ export function useTerminalStream({
       batcher.dispose()
       if (retryTimer !== undefined) clearTimeout(retryTimer)
       socket?.close()
-      socketRef.current = null
     }
-  }, [bootstrap, apiBase, product])
-
-  const sendCommand = (action: string) => {
-    const socket = socketRef.current
-    if (!socket || socket.readyState !== WebSocket.OPEN || !bootstrap || !state)
-      return
-    setCommandPending(true)
-    setCommandStatus('Enviando comando; aceptación no significa fill.')
-    if (action === 'paper.new_run') awaitingNewRunRef.current = true
-    socket.send(
-      JSON.stringify({
-        schema_version: 1,
-        type: 'paper.command',
-        run_id: activeRunRef.current,
-        command_id: crypto.randomUUID(),
-        expected_state_version: Number(commandVersion),
-        action,
-      }),
-    )
-    setCommandVersion((version) => version + 1)
-  }
+  }, [bootstrap, apiBase, product, activeRunId])
 
   return {
     state,
@@ -254,12 +185,8 @@ export function useTerminalStream({
     serverClock,
     connectedAtMs,
     error,
-    commandPending,
-    commandStatus,
-    commandVersion,
     activeRunId,
     selectedAnalysisId,
     setSelectedAnalysisId,
-    sendCommand,
   }
 }
