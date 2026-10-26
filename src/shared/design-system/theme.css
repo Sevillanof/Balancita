@@ -91,15 +91,18 @@
   --tracking-brand: -0.02em;
   --tracking-market: 0.06em;
   --tracking-eyebrow: 0.09em;
+  --tracking-section: 0.08em;
   --container-shell: 1800px;
 
   --leading-*: initial;
   --leading-normal: 1.5;
   --leading-control: 21px;
   --leading-browser: normal;
+  --leading-none: 1;
 
   --shadow-*: initial;
   --shadow-popover: 0 8px 24px -4px rgb(0 0 0 / 60%);
+  --shadow-menu: 0 6px 18px rgb(0 0 0 / 35%);
 }
 
 /*
@@ -152,6 +155,15 @@
 @custom-variant portfolio-value (& strong);
 @custom-variant terminal-last (& > :last-child);
 @custom-variant observer-history (&:where(.obs-history *));
+@custom-variant data-warn (&[data-tone='warn']);
+@custom-variant data-active (&[data-state='active']);
+@custom-variant data-tracking (&[data-state='tracking']);
+@custom-variant data-draft (&[data-state='draft']);
+@custom-variant data-shadow (&[data-state='shadow']);
+@custom-variant data-retired (&[data-state='retired']);
+@custom-variant data-closed (&[data-state='closed']);
+@custom-variant data-off (&[data-state='off']);
+@custom-variant data-inactive (&[data-state='inactive']);
 
 @utility font-features-terminal {
   font-feature-settings: 'tnum', 'cv05', 'cv11';
@@ -171,6 +183,10 @@
 
 @utility grid-cols-account {
   grid-template-columns: 1fr auto;
+}
+
+@utility grid-cols-strategies {
+  grid-template-columns: minmax(180px, 24%) minmax(0, 1fr);
 }
 
 @utility grid-cols-decisions {

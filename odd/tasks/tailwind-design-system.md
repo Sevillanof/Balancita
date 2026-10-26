@@ -62,16 +62,16 @@ The status pill formula (10% fill, 25% border, full-strength text) becomes `bg-l
 
 ## Tasks
 
-| ID  | Specs          | Route  | Status                              | Commit   |
-| --- | -------------- | ------ | ----------------------------------- | -------- |
-| T1  | S1, S3, S5     | inline | done                                | d0162349 |
-| T2  | S1, S2, S5     | inline | done                                | ce1f4a8f |
-| T3  | S4             | inline | local done; publication pending     | 292ff226 |
-| T4  | S2, S3         | inline | done                                | 6b727b23 |
-| T5  | S1, S2, S5, S6 | inline | local done; T5c user commit pending | —        |
-| T6  | S1, S2, S5, S6 | inline | pending                             | —        |
-| T7  | S1, S2, S5     | inline | pending                             | —        |
-| T8  | S1             | inline | pending                             | —        |
+| ID  | Specs          | Route  | Status                          | Commit   |
+| --- | -------------- | ------ | ------------------------------- | -------- |
+| T1  | S1, S3, S5     | inline | done                            | d0162349 |
+| T2  | S1, S2, S5     | inline | done                            | ce1f4a8f |
+| T3  | S4             | inline | local done; publication pending | 292ff226 |
+| T4  | S2, S3         | inline | done                            | 6b727b23 |
+| T5  | S1, S2, S5, S6 | inline | done                            | 694e81a3 |
+| T6  | S1, S2, S5, S6 | inline | in progress; T6a local done     | —        |
+| T7  | S1, S2, S5     | inline | pending                         | —        |
+| T8  | S1             | inline | pending                         | —        |
 
 ### T1 — Tailwind and the single theme (no visual change)
 
@@ -128,7 +128,7 @@ pnpm exec vitest run --dir src --exclude '.claude/**' --exclude '**/node_modules
 
 The test uses the existing TypeScript compiler to inspect JSX `className` values and reachable static strings (templates, branches, aliases, imported variant maps and class-helper arguments). It ignores comments, display text and unrelated strings such as chart colors. Tests/specs are excluded from the application-source scan so negative fixtures do not flag themselves. This is a static guard, not a runtime evaluator: classes assembled from arbitrary runtime data or custom function return values still require review.
 
-Only `theme.css` and the 10 explicitly listed legacy source stylesheets are allowed. New or renamed CSS files under `src` fail; when retiring a legacy stylesheet, remove its entry from `LEGACY_CSS` in the same slice. Stale entries fail too, preventing retired paths from silently remaining exempt. The standalone T3 catalog is tooling under `scripts/design-system`, outside this app-source rule.
+Only `theme.css` and the 8 explicitly listed legacy source stylesheets are allowed. New or renamed CSS files under `src` fail; when retiring a legacy stylesheet, remove its entry from `LEGACY_CSS` in the same slice. Stale entries fail too, preventing retired paths from silently remaining exempt. The standalone T3 catalog is tooling under `scripts/design-system`, outside this app-source rule.
 
 ### T5 — Terminal screens
 
@@ -138,11 +138,11 @@ Only `theme.css` and the 10 explicitly listed legacy source stylesheets are allo
 T5 is split into independently reviewable units because its starting scope is
 1,011 CSS lines plus the component consumers:
 
-| Unit | Scope                                                                               | Status                          |
-| ---- | ----------------------------------------------------------------------------------- | ------------------------------- |
-| T5a  | Market strip, shared notices, product select, loading/error frame and usage chip    | Done; d2101e1c                  |
-| T5b  | Chart toolbar, statistics, details and responsive panes                             | Done; 093b1a4a                  |
-| T5c  | Terminal layout, account/history tables and decisions; retire remaining stylesheets | Local done; pending user commit |
+| Unit | Scope                                                                               | Status         |
+| ---- | ----------------------------------------------------------------------------------- | -------------- |
+| T5a  | Market strip, shared notices, product select, loading/error frame and usage chip    | Done; d2101e1c |
+| T5b  | Chart toolbar, statistics, details and responsive panes                             | Done; 093b1a4a |
+| T5c  | Terminal layout, account/history tables and decisions; retire remaining stylesheets | Done; 694e81a3 |
 
 T5a uses one `TerminalNotices` component for both market alerts and the gateway
 diagnosis. Unknown/no-data tones stay neutral. The usage chip owns its alignment,
@@ -192,6 +192,23 @@ for removed CSS. Neither hook requires keeping an app stylesheet.
 
 - Migrate `StrategiesPage.css` (146), `StrategyLab.css` (5), `StrategyModals.css` (185), `StrategyRunView.css` (491), `AnalyzerModal.css` (254), `VectorbtPanel.css` (261) under `src/features/strategy-lab/presentation/`.
 - Check: screenshots; strategy switch shows no frame gap over 50 ms.
+
+T6 follows the same independent-unit boundary as T5:
+
+| Unit | Scope                                                                | Status                          |
+| ---- | -------------------------------------------------------------------- | ------------------------------- |
+| T6a  | Strategy list, responsive composition, row menus and notices         | Local done; pending user commit |
+| T6b  | Shared strategy dialogs, editor, details and lifecycle confirmations | Pending                         |
+| T6c  | Strategy-run detail, test stages, results and chart composition      | Pending                         |
+| T6d  | Signal analyzer and VectorBT panels                                  | Pending                         |
+
+T6a retires `StrategiesPage.css` (166 actual lines) and `StrategyLab.css` (5).
+List/menu button styles and success/purge/error notices share local constants.
+Named state variants preserve active/tracking, draft/shadow, retired/off/inactive
+and unknown colors; unknown stays neutral. New menu-shadow, section-tracking
+and unit-line-height tokens retain the previous values. The strategy grid keeps
+the inclusive 900 px breakpoint. Registry, grouping, permissions, lifecycle
+requests and polling are unchanged; no strategies are edited by validation.
 
 ### T7 — Observability screens
 
@@ -262,4 +279,11 @@ Each task or explicitly named sub-unit is one work-unit commit; report slices ov
   - Cascade findings: native button `font: inherit` needs an explicit important selected-filter weight; table `font` shorthand previously reset line-height to `normal`; border colors must target only the painted side. Tailwind's `flex: 1` uses a percentage basis, while the old list used a zero-length basis; explicit grow/shrink/basis utilities preserve embedded scrolling. The legacy `word-break: break-word` needs a named utility because the old `break-words` class is not generated in v4.
   - Runtime measurement: six live timeframe changes, **60.0 FPS before / 60.1 after**, maximum frame **16.8 ms**, zero frames over 50 ms, zero long tasks/errors. Browser task CPU **3.30% before / 3.60% after**; no optimization is claimed. Five already-warmed bootstrap GETs returned HTTP 200 in **32/2/2/3/5 ms**; these do not invalidate the cold outliers recorded in L9/L10 or prove an unconditional 0.1 s bound. Strategy-switch acceptance remains T6.
   - Offline catalog regenerated: **76 source tokens**, all seven previews/variants at 1440/768/390 px, no external requests, three exporter tests pass. Rollback boundary: restore both deleted app stylesheets/imports and guard entries, the three observability lines, all T5c consumer/theme/shell edits and this status/log; remove `terminal-styles.ts` and `TerminalDecisions.test.tsx`. T5a/T5b remain independent. Local-only; the user commits and pushes.
-- **Next step:** user reviews/commits T5c; continue with T6 Estrategias. External T3 publication and React 18 host validation remain pending.
+- **L12 (T6a local delivery):** T5c was committed by the user as `694e81a3`. Migrated the strategy-list composition, selection, net figures, operational dots, row menus and shared notices to utilities. Deleted **171 CSS lines** in `StrategiesPage.css` and `StrategyLab.css`, both imports and guard entries. Dialogs, run detail, analyzer and VectorBT remain separate T6 units.
+  - Review first: `strategy-list-styles.ts` and the list/menu markup against the removed selectors; then the four new interaction tests. **325 changed lines before this documentation update**, within the ~400-line target. All registry calls, strategy permissions, state transitions and data calculations are untouched.
+  - Validation: **204/204 tests across eight files**, including four new cases for Escape/outside/toggle dismissal and changing the current strategy without registry writes. Typecheck, production build, focused ESLint, Prettier, editor diagnostics and whitespace checks pass. Existing production chunk-size advisory remains.
+  - Runtime harness: **35 before/after production scenarios**, replaying identical GET responses on existing `localhost:5173`: base list, rule/model menus, destructive-item hover, options/menu keyboard focus and Kronos selection at **1600/901/900/600/390 px**. Geometry/computed visual styles match; mobile screenshots reviewed. **12 additional isolated fixture scenarios** at 1600/901/900/390 px cover all supported state colors plus unknown, normal/success/error notices and pending/completed purge notices. Only synthetic local API failures are triggered; no live mutation endpoints are called. Radius comparisons normalize the identical 4 px rendered circles, and grid `start`/`flex-start` values normalize as equivalent.
+  - Runtime measurement: six live strategy selections (Qwen/Kronos/C29/C30/Qwen/C29), **59.8 FPS both versions**, maximum frame **50.0 ms before / 33.3 ms after**, zero frames strictly over 50 ms, zero long tasks/runtime errors. Browser task CPU **2.78% before / 3.00% after**; this is not a CPU optimization. This checks the selected strategies' currently available states, not every possible populated run-detail state; T6c will repeat the relevant chart/results boundary.
+  - Catalog rebuilt: **79 source tokens**, seven previews/variants at 1440/768/390 px, no external requests; three exporter tests pass. No dependencies, ports, services or real strategy state changed.
+  - Rollback boundary: restore both deleted stylesheets/imports and guard entries; restore T6a changes in `StrategiesPage.tsx`, its test, `StrategyLab.tsx`, `PurgeNotice.tsx`, theme and this plan; remove `strategy-list-styles.ts`. T5 remains independent. No Git writes; the user commits/pushes.
+- **Next step:** user reviews/commits T6a; continue with T6b strategy dialogs. External T3 publication and React 18 host validation remain pending.

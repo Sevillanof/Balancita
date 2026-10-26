@@ -18,7 +18,10 @@ import StrategyDetailsModal from './StrategyDetailsModal.tsx'
 import { describeFailure } from './describe-failure.ts'
 import StrategyEditorModal from './StrategyEditorModal.tsx'
 import StrategyRunView from './StrategyRunView.tsx'
-import './StrategiesPage.css'
+import {
+  STRATEGY_LIST_BUTTON,
+  STRATEGY_NOTICE,
+} from './strategy-list-styles.ts'
 
 type Props = {
   api: StrategyApi | null
@@ -213,25 +216,38 @@ export default function StrategiesPage({
 
   const open = modal && modal.kind !== 'create' ? rowOf(modal.id) : null
   return (
-    <section className="strategies" aria-label="Estrategias">
-      <nav className="strategies__list" aria-label="Lista de estrategias">
-        <p className="strategies__heading">Estrategias</p>
-        {groupStrategies(rows, standings).map((group) => (
-          <div key={group.key} className="strategies__group">
-            {group.title && <p className="strategies__stage">{group.title}</p>}
-            <ul>
+    <section
+      className="grid min-w-0 grid-cols-strategies items-start gap-4 terminal-stack:grid-cols-1"
+      aria-label="Estrategias"
+    >
+      <nav aria-label="Lista de estrategias">
+        <p className="mt-0 mr-0 mb-2 ml-0 text-label leading-normal tracking-section text-ink-2 uppercase">
+          Estrategias
+        </p>
+        {groupStrategies(rows, standings).map((group, index) => (
+          <div key={group.key} className={index > 0 ? 'mt-3' : undefined}>
+            {group.title && (
+              <p className="mt-0 mr-0 mb-1 ml-0 px-2.5 py-0 text-label leading-normal tracking-market text-ink-2 uppercase">
+                {group.title}
+              </p>
+            )}
+            <ul className="m-0 grid list-none gap-1 p-0">
               {group.rows.map((row) => (
-                <li key={row.id} data-id={row.id}>
+                <li
+                  className="relative flex items-stretch gap-0.5"
+                  key={row.id}
+                  data-id={row.id}
+                >
                   <button
                     type="button"
-                    className="strategies__pick"
+                    className={`${STRATEGY_LIST_BUTTON} min-w-0 flex-auto text-ink-2 aria-current:border-line aria-current:bg-surface-1 aria-current:text-ink`}
                     aria-current={row.id === selected?.id ? 'true' : undefined}
                     onClick={() => pick(row.id)}
                   >
                     <span>{row.name}</span>
                     {standings.get(row.id)?.meanBp != null && (
                       <small
-                        className="strategies__net"
+                        className="ml-auto text-label leading-normal text-ink-2 tabular-nums"
                         title="Neto por operación del último test"
                       >
                         {signedAmount(standings.get(row.id)?.meanBp ?? null, 1)}{' '}
@@ -239,7 +255,7 @@ export default function StrategiesPage({
                       </small>
                     )}
                     <i
-                      className="strategies__dot"
+                      className="h-2 w-2 flex-none rounded-full bg-ink-2 data-active:bg-long data-tracking:bg-long data-draft:bg-warn data-shadow:bg-warn data-retired:bg-short data-closed:bg-short data-off:bg-short data-inactive:bg-short"
                       data-state={row.operational.state}
                       title={operationalLabel(row.operational.state)}
                       aria-hidden="true"
@@ -247,7 +263,7 @@ export default function StrategiesPage({
                   </button>
                   <button
                     type="button"
-                    className="strategies__more"
+                    className="flex w-7 flex-none cursor-pointer items-center justify-center gap-2 rounded-sm border border-solid border-transparent bg-transparent p-0 text-left text-title! leading-none! text-ink-2"
                     aria-label={`Opciones de ${row.name}`}
                     aria-haspopup="menu"
                     aria-expanded={menuId === row.id}
@@ -259,9 +275,16 @@ export default function StrategiesPage({
                     ⋮
                   </button>
                   {menuId === row.id && (
-                    <ul className="strategies__menu" role="menu">
-                      <li role="none">
+                    <ul
+                      className="absolute top-full right-0 z-20 mt-0.5 mr-0 mb-0 ml-0 grid min-w-40 list-none gap-0 rounded-sm border border-solid border-line bg-surface-1 p-1 shadow-menu"
+                      role="menu"
+                    >
+                      <li
+                        className="relative block items-stretch gap-0.5"
+                        role="none"
+                      >
                         <button
+                          className={`${STRATEGY_LIST_BUTTON} text-ink hover:bg-surface-2`}
                           type="button"
                           role="menuitem"
                           onClick={() =>
@@ -273,8 +296,12 @@ export default function StrategiesPage({
                       </li>
                       {editable(row) && (
                         <>
-                          <li role="none">
+                          <li
+                            className="relative block items-stretch gap-0.5"
+                            role="none"
+                          >
                             <button
+                              className={`${STRATEGY_LIST_BUTTON} text-ink hover:bg-surface-2`}
                               type="button"
                               role="menuitem"
                               onClick={() =>
@@ -284,8 +311,12 @@ export default function StrategiesPage({
                               Modificar
                             </button>
                           </li>
-                          <li role="none">
+                          <li
+                            className="relative block items-stretch gap-0.5"
+                            role="none"
+                          >
                             <button
+                              className={`${STRATEGY_LIST_BUTTON} text-ink hover:bg-surface-2`}
                               type="button"
                               role="menuitem"
                               onClick={() =>
@@ -297,8 +328,12 @@ export default function StrategiesPage({
                               {operating(row) ? 'Apagar' : 'Activar en paper'}
                             </button>
                           </li>
-                          <li role="none">
+                          <li
+                            className="relative block items-stretch gap-0.5"
+                            role="none"
+                          >
                             <button
+                              className={`${STRATEGY_LIST_BUTTON} text-short hover:bg-surface-2`}
                               type="button"
                               role="menuitem"
                               data-danger="true"
@@ -319,14 +354,14 @@ export default function StrategiesPage({
           </div>
         ))}
       </nav>
-      <div className="strategies__detail" data-testid="strategy-pane">
+      <div className="min-w-0" data-testid="strategy-pane">
         {notice && (
-          <p role="status" className="strategies__notice">
+          <p role="status" className={STRATEGY_NOTICE}>
             {notice}
           </p>
         )}
         {problem && (
-          <p role="alert" className="strategies__notice" data-tone="warn">
+          <p role="alert" className={STRATEGY_NOTICE} data-tone="warn">
             {problem}
           </p>
         )}

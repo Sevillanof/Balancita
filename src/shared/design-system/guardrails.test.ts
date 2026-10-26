@@ -6,8 +6,6 @@ const LEGACY_CSS = new Set([
   'src/index.css',
   'src/features/observability/presentation/observability.css',
   'src/features/strategy-lab/presentation/AnalyzerModal.css',
-  'src/features/strategy-lab/presentation/StrategiesPage.css',
-  'src/features/strategy-lab/presentation/StrategyLab.css',
   'src/features/strategy-lab/presentation/StrategyModals.css',
   'src/features/strategy-lab/presentation/StrategyRunView.css',
   'src/features/strategy-lab/presentation/VectorbtPanel.css',

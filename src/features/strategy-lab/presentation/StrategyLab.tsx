@@ -4,7 +4,6 @@ import {
   type StrategyApi,
 } from '../infrastructure/strategy-api.ts'
 import StrategiesPage from './StrategiesPage.tsx'
-import './StrategyLab.css'
 
 type Props = {
   connect?: () => Promise<StrategyApi>
@@ -40,7 +39,7 @@ export default function StrategyLab({ connect = defaultConnect }: Props) {
   }, [connect])
 
   return (
-    <div className="strategy-lab">
+    <div className="grid gap-4 text-body">
       <StrategiesPage
         api={api}
         connectError={connectError}

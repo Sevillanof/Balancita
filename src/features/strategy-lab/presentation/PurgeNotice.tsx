@@ -1,4 +1,5 @@
 import type { PurgeStatus } from '../infrastructure/strategy-api.ts'
+import { STRATEGY_NOTICE } from './strategy-list-styles.ts'
 
 const CONSUMER_TEXT: Record<string, string> = {
   forward: 'medición en paper',
@@ -16,7 +17,7 @@ export default function PurgeNotice({
     .filter(([, value]) => value === 'pending')
     .map(([key]) => CONSUMER_TEXT[key] ?? key)
   return (
-    <p role="status" className="strategies__notice">
+    <p role="status" className={STRATEGY_NOTICE}>
       {status.state === 'done'
         ? `Listo: ${name} se borró por completo.`
         : `Borrando ${name}…${pending.length ? ` Falta: ${pending.join(', ')}.` : ''}`}
