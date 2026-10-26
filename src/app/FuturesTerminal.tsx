@@ -8,6 +8,7 @@ import ApprovedTerminalLayout from '../features/trading-view/presentation/Approv
 import { AppShell, DataState } from '../shared/mission-control/index.ts'
 import GatewayHistory from './GatewayHistory.tsx'
 import MarketStrip from './MarketStrip.tsx'
+import TerminalNotices from './TerminalNotices.tsx'
 import PaperAccountPanel from './PaperAccountPanel.tsx'
 import { appNavigation } from './app-navigation.ts'
 import ApprovedPortfolioTables from '../features/trading-view/presentation/ApprovedPortfolioTables.tsx'
@@ -322,15 +323,7 @@ export default function FuturesTerminal({
         </p>
       )}
       <p>Run: {activeRunId ?? 'cargando'}</p>
-      {statusItems.length > 0 && (
-        <ul className="connected-terminal__chips">
-          {statusItems.map((item) => (
-            <li key={item.key} data-tone={item.tone}>
-              {item.text}
-            </li>
-          ))}
-        </ul>
-      )}
+      {statusItems.length > 0 && <TerminalNotices items={statusItems} />}
       {state && bootstrap.mode === 'paper_live' && (
         <>
           <p>

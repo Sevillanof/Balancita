@@ -93,9 +93,6 @@
 .obs-flow details > :not(summary) {
   margin-top: var(--mc-space-sm);
 }
-.obs-flow .demo-shell__badge {
-  justify-self: start;
-}
 .obs-flow details summary {
   color: var(--mc-text);
   cursor: pointer;

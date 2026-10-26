@@ -67,8 +67,8 @@ The status pill formula (10% fill, 25% border, full-strength text) becomes `bg-l
 | T1  | S1, S3, S5     | inline | done                            | d0162349 |
 | T2  | S1, S2, S5     | inline | done                            | ce1f4a8f |
 | T3  | S4             | inline | local done; publication pending | 292ff226 |
-| T4  | S2, S3         | inline | done (pending user commit)      | —        |
-| T5  | S1, S2, S5, S6 | inline | pending                         | —        |
+| T4  | S2, S3         | inline | done                            | 6b727b23 |
+| T5  | S1, S2, S5, S6 | inline | in progress; T5a local done      | —        |
 | T6  | S1, S2, S5, S6 | inline | pending                         | —        |
 | T7  | S1, S2, S5     | inline | pending                         | —        |
 | T8  | S1             | inline | pending                         | —        |
@@ -135,6 +135,28 @@ Only `theme.css` and the 13 explicitly listed legacy source stylesheets are allo
 - Migrate `src/app/ConnectedTerminal.css` (404 lines), the rest of `src/app/DemoShell.css` (427) and `src/features/trading-view/presentation/terminal-chart-panel.css` (324). Delete each file when its screen is done.
 - Check: screenshots; S6 measurements (bootstrap time, frame gaps).
 
+T5 is split into independently reviewable units because its starting scope is
+1,011 CSS lines plus the component consumers:
+
+| Unit | Scope | Status |
+| ---- | ----- | ------ |
+| T5a | Market strip, shared notices, product select, loading/error frame and usage chip | Local done; pending user commit |
+| T5b | Chart toolbar, statistics, details and responsive panes | Pending |
+| T5c | Terminal layout, account/history tables and decisions; retire remaining stylesheets | Pending |
+
+T5a uses one `TerminalNotices` component for both market alerts and the gateway
+diagnosis. Unknown/no-data tones stay neutral. The usage chip owns its alignment,
+so observability no longer needs a badge-specific override. Existing accessible
+labels, price formatting, evidence titles, polling and product-switch logic are
+unchanged.
+
+The product select temporarily needs important utilities: unlayered `ui.css`
+still sets every native select's height, padding, colors, border, font and focus
+outline. T8 can remove these modifiers with that legacy layer. New badge,
+tracking and control-line-height tokens preserve the existing visual values;
+they are not new styling rules copied into the theme. Keep the three T5 CSS
+allowlist entries until T5b/T5c actually delete those files.
+
 ### T6 — Estrategias screens
 
 - Migrate `StrategiesPage.css` (146), `StrategyLab.css` (5), `StrategyModals.css` (185), `StrategyRunView.css` (491), `AnalyzerModal.css` (254), `VectorbtPanel.css` (261) under `src/features/strategy-lab/presentation/`.
@@ -153,7 +175,7 @@ Only `theme.css` and the 13 explicitly listed legacy source stylesheets are allo
 
 ## Delivery
 
-Each task is one work-unit commit; report slices over ~400 authored changed lines rather than compressing them. The assistant only edits and validates: the user runs all branch, commit, push and PR commands. Per the user's 2026-10-26 instruction, commit commands for this work omit the Copilot co-author trailer.
+Each task or explicitly named sub-unit is one work-unit commit; report slices over ~400 authored changed lines rather than compressing them. The assistant only edits and validates: the user runs all branch, commit, push and PR commands. Per the user's 2026-10-26 instruction, commit commands for this work omit the Copilot co-author trailer.
 
 ## Log
 
@@ -186,4 +208,11 @@ Each task is one work-unit commit; report slices over ~400 authored changed line
   - Validation: focused Vitest suite **21/21 pass**, including negative fixtures for every rule, positive semantic/legacy cases, imported nested maps, cyclic aliases, default parameters, CSS additions/renames and real application TSX/CSS scans. Typecheck, targeted ESLint, Prettier and `git diff --check` pass.
   - Tailwind application sources are explicitly limited to `src`, excluding tests/specs. Excluding tests alone was insufficient: documentation also contains forbidden-class examples. The T3 library source override follows the explicit application-source directive, keeping its shared-component-only scope.
   - Runtime harness: **N/A**, no runtime behavior change; production build verifies fixture utilities are absent and application semantic utilities remain present, and T3's generated catalog still passes verification. No servers or ports started. Rollback boundary: delete the guard test, restore the theme/config source directives, and revert this T4 plan/log update. One reviewable work unit, under 400 authored changed lines.
-- **Next step:** user reviews/commits T4, then T5 Terminal migration. External T3 publication and React 18 host validation remain pending.
+- **L9 (T5a):** Migrated market strip, alerts/diagnosis notices, product select, loading/error wrapper and system usage chip to semantic utilities. Removed **166 legacy CSS lines** (101 Terminal, 62 DemoShell, 3 observability); unused warning/ok/error badge variants were deleted, not recreated. No trading, chart or strategy logic changes.
+  - Review first: `TerminalNotices.tsx` and `MarketStrip.tsx`; then the native select cascade in `TerminalEntry.tsx`, usage chip and matching CSS deletions. The chart, account/history tables and decision-panel styles are intentionally still legacy.
+  - Validation: **114/114 Vitest tests** across Terminal, shared components and guardrails, including six new market/notice tests. Typecheck, focused ESLint, Prettier and `git diff --check` pass. App production build passes with the existing chunk-size advisory.
+  - Runtime harness: production builds intercepted on the existing `localhost:5173`, replaying the same GET responses, public WebSocket snapshot and frozen clock. **56 before/after scenarios**: live, select hover/focus, expanded health/usage inspector, Estrategias, bootstrap error and pending bootstrap, each at 1600/761/760/481/480/461/460/390 px. Geometry and visual styles match; screenshots reviewed. Pill radii normalize to their identical clamped geometry; auto margins use typed computed values plus bounding rectangles rather than Chrome's inconsistent shorthand serialization. API settling is required before capture; otherwise initial loading states produce false differences.
+  - Performance: sequential production samples, **20 s each**, both **60.1 FPS / 2.2% browser task CPU / 0 frames >50 ms / 0 long tasks**. Script time 198 ms in both samples; no performance improvement is claimed. Five live bootstrap GETs: **1.221 s first**, then **113/93/91/112 ms**; the cold outlier is recorded, not hidden. Strategy-switch frame gaps remain part of later T5/T6 acceptance, not claimed tested by this slice.
+  - Catalog regenerated and verified offline: **48 source tokens**, seven real previews and their variants at 1440/768/390 px, no external requests; all three exporter tests pass.
+  - Rollback boundary: remove `TerminalNotices.tsx` and `MarketStrip.test.tsx`; restore T5a edits in `MarketStrip.tsx`, `FuturesTerminal.tsx`, `SystemUsageChip.tsx`, `TerminalEntry.tsx`, both app stylesheets, the badge rule in `observability.css`, theme additions and this plan update. No data, dependencies or service changes. Local-only; no Git writes.
+- **Next step:** user reviews/commits T5a; continue with T5b chart migration, then T5c to complete T5. External T3 publication and React 18 host validation remain pending.

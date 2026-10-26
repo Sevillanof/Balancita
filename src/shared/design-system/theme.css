@@ -60,14 +60,18 @@
   --text-brand-mark: 17px;
   --text-brand-compact: 18px;
   --text-provenance: 0.78rem;
+  --text-badge: 10px;
+  --text-badge-compact: 9px;
 
   --tracking-label: 0.04em;
   --tracking-title: -0.01em;
   --tracking-brand: -0.02em;
+  --tracking-market: 0.06em;
   --container-shell: 1800px;
 
   --leading-*: initial;
   --leading-normal: 1.5;
+  --leading-control: 21px;
 
   --shadow-*: initial;
   --shadow-popover: 0 8px 24px -4px rgb(0 0 0 / 60%);
@@ -89,6 +93,7 @@
   --radius-sm: 4px;
   --radius-lg: 8px;
   --radius-brand: 5px;
+  --radius-badge: 3px;
 }
 
 /* Preserve the legacy inclusive header breakpoints while screens migrate. */
@@ -96,6 +101,7 @@
 @custom-variant header-stack (@media (width <= 760px));
 @custom-variant header-phone (@media (width <= 640px));
 @custom-variant header-compact (@media (width <= 460px));
+@custom-variant source-phone (@media (width <= 480px));
 
 @utility w-shell-content {
   width: min(calc(100% - --spacing(14)), var(--container-shell));

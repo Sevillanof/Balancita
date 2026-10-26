@@ -18,37 +18,6 @@
   outline-offset: 3px;
 }
 
-.demo-shell__badge {
-  padding: 4px 8px;
-  border: 1px solid color-mix(in oklab, var(--mc-warn) 42%, transparent);
-  border-radius: 3px;
-  color: var(--mc-warn);
-  background: color-mix(in oklab, var(--mc-warn) 12%, transparent);
-  font-family: 'IBM Plex Mono', ui-monospace, monospace;
-  font-size: 10px;
-  font-weight: 600;
-  white-space: nowrap;
-}
-
-.demo-shell__badge[data-tone='ok'] {
-  border-color: color-mix(in oklab, var(--mc-long) 55%, transparent);
-  color: var(--mc-long);
-  background: color-mix(in oklab, var(--mc-long) 12%, transparent);
-}
-
-.demo-shell__badge[data-tone='bad'] {
-  border-color: color-mix(in oklab, var(--mc-short) 55%, transparent);
-  color: var(--mc-short);
-  background: color-mix(in oklab, var(--mc-short) 14%, transparent);
-}
-
-.demo-shell__badge--usage {
-  color: var(--mc-text-2);
-  border-color: var(--mc-border-strong);
-  background: var(--mc-canvas);
-  font-weight: 500;
-}
-
 .demo-shell__eyebrow {
   margin: 0 0 6px;
   color: var(--mc-text-2);
@@ -237,35 +206,4 @@
   .demo-terminal__results-heading > div:last-child {
     flex-wrap: wrap;
   }
-}
-
-@media (max-width: 460px) {
-  .demo-shell__badge {
-    padding-inline: 6px;
-    font-size: 9px;
-  }
-}
-
-/* Product selector of the header: dark, same height as the status chip. */
-.demo-shell__status select {
-  min-height: 28px;
-  padding: 0 var(--mc-space-md);
-  border: 1px solid var(--mc-border);
-  border-radius: var(--mc-radius);
-  color: var(--mc-text);
-  background: var(--mc-surface-2);
-  color-scheme: dark;
-  font: inherit;
-  font-family: var(--mc-font-mono);
-  font-size: 12px;
-  cursor: pointer;
-}
-
-.demo-shell__status select:hover {
-  background: var(--mc-surface-hover);
-}
-
-.demo-shell__status select:focus-visible {
-  outline: 2px solid var(--mc-info);
-  outline-offset: 2px;
 }

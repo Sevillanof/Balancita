@@ -52,6 +52,7 @@ function TerminalView() {
         sourceSwitch={
           products.length > 1 ? (
             <select
+              className="min-h-7! rounded-sm! border border-solid border-line! bg-surface-2! px-3! py-0! font-mono! text-hint! leading-control! text-ink! scheme-dark hover:bg-surface-hover! focus-visible:outline-2! focus-visible:outline-info! focus-visible:outline-offset-2!"
               aria-label="Producto"
               value={product ?? products[0]}
               onChange={(event) => {
@@ -99,7 +100,9 @@ function TerminalView() {
 function SwitchBar({ children }: { children: ReactNode }) {
   return (
     <div className="demo-shell min-h-svh bg-canvas font-sans text-body text-ink">
-      <div className="source-switch-bar">{children}</div>
+      <div className="flex justify-end border-b border-b-solid border-b-line px-7 py-2 source-phone:px-4">
+        {children}
+      </div>
     </div>
   )
 }

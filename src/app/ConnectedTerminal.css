@@ -110,21 +110,6 @@
   outline-offset: 2px;
 }
 
-/* Data-source switch: compact dark segmented control (native radios). */
-
-.source-switch-bar {
-  display: flex;
-  justify-content: flex-end;
-  padding: 8px 28px;
-  border-bottom: 1px solid var(--mc-border);
-}
-
-@media (max-width: 480px) {
-  .source-switch-bar {
-    padding-inline: 16px;
-  }
-}
-
 /* Up to 100 analyses: keep them in their own scroll instead of growing the page. */
 
 .connected-terminal__decisions {
@@ -214,92 +199,6 @@
   .connected-terminal__decisions {
     height: 420px;
   }
-}
-
-.connected-terminal__chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin: 0 0 8px;
-  padding: 0;
-  list-style: none;
-}
-
-.connected-terminal__chips li {
-  padding: 2px 10px;
-  border: 1px solid var(--mc-border);
-  border-radius: 999px;
-}
-
-.connected-terminal__chips li[data-tone='ok'] {
-  border-color: var(--mc-long);
-}
-
-.connected-terminal__chips li[data-tone='warn'] {
-  border-color: var(--mc-warn);
-}
-
-.connected-terminal__chips li[data-tone='bad'] {
-  border-color: var(--mc-short);
-}
-
-/* One-line market strip above the chart: pair, price, 24 h change, age. */
-
-.connected-terminal__strip {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 2px 16px;
-  margin: 0 0 6px;
-}
-
-.connected-terminal__strip h1 {
-  margin: 0;
-  font-size: 18px;
-  font-weight: 600;
-}
-
-.connected-terminal__strip h1 > span {
-  color: var(--mc-text-2);
-  font-weight: 500;
-}
-
-.connected-terminal__strip h1 small {
-  margin-left: 10px;
-  color: var(--mc-text-2);
-  font-family: 'IBM Plex Mono', ui-monospace, monospace;
-  font-size: 11px;
-  font-weight: 500;
-  letter-spacing: 0.06em;
-}
-
-.connected-terminal__price {
-  font-family: 'IBM Plex Mono', ui-monospace, monospace;
-  font-size: 18px;
-  font-weight: 600;
-}
-
-.connected-terminal__change {
-  font-family: 'IBM Plex Mono', ui-monospace, monospace;
-  font-size: 13px;
-}
-
-.connected-terminal__change[data-tone='ok'] {
-  color: var(--mc-long);
-}
-
-.connected-terminal__change[data-tone='bad'] {
-  color: var(--mc-short);
-}
-
-.connected-terminal__quote-label {
-  color: var(--mc-text-2);
-  font-size: 12px;
-}
-
-.connected-terminal__alerts {
-  margin: 0;
-  font-size: 12px;
 }
 
 .visually-hidden {
