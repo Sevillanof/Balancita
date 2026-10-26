@@ -46,6 +46,7 @@
   "test_futures_qwen_exam": 69,
   "test_futures_qwen_exit": 7,
   "test_futures_qwen_factors": 30,
+  "test_futures_qwen_parallel": 10,
   "test_futures_qwen_practice": 32,
   "test_futures_qwen_practice_report": 9,
   "test_futures_qwen_trader": 17,

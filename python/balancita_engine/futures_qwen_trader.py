@@ -1669,7 +1669,14 @@ def _parser():
     ee.add_argument("--max-minutes", type=float, default=55.0)
     ee.add_argument("--llama-url", default=None)
     ee.add_argument("--offline", action="store_true", help="use only the local cache: no Kraken request at all")
-    ee.add_argument("--sequential", action="store_true")
+    ee.add_argument("--sequential", action="store_true",
+                    help="ask the real and the mirrored state of a photo one after the other (default: at the same time; "
+                         "llama-server needs -np 2). Also turns off the concurrent option orders of the letters question")
+    ee.add_argument("--check-parallel", type=int, default=None, metavar="N",
+                    help="do not run the exam: take the first N photos of --exam-db and ask the real and the mirrored state "
+                         "of each one by one and then at the same time (4 calls per photo, about N x 4 x 2.5 s), and compare "
+                         "the lines F1..F8, the 16 gradients and the sign of lean_num. Saves nothing. Run it with the exam "
+                         "stopped: both use the two slots of the server")
     ee.add_argument("--positioning-db", default=None, metavar="PATH",
                     help="database of the positioning collector, opened read-only for row F6 of the 'ficha' variants (default: "
                          "$POSITIONING_DB_PATH or server/data/dev-live/positioning.sqlite); without it F6 says n/d")
@@ -1739,6 +1746,19 @@ def main(argv=None):
         elif args.command == "exam":
             from . import futures_qwen_quick_variants as variants
             from .futures_qwen_trader_exam import run_exam
+            if args.check_parallel is not None:
+                from .futures_qwen_factors import check_parallel, parallel_text
+                if not cfg.get("state_ficha"):
+                    raise TraderError("--check-parallel solo vale para la pregunta por factores (config con state_ficha, "
+                                      "como --version live)")
+                if not os.path.exists(args.exam_db):
+                    raise TraderError("no existe la base del examen: {}".format(args.exam_db))
+                provider = _provider(args.llama_url)
+                if not provider.health():
+                    raise TraderError("llama-server no responde en {}".format(provider.base_url))
+                print(parallel_text(check_parallel(args.exam_db, cfg, provider, args.check_parallel,
+                                                  log=lambda *a: print(*a, flush=True))))
+                return 0
             variant = variants.get_variant(args.variant) if args.variant or args.quick is not None else None
             if args.version == "live" and variant is not None and variant["kind"] not in ("control", "memory"):
                 raise TraderError("con --version live se pregunta lo que pregunta Qwen en vivo (variante «actual» o «memoria»): "
@@ -1768,14 +1788,15 @@ def main(argv=None):
                             cfg = variants.apply_variant(cfg, variant)
                         state = run_quick(history, quick_db, _provider(url), cfg, holdout_ms,
                                           snapshots=args.quick, max_minutes=args.max_minutes, state_path=state_path,
-                                          variant=variant)
+                                          variant=variant, concurrent=not args.sequential)
                 except variants.VariantError as error:
                     state = fail_quick(state_path, variant, str(error))
                 print("prueba rápida {}: {}".format(variant["id"], state["state"]))
                 return
             if variant is not None and variant.get("model"):
                 raise TraderError("el examen completo de una variante de modelo no está soportado")
-            run_exam(history, args.exam_db, _provider(args.llama_url), cfg, holdout_ms, max_minutes=args.max_minutes)
+            run_exam(history, args.exam_db, _provider(args.llama_url), cfg, holdout_ms, max_minutes=args.max_minutes,
+                     concurrent=not args.sequential)
         elif args.command in ("prefetch", "practice"):
             history = History(args.cache_dir, holdout_ms, offline=getattr(args, "offline", False))
             plan, _ = block_plan(cfg, holdout_ms, seed=args.seed, blocks=args.blocks)
@@ -1834,7 +1855,7 @@ def main(argv=None):
         return 0
     except KeyboardInterrupt:
         print("\ncortado con Ctrl+C: lo ya preguntado quedó guardado; volvé a lanzar el mismo comando para retomar "
-              "(compare-prompts y --check-determinism no guardan nada).", flush=True)
+              "(compare-prompts, --check-determinism y --check-parallel no guardan nada).", flush=True)
         return 130
     except (TraderError, HistoryError, ValueError) as error:
         print("error: {}".format(error), file=sys.stderr)

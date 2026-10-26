@@ -29,6 +29,7 @@ import json
 import math
 import re
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 from . import futures_llm_decisions as llm
 from . import futures_qwen_trader as qt
@@ -235,18 +236,26 @@ class FactorsDecider:
 
     Same contract as ``LlmDecider`` for the exam loop: ``BudgetExhausted`` when the time budget would be passed, ``ModelDown``
     after three unreachable calls in a row, ``DecisionError`` on an answer that is not in the format. With a ``store`` (the
-    exam's ``PracticeDB``) every answer is saved and a question already answered is never asked again."""
+    exam's ``PracticeDB``) every answer is saved and a question already answered is never asked again.
 
-    def __init__(self, provider, cfg, *, store=None, clock=time.monotonic, deadline=None, model=None):
+    ``ask_pair`` asks the real and the mirrored state of one photo at the same time (llama-server ``-np 2`` serves them in
+    parallel; ``concurrent=False`` asks them one after the other). Same pattern as ``LlmDecider._call_many``: only the HTTP
+    request runs in a worker thread (``_request`` touches nothing shared); the counters, the SQLite inserts (the connection
+    of ``PracticeDB`` belongs to the calling thread) and the call errors are all handled by the calling thread afterwards, so
+    no lock is needed."""
+
+    def __init__(self, provider, cfg, *, store=None, clock=time.monotonic, deadline=None, model=None, concurrent=True):
         self.provider, self.cfg, self.store, self.clock, self.deadline, self.model = provider, cfg, store, clock, deadline, model
         self.template = qt.template_of(cfg)
         self.question = settings(cfg)["question"]
         self.temperature = float(cfg["prompt"]["temperature"])
+        self.concurrent = concurrent
         self.calls = 0
-        self.spent = 0.0
+        self.spent = 0.0              # wall seconds spent waiting for the model (a concurrent pair counts once)
         self.down = 0
 
     def mean_call(self):
+        """Wall seconds per call: with a concurrent pair this is about half the latency of one call."""
         return self.spent / self.calls if self.calls else 0.0
 
     def _stored(self, snap_id, step):
@@ -257,48 +266,167 @@ class FactorsDecider:
         return {"text": row["text"], "grads": json.loads(row["grads_json"]), "detail": json.loads(row["detail_json"]),
                 "values": [d["value"] for d in json.loads(row["detail_json"])], "latency_ms": row["latency_ms"]}
 
+    @staticmethod
+    def _decorated(result):
+        action, p = summary_action(result["grads"])
+        return dict(result, chosen=action, probabilities={action: p})
+
     def ask(self, snap_id, t_ms, step, state_text):
         """``{text, values, grads, detail, latency_ms, chosen, probabilities}`` (the last two: the side of the sum, for the tables)."""
         result = self._stored(snap_id, step)
         if result is None:
             result = self._call(snap_id, t_ms, step, state_text)
-        action, p = summary_action(result["grads"])
-        return dict(result, chosen=action, probabilities={action: p})
+        return self._decorated(result)
+
+    # ---- one photo: real and mirror
+
+    def ask_pair(self, snap_id, t_ms, real_text, mirror_text):
+        """``(real, mirror)``, each as ``ask`` returns it. What is already stored is not asked again; when both are missing and
+        ``concurrent`` they go out at the same time (otherwise real first, then mirror), and when only one is missing it is
+        asked alone.
+
+        * ``BudgetExhausted`` before anything is launched when the pair would pass the deadline (two calls at the mean wall
+          time per call).
+        * ``DecisionError`` when an answer is not in the format. The other answer, if valid, is saved all the same so it is
+          never asked again; the error carries ``answers``: ``{step: result}`` of what did come out (stored or new), which the
+          exam uses to fill what it can of the photo's row. In series, a failed real answer means the mirror is not asked.
+        * ``ModelDown`` after three unreachable calls in a row. A pair counts like its calls would one after the other,
+          except that the answers that did arrive are handled first (and set ``down`` to 0): if one call of the pair is
+          unreachable and the other answered, ``down`` ends at 1 and the unreachable one is asked again alone."""
+        steps = (("action", real_text), ("mirror", mirror_text))
+        out = {step: self._stored(snap_id, step) for step, _ in steps}
+        missing = [(step, text) for step, text in steps if out[step] is None]
+        if len(missing) == 2 and self.concurrent:
+            self._guard(2)
+            out.update(self._call_pair(snap_id, t_ms, missing))
+        else:
+            failure = None
+            for step, text in missing:
+                try:
+                    out[step] = self._call(snap_id, t_ms, step, text)
+                except qt.DecisionError as error:
+                    failure = error
+                    break                                   # as ever in series: the mirror is not asked after a failed real
+            if failure is not None:
+                failure.answers = {s: self._decorated(r) for s, r in out.items() if r is not None}
+                raise failure
+        return self._decorated(out["action"]), self._decorated(out["mirror"])
+
+    def read_states(self, texts, concurrent):
+        """Asks each STATE of ``texts`` without storing or counting anything (``check_parallel``): one after the other or all at
+        once. A list with, per text, the ``read_completion`` result or ``None`` when the answer is not in the format.
+        ``TraderError`` when the server does not answer."""
+        bodies = [request_body(build_prompt(text, self.question), self.template) for text in texts]
+        if concurrent:
+            with ThreadPoolExecutor(max_workers=len(bodies)) as pool:
+                got = [f.result() for f in [pool.submit(self._request, body) for body in bodies]]
+        else:
+            got = [self._request(body) for body in bodies]
+        out = []
+        for answer, _, error in got:
+            if isinstance(error, llm.ModelUnavailable):
+                raise qt.TraderError("llama-server no contestó: {}".format(error))
+            try:
+                if error is not None:
+                    raise error
+                out.append(read_completion(answer["completion"], self.temperature))
+            except llm.ModelResponseError:
+                out.append(None)
+        return out
+
+    def _guard(self, count):
+        if self.deadline is not None and self.clock() + self.mean_call() * count > self.deadline:
+            raise qt.BudgetExhausted()
+
+    def _call_pair(self, snap_id, t_ms, missing):
+        prepared = []
+        for step, text in missing:
+            prompt = build_prompt(text, self.question)
+            prepared.append((step, prompt, request_body(prompt, self.template)))
+        started = self.clock()
+        with ThreadPoolExecutor(max_workers=len(prepared)) as pool:
+            futures = [pool.submit(self._request, body) for _, _, body in prepared]
+            results = [f.result() for f in futures]
+        wall = self.clock() - started
+        out, failure, unreachable, counted = {}, None, [], 0
+        for (step, prompt, _), (answer, took, error) in zip(prepared, results):      # the answers that arrived first
+            if isinstance(error, llm.ModelUnavailable):
+                unreachable.append((step, prompt))
+                continue
+            try:
+                if error is not None:
+                    raise error
+                out[step] = self._keep(snap_id, step, prompt, answer, took)
+            except llm.ModelResponseError as bad:
+                self._failed(snap_id, t_ms, step, bad)
+                failure = failure or qt.DecisionError(str(bad))
+                failure.__cause__ = bad
+                continue
+            counted += 1
+            self.down = 0
+        self.calls += counted
+        if counted:
+            self.spent += wall
+        for step, prompt in unreachable:                    # each counts one; asked again alone like a call in series
+            self.down += 1
+            if self.down >= 3:
+                raise qt.ModelDown()
+            try:
+                out[step] = self._call(snap_id, t_ms, step, dict(missing)[step])
+            except qt.DecisionError as bad:
+                failure = failure or bad
+        if failure is not None:
+            failure.answers = {s: self._decorated(r) for s, r in out.items() if r is not None}
+            raise failure
+        return out
+
+    # ---- one call
+
+    def _request(self, body):
+        """The HTTP part only (runs in a worker thread when the pair is concurrent): ``(answer, seconds, error)``; no shared
+        state is touched."""
+        started = time.monotonic()
+        try:
+            return self.provider.chat(body), time.monotonic() - started, None
+        except (llm.ModelUnavailable, llm.ModelResponseError) as error:
+            return None, time.monotonic() - started, error
+
+    def _keep(self, snap_id, step, prompt, answer, took):
+        """Reads a completion and saves it (calling thread only). ``ModelResponseError`` if it is not in the format."""
+        result = read_completion(answer["completion"], self.temperature)
+        result["latency_ms"] = int(answer.get("latency_ms") or took * 1000)
+        result["prompt_hash"] = llm.prompt_hash(prompt, self.template)
+        if self.store:
+            with self.store.db:
+                self.store.db.execute("INSERT OR REPLACE INTO exam_factors VALUES(?,?,?,?,?,?,?,?,?,?)", (
+                    snap_id, step, result["text"], json.dumps(result["grads"]), json.dumps(result["detail"]),
+                    result["latency_ms"], result["prompt_hash"], self.template["version"], self.model,
+                    int(time.time() * 1000)))
+        return result
 
     def _call(self, snap_id, t_ms, step, state_text):
         prompt = build_prompt(state_text, self.question)
         body = request_body(prompt, self.template)
         for _ in range(3):
-            if self.deadline is not None and self.clock() + self.mean_call() > self.deadline:
-                raise qt.BudgetExhausted()
+            self._guard(1)
             started = self.clock()
-            try:
-                answer = self.provider.chat(body)
-            except llm.ModelUnavailable:
+            answer, _, error = self._request(body)
+            took = self.clock() - started
+            if isinstance(error, llm.ModelUnavailable):
                 self.down += 1
                 if self.down >= 3:
                     raise qt.ModelDown() from None
                 continue
-            except llm.ModelResponseError as error:
-                self._failed(snap_id, t_ms, step, error)
-                raise qt.DecisionError(str(error)) from error
             try:
-                result = read_completion(answer["completion"], self.temperature)
-            except llm.ModelResponseError as error:
-                self._failed(snap_id, t_ms, step, error)
-                raise qt.DecisionError(str(error)) from error
-            took = self.clock() - started
+                if error is not None:
+                    raise error
+                result = self._keep(snap_id, step, prompt, answer, took)
+            except llm.ModelResponseError as bad:
+                self._failed(snap_id, t_ms, step, bad)
+                raise qt.DecisionError(str(bad)) from bad
             self.down = 0
             self.calls += 1
             self.spent += took
-            result["latency_ms"] = int(answer.get("latency_ms") or took * 1000)
-            result["prompt_hash"] = llm.prompt_hash(prompt, self.template)
-            if self.store:
-                with self.store.db:
-                    self.store.db.execute("INSERT OR REPLACE INTO exam_factors VALUES(?,?,?,?,?,?,?,?,?,?)", (
-                        snap_id, step, result["text"], json.dumps(result["grads"]), json.dumps(result["detail"]),
-                        result["latency_ms"], result["prompt_hash"], self.template["version"], self.model,
-                        int(time.time() * 1000)))
             return result
         raise qt.ModelDown()
 
@@ -531,3 +659,94 @@ def ficha_lines(summary):
         lines.append("| {} | {} | {} | {} | {} |".format(_h(c["horizon_min"]), _rho(c["qwen_spearman"]), _rho(c["rule_spearman"]),
                                                          _bp(c["always_long_net_bp"]), _bp(c["always_short_net_bp"])))
     return lines + [""]
+
+
+# --------------------------------------------------------------------------- real and mirror at once: is it the same answer?
+
+PARALLEL_SAME_SHARE = 0.95          # «sirve»: the F1..F8 line is the same in at least this share of the photos...
+PARALLEL_MAX_GRAD = 0.05            # ...no gradient moves by this much or more...
+                                    # ...and the sign of lean_num never changes
+
+
+def _sign(x):
+    return 1 if x > 1e-9 else -1 if x < -1e-9 else 0
+
+
+def check_parallel(db_path, cfg, provider, n, *, log=None, clock=time.monotonic):
+    """Asks the real and the mirrored state of the first ``n`` photos of an exam database twice, one after the other and at
+    the same time (4 calls per photo), and compares the two ways: the text of the line ``F1..F8`` (real and mirror apart), the
+    16 gradients and the sign of ``lean_num``. Nothing is written: the database is opened read-only."""
+    pdb = qt.PracticeDB(db_path, readonly=True)
+    try:
+        photos = [dict(r) for r in pdb.db.execute(
+            "SELECT snap_id, state_text, mirror_text FROM exam_snapshots ORDER BY ord LIMIT ?", (max(0, int(n)),))]
+    finally:
+        pdb.close()
+    decider = FactorsDecider(provider, cfg)
+    out = {"photos": len(photos), "compared": 0, "skipped": 0, "calls": 0, "same_real": 0, "same_mirror": 0, "same_both": 0,
+           "max_diff": 0.0, "sum_diff": 0.0, "grads": 0, "sign_changes": 0, "seconds": 0.0}
+    started = clock()
+    if log:
+        log("paralelo: {} fotos, 4 llamadas por foto; preguntando a Qwen… (Ctrl+C para cortar; esto no guarda nada)".format(
+            len(photos)))
+    for i, photo in enumerate(photos):
+        texts = [photo["state_text"], photo["mirror_text"]]
+        serial = decider.read_states(texts, concurrent=False)
+        parallel = decider.read_states(texts, concurrent=True)
+        out["calls"] += 4
+        if log and (i + 1) % 10 == 0:
+            log("paralelo: {} de {} fotos, {:.1f} min".format(i + 1, len(photos), (clock() - started) / 60.0))
+        if None in serial or None in parallel:
+            out["skipped"] += 1
+            continue
+        out["compared"] += 1
+        same = [a["text"] == b["text"] for a, b in zip(serial, parallel)]
+        out["same_real"] += int(same[0])
+        out["same_mirror"] += int(same[1])
+        out["same_both"] += int(all(same))
+        for a, b in zip(serial, parallel):
+            for x, y in zip(a["grads"], b["grads"]):
+                out["max_diff"] = max(out["max_diff"], abs(x - y))
+                out["sum_diff"] += abs(x - y)
+                out["grads"] += 1
+        lean_serial = photo_numbers(serial[0]["grads"], serial[1]["grads"])["lean_num"]
+        lean_parallel = photo_numbers(parallel[0]["grads"], parallel[1]["grads"])["lean_num"]
+        out["sign_changes"] += int(_sign(lean_serial) != _sign(lean_parallel))
+    out["seconds"] = clock() - started
+    out["mean_diff"] = out["sum_diff"] / out["grads"] if out["grads"] else 0.0
+    problems = []
+    if not out["compared"]:
+        problems.append("no se pudo comparar ninguna foto")
+    else:
+        if out["same_both"] / out["compared"] < PARALLEL_SAME_SHARE:
+            problems.append("el texto cambia en más de {:.0f} % de las fotos".format(100 * (1 - PARALLEL_SAME_SHARE)))
+        if out["max_diff"] >= PARALLEL_MAX_GRAD:
+            problems.append("un gradiente se mueve {} o más".format(_num(PARALLEL_MAX_GRAD, 2)))
+        if out["sign_changes"]:
+            problems.append("el signo de lean_num cambia")
+    out["verdict"], out["problems"] = ("revisar" if problems else "sirve"), problems
+    return out
+
+
+def _num(x, places):
+    return "{:.{}f}".format(x, places).replace(".", ",")
+
+
+def parallel_text(r):
+    """The summary of ``check_parallel`` in Spanish, five or six lines."""
+    lines = ["Real y espejo a la vez contra en serie: {} fotos, {} llamadas en {} min.".format(
+        r["photos"], r["calls"], _num(r["seconds"] / 60.0, 1)),
+        "- Línea F1…F8 idéntica entre los dos modos: real {} de {}, espejo {} de {}; las dos en {} de {} fotos ({} %).".format(
+            r["same_real"], r["compared"], r["same_mirror"], r["compared"], r["same_both"], r["compared"],
+            _num(100.0 * r["same_both"] / r["compared"], 0) if r["compared"] else "0"),
+        "- Los 16 gradientes: diferencia máxima {}, media absoluta {}.".format(_num(r["max_diff"], 6), _num(r["mean_diff"], 6)),
+        "- Signo de lean_num: cambia en {} de {} fotos.".format(r["sign_changes"], r["compared"])]
+    if r["skipped"]:
+        lines.append("- Fotos salteadas por una respuesta fuera de formato: {}.".format(r["skipped"]))
+    if r["verdict"] == "sirve":
+        lines.append("Lectura: sirve. Mandar real y espejo juntas da lo mismo que en serie (texto idéntico en al menos {} % de "
+                     "las fotos, gradientes a menos de {}, el signo de lean_num no cambia).".format(
+                         _num(100 * PARALLEL_SAME_SHARE, 0), _num(PARALLEL_MAX_GRAD, 2)))
+    else:
+        lines.append("Lectura: revisar ({}). Hasta aclararlo, corré el examen con --sequential.".format("; ".join(r["problems"])))
+    return "\n".join(lines)
