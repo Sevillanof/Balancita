@@ -1,5 +1,4 @@
 import type { ReactNode } from 'react'
-import './mission-control.css'
 import TopBar, { type NavigationItem } from './TopBar.tsx'
 
 type AppShellProps = {

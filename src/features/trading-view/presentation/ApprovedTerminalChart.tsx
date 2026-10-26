@@ -262,13 +262,13 @@ export default function ApprovedTerminalChart({
     const node = container.current
     if (!node) return
     const colors = {
-      background: cssColor('--card', '#171c20'),
-      text: cssColor('--muted-foreground', '#8b969a'),
-      grid: cssColor('--border', '#252d31'),
-      up: cssColor('--chart-up', '#55c7a2'),
-      down: cssColor('--chart-down', '#ee7777'),
-      amber: cssColor('--warning', '#d4aa62'),
-      info: cssColor('--info', '#79a9bd'),
+      background: cssColor('--color-chart-surface', '#171c20'),
+      text: cssColor('--color-chart-text', '#8b969a'),
+      grid: cssColor('--color-chart-line', '#252d31'),
+      up: cssColor('--color-chart-up', '#55c7a2'),
+      down: cssColor('--color-chart-down', '#ee7777'),
+      amber: cssColor('--color-chart-warn', '#d4aa62'),
+      info: cssColor('--color-chart-info', '#79a9bd'),
     }
     const overlays = overlaySeries.current
     const chart = createChart(node, {
@@ -536,8 +536,8 @@ export default function ApprovedTerminalChart({
     const series = candleSeriesRef.current
     if (!series) return
     const timeScale = chartRef.current?.timeScale()
-    const volumeUpColor = cssColor('--chart-volume-up', '#285d50')
-    const volumeDownColor = cssColor('--chart-volume-down', '#653f42')
+    const volumeUpColor = cssColor('--color-chart-volume-up', '#285d50')
+    const volumeDownColor = cssColor('--color-chart-volume-down', '#653f42')
     const previous = renderedCandles.current
     const rebuild =
       previous === null ||
@@ -600,11 +600,11 @@ export default function ApprovedTerminalChart({
   useEffect(() => {
     const candleTimes = new Set(candles.map((candle) => candle.time))
     const markerColors = {
-      up: cssColor('--chart-up', '#55c7a2'),
-      down: cssColor('--chart-down', '#ee7777'),
-      amber: cssColor('--warning', '#d4aa62'),
-      info: cssColor('--info', '#79a9bd'),
-      muted: cssColor('--muted-foreground', '#8b969a'),
+      up: cssColor('--color-chart-up', '#55c7a2'),
+      down: cssColor('--color-chart-down', '#ee7777'),
+      amber: cssColor('--color-chart-warn', '#d4aa62'),
+      info: cssColor('--color-chart-info', '#79a9bd'),
+      muted: cssColor('--color-chart-text', '#8b969a'),
     }
     const visibleMarkers: SeriesMarker<Time>[] = [...markers]
       .sort((left, right) => left.time - right.time)

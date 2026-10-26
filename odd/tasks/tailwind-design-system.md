@@ -5,9 +5,9 @@ Branch: `feat/tailwind-design-system` (one branch per slice, chained). Delivery 
 
 ## Problem / why
 
-- Two styling systems live side by side: `src/shared/styles/ui.css` (legacy light/dark, blue accent, 354 lines) and Mission Control (`src/shared/mission-control/mission-control.css`, 233 lines, the `--mc-*` tokens). All 11 screen stylesheets already use only `--mc-*`, while `ui.css` still styles every global button, input and table.
-- About 4,100 lines of hand-written CSS across 13 files, each screen with its own selectors and values.
-- The published design system (https://claude.ai/artifact/B3AvVBuQcwxr6o7CT2Fmze) is a hand copy of those files, with static previews. It drifts as soon as the code changes.
+- At the start, two styling systems coexisted: `src/shared/styles/ui.css` (legacy light/dark, blue accent, 354 lines) and Mission Control (`src/shared/mission-control/mission-control.css`, 233 lines, the `--mc-*` tokens). All 11 screen stylesheets used `--mc-*`, while `ui.css` styled global controls.
+- About 4,100 lines of hand-written CSS across 13 files started this migration. T1-T8 retire those files; `theme.css` now owns the tokens, scoped app defaults and named Tailwind variants/utilities.
+- The external design-system artifact (https://claude.ai/artifact/B3AvVBuQcwxr6o7CT2Fmze) was a hand copy with static previews. A generated local catalog now replaces that duplication; external publication remains pending.
 
 What this is NOT: a runtime performance fix. Plain CSS and Tailwind both ship static CSS. The "Terminal is slow" problem was a gateway SQLite query plan (fixed in commit 9365be8d), not styling. Runtime render cost in React is a separate topic.
 
@@ -25,7 +25,7 @@ src/shared/design-system/theme.css   ← the ONLY token source (@theme)
 
 ## Specs
 
-- **S1 — One system.** User: «El design system tiene que estar unificado. Tailwind puede ser la mejor opcion para unificarlo y hacerlo escalable?» Acceptance: one token source (`theme.css`); `ui.css`, `mission-control.css` and every screen `.css` file are deleted by the end; no `--color-*`/`--bg`/`--positive` legacy variables remain.
+- **S1 — One system.** User: «El design system tiene que estar unificado. Tailwind puede ser la mejor opcion para unificarlo y hacerlo escalable?» Acceptance: one token source (`theme.css`); `ui.css`, `mission-control.css` and every screen `.css` file are deleted by the end; no legacy palette variables or compatibility aliases remain. Semantic Tailwind `--color-*` tokens are the intended replacement.
 - **S2 — Clean and working.** User: «el css que tenemos hoy es feo y no tiene buen performance. Yo quiero algo limpio y que funcione bien.» Acceptance: pages compose shared components; utilities live inside components, not as long class strings in pages; no arbitrary values (`text-[13px]`, `w-[437px]`, `#hex` in `className`).
 - **S3 — Semantic palette only.** From the design system brand book: color is semantic only (long, short, warn, info), and "Sin datos" is never green. Acceptance: Tailwind's default palette is removed (`--color-*: initial`), so `text-red-500` does not compile.
 - **S4 — The design system comes from the code.** Acceptance: the published design system's `tokens.json`, `bundle.js` and `bundle.css` are generated from `theme.css` and the shared components by one command; previews render the real components live.
@@ -37,7 +37,7 @@ src/shared/design-system/theme.css   ← the ONLY token source (@theme)
 - Paper only; ADR 0001 is untouched. C25-C31 and Kronos strategy logic is not modified (styling only).
 - **New dependencies need approval:** `tailwindcss` and `@tailwindcss/vite`, pinned to exact versions at install time (at least two weeks old). Nothing else.
 - No CSS-in-JS with runtime cost (styled-components, Emotion).
-- Chart colors: `ApprovedTerminalChart` reads CSS variables at runtime through `cssColor('--chart-up', …)`. Those variables must keep resolving after every slice.
+- Chart colors: both chart consumers read the `--color-chart-*` theme tokens at runtime. T8 preserves all nine original fallback colors exactly; non-DOM fallbacks remain for existing rendering/tests.
 - Existing test ids (`approved-trading-header`, …) and accessible names stay.
 
 ## Token mapping (Mission Control → Tailwind v4 `@theme`)
@@ -70,8 +70,8 @@ The status pill formula (10% fill, 25% border, full-strength text) becomes `bg-l
 | T4  | S2, S3         | inline | done                            | 6b727b23 |
 | T5  | S1, S2, S5, S6 | inline | done                            | 694e81a3 |
 | T6  | S1, S2, S5, S6 | inline | done                            | 3074d370 |
-| T7  | S1, S2, S5     | inline | local done; pending user commit | —        |
-| T8  | S1             | inline | pending                         | —        |
+| T7  | S1, S2, S5     | inline | done                            | 21fd03f5 |
+| T8  | S1, S5, S6     | inline | local done; pending user commit | —        |
 
 ### T1 — Tailwind and the single theme (no visual change)
 
@@ -108,7 +108,7 @@ open dist/design-system/index.html
 The generated directory is ignored by Git. Open the HTML directly; no server, new port, CDN or market connection is needed. Chrome must be installed for `design-system:verify`.
 
 - `bundle.js` exposes `window.Balancita`. Load a host React and ReactDOM first; the component bundle does not embed either and uses classic `React.createElement`, not a version-specific JSX-runtime shim.
-- `bundle.css` contains the theme, embedded fonts, shared-component utilities and temporary `--mc-*` aliases, not screen CSS. Tailwind scans only shared component TSX, excluding tests. As with the app's no-preflight setup, a host supplies base styles (box sizing, body margin, link defaults); the catalog provides its own document styling.
+- `bundle.css` contains the theme, embedded fonts and shared-component utilities, not screen CSS or compatibility aliases. Tailwind scans only shared component TSX, excluding tests. App base rules require the explicit `data-balancita-app` root marker; they do not reset a host document. A library host supplies its own base styles (box sizing, body margin, link defaults); the catalog provides its own document styling.
 - `runtime.js` is separate and uses the project's installed React/ReactDOM (19.3.0 in this validation) for the offline catalog. It is not required when the host already provides those globals. React 18 runtime compatibility has **not** been validated; classic JSX removes the known element-format coupling but is not a substitute for that validation. Generated runtime/font license notices travel with the catalog.
 - `tokens.json` is a list of `{ name, value, type }`; names omit the CSS `--` prefix. `tokens.usage.json` stores usage guidance separately. Both the catalog and its token search consume the generated values.
 - Catalog HTML/JS live under `scripts/design-system/`; component examples instantiate the exported components, never hand-copied markup. The catalog's editorial layout does not change the app's visual design.
@@ -128,7 +128,7 @@ pnpm exec vitest run --dir src --exclude '.claude/**' --exclude '**/node_modules
 
 The test uses the existing TypeScript compiler to inspect JSX `className` values and reachable static strings (templates, branches, aliases, imported variant maps and class-helper arguments). It ignores comments, display text and unrelated strings such as chart colors. Tests/specs are excluded from the application-source scan so negative fixtures do not flag themselves. This is a static guard, not a runtime evaluator: classes assembled from arbitrary runtime data or custom function return values still require review.
 
-Only `theme.css` and the 3 explicitly listed legacy source stylesheets are allowed. New or renamed CSS files under `src` fail; when retiring a legacy stylesheet, remove its entry from `LEGACY_CSS` in the same slice. Stale entries fail too, preventing retired paths from silently remaining exempt. The standalone T3 catalog is tooling under `scripts/design-system`, outside this app-source rule.
+Only `theme.css` is allowed under `src`; no legacy stylesheet exemptions remain. New, renamed or resurrected CSS files fail, as do retired palette/compatibility aliases in application source. The standalone T3 catalog is tooling under `scripts/design-system`, outside this app-source rule.
 
 ### T5 — Terminal screens
 
@@ -179,8 +179,9 @@ T5c shares frame, padded-panel, action-tone and present/copy-button utilities in
 focus and table defaults previously supplied by the deleted screen CSS. Named
 descendant variants preserve the existing panel inheritance, including nested
 history headings and tables; they are not a reset or a new visual design.
-Temporary important modifiers override unlayered native-control styles until
-T8. The generic button-focus variant uses `:where` so the more specific selected
+Important modifiers originally overrode unlayered native-control styles.
+T8 removes that legacy layer; existing component precedence is retained rather
+than removing important modifiers indiscriminately. The generic button-focus variant uses `:where` so the more specific selected
 row and present/copy button retain their original focus treatment.
 
 T6c removed the `demo-terminal__chart` hook with the strategy-detail stylesheet;
@@ -264,9 +265,11 @@ utilities reference source colors directly, without unresolved catalog tokens.
 
 ### T8 — Retire the legacy layer
 
-- Delete `src/shared/styles/ui.css`, `mission-control.css` and the `--mc-*` / legacy aliases. Laboratorio and Investigación pages move to the shared components (or utilities) in this slice.
-- Check: a grep for `var(--mc-`, `var(--color-background`, `var(--bg` returns nothing; full suite and screenshots.
-- Risk: item 3 if any page outside the app still imports `ui.css` (check first).
+- Delete `src/shared/styles/ui.css`, `mission-control.css`, their `src/index.css` bridge and all remaining imports/guard exemptions. Laboratorio and Investigación have already been retired; do not restore them.
+- Keep only necessary document/native-control defaults in `theme.css`'s app-scoped base layer. Do not enable preflight or resurrect unused `.card`, `.field`, `.badge`, `.status`, `.numeric` or other legacy selectors.
+- User-approved deviation from visual parity: native controls and document defaults use Balancita's dark semantic palette regardless of OS preference. Preserve sizes, disabled/invalid/focus states, reduced motion and chart colors.
+- `index.html` opts into app defaults with `data-balancita-app`. A host without that attribute must keep its own document/control defaults.
+- Check: no retired variables/imports; full app-source suite, catalog, before/after geometry, both OS color preferences, reduced motion and runtime measurements.
 
 ## Delivery
 
@@ -372,4 +375,15 @@ Each task or explicitly named sub-unit is one work-unit commit; report slices ov
   - Evidence in the same session files directory as L15: `t7-observability.json`, `t7-short.json`, `t7-tones.json`, `t7-visual.json`, `t7-semantics.json`, `t7-perf.json` and screenshots. Commands: `WIDTHS=1600,1120,901,900,761,760,721,720,390 node "$SESSION_FILES/t7-observability.mjs"`; `HEIGHT=600 MODES=health-degraded,health-healthy,health-flow,observer-long WIDTHS=900,390 REPORT_NAME=t7-short node "$SESSION_FILES/t7-observability.mjs"`; `MODES=health-ok,health-warning STATES=initial,hover,open,details,focus WIDTHS=1600,1120,901,900,761,760,721,720,390 REPORT_NAME=t7-tones node "$SESSION_FILES/t7-observability.mjs"`; `SLICE=t7 SCENARIOS=live,observer-details,inspector,inspector-health,strategies WIDTHS=1600,1120,901,900,761,760,390 node "$SESSION_FILES/t5b-visual.mjs"`; `node "$SESSION_FILES/t7-semantics.mjs"`; `SLICE=t7 OBSERVABILITY=1 node "$SESSION_FILES/t5b-perf.mjs"`. Harnesses use standards-mode HTML and the existing localhost origin, rejecting non-GET API calls. No ports, restarts, dependencies or uploads.
   - Offline catalog: **100 source tokens**, seven real previews/variants at 1440/768/390 px, three exporter tests, no horizontal overflow, external requests or screen CSS.
   - Rollback: restore `observability.css`, its two imports/guard entry, the three consumers, theme additions/history variant, the three new test cases and this plan; remove `observability-styles.ts`. T1-T6 remain independent. User alone runs all Git writes.
-- **Next step:** user reviews/commits T7; continue with T8, retiring legacy globals and compatibility aliases. External T3 publication and React 18 host validation remain pending.
+- **L17 (T8 local delivery):** T7 was committed by the user as `21fd03f5`. Retired the last **285 legacy CSS lines**: `ui.css` (240), `mission-control.css` (44) and the one-line `index.css` bridge. Removed all three consumer imports and every legacy stylesheet exemption. **`theme.css` is now the only application stylesheet under `src`.**
+  - User explicitly approved unifying remaining native controls with Balancita's dark palette, regardless of OS color preference. `data-balancita-app` on the HTML root opts into a low-specificity base layer: document defaults, inherited control fonts, 44 px inputs/selects, disabled/invalid/keyboard-focus states and reduced motion (including pseudo-elements). No preflight, old class selectors or light/dark compatibility palette were recreated. Documents without the marker retain native defaults.
+  - Fonts/radii now use normal static theme tokens, without the temporary `inline` workaround. Both chart consumers read nine semantic chart tokens with the **exact original colors**; existing non-DOM fallbacks remain. No trading, lifecycle, polling, API or chart-data logic changes: transpiled AST equality checks all five production consumers, allowing only retired CSS imports and the nine explicit token renames.
+  - Review first: base rules and chart tokens in `theme.css`, then the root opt-in/import removal, both chart consumers and guard/chart regression tests. This cohesive retirement exceeds the ~400-line review target primarily because 285 old CSS lines are deleted; splitting the defaults from their consumers would leave a broken intermediate state.
+  - **559/559 tests in 56 app-source files pass**, including new chart-token consumption and retired-alias regression cases. Command: `pnpm exec vitest run --dir src --exclude '.claude/**' --exclude '**/node_modules/**'`. The initial unscoped run was stopped because it traversed unrelated nested worktrees; those files/configuration were not changed. Typecheck, targeted ESLint, production build, changed-file Prettier, editor diagnostics and whitespace checks pass. The existing >500 kB chunk advisory remains.
+  - **598 before/after browser comparisons**: 116 live production cases, 264 real-component dialog cases and 218 run/chart/report cases. Widths 1600/900/600/390 px, short 600 px viewports, light/dark OS preferences, keyboard focus, disabled/invalid inputs, checkboxes/radios, populated/empty/error/loading forms, analyzer controls, report history/comparisons and reduced motion. **No unexpected computed-style/geometry differences or browser errors.** Only explicit old-to-new native/document color transitions and equivalent fallback-font serialization are accepted; every size/position/typography assertion stays active. The original full live report is retained alongside a reviewed report that classifies its native-button color differences; those buttons were also rerun against the final build in both OS schemes. Screenshots reviewed.
+  - **Six additional native contracts** at 1600/390/320 px in both OS preferences assert identical dark controls, 44 px minimum height, 8/12 px padding, 6 px radius, disabled opacity 0.56, semantic invalid borders and 3 px/2 px keyboard outline; reduced-motion durations at most 0.01 ms for elements and pseudo-elements; exact nine chart colors; no overflow; and no document/native-control reset without the app marker.
+  - Runtime without concurrent browser suites: Terminal timeframe changes **60.0 / 59.9 FPS**, max frame **16.8 / 16.8 ms**, task CPU **2.95% / 3.22%**; strategy selection **60.0 / 59.9 FPS**, max **16.8 / 33.3 ms**, CPU **2.93% / 2.95%**; inspector/window actions **60.1 / 59.9 FPS**, max **16.8 / 16.8 ms**, CPU **3.17% / 3.29%**. Explicit assertions pass: zero frames >50 ms, long tasks or runtime errors. No performance improvement is claimed.
+  - Final offline catalog: **110 source tokens**, seven previews/variants at 1440/768/390 px, three exporter tests, zero external requests, overflow or runtime errors. External publication and React 18 host verification remain pending.
+  - Evidence: `t8-validation-summary.json`, `t8-base.json`, `t8-semantics.json`, `t8-live-light-reviewed.json`, `t8-live-final.json`, `t8-live-dark.json`, `t8-dialogs-{light,dark,short}.json`, `t8-run-light.json`, `t8-run-dark-reduced.json`, three `t8-perf-*.json` reports and screenshots in the same session files directory as L16. Reused local fixture/production harnesses with `SLICE=t8`; no servers or ports were started, dependencies added, uploads, Git writes or real strategy/data writes performed.
+  - Rollback boundary: restore the three retired stylesheets and their imports/exemptions, the root HTML change, theme defaults/tokens, both chart token references, guard/chart tests and this plan. T1-T7 remain independent.
+- **Next step:** user reviews/commits T8. The T1-T8 app migration is locally complete; external T3 publication and React 18 host validation remain separate pending work.

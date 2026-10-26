@@ -443,11 +443,11 @@ export default function TerminalChartPanel({
   )
   const colors = useMemo(
     () => ({
-      up: css('--chart-up', '#55c7a2'),
-      down: css('--chart-down', '#ee7777'),
-      amber: css('--warning', '#d4aa62'),
-      info: css('--info', '#79a9bd'),
-      muted: css('--muted-foreground', '#8b969a'),
+      up: css('--color-chart-up', '#55c7a2'),
+      down: css('--color-chart-down', '#ee7777'),
+      amber: css('--color-chart-warn', '#d4aa62'),
+      info: css('--color-chart-info', '#79a9bd'),
+      muted: css('--color-chart-text', '#8b969a'),
     }),
     [],
   )

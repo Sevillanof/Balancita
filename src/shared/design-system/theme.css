@@ -3,10 +3,9 @@
  * Color is semantic only (long, short, warn, info) and Tailwind's default
  * palette is removed, so `text-red-500` does not compile.
  *
- * Preflight is left out until T8 retires ui.css: the legacy global rules still
- * style buttons, inputs and tables, and a reset would change every screen.
- * Utilities live in a cascade layer, so an unlayered legacy rule still wins:
- * drop the old class from an element when migrating it.
+ * Preflight is intentionally omitted: browser heading, list and table defaults
+ * are part of the existing layout. App-scoped base rules supply only the
+ * document/control defaults; reusable components do not reset their host.
  */
 @layer theme, base, components, utilities;
 @import 'tailwindcss/theme.css' layer(theme);
@@ -48,6 +47,15 @@
   --color-on-danger: #fff;
   --color-line-quick: rgba(128, 128, 128, 0.3);
   --color-health-overlay: rgb(8 10 15 / 70%);
+  --color-chart-surface: #171c20;
+  --color-chart-text: #8b969a;
+  --color-chart-line: #252d31;
+  --color-chart-up: #55c7a2;
+  --color-chart-down: #ee7777;
+  --color-chart-warn: #d4aa62;
+  --color-chart-info: #79a9bd;
+  --color-chart-volume-up: #285d50;
+  --color-chart-volume-down: #653f42;
 
   --spacing: 4px;
   --spacing-chart-unit: 0.1rem;
@@ -126,12 +134,7 @@
   --shadow-menu: 0 6px 18px rgb(0 0 0 / 35%);
 }
 
-/*
- * ui.css also defines `--font-sans`, `--radius-sm` and `--radius-lg` on :root
- * with other values, and its unlayered rule wins. `inline` embeds these values
- * in the utilities so they never read ui.css; T8 can drop `inline` with ui.css.
- */
-@theme inline {
+@theme static {
   --font-*: initial;
   --font-sans:
     'Inter', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
@@ -146,6 +149,94 @@
   --radius-badge: 3px;
   --radius-panel: 0.375rem;
   --radius-swatch: 2px;
+  --radius-control: 6px;
+}
+
+@layer base {
+  :where(html[data-balancita-app]) {
+    min-width: 320px;
+    color-scheme: dark;
+    background: var(--color-canvas);
+  }
+
+  :where([data-balancita-app], [data-balancita-app] *) {
+    box-sizing: border-box;
+  }
+
+  :where([data-balancita-app] body) {
+    margin: 0;
+    min-width: 320px;
+    color: var(--color-ink);
+    background: var(--color-canvas);
+    font-family: var(--font-sans);
+    font-size: var(--text-title);
+    line-height: var(--leading-normal);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  :where(
+    [data-balancita-app] button,
+    [data-balancita-app] input,
+    [data-balancita-app] select
+  ) {
+    font: inherit;
+  }
+
+  :where([data-balancita-app] button, [data-balancita-app] select) {
+    cursor: pointer;
+  }
+
+  :where([data-balancita-app] button) {
+    color: inherit;
+    background: var(--color-surface-2);
+    border-color: var(--color-line-strong);
+  }
+
+  :where([data-balancita-app] input, [data-balancita-app] select) {
+    min-height: 44px;
+    padding: 8px 12px;
+    color: var(--color-ink);
+    background: var(--color-surface-1);
+    border: 1px solid var(--color-line-strong);
+    border-radius: var(--radius-control);
+  }
+
+  :where(
+    [data-balancita-app] input[aria-invalid='true'],
+    [data-balancita-app] select[aria-invalid='true']
+  ) {
+    border-color: var(--color-short);
+  }
+
+  :where(
+    [data-balancita-app] button:disabled,
+    [data-balancita-app] select:disabled,
+    [data-balancita-app] input:disabled
+  ) {
+    cursor: not-allowed;
+    opacity: 0.56;
+  }
+
+  :where(
+    [data-balancita-app] button:focus-visible,
+    [data-balancita-app] input:focus-visible,
+    [data-balancita-app] select:focus-visible
+  ) {
+    outline: 3px solid var(--color-info);
+    outline-offset: 2px;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    :where([data-balancita-app], [data-balancita-app] *),
+    :where([data-balancita-app], [data-balancita-app] *)::before,
+    :where([data-balancita-app], [data-balancita-app] *)::after {
+      scroll-behavior: auto !important;
+      transition-duration: 0.01ms !important;
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+    }
+  }
 }
 
 /* Preserve the legacy inclusive header breakpoints while screens migrate. */

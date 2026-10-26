@@ -1,17 +1,11 @@
 import ts from 'typescript'
 import { describe, expect, it } from 'vitest'
 
-// This list may only shrink as T5-T8 remove the legacy stylesheets.
-const LEGACY_CSS = new Set([
-  'src/index.css',
-  'src/shared/mission-control/mission-control.css',
-  'src/shared/styles/ui.css',
-])
 const THEME = 'src/shared/design-system/theme.css'
 
 function cssViolations(paths: string[]) {
   return paths
-    .filter((path) => path !== THEME && !LEGACY_CSS.has(path))
+    .filter((path) => path !== THEME)
     .map(
       (path) =>
         `${path}: new CSS file; use theme tokens and component utilities`,
@@ -242,8 +236,9 @@ describe('design-system guard rails', () => {
     ).toEqual([])
   })
 
-  it('allows the theme and remaining legacy CSS, but rejects new CSS anywhere under src', () => {
-    expect(cssViolations([THEME, ...LEGACY_CSS])).toEqual([])
+  it('allows only the theme and rejects legacy or new CSS anywhere under src', () => {
+    expect(cssViolations([THEME])).toEqual([])
+    expect(cssViolations(['src/shared/styles/ui.css'])).toHaveLength(1)
     expect(cssViolations(['src/features/example/new.css'])).toEqual([
       'src/features/example/new.css: new CSS file; use theme tokens and component utilities',
     ])
@@ -270,14 +265,25 @@ describe('design-system guard rails', () => {
     expect(classViolations(files)).toEqual([])
   })
 
-  it('does not introduce another stylesheet alongside the migration', () => {
+  it('keeps the theme as the only application stylesheet', () => {
     const files = Object.keys(import.meta.glob('/src/**/*.css')).map((path) =>
       path.slice(1),
     )
     expect(cssViolations(files)).toEqual([])
-    expect(
-      [...LEGACY_CSS].filter((path) => !files.includes(path)),
-      'Remove retired stylesheets from LEGACY_CSS; do not leave reusable exceptions',
-    ).toEqual([])
+    expect(files).toEqual([THEME])
+  })
+
+  it('does not reintroduce retired token aliases', () => {
+    const sources = import.meta.glob('/src/**/*.{ts,tsx,css}', {
+      query: '?raw',
+      import: 'default',
+      eager: true,
+    })
+    const retired =
+      /--mc-[\w-]+|--color-(?:background|surface|surface-muted|surface-elevated|text|muted|border|border-strong|accent|accent-soft|accent-contrast|focus|success|success-contrast|danger|danger-contrast|warning|warning-contrast|chart-grid)(?![\w-])|--(?:bg|text|text-muted|positive|negative|muted-color|border-color|accent-soft|success-color|card|muted-foreground|border|chart-up|chart-down|chart-volume-up|chart-volume-down|warning|info)(?![\w-])/
+    for (const [path, source] of Object.entries(sources)) {
+      if (/\.(?:test|spec)\.[tj]sx?$/.test(path)) continue
+      expect(source, path).not.toMatch(retired)
+    }
   })
 })
