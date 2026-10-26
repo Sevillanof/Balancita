@@ -144,11 +144,14 @@ Sin red, `capture` y la fuente Real avisan; `vite` y el resto siguen funcionando
 | `LLAMA_PORT`            | `8088`        | Puerto loopback                                                                                                                          |
 | `LLAMA_CTX`             | `8192`        | Contexto                                                                                                                                 |
 | `LLAMA_PARALLEL`        | `2`           | Slots paralelos                                                                                                                          |
+| `LLAMA_THREADS`         | `6` en macOS  | Hilos de `llama-server` (`-t`); fuera de macOS lo decide el servidor. Un valor que no sea entero ≥ 1 se ignora                           |
 | `LLAMA_UBATCH`          | (servidor)    | Opcional, `-ub`. Con modelos híbridos (Qwen3.5) decide dónde se guarda el punto de reuso del prompt; ver `futures_qwen_prefill_probe.py` |
 | `LLAMA_CTX_CHECKPOINTS` | (servidor)    | Opcional, `--ctx-checkpoints`                                                                                                            |
 | `DECISIONS_PRODUCTS`    | `PF_XBTUSD`   | Productos que decide Q (separados por comas)                                                                                             |
 | `NEWS_ENABLED`          | activo        | `0` desactiva `news`                                                                                                                     |
 | `NEWS_EXTRA_RSS_FEEDS`  | -             | Feeds extra `id\|label\|https url\|license`                                                                                              |
+
+En macOS `llm` corre con prioridad de fondo (`taskpolicy -b`) para que la Mac siga usable durante la Prueba rápida y el Examen; mismo modelo, contexto y slots, así que las respuestas no cambian. `pnpm dev` imprime una línea `[dev] llm:` con cómo quedó.
 
 **El modelo corre 100 % offline**: `dev` nunca descarga nada, `llama-server` va con `--offline` en `127.0.0.1` y Q rechaza cualquier URL que no sea loopback. Las noticias nunca se envían a una API remota.
 

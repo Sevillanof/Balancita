@@ -79,6 +79,8 @@ else if (python.command === undefined)
   process.stdout.write(
     '[dev] llm and q need Python as well, which was not found; they will not start.\n',
   )
+// How the llm child runs (priority and threads); only when it will start.
+else if (llmEnabled) process.stdout.write(`${llama.message}\n`)
 // Qwen is part of the Terminal: when it cannot start, say it loudly and why.
 if (!llmEnabled && (env.DECISIONS_ENABLED ?? '').trim() !== '0') {
   const why =
@@ -249,6 +251,7 @@ function shutdown(signal, code = 0) {
   // A child that ignores the first signal (a background shell sets SIGINT to
   // ignored and children inherit it) gets SIGTERM, then SIGKILL: no group
   // may outlive pnpm (an orphaned llama-server keeps the model in memory).
+  // The llm child may be `taskpolicy -b llama-server`: it execs in the same group.
   const term = setTimeout(() => {
     for (const { child } of children)
       if (child.exitCode === null) signalChild(child, 'SIGTERM')
