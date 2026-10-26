@@ -117,8 +117,11 @@ def snap_id(product, t_ms):
 
 
 def exam_identity(cfg, holdout_ms):
-    return {"config_hash": qt.config_hash(cfg), "exam": cfg["exam"], "holdout_ms": holdout_ms,
-            "practice_entry_threshold": cfg["practice_entry_threshold"]}
+    out = {"config_hash": qt.config_hash(cfg), "exam": cfg["exam"], "holdout_ms": holdout_ms,
+           "practice_entry_threshold": cfg["practice_entry_threshold"]}
+    if qt.lora_of(cfg):
+        out["lora"] = qt.lora_of(cfg)            # an exam with a LoRA adapter never shares a database with the plain model
+    return out
 
 
 def _store_photos(pdb, photos):

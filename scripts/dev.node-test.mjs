@@ -747,6 +747,16 @@ describe('optional LLM decision children (llm and q)', () => {
     assert.equal(tuned[tuned.indexOf('-ub') + 1], '64')
     assert.equal(tuned[tuned.indexOf('--ctx-checkpoints') + 1], '16')
     assert.ok(!spec.args.includes('-ub'))
+    assert.ok(!spec.args.includes('--lora'))
+    const lora = byName(
+      devChildSpecs({
+        ...base,
+        env: { ...env, LLAMA_LORA: ' /models/qwen-lora.gguf ' },
+        llm,
+      }),
+    ).llm.args
+    assert.equal(lora[lora.indexOf('--lora') + 1], '/models/qwen-lora.gguf')
+    assert.ok(lora.includes('--lora-init-without-apply'))
     const hf = byName(
       devChildSpecs({ ...base, env: { LLAMA_HF: 'org/other:Q6_K' }, llm }),
     )

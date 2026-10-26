@@ -1,0 +1,34 @@
+# Ajuste fino LoRA de Qwen3-4B con mlx-lm (hilo «Entrenar a Qwen con LoRA»). Los caminos (modelo, datos, adaptador) los pasa
+# ops/qwen-lora/train.sh por línea de comandos; aquí van solo los hiperparámetros. Ver docs/qwen-lora.md.
+train: true
+fine_tune_type: lora
+# LoRA en las últimas 16 capas (de 36): el gradiente no baja de la capa 20 y el paso cuesta ~40 % menos que con todas.
+num_layers: 16
+batch_size: 1
+# Una pasada por los ~11.400 ejemplos de train.jsonl (lote 1). Se puede cortar y retomar con --resume-adapter-file.
+iters: 11400
+learning_rate: 2.0e-5
+steps_per_report: 50
+steps_per_eval: 1000
+val_batches: 50
+save_every: 500
+# La ficha completa son ~1.000 tokens; 1.536 deja margen.
+max_seq_length: 1536
+# Solo se aprende la línea de respuesta: los tokens de la pregunta y del STATE no entran en la pérdida.
+mask_prompt: true
+grad_checkpoint: true
+seed: 20261026
+lora_parameters:
+  rank: 8
+  scale: 20.0
+  dropout: 0.0
+  keys:
+    [
+      'self_attn.q_proj',
+      'self_attn.k_proj',
+      'self_attn.v_proj',
+      'self_attn.o_proj',
+      'mlp.gate_proj',
+      'mlp.up_proj',
+      'mlp.down_proj',
+    ]

@@ -119,6 +119,12 @@ function pythonStatus(python) {
 export const DEFAULT_LLAMA_PORT = 8088
 
 /** `[flag, value]` when the environment sets a value, else nothing (the server default stays). */
+/** `--lora <path> --lora-init-without-apply` when `LLAMA_LORA` names an adapter file; nothing otherwise. */
+export function loraFlags(value) {
+  const path = (value ?? '').trim()
+  return path ? ['--lora', path, '--lora-init-without-apply'] : []
+}
+
 function optionalFlag(flag, value) {
   const text = (value ?? '').trim()
   return text ? [flag, text] : []
@@ -809,6 +815,10 @@ export function devChildSpecs({
           // Opt-in server flags for prompt reuse between option orders (see futures_qwen_prefill_probe.py).
           ...optionalFlag('-ub', env.LLAMA_UBATCH),
           ...optionalFlag('--ctx-checkpoints', env.LLAMA_CTX_CHECKPOINTS),
+          // A LoRA adapter (GGUF) loaded but NOT applied: the live operator never
+          // sends a `lora` field, so its answers do not change; only a request that
+          // asks for it (`exam --lora`, see futures_qwen_lora.py) gets the adapter.
+          ...loraFlags(env.LLAMA_LORA),
           '--no-mmproj',
           '--no-webui',
         ],
