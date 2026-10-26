@@ -46,10 +46,6 @@ describe('devChildSpecs', () => {
     )
   })
 
-  it('does not start the MOCK source: the terminal always reads the live gateway', () => {
-    assert.equal(byName.mock, undefined)
-  })
-
   it('runs capture as the only writer of the live market database, without HTTP or engine', () => {
     const { env, args, cwd } = byName.capture
     assert.equal(cwd, '/repo/server')
@@ -185,10 +181,6 @@ describe('devChildSpecs', () => {
       byName.strategies.env.STRATEGY_FORWARD_PATH,
       './data/dev-live/forward/forward-reliability.json',
     )
-  })
-
-  it('keeps vite on the default provider environment', () => {
-    assert.equal(byName.vite.env.VITE_MARKET_DATA_PROVIDER, 'kraken')
   })
 })
 

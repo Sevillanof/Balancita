@@ -243,12 +243,6 @@
   border-color: var(--mc-short);
 }
 
-.connected-terminal__reset {
-  margin-top: 12px;
-  padding-top: 12px;
-  border-top: 1px solid var(--mc-border);
-}
-
 /* One-line market strip above the chart: pair, price, 24 h change, age. */
 
 .connected-terminal__strip {
@@ -317,8 +311,8 @@
   white-space: nowrap;
 }
 
-/* Mission Control 2.5: the chart leads; position, account and tools are a
-   secondary row below it. Composition only, no data or behaviour changes. */
+/* Mission Control 2.5: the chart leads; position and account are a secondary
+   row below it. Composition only, no data or behaviour changes. */
 
 .mc-terminal__secondary {
   display: grid;
@@ -328,18 +322,13 @@
   align-items: start;
 }
 
-.mc-terminal__secondary-main,
-.mc-terminal__secondary-tools {
+.mc-terminal__secondary-main {
   display: grid;
   gap: 1rem;
   min-width: 0;
 }
 
 @media (min-width: 1200px) {
-  .mc-terminal__secondary {
-    grid-template-columns: minmax(0, 7fr) minmax(310px, 3fr);
-  }
-
   /* The decisions stay beside the chart while the page scrolls. */
 
   .demo-terminal__grid > :last-child {

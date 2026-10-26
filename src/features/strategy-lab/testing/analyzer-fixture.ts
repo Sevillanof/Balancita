@@ -176,7 +176,3 @@ export function fullAnalyzerData(eventsPerKey = 60): AnalyzerEvents {
   data.cells = cells
   return data
 }
-
-export const fullAnalyzerApi = (): AnalyzerApi => ({
-  events: async () => ({ available: true, data: fullAnalyzerData() }),
-})

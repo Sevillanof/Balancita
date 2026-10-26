@@ -4,24 +4,6 @@ const number = (digits: number) =>
     maximumFractionDigits: digits,
   })
 
-export function price(value: number): string {
-  return number(2).format(value)
-}
-
-export function percent(value: number, digits = 0): string {
-  return `${number(digits).format(value)} %`
-}
-
-export function utcTime(seconds: number): string {
-  return new Intl.DateTimeFormat('es-ES', {
-    day: 'numeric',
-    month: 'short',
-    hour: '2-digit',
-    minute: '2-digit',
-    timeZone: 'UTC',
-  }).format(new Date(seconds * 1000))
-}
-
 /** `1.234,50 US$` for a number; `—` when absent. */
 export function usd(value: number | null | undefined, digits = 2): string {
   return value == null

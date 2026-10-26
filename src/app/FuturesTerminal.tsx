@@ -9,7 +9,6 @@ import { AppShell, DataState } from '../shared/mission-control/index.ts'
 import GatewayHistory from './GatewayHistory.tsx'
 import MarketStrip from './MarketStrip.tsx'
 import PaperAccountPanel from './PaperAccountPanel.tsx'
-import SimulatedControls from './SimulatedControls.tsx'
 import { appNavigation } from './app-navigation.ts'
 import ApprovedPortfolioTables from '../features/trading-view/presentation/ApprovedPortfolioTables.tsx'
 import type { TerminalTickerStats } from '../features/trading-view/infrastructure/terminal-chart-client.ts'
@@ -68,19 +67,15 @@ export default function FuturesTerminal({
     serverClock,
     connectedAtMs,
     error,
-    commandPending,
-    commandStatus,
     activeRunId,
     selectedAnalysisId,
     setSelectedAnalysisId,
-    sendCommand,
   } = useTerminalStream({ bootstrap, apiBase, product })
   // null: the health feed has not answered (yet) or is unreachable.
   const [processHealth, setProcessHealth] = useState<Record<
     string,
     unknown
   > | null>(null)
-  const [confirmingReset, setConfirmingReset] = useState(false)
   const liveGateway = bootstrap.mode === 'paper_live'
   const health = useHealth(liveGateway)
 
@@ -133,8 +128,7 @@ export default function FuturesTerminal({
   const engineOff =
     bootstrap.mode === 'paper_live' &&
     (record(state?.engine).status ?? bootstrap.engine?.status) === 'off'
-  // The live gateway shows paper execution D read-only: it has no command
-  // channel yet (PS-06), so controls render disabled.
+  // The live gateway shows paper execution read-only: it has no command channel.
   const gatewayEngine =
     bootstrap.mode === 'paper_live' &&
     (record(state?.engine).commands ?? bootstrap.engine?.commands) ===
@@ -651,18 +645,6 @@ export default function FuturesTerminal({
                     }}
                   />
                 </GatewayHistory>
-              </div>
-              <div className="mc-terminal__secondary-tools">
-                <SimulatedControls
-                  gatewayEngine={gatewayEngine}
-                  connected={connected}
-                  commandPending={commandPending}
-                  commandStatus={commandStatus}
-                  confirmingReset={confirmingReset}
-                  setConfirmingReset={setConfirmingReset}
-                  sendCommand={sendCommand}
-                  runId={activeRunId}
-                />
               </div>
             </div>
           )}

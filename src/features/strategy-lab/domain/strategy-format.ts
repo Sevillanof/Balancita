@@ -13,12 +13,6 @@ export function signedAmount(
   return `${sign}${amount(Math.abs(rounded), digits)}`
 }
 
-/** `+174,59 USD`. */
-export function netUsd(value: number | null | undefined): string | null {
-  const text = signedAmount(value, 2)
-  return text === null ? null : `${text} USD`
-}
-
 const COUNT = new Intl.NumberFormat('es-AR', { maximumFractionDigits: 0 })
 
 /** Whole numbers with a thousands dot from 1.000 (es-ES would skip it below 10.000). */

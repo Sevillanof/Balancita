@@ -74,9 +74,6 @@ export type StrategySpec = {
   branches?: Partial<Record<'trend' | 'range', { id: string; rules: Rules }>>
 }
 
-/** Where a set of rules lives: the spec itself or one adapter branch. */
-export type RulesScope = 'rules' | 'trend' | 'range'
-
 /** Index path from a check's node down to one comparison. */
 export type CmpPath = { check: number; steps: number[] }
 
@@ -119,14 +116,6 @@ const FIELD_LABELS: Record<string, string> = {
 }
 
 const DECIMAL = /^-?\d+(?:\.\d+)?$/
-
-export function isCmp(node: SpecNode): node is CmpNode {
-  return 'cmp' in node
-}
-
-export function isDecimal(operand: Operand): operand is string {
-  return typeof operand === 'string' && DECIMAL.test(operand)
-}
 
 export function isParam(operand: Operand): operand is string {
   return typeof operand === 'string' && operand.startsWith('$')
@@ -248,23 +237,6 @@ export function conditionSentence(
 /** `1.5` → `1,5` for display; specs always store dot decimals. */
 export function formatDecimal(value: string): string {
   return value.replace('.', ',')
-}
-
-/** Accepts `1,5` or `1.5`; returns the dot decimal or null. */
-export function parseDecimalInput(value: string): string | null {
-  const normalized = value.trim().replace(',', '.')
-  return DECIMAL.test(normalized) ? normalized : null
-}
-
-export function cloneSpec(spec: StrategySpec): StrategySpec {
-  return structuredClone(spec)
-}
-
-export function rulesOf(
-  spec: StrategySpec,
-  scope: RulesScope,
-): Rules | undefined {
-  return scope === 'rules' ? spec.rules : spec.branches?.[scope]?.rules
 }
 
 /** Parsed JSON or a readable error, for the import box. */

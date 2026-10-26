@@ -14,7 +14,6 @@ export function applyTerminalEvent(
       ...(Array.isArray(state.analyses) ? state.analyses : []),
       { ...record(data.analysis) },
     ].slice(-500)
-    state.state_version = Number(state.state_version ?? 0) + 1
   } else if (event.type === 'account.updated') state.account = data.account
   else if (event.type === 'position.updated') {
     state.position = data.position
@@ -84,9 +83,6 @@ export function applyTerminalEvent(
       interval_ms: 60_000,
       candles: nextCandles,
     }
-  } else if (event.type === 'command.result') {
-    const result = record(record(data.result).result)
-    state.state_version = result.applied_state_version ?? state.state_version
   }
   return state
 }
