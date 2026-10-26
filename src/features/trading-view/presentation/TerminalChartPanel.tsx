@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { productBase, productPair } from '../domain/product-label.ts'
 import { amount, compactUsd, usd } from '../../../shared/finance/format.ts'
 import ApprovedTerminalChart, {
@@ -34,7 +34,69 @@ import {
   chartPositions,
   timeframeCandles,
 } from '../domain/terminal-chart-model.ts'
-import './terminal-chart-panel.css'
+
+const SUMMARY_CLASSES =
+  'inline-flex min-h-7.5 items-center rounded-lg border border-solid border-line px-chart-control py-0 text-ink-2 cursor-pointer chart-desktop:min-h-6.5 chart-desktop:whitespace-nowrap'
+const TOGGLES_CLASSES =
+  'm-0 flex flex-wrap items-center gap-x-3 gap-y-1 border-0 border-none border-current p-0 text-control leading-normal chart-phone:flex-nowrap chart-phone:whitespace-nowrap'
+const LEGEND_CLASSES =
+  'float-left mr-1 text-stat-label leading-normal tracking-label text-ink-2 uppercase'
+const LABEL_CLASSES =
+  'inline-flex min-h-7.5 items-center gap-chart-label cursor-pointer'
+
+function ChartStats({
+  children,
+  compact = false,
+}: {
+  children: ReactNode
+  compact?: boolean
+}) {
+  return (
+    <dl
+      aria-label={compact ? 'Datos del mercado' : 'Más datos del mercado'}
+      className={`m-0 grid grid-cols-chart-stats gap-x-4 gap-y-chart-row px-3 py-0 text-provenance leading-normal chart-phone:flex chart-phone:gap-chart-gap chart-phone:overflow-x-auto chart-phone:pb-1 chart-phone:snap-x chart-phone:snap-proximity chart-desktop:flex chart-desktop:gap-chart-gap ${
+        compact
+          ? 'chart-phone:flex-none chart-desktop:order-2 chart-desktop:min-w-0 chart-desktop:flex-auto chart-desktop:basis-full chart-desktop:shrink-0 chart-desktop:flex-nowrap chart-desktop:justify-start chart-desktop:gap-x-chart-strip chart-desktop:gap-y-0 chart-desktop:p-0 chart-desktop:text-stat-label'
+          : 'group-open:absolute group-open:top-popover group-open:left-0 group-open:z-20 group-open:w-chart-popover group-open:rounded-lg group-open:border group-open:border-solid group-open:border-line group-open:bg-surface-1 group-open:p-chart-inset! group-open:shadow-popover chart-desktop:flex-wrap chart-desktop:pt-2'
+      }`}
+    >
+      {children}
+    </dl>
+  )
+}
+
+function ChartStat({
+  label,
+  children,
+  compact = false,
+  tone,
+}: {
+  label: string
+  children: ReactNode
+  compact?: boolean
+  tone?: 'text-long' | 'text-short'
+}) {
+  return (
+    <div
+      className={`grid min-w-0 gap-chart-unit rounded-panel border border-solid border-line bg-surface-1 px-chart-inset py-chart-gap chart-phone:min-w-34 chart-phone:max-w-56 chart-phone:flex-none chart-phone:snap-start ${
+        compact
+          ? 'chart-desktop:flex chart-desktop:flex-initial chart-desktop:items-baseline chart-desktop:gap-chart-gap chart-desktop:border-0 chart-desktop:border-none chart-desktop:border-current chart-desktop:bg-transparent chart-desktop:p-0 chart-desktop:whitespace-nowrap'
+          : 'chart-desktop:flex-1 chart-desktop:basis-44 chart-desktop:py-chart-label'
+      }`}
+    >
+      <dt
+        className={`text-stat-label leading-normal tracking-label text-ink-2 uppercase ${compact ? 'chart-desktop:text-stat-compact' : ''}`}
+      >
+        {label}
+      </dt>
+      <dd
+        className={`m-0 font-brand-mono tabular-nums wrap-anywhere ${tone ?? ''}`}
+      >
+        {children}
+      </dd>
+    </div>
+  )
+}
 
 type Overlay =
   | 'ema9'
@@ -529,15 +591,16 @@ export default function TerminalChartPanel({
   const change = stats?.change_24h_pct ?? null
 
   return (
-    <div className="terminal-chart">
-      <div className="terminal-chart__toolbar">
+    <div className="grid gap-chart-gap chart-desktop:gap-chart-tight">
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-2 px-3 py-0 chart-phone:flex-nowrap chart-phone:gap-x-3 chart-phone:overflow-x-auto chart-phone:pb-1 chart-desktop:gap-x-3 chart-desktop:gap-y-1 chart-desktop:px-2">
         <div
-          className="terminal-chart__seg"
+          className="inline-flex gap-0.5 rounded-lg border border-solid border-line p-0.75 chart-phone:flex-none chart-desktop:p-0.5"
           role="group"
           aria-label="Temporalidad"
         >
           {CHART_TIMEFRAMES.map((item) => (
             <button
+              className="min-h-7.5 cursor-pointer rounded-brand border-0 border-none border-current bg-transparent px-chart-control py-0 text-control! leading-normal! text-ink-2 aria-pressed:bg-line aria-pressed:text-inherit chart-desktop:min-h-6.5 chart-desktop:whitespace-nowrap"
               key={item.ms}
               type="button"
               aria-pressed={settings.intervalMs === item.ms}
@@ -549,13 +612,13 @@ export default function TerminalChartPanel({
             </button>
           ))}
         </div>
-        <details className="terminal-chart__tools">
-          <summary>Indicadores y paneles</summary>
-          <div className="terminal-chart__tools-body">
-            <fieldset className="terminal-chart__toggles">
-              <legend>Indicadores</legend>
+        <details className="relative text-provenance leading-normal chart-phone:flex-none">
+          <summary className={SUMMARY_CLASSES}>Indicadores y paneles</summary>
+          <div className="absolute top-popover left-0 z-20 grid min-w-88 gap-2 rounded-lg border border-solid border-line bg-surface-1 p-3 shadow-popover">
+            <fieldset className={TOGGLES_CLASSES}>
+              <legend className={LEGEND_CLASSES}>Indicadores</legend>
               {OVERLAYS.map((item) => (
-                <label key={item.id}>
+                <label className={LABEL_CLASSES} key={item.id}>
                   <input
                     type="checkbox"
                     checked={settings.overlays.includes(item.id)}
@@ -567,7 +630,7 @@ export default function TerminalChartPanel({
                     }
                   />
                   <span
-                    className="terminal-chart__swatch"
+                    className="h-0.75 w-2.5 rounded-swatch"
                     style={{ background: item.color }}
                     aria-hidden="true"
                   />
@@ -575,10 +638,10 @@ export default function TerminalChartPanel({
                 </label>
               ))}
             </fieldset>
-            <fieldset className="terminal-chart__toggles">
-              <legend>Paneles</legend>
+            <fieldset className={TOGGLES_CLASSES}>
+              <legend className={LEGEND_CLASSES}>Paneles</legend>
               {PANES.map((item) => (
-                <label key={item.id}>
+                <label className={LABEL_CLASSES} key={item.id}>
                   <input
                     type="checkbox"
                     checked={settings.panes.includes(item.id)}
@@ -596,109 +659,84 @@ export default function TerminalChartPanel({
             </fieldset>
           </div>
         </details>
-        <details className="terminal-chart__more">
-          <summary>Más datos del mercado</summary>
-          <dl
-            className="terminal-chart__stats"
-            aria-label="Más datos del mercado"
-          >
-            <div>
-              <dt>Máx / mín 24 h</dt>
-              <dd>
-                {usd(stats?.high_24h, 0)} / {usd(stats?.low_24h, 0)}
-              </dd>
-            </div>
-            <div>
-              <dt>Volumen 24 h</dt>
-              <dd>
-                {amount(stats?.volume_24h_base, 1)} {productBase(product)} ·{' '}
-                {compactUsd(stats?.volume_24h_quote)}
-              </dd>
-            </div>
-            <div>
-              <dt>Mark / índice</dt>
-              <dd>
-                {usd(stats?.mark)} / {usd(stats?.index)}
-              </dd>
-            </div>
-            <div>
-              <dt>Profundidad ±0,1 %</dt>
-              <dd>
-                {depth
-                  ? `${amount(depth.bid, 1)} / ${amount(depth.ask, 1)} ${productBase(product)}`
-                  : '—'}
-              </dd>
-            </div>
-            <div>
-              <dt>Cuentas en largo</dt>
-              <dd>
-                {latestFlow?.long_percent == null
-                  ? '—'
-                  : `${amount(latestFlow.long_percent, 1)} %`}
-                {latestFlow?.top_long_percent == null
-                  ? ''
-                  : ` · top 20 %: ${amount(latestFlow.top_long_percent, 1)} %`}
-              </dd>
-            </div>
-          </dl>
+        <details className="group relative text-provenance leading-normal chart-phone:flex-none">
+          <summary className={SUMMARY_CLASSES}>Más datos del mercado</summary>
+          <ChartStats>
+            <ChartStat label="Máx / mín 24 h">
+              {usd(stats?.high_24h, 0)} / {usd(stats?.low_24h, 0)}
+            </ChartStat>
+            <ChartStat label="Volumen 24 h">
+              {amount(stats?.volume_24h_base, 1)} {productBase(product)} ·{' '}
+              {compactUsd(stats?.volume_24h_quote)}
+            </ChartStat>
+            <ChartStat label="Mark / índice">
+              {usd(stats?.mark)} / {usd(stats?.index)}
+            </ChartStat>
+            <ChartStat label="Profundidad ±0,1 %">
+              {depth
+                ? `${amount(depth.bid, 1)} / ${amount(depth.ask, 1)} ${productBase(product)}`
+                : '—'}
+            </ChartStat>
+            <ChartStat label="Cuentas en largo">
+              {latestFlow?.long_percent == null
+                ? '—'
+                : `${amount(latestFlow.long_percent, 1)} %`}
+              {latestFlow?.top_long_percent == null
+                ? ''
+                : ` · top 20 %: ${amount(latestFlow.top_long_percent, 1)} %`}
+            </ChartStat>
+          </ChartStats>
         </details>
-        <dl className="terminal-chart__stats" aria-label="Datos del mercado">
-          <div>
-            <dt>Cambio 24 h</dt>
-            <dd
-              className={
-                change == null
-                  ? undefined
-                  : change >= 0
-                    ? 'terminal-chart__up'
-                    : 'terminal-chart__down'
-              }
-            >
-              {percent(change)}
-            </dd>
-          </div>
-          <div>
-            <dt>Funding (por hora)</dt>
-            <dd>
-              {stats?.relative_funding_rate == null
-                ? '—'
-                : percent(stats.relative_funding_rate * 100, 4)}
-              {' · próx. '}
-              {stats?.relative_funding_rate_prediction == null
-                ? '—'
-                : percent(stats.relative_funding_rate_prediction * 100, 4)}
-              {' en '}
-              {countdown(stats?.next_funding_time_ms, now)}
-            </dd>
-          </div>
-          <div>
-            <dt>Bid / ask</dt>
-            <dd>
-              {usd(stats?.bid, 0)} ({amount(stats?.bid_size, 3)}) /{' '}
-              {usd(stats?.ask, 0)} ({amount(stats?.ask_size, 3)}) · spread{' '}
-              {usd(stats?.spread)}
-            </dd>
-          </div>
-          <div>
-            <dt>Interés abierto</dt>
-            <dd>
-              {amount(stats?.open_interest, 1)} {productBase(product)}
-              {stats?.open_interest != null && stats.mark != null
-                ? ` · ${compactUsd(stats.open_interest * stats.mark)}`
-                : ''}
-            </dd>
-          </div>
-        </dl>
+        <ChartStats compact>
+          <ChartStat
+            label="Cambio 24 h"
+            compact
+            tone={
+              change == null
+                ? undefined
+                : change >= 0
+                  ? 'text-long'
+                  : 'text-short'
+            }
+          >
+            {percent(change)}
+          </ChartStat>
+          <ChartStat label="Funding (por hora)" compact>
+            {stats?.relative_funding_rate == null
+              ? '—'
+              : percent(stats.relative_funding_rate * 100, 4)}
+            {' · próx. '}
+            {stats?.relative_funding_rate_prediction == null
+              ? '—'
+              : percent(stats.relative_funding_rate_prediction * 100, 4)}
+            {' en '}
+            {countdown(stats?.next_funding_time_ms, now)}
+          </ChartStat>
+          <ChartStat label="Bid / ask" compact>
+            {usd(stats?.bid, 0)} ({amount(stats?.bid_size, 3)}) /{' '}
+            {usd(stats?.ask, 0)} ({amount(stats?.ask_size, 3)}) · spread{' '}
+            {usd(stats?.spread)}
+          </ChartStat>
+          <ChartStat label="Interés abierto" compact>
+            {amount(stats?.open_interest, 1)} {productBase(product)}
+            {stats?.open_interest != null && stats.mark != null
+              ? ` · ${compactUsd(stats.open_interest * stats.mark)}`
+              : ''}
+          </ChartStat>
+        </ChartStats>
       </div>
       {!live && (
-        <p className="terminal-chart__note">
+        <p className="m-0 px-3 py-0 text-hint text-ink-2">
           Flujo de órdenes, interés abierto, liquidaciones y long/short solo
           están disponibles con el mercado real de Kraken.
         </p>
       )}
 
       {waiting ? (
-        <p className="terminal-chart__loading" role="status">
+        <p
+          className="terminal-chart__loading m-0 grid h-terminal-chart place-items-center text-ink-2"
+          role="status"
+        >
           Cargando velas de {timeframeLabel}…
         </p>
       ) : (
@@ -761,7 +799,7 @@ export default function TerminalChartPanel({
       {pendingPanes.map((pane) => (
         <p
           key={pane.id}
-          className="terminal-chart__pane-placeholder"
+          className="m-0 grid h-27.5 place-items-center border-t border-t-solid border-t-line text-ink-2"
           role="status"
         >
           {pane.text}
@@ -769,44 +807,49 @@ export default function TerminalChartPanel({
       ))}
       {fillRows && (
         <section
-          className="terminal-chart__fill-detail"
+          className="mx-3 my-0 rounded-lg border border-solid border-line-overlay px-3 py-2 text-hint"
           aria-label="Ejecución seleccionada"
           data-testid="fill-detail"
         >
-          <header>
-            <h3>Ejecución seleccionada (EJEC.)</h3>
+          <header className="flex items-center justify-between gap-2">
+            <h3 className="m-0 text-note leading-normal">
+              Ejecución seleccionada (EJEC.)
+            </h3>
             <button type="button" onClick={() => setPickedFill(null)}>
               Cerrar
             </button>
           </header>
-          <dl>
+          <dl className="my-2 grid grid-cols-fill-facts gap-x-4 gap-y-1">
             {fillRows.map((row) => (
-              <div key={row.key} data-field={row.key}>
+              <div className="min-w-0" key={row.key} data-field={row.key}>
                 <dt>{row.label}</dt>
-                <dd>{row.value}</dd>
+                <dd className="m-0 tabular-nums wrap-anywhere">{row.value}</dd>
               </div>
             ))}
           </dl>
-          <p>
+          <p className="m-0">
             Evento independiente: no está vinculado a ninguna decisión ni
             veredicto.
           </p>
         </section>
       )}
-      <p className="terminal-chart__legend">
+      <p
+        className="m-0 flex flex-wrap gap-x-4 gap-y-1 px-3 py-0 text-hint text-ink-2"
+        aria-label="Leyenda del gráfico"
+      >
         {proposalLegend ? (
           <>
             <span data-testid="legend-proposal">
-              <b className="terminal-chart__up">▲</b>
-              <b className="terminal-chart__down">▼</b> propuesta LONG/SHORT (no
-              es una operación)
+              <b className="text-long">▲</b>
+              <b className="text-short">▼</b> propuesta LONG/SHORT (no es una
+              operación)
             </span>
             <span data-testid="legend-wait">
               <b style={{ color: colors.muted }}>◌</b> W = WAIT (W×n: agrupados)
             </span>
             <span data-testid="legend-fill">
-              <b className="terminal-chart__up">■</b> EJEC. ejecución paper (EJ
-              L/S, un marcador por fill; el detalle sale al seleccionarlo)
+              <b className="text-long">■</b> EJEC. ejecución paper (EJ L/S, un
+              marcador por fill; el detalle sale al seleccionarlo)
             </span>
             <span data-testid="legend-exit">
               <b style={{ color: colors.info }}>●</b> salida (stop, objetivo,
@@ -816,10 +859,10 @@ export default function TerminalChartPanel({
         ) : (
           <>
             <span>
-              <b className="terminal-chart__up">▲</b> entrada larga
+              <b className="text-long">▲</b> entrada larga
             </span>
             <span>
-              <b className="terminal-chart__down">▼</b> entrada corta
+              <b className="text-short">▼</b> entrada corta
             </span>
             <span>
               <b style={{ color: colors.info }}>●</b> salida (stop, objetivo,

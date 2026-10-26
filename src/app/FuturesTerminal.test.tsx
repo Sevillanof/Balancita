@@ -1599,7 +1599,7 @@ describe('FuturesTerminal on the live gateway with paper execution', () => {
 
     it('names proposals, WAIT, EJEC. and exits in the visible legend', async () => {
       await renderLive()
-      const legend = document.querySelector('.terminal-chart__legend')!
+      const legend = screen.getByLabelText('Leyenda del gráfico')
       expect(legend.textContent).toMatch(/propuesta LONG\/SHORT/)
       expect(legend.textContent).toMatch(/W = WAIT/)
       expect(legend.textContent).toMatch(/EJEC\. ejecución paper/)

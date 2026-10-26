@@ -13,7 +13,6 @@ const LEGACY_CSS = new Set([
   'src/features/strategy-lab/presentation/StrategyModals.css',
   'src/features/strategy-lab/presentation/StrategyRunView.css',
   'src/features/strategy-lab/presentation/VectorbtPanel.css',
-  'src/features/trading-view/presentation/terminal-chart-panel.css',
   'src/shared/mission-control/mission-control.css',
   'src/shared/styles/ui.css',
 ])

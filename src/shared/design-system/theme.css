@@ -32,6 +32,7 @@
   --color-line: #1e2638;
   --color-line-strong: #2a354d;
   --color-line-focus: #3b4866;
+  --color-line-overlay: rgb(255 255 255 / 12%);
   --color-long: #10b981;
   --color-short: #ef4444;
   --color-warn: #f59e0b;
@@ -43,6 +44,14 @@
   --color-on-long: #0a0d14;
 
   --spacing: 4px;
+  --spacing-chart-unit: 0.1rem;
+  --spacing-chart-tight: 0.2rem;
+  --spacing-chart-label: 0.3rem;
+  --spacing-chart-gap: 0.4rem;
+  --spacing-chart-row: 0.35rem;
+  --spacing-chart-inset: 0.6rem;
+  --spacing-chart-control: 0.7rem;
+  --spacing-chart-strip: 1.4rem;
 
   --text-*: initial;
   --text-label: 11px;
@@ -62,6 +71,9 @@
   --text-provenance: 0.78rem;
   --text-badge: 10px;
   --text-badge-compact: 9px;
+  --text-control: 0.8rem;
+  --text-stat-label: 0.7rem;
+  --text-stat-compact: 0.62rem;
 
   --tracking-label: 0.04em;
   --tracking-title: -0.01em;
@@ -94,6 +106,8 @@
   --radius-lg: 8px;
   --radius-brand: 5px;
   --radius-badge: 3px;
+  --radius-panel: 0.375rem;
+  --radius-swatch: 2px;
 }
 
 /* Preserve the legacy inclusive header breakpoints while screens migrate. */
@@ -102,6 +116,28 @@
 @custom-variant header-phone (@media (width <= 640px));
 @custom-variant header-compact (@media (width <= 460px));
 @custom-variant source-phone (@media (width <= 480px));
+@custom-variant chart-phone (@media (width <= 600px));
+@custom-variant chart-desktop (@media (width >= 901px));
+
+@utility grid-cols-chart-stats {
+  grid-template-columns: repeat(auto-fill, minmax(11.5rem, 1fr));
+}
+
+@utility grid-cols-fill-facts {
+  grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
+}
+
+@utility w-chart-popover {
+  width: min(46rem, 80vw);
+}
+
+@utility top-popover {
+  top: calc(100% + --spacing(1));
+}
+
+@utility h-terminal-chart {
+  height: var(--terminal-chart-height, 440px);
+}
 
 @utility w-shell-content {
   width: min(calc(100% - --spacing(14)), var(--container-shell));

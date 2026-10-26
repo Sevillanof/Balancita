@@ -68,7 +68,7 @@ The status pill formula (10% fill, 25% border, full-strength text) becomes `bg-l
 | T2  | S1, S2, S5     | inline | done                            | ce1f4a8f |
 | T3  | S4             | inline | local done; publication pending | 292ff226 |
 | T4  | S2, S3         | inline | done                            | 6b727b23 |
-| T5  | S1, S2, S5, S6 | inline | in progress; T5a local done      | —        |
+| T5  | S1, S2, S5, S6 | inline | in progress; T5b local done      | —        |
 | T6  | S1, S2, S5, S6 | inline | pending                         | —        |
 | T7  | S1, S2, S5     | inline | pending                         | —        |
 | T8  | S1             | inline | pending                         | —        |
@@ -128,7 +128,7 @@ pnpm exec vitest run --dir src --exclude '.claude/**' --exclude '**/node_modules
 
 The test uses the existing TypeScript compiler to inspect JSX `className` values and reachable static strings (templates, branches, aliases, imported variant maps and class-helper arguments). It ignores comments, display text and unrelated strings such as chart colors. Tests/specs are excluded from the application-source scan so negative fixtures do not flag themselves. This is a static guard, not a runtime evaluator: classes assembled from arbitrary runtime data or custom function return values still require review.
 
-Only `theme.css` and the 13 explicitly listed legacy source stylesheets are allowed. New or renamed CSS files under `src` fail; when retiring a legacy stylesheet, remove its entry from `LEGACY_CSS` in the same slice. Stale entries fail too, preventing retired paths from silently remaining exempt. The standalone T3 catalog is tooling under `scripts/design-system`, outside this app-source rule.
+Only `theme.css` and the 12 explicitly listed legacy source stylesheets are allowed. New or renamed CSS files under `src` fail; when retiring a legacy stylesheet, remove its entry from `LEGACY_CSS` in the same slice. Stale entries fail too, preventing retired paths from silently remaining exempt. The standalone T3 catalog is tooling under `scripts/design-system`, outside this app-source rule.
 
 ### T5 — Terminal screens
 
@@ -140,8 +140,8 @@ T5 is split into independently reviewable units because its starting scope is
 
 | Unit | Scope | Status |
 | ---- | ----- | ------ |
-| T5a | Market strip, shared notices, product select, loading/error frame and usage chip | Local done; pending user commit |
-| T5b | Chart toolbar, statistics, details and responsive panes | Pending |
+| T5a | Market strip, shared notices, product select, loading/error frame and usage chip | Done; d2101e1c |
+| T5b | Chart toolbar, statistics, details and responsive panes | Local done; pending user commit |
 | T5c | Terminal layout, account/history tables and decisions; retire remaining stylesheets | Pending |
 
 T5a uses one `TerminalNotices` component for both market alerts and the gateway
@@ -154,8 +154,24 @@ The product select temporarily needs important utilities: unlayered `ui.css`
 still sets every native select's height, padding, colors, border, font and focus
 outline. T8 can remove these modifiers with that legacy layer. New badge,
 tracking and control-line-height tokens preserve the existing visual values;
-they are not new styling rules copied into the theme. Keep the three T5 CSS
-allowlist entries until T5b/T5c actually delete those files.
+they are not new styling rules copied into the theme. T5b deletes the chart
+stylesheet and its allowlist entry; keep the two remaining T5 CSS entries until
+T5c actually deletes those files.
+
+T5b keeps shared chart-height media queries in `DemoShell.css` for T5c. The
+loading paragraph retains its class only for those height variables. Chart
+statistics share two small presentation components inside `TerminalChartPanel`;
+the compact desktop strip and floating cards keep separate variants. No
+indicator calculations, settings persistence, marker selection or chart-engine
+code changes. A labeled legend replaces the test's dependency on a styling
+selector.
+
+Chart-specific spacing tokens preserve the old rem values exactly: Tailwind's
+numeric spacing utilities accept quarter-step multipliers, not values such as
+`gap-1.6`. A class string alone does not prove CSS generation; the production
+browser comparison checks the resulting dimensions. The formerly undefined
+`--demo-muted` declarations resolve to inherited text and need no replacement;
+the old white-12% border fallback becomes semantic `line-overlay`.
 
 ### T6 — Estrategias screens
 
@@ -215,4 +231,12 @@ Each task or explicitly named sub-unit is one work-unit commit; report slices ov
   - Performance: sequential production samples, **20 s each**, both **60.1 FPS / 2.2% browser task CPU / 0 frames >50 ms / 0 long tasks**. Script time 198 ms in both samples; no performance improvement is claimed. Five live bootstrap GETs: **1.221 s first**, then **113/93/91/112 ms**; the cold outlier is recorded, not hidden. Strategy-switch frame gaps remain part of later T5/T6 acceptance, not claimed tested by this slice.
   - Catalog regenerated and verified offline: **48 source tokens**, seven real previews and their variants at 1440/768/390 px, no external requests; all three exporter tests pass.
   - Rollback boundary: remove `TerminalNotices.tsx` and `MarketStrip.test.tsx`; restore T5a edits in `MarketStrip.tsx`, `FuturesTerminal.tsx`, `SystemUsageChip.tsx`, `TerminalEntry.tsx`, both app stylesheets, the badge rule in `observability.css`, theme additions and this plan update. No data, dependencies or service changes. Local-only; no Git writes.
-- **Next step:** user reviews/commits T5a; continue with T5b chart migration, then T5c to complete T5. External T3 publication and React 18 host validation remain pending.
+- **L10 (T5b):** Migrated chart controls, compact/floating market statistics, indicator/pane selectors, loading and empty panes, selected-fill facts and legend. Deleted the complete **333-line** `terminal-chart-panel.css` and removed its import/guard allowlist entry. Existing chart canvas, colors, data fetching, indicator calculations and selection logic are untouched.
+  - Review first: the `ChartStats`/`ChartStat` presentation variants, then the toolbar and selected-fill markup; compare the matching stylesheet deletion. This unit exceeds the ~400-line review budget: **740 changed lines before this documentation update**, including 333 deleted CSS lines and mechanical JSX wrapper replacements. The overage is explicit, not reduced by compressing tests or formatting; T5c remains separate.
+  - Validation: **93/93 Vitest tests** across chart panel, chart renderer, Terminal integration and design-system guards, including four new control/fact-group tests. Typecheck, focused ESLint, Prettier, editor diagnostics and `git diff --check` pass. Production build passes with the existing chunk-size advisory.
+  - Runtime harness: **64 before/after production scenarios** on the existing `localhost:5173`: default chart, both open popovers, EMA/RSI enabled, pending panes, 5m timeframe, unavailable timeframe data and keyboard focus; each at **1600/1200/1199/901/900/601/600/390 px**. Identical geometry and computed visual styles; screenshots reviewed. API responses/public WS snapshot are replayed with a fixed clock. Transparent zero-sized Tailwind shadow layers normalize away; the visible shadow is identical.
+  - Selected-fill harness: **six additional before/after scenarios** at 1600/901/900/601/600/390 px use the real panel and a local chart-selection stub, with synthetic paper-fill facts, historical-only disabled controls and no network data. Opening the fill and closing it pass; all detail geometry/styles match. Existing integration tests separately cover real marker-selection wiring.
+  - Runtime measurement: six live timeframe changes (5m/15m/1h/1m/5m/1m), about **13.6 s per version**, **60 FPS**, maximum frame **16.8 ms**, **zero frames >50 ms**, zero long tasks/errors in both. Browser task CPU **2.97% before / 3.49% after**; no CPU improvement is claimed. Five bootstrap GETs: **1.326 s first**, then **132/91/91/90 ms**. The recurring first-request outlier is not fixed by styling and prevents claiming an unconditional 0.1 s bootstrap; strategy-switch testing still belongs to T6.
+  - Catalog regenerated: **62 source tokens**, all seven previews/variants pass at 1440/768/390 px with no external requests, plus all three exporter tests. No dependencies, data or services changed.
+  - Rollback boundary: restore the deleted chart stylesheet/import and its guard entry; restore T5b edits in `TerminalChartPanel.tsx`, its test, the legend lookup in `FuturesTerminal.test.tsx`, theme additions and this plan update. T5a remains independent. No Git writes; the user commits.
+- **Next step:** user reviews/commits T5b; T5c completes the Terminal layout, account/history and decisions migration and retires the remaining two app stylesheets. External T3 publication and React 18 host validation remain pending.
