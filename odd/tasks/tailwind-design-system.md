@@ -62,16 +62,16 @@ The status pill formula (10% fill, 25% border, full-strength text) becomes `bg-l
 
 ## Tasks
 
-| ID  | Specs          | Route  | Status                     | Commit   |
-| --- | -------------- | ------ | -------------------------- | -------- |
-| T1  | S1, S3, S5     | inline | done                       | 3cf55be8 |
-| T2  | S1, S2, S5     | inline | done (pending user commit) | —        |
-| T3  | S4             | inline | pending                    | —        |
-| T4  | S2, S3         | inline | pending                    | —        |
-| T5  | S1, S2, S5, S6 | inline | pending                    | —        |
-| T6  | S1, S2, S5, S6 | inline | pending                    | —        |
-| T7  | S1, S2, S5     | inline | pending                    | —        |
-| T8  | S1             | inline | pending                    | —        |
+| ID  | Specs          | Route  | Status                          | Commit   |
+| --- | -------------- | ------ | ------------------------------- | -------- |
+| T1  | S1, S3, S5     | inline | done                            | d0162349 |
+| T2  | S1, S2, S5     | inline | done                            | ce1f4a8f |
+| T3  | S4             | inline | local done; publication pending | —        |
+| T4  | S2, S3         | inline | pending                         | —        |
+| T5  | S1, S2, S5, S6 | inline | pending                         | —        |
+| T6  | S1, S2, S5, S6 | inline | pending                         | —        |
+| T7  | S1, S2, S5     | inline | pending                         | —        |
+| T8  | S1             | inline | pending                         | —        |
 
 ### T1 — Tailwind and the single theme (no visual change)
 
@@ -95,6 +95,25 @@ The status pill formula (10% fill, 25% border, full-strength text) becomes `bg-l
 - `pnpm design-system:build` runs both. Live previews mount `window.Balancita.<Component>` with real props.
 - Republish the artifact at https://claude.ai/artifact/B3AvVBuQcwxr6o7CT2Fmze (same URL), libraries `react` / `react-dom` 18.
 - Check: every preview renders; tokens.json values equal `theme.css`.
+
+#### T3 local workflow
+
+```bash
+pnpm design-system:build
+pnpm design-system:test
+pnpm design-system:verify
+open dist/design-system/index.html
+```
+
+The generated directory is ignored by Git. Open the HTML directly; no server, new port, CDN or market connection is needed. Chrome must be installed for `design-system:verify`.
+
+- `bundle.js` exposes `window.Balancita`. Load a host React and ReactDOM first; the component bundle does not embed either and uses classic `React.createElement`, not a version-specific JSX-runtime shim.
+- `bundle.css` contains the theme, embedded fonts, shared-component utilities and temporary `--mc-*` aliases, not screen CSS. Tailwind scans only shared component TSX, excluding tests. As with the app's no-preflight setup, a host supplies base styles (box sizing, body margin, link defaults); the catalog provides its own document styling.
+- `runtime.js` is separate and uses the project's installed React/ReactDOM (19.3.0 in this validation) for the offline catalog. It is not required when the host already provides those globals. React 18 runtime compatibility has **not** been validated; classic JSX removes the known element-format coupling but is not a substitute for that validation. Generated runtime/font license notices travel with the catalog.
+- `tokens.json` is a list of `{ name, value, type }`; names omit the CSS `--` prefix. `tokens.usage.json` stores usage guidance separately. Both the catalog and its token search consume the generated values.
+- Catalog HTML/JS live under `scripts/design-system/`; component examples instantiate the exported components, never hand-copied markup. The catalog's editorial layout does not change the app's visual design.
+- Rebuilding refreshes the output directory. A normal app build also replaces `dist`, so rerun `design-system:build` afterward if needed.
+- Republishing the existing external artifact is a manual user action, pending host/runtime verification. This task does not upload source or generated code to third-party services.
 
 ### T4 — Guard rails
 
@@ -146,4 +165,11 @@ Each task is one work-unit commit; report slices over ~400 authored changed line
 - **L6 checks:** production builds compared in headless Chrome through the existing localhost port, with the same captured public-market snapshot and GET responses replayed to both versions. Terminal (395 elements), Estrategias (191), and a component fixture (112, including all tones, data states and known/unknown provenance) compared at 1600/1081/1080/761/760/641/640/461/460/390px, in normal, navigation hover/focus and product-selector focus states: zero computed visual-style/geometry differences after normalizing equivalent color syntax and ignoring non-rendered border colors and the equivalent header max-width constraint. Screenshots reviewed: Estrategias is byte-identical at all 10 widths; pills have at most one channel level of pixel rounding from srgb vs oklab interpolation, and two chart pixels at 1081px differ by at most three levels. No browser runtime errors. No new ports or server restarts.
   - Focused validation: `npx vitest run --dir src --exclude '.claude/**' --exclude '**/node_modules/**' src/shared/mission-control/mission-control.test.tsx src/app/FuturesTerminal.test.tsx src/app/TerminalEntry.test.tsx src/features/strategy-lab/presentation/StrategiesPage.test.tsx src/features/observability/presentation/Observability.test.tsx`: **155/155 pass**, including 10 new regression cases. `npx tsc -b`, targeted ESLint and the production build pass. The existing >500kB chunk warning remains; no runtime-performance improvement is claimed for this styling slice.
   - Rollback boundary: the seven shared component TSX files and their test, `theme.css`, `mission-control.css`, `DemoShell.css`, `TerminalEntry.tsx`, plus this T2 log/status. The slice exceeds the ~400-line review target mainly because old CSS is removed; it remains one cohesive migration, with no unrelated work.
-- **Next step:** user reviews/commits T2, then T3.
+- **L7 (2026-10-26, T3 local delivery):** User approved creative freedom for the design-system presentation. Added an offline, responsive catalog with semantic palette, type specimens, seven live component previews, variant controls, prop examples, searchable source tokens and downloads. `vite.design-system.config.ts` builds the classic-JSX `window.Balancita` IIFE with `@ds-bundle` header, external React and shared-only Tailwind sources. A separate runtime supports the local catalog without CDN dependencies. Fonts are embedded in the CSS, which accounts for most of its ~381 kB size; component JS is ~6.7 kB before gzip.
+  - Screen CSS imports moved from the shared `AppShell` to the app entry to keep screen styles out of the library while preserving application load order. No component behavior, app theme values, dependency versions, strategy logic or market integrations changed.
+  - Token extraction fails on empty, malformed, duplicate or unresolved declarations; usage metadata must reference real tokens. Exporter tests compare generated JSON to the exact source token list and check the generated catalog embeds it.
+  - Validation: `pnpm design-system:build`, `pnpm design-system:test` (3/3), `pnpm design-system:verify` (all seven previews and their variants at 1440/768/390px, token search, offline fonts, zero horizontal document overflow, zero runtime errors or external requests). Classic bundle/header and absence of screen/default-palette CSS checked. `npx tsc -b`, focused ESLint and shared/app-entry tests (25/25) pass.
+  - Application regression check: before/after production builds served through the existing localhost port with identical replayed GET responses and initial public WS snapshot. Terminal (389 DOM elements) and Estrategias (191) have identical computed styles and geometry at 1600/760/390px. No server restart or new ports.
+  - Review boundary: about 1,200 new source lines, largely the formatted catalog presentation, exceeding the ~400-line target. This is a single runnable local-catalog deliverable; tests and generator stay together. Rollback removes `scripts/design-system/`, `vite.design-system.config.ts`, the package scripts and config include, and restores the two AppShell screen imports/removes the app-entry imports. The app itself remains otherwise unchanged.
+  - Open items: external artifact publication and a real React 18 host verification. Neither is claimed complete, and no third-party upload was performed. The user reviews and commits; no co-author trailer is added to the handoff command.
+- **Next step:** user reviews/commits local T3; external publication remains manual. T4 guard rails are not started.

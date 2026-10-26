@@ -13,6 +13,9 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "build": "tsc -b && vite build",
+    "design-system:build": "vite build --config vite.design-system.config.ts && vite build --config vite.design-system.config.ts --mode catalog-runtime && node scripts/design-system/export-tokens.mjs",
+    "design-system:test": "node --test scripts/design-system/export-tokens.node-test.mjs",
+    "design-system:verify": "node scripts/design-system/verify.mjs",
     "preview": "vite preview",
     "test:server": "pnpm --dir server test",
     "typecheck:server": "pnpm --dir server typecheck"

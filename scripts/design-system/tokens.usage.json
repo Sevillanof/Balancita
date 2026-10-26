@@ -1,0 +1,10 @@
+{
+  "color-ink-3": "Decoración solamente. No usar como color de texto: contraste insuficiente sobre canvas.",
+  "color-long": "Posición larga, resultado positivo o estado verificado como correcto. Nunca implica datos disponibles por defecto.",
+  "color-short": "Posición corta, resultado negativo o error. El contexto determina su significado.",
+  "color-warn": "Advertencia o espera; no representa una operación ejecutada.",
+  "color-ink-2": "Texto secundario y estados sin datos o no disponibles.",
+  "spacing": "Unidad base de 4 px. Las utilidades de espaciado usan múltiplos de esta unidad.",
+  "font-mono": "Cifras, identificadores y datos financieros.",
+  "shadow-popover": "Elevación reservada para contenido flotante, no para paneles normales."
+}
