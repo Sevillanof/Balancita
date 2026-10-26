@@ -1,0 +1,33 @@
+odd/tasks/tailwind-design-system.md
+  s_e15f51fa943e1d::t_c59362118bde0c 72-73,131,198-203,259-263,365-375
+src/app/AppStatusChips.test.tsx
+  s_e15f51fa943e1d::t_4dea081fafbb46 74-100
+src/app/AppStatusChips.tsx
+  s_e15f51fa943e1d::t_026ec3dac9d668 1,107-108
+src/features/observability/presentation/HealthIndicator.tsx
+  s_e15f51fa943e1d::t_dfe88bf09b714e 1,31,35-36,43-44,53,56,63-64,70,88-89,133,139,145,149,166,168,193,198,203,206,223,227-232,318,330,335,341
+src/features/observability/presentation/ObserverPanel.tsx
+  s_e15f51fa943e1d::t_9b5aa6be83fd71 1,123-125,133,139,141-142,150,152-155,163,178,187,196,207,219,227,236,238,245,273-274,285,290,354,358,360-364,387,406-410,413
+src/shared/design-system/theme.css
+  s_e15f51fa943e1d::t_d57a4b59dead96 50,96-99,108-109,122,178,239-317
+src/features/observability/presentation/Observability.test.tsx
+  s_e15f51fa943e1d::t_2ec169ff95b3dd 239-279
+src/features/observability/presentation/observability-styles.ts
+  s_e15f51fa943e1d::t_ce0e5f1d6108c1 1-72
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "21fd03f5f540fa4ed1dd992a304717fb75d40800",
+  "prompts": {},
+  "sessions": {
+    "s_e15f51fa943e1d": {
+      "agent_id": {
+        "tool": "github-copilot-cli",
+        "id": "ff6016a2-cdbf-403f-99d2-004567e63f82",
+        "model": "unknown"
+      },
+      "human_author": "Franco Sevillano <79455847+Sevillanof@users.noreply.github.com>"
+    }
+  }
+}
