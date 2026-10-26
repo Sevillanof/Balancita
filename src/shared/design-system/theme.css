@@ -10,7 +10,11 @@
  */
 @layer theme, base, components, utilities;
 @import 'tailwindcss/theme.css' layer(theme);
-@import 'tailwindcss/utilities.css' layer(utilities);
+@import 'tailwindcss/utilities.css' layer(utilities) source(none);
+
+/* Scan application code, not documentation examples or negative fixtures. */
+@source '../../';
+@source not '../../**/*.{test,spec}.{ts,tsx}';
 
 @import '@fontsource/inter/latin-400.css';
 @import '@fontsource/inter/latin-500.css';

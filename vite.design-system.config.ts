@@ -34,8 +34,8 @@ export default defineConfig(({ mode }) => {
           }
           if (id === fromRoot('./src/shared/design-system/theme.css')) {
             return code.replace(
-              "@import 'tailwindcss/utilities.css' layer(utilities);",
-              "@import 'tailwindcss/utilities.css' layer(utilities) source(none);\n@source '../mission-control/*.tsx';\n@source not '../mission-control/*.test.tsx';",
+              "@source '../../';",
+              "@source '../mission-control/*.tsx';",
             )
           }
         },

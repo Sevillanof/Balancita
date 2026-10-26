@@ -66,8 +66,8 @@ The status pill formula (10% fill, 25% border, full-strength text) becomes `bg-l
 | --- | -------------- | ------ | ------------------------------- | -------- |
 | T1  | S1, S3, S5     | inline | done                            | d0162349 |
 | T2  | S1, S2, S5     | inline | done                            | ce1f4a8f |
-| T3  | S4             | inline | local done; publication pending | —        |
-| T4  | S2, S3         | inline | pending                         | —        |
+| T3  | S4             | inline | local done; publication pending | 292ff226 |
+| T4  | S2, S3         | inline | done (pending user commit)      | —        |
 | T5  | S1, S2, S5, S6 | inline | pending                         | —        |
 | T6  | S1, S2, S5, S6 | inline | pending                         | —        |
 | T7  | S1, S2, S5     | inline | pending                         | —        |
@@ -119,6 +119,16 @@ The generated directory is ignored by Git. Open the HTML directly; no server, ne
 
 - A Vitest test that scans `src/**/*.tsx` and fails on: arbitrary values in `className` (`-[`), raw hex colors, `ink-3` on text, and any new `.css` file other than `theme.css`. No new lint dependency.
 - Check: the test fails on a fixture with each violation, passes on the codebase.
+
+Run the focused guard suite with:
+
+```bash
+pnpm exec vitest run --dir src --exclude '.claude/**' --exclude '**/node_modules/**' src/shared/design-system/guardrails.test.ts
+```
+
+The test uses the existing TypeScript compiler to inspect JSX `className` values and reachable static strings (templates, branches, aliases, imported variant maps and class-helper arguments). It ignores comments, display text and unrelated strings such as chart colors. Tests/specs are excluded from the application-source scan so negative fixtures do not flag themselves. This is a static guard, not a runtime evaluator: classes assembled from arbitrary runtime data or custom function return values still require review.
+
+Only `theme.css` and the 13 explicitly listed legacy source stylesheets are allowed. New or renamed CSS files under `src` fail; when retiring a legacy stylesheet, remove its entry from `LEGACY_CSS` in the same slice. Stale entries fail too, preventing retired paths from silently remaining exempt. The standalone T3 catalog is tooling under `scripts/design-system`, outside this app-source rule.
 
 ### T5 — Terminal screens
 
@@ -172,4 +182,8 @@ Each task is one work-unit commit; report slices over ~400 authored changed line
   - Application regression check: before/after production builds served through the existing localhost port with identical replayed GET responses and initial public WS snapshot. Terminal (389 DOM elements) and Estrategias (191) have identical computed styles and geometry at 1600/760/390px. No server restart or new ports.
   - Review boundary: about 1,200 new source lines, largely the formatted catalog presentation, exceeding the ~400-line target. This is a single runnable local-catalog deliverable; tests and generator stay together. Rollback removes `scripts/design-system/`, `vite.design-system.config.ts`, the package scripts and config include, and restores the two AppShell screen imports/removes the app-entry imports. The app itself remains otherwise unchanged.
   - Open items: external artifact publication and a real React 18 host verification. Neither is claimed complete, and no third-party upload was performed. The user reviews and commits; no co-author trailer is added to the handoff command.
-- **Next step:** user reviews/commits local T3; external publication remains manual. T4 guard rails are not started.
+- **L8 (2026-10-26, T4):** Added `src/shared/design-system/guardrails.test.ts`, with no new dependency or runtime JavaScript. Detects bracket-based arbitrary utilities/properties/variants, raw hex colors and `text-ink-3` (including variants, opacity and important modifiers) in static class values. Diagnostics name the declaration file, line and offending value. CSS checks use exact paths, not broad legacy-directory exemptions. The theme explicitly excludes test/spec files from Tailwind's source scan so negative fixtures never generate production utilities.
+  - Validation: focused Vitest suite **21/21 pass**, including negative fixtures for every rule, positive semantic/legacy cases, imported nested maps, cyclic aliases, default parameters, CSS additions/renames and real application TSX/CSS scans. Typecheck, targeted ESLint, Prettier and `git diff --check` pass.
+  - Tailwind application sources are explicitly limited to `src`, excluding tests/specs. Excluding tests alone was insufficient: documentation also contains forbidden-class examples. The T3 library source override follows the explicit application-source directive, keeping its shared-component-only scope.
+  - Runtime harness: **N/A**, no runtime behavior change; production build verifies fixture utilities are absent and application semantic utilities remain present, and T3's generated catalog still passes verification. No servers or ports started. Rollback boundary: delete the guard test, restore the theme/config source directives, and revert this T4 plan/log update. One reviewable work unit, under 400 authored changed lines.
+- **Next step:** user reviews/commits T4, then T5 Terminal migration. External T3 publication and React 18 host validation remain pending.
