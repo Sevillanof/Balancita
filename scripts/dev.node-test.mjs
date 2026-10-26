@@ -958,7 +958,7 @@ describe('resolveLlamaServer priority (taskpolicy)', () => {
     assert.equal(result.command, 'taskpolicy')
     assert.deepEqual(result.prefixArgs, ['-b', 'llama-server'])
     assert.match(result.message, /prioridad de fondo/)
-    assert.match(result.message, /6 hilos/)
+    assert.match(result.message, /2 hilos/)
   })
 
   it('falls back to plain llama-server on macOS without taskpolicy', () => {
@@ -1016,8 +1016,8 @@ describe('llm child threads and priority', () => {
     ])
   })
 
-  it('defaults to 6 threads on macOS and honours LLAMA_THREADS', () => {
-    assert.equal(threads(llmSpec({}, 'darwin', plain)), '6')
+  it('defaults to 2 threads on macOS and honours LLAMA_THREADS', () => {
+    assert.equal(threads(llmSpec({}, 'darwin', plain)), '2')
     assert.equal(
       threads(llmSpec({ LLAMA_THREADS: '12' }, 'darwin', plain)),
       '12',
@@ -1050,7 +1050,7 @@ describe('llm child threads and priority', () => {
     for (const bad of ['abc', '0', '-2', '1.5', ' '])
       assert.equal(
         threads(llmSpec({ LLAMA_THREADS: bad }, 'darwin', plain)),
-        '6',
+        '2',
       )
     assert.equal(
       threads(llmSpec({ LLAMA_THREADS: 'abc' }, 'linux', plain)),

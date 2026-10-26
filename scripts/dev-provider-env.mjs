@@ -339,7 +339,9 @@ export function resolveLlamaServer({
 
 /**
  * Threads for `llama-server -t`: `LLAMA_THREADS` when it is an integer >= 1,
- * else 6 on macOS (light on the Mac), else undefined (the server decides).
+ * else 2 on macOS (with Metal the GPU does the work: llama-bench on an M4 Pro gave
+ * the same speed with 2, 4 and 6 threads, so 2 leaves the cores to the Mac),
+ * else undefined (the server decides).
  * An invalid value is ignored, never an error.
  */
 export function llamaThreads(env, platform = process.platform) {
@@ -350,7 +352,7 @@ export function llamaThreads(env, platform = process.platform) {
     Number.isSafeInteger(Number(raw))
   )
     return Number(raw)
-  return platform === 'darwin' ? 6 : undefined
+  return platform === 'darwin' ? 2 : undefined
 }
 
 export const DEV_PORTS = { vite: 5173, live: 8789 }
