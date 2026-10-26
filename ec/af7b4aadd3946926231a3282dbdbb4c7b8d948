@@ -1,0 +1,31 @@
+odd/tasks/tailwind-design-system.md
+  s_e15f51fa943e1d::t_28c9f99003f0b0 65-74,131,141-145,196-212,282-289
+src/features/strategy-lab/presentation/StrategiesPage.tsx
+  s_e15f51fa943e1d::t_d77ade920f6f16 21-24,219-234,236-240,243,250,258,266,278-285,287,299-302,304,314-317,319,331-334,336,357,359,364
+src/features/strategy-lab/presentation/PurgeNotice.tsx
+  s_e15f51fa943e1d::t_a7c3b1e7da5887 2,20
+src/features/strategy-lab/presentation/StrategiesPage.test.tsx
+  s_e15f51fa943e1d::t_ac92095e5b8d2a 336-383
+src/features/strategy-lab/presentation/StrategyLab.tsx
+  s_e15f51fa943e1d::t_605f92a0eb066d 42
+src/features/strategy-lab/presentation/strategy-list-styles.ts
+  s_e15f51fa943e1d::t_c8adb2c6861a0f 1-5
+src/shared/design-system/theme.css
+  s_e15f51fa943e1d::t_91e684029480f5 94,101,105,158-166,188-191
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "ecaf7b4aadd3946926231a3282dbdbb4c7b8d948",
+  "prompts": {},
+  "sessions": {
+    "s_e15f51fa943e1d": {
+      "agent_id": {
+        "tool": "github-copilot-cli",
+        "id": "ff6016a2-cdbf-403f-99d2-004567e63f82",
+        "model": "unknown"
+      },
+      "human_author": "Franco Sevillano <79455847+Sevillanof@users.noreply.github.com>"
+    }
+  }
+}
