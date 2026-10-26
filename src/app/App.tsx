@@ -1,5 +1,3 @@
-import './DemoShell.css'
-import './ConnectedTerminal.css'
 import LaboratoryPage from './LaboratoryPage.tsx'
 import { sectionForPath } from './app-routes.ts'
 import TerminalEntry from './TerminalEntry.tsx'

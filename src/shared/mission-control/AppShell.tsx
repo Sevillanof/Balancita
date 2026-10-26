@@ -22,14 +22,14 @@ export default function AppShell({
   children,
 }: AppShellProps) {
   return (
-    <div className="demo-shell connected-terminal min-h-svh bg-canvas font-sans text-body text-ink">
+    <div className="min-h-screen bg-canvas font-sans text-body text-ink font-features-terminal shell-link:text-inherit shell-link:no-underline shell-link-focus:outline-2! shell-link-focus:outline-long! shell-link-focus:outline-offset-2! shell-button-focus:outline-2! shell-button-focus:outline-long! shell-button-focus:outline-offset-2! shell-table:w-full shell-table:border-collapse shell-table:text-table shell-cell:border-b shell-cell:border-b-solid shell-cell:border-b-line shell-cell:p-table-cell shell-cell:text-left shell-cell:whitespace-nowrap shell-th:font-medium shell-th:text-ink-2 shell-selected-row:bg-row-selected">
       <TopBar
         brandHref={brandHref}
         brandLabel={brandLabel}
         navigation={navigation}
         status={status}
       />
-      <main className="connected-terminal__main mx-auto w-shell-content pt-2 pb-12 header-stack:w-shell-content-compact header-stack:pt-5">
+      <main className="mx-auto min-w-0 w-shell-content overflow-x-clip pt-2 pb-12 header-stack:w-shell-content-compact header-stack:pt-5">
         {children}
       </main>
     </div>

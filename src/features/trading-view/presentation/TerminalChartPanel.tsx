@@ -734,7 +734,7 @@ export default function TerminalChartPanel({
 
       {waiting ? (
         <p
-          className="terminal-chart__loading m-0 grid h-terminal-chart place-items-center text-ink-2"
+          className="m-0 grid h-terminal-chart place-items-center text-ink-2 chart-height"
           role="status"
         >
           Cargando velas de {timeframeLabel}…

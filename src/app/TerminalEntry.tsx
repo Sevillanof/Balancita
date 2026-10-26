@@ -1,7 +1,5 @@
 import { useEffect, useState, type ReactNode } from 'react'
 import '../shared/mission-control/mission-control.css'
-import './DemoShell.css'
-import './ConnectedTerminal.css'
 import FuturesTerminal from './FuturesTerminal.tsx'
 import {
   loadTerminalBootstrap,
@@ -99,7 +97,7 @@ function TerminalView() {
 /** Dark frame for states where the terminal header is not rendered. */
 function SwitchBar({ children }: { children: ReactNode }) {
   return (
-    <div className="demo-shell min-h-svh bg-canvas font-sans text-body text-ink">
+    <div className="min-h-svh bg-canvas font-sans text-body text-ink font-features-terminal">
       <div className="flex justify-end border-b border-b-solid border-b-line px-7 py-2 source-phone:px-4">
         {children}
       </div>

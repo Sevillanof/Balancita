@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react'
 import { DataProvenance, StatusPill } from '../shared/mission-control/index.ts'
+import { TERMINAL_PANEL } from '../shared/design-system/terminal-styles.ts'
 
 /**
  * Secondary section for what the live gateway reads from the retired D book.
@@ -18,10 +19,7 @@ export default function GatewayHistory({
 }) {
   if (!enabled) return <>{children}</>
   return (
-    <details
-      className="connected-terminal__panel"
-      aria-label="Historial del gateway"
-    >
+    <details className={TERMINAL_PANEL} aria-label="Historial del gateway">
       <summary>
         Historial del gateway · libro D retirado{' '}
         <StatusPill tone="warn">Histórico</StatusPill>

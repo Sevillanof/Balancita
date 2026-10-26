@@ -161,7 +161,7 @@ export default function TerminalMarketChart({
   return (
     <>
       {market.candles instanceof Array && market.candles.length > 0 && (
-        <p role="status" className="visually-hidden">
+        <p role="status" className="clip-hidden whitespace-nowrap">
           {record(market.candles.at(-1)).closed === true
             ? 'Última vela cerrada'
             : 'Vela en formación'}

@@ -2,6 +2,7 @@ import { APPROVED_TERMINAL_STRATEGIES } from '../../../app/terminal-approved.ts'
 import { useCallback, useState, type ReactNode } from 'react'
 import './observability.css'
 import { DataState, StatusPill } from '../../../shared/mission-control/index.ts'
+import { TERMINAL_FRAME } from '../../../shared/design-system/terminal-styles.ts'
 import {
   ACTIVITY_WINDOWS,
   fetchActivity,
@@ -347,7 +348,7 @@ export default function ObserverPanel({
     data && data.window === window && data.product === product ? data : null
   return (
     <section
-      className="demo-terminal__panel obs-observer"
+      className={`${TERMINAL_FRAME} obs-observer`}
       aria-label="Decisiones de Qwen"
       data-testid="activity-panel"
     >

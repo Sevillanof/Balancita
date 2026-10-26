@@ -1,5 +1,9 @@
 import { record } from '../shared/wire/decode.ts'
 import {
+  DECISION_TONES,
+  TERMINAL_BUTTON,
+} from '../shared/design-system/terminal-styles.ts'
+import {
   analysisAction,
   reasonLabel,
   strategyLabel,
@@ -23,12 +27,12 @@ export default function SelectedDecision({
   const selector = record(analysis.selector)
   const proposals = Array.isArray(analysis.proposals) ? analysis.proposals : []
   return (
-    <div
-      className="connected-terminal__selected"
-      aria-label="Decisión seleccionada"
-    >
+    <div aria-label="Decisión seleccionada">
       <p>
-        <strong data-action={analysisAction(analysis)}>
+        <strong
+          className={DECISION_TONES[analysisAction(analysis)]}
+          data-action={analysisAction(analysis)}
+        >
           {analysisAction(analysis)}
         </strong>{' '}
         · {strategyLabel(selector.strategy_id ?? analysis.selected_strategy_id)}
@@ -53,12 +57,15 @@ export default function SelectedDecision({
       <details>
         <summary>Propuestas, condiciones e ID</summary>
         <p>
-          <code className="connected-terminal__hash" title={id}>
+          <code
+            className="my-chart-row block min-w-0 max-w-full font-account-mono text-hint leading-normal whitespace-normal wrap-anywhere break-word"
+            title={id}
+          >
             {id ? id.slice(0, 12) : 'ID no disponible'}
           </code>
           <button
             type="button"
-            className="demo-terminal__present"
+            className={TERMINAL_BUTTON}
             aria-label={`Copiar ID completo ${id}`}
             onClick={() => void navigator.clipboard?.writeText(id)}
           >

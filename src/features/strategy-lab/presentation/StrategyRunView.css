@@ -195,7 +195,7 @@
 }
 
 .runview__chart {
-  /* The chart reads this variable for its own height (see DemoShell.css). */
+  /* Override the shared chart-height utility for the strategy detail. */
   --terminal-chart-height: clamp(380px, 56vh, 600px);
   min-width: 0;
 }

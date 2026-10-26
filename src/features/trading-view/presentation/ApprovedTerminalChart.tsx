@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react'
 import { currency as formatCurrency } from '../../../shared/finance/format.ts'
+import { TERMINAL_BUTTON } from '../../../shared/design-system/terminal-styles.ts'
 import {
   CandlestickSeries,
   ColorType,
@@ -830,7 +831,7 @@ export default function ApprovedTerminalChart({
         data-candle-count={candles.length}
         data-marker-count={markers.length}
         data-selected-marker={selectedId}
-        className="demo-terminal__chart"
+        className="demo-terminal__chart chart-height h-terminal-chart w-full"
         style={
           panes.length > 0
             ? {
@@ -845,7 +846,7 @@ export default function ApprovedTerminalChart({
         }
       />
       <button
-        className="demo-terminal__present"
+        className={TERMINAL_BUTTON}
         type="button"
         onClick={() => chartRef.current?.timeScale().scrollToRealTime()}
       >

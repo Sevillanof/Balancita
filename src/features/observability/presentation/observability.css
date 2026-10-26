@@ -330,9 +330,6 @@
   overflow-y: auto;
   overscroll-behavior: contain;
 }
-.obs-history .connected-terminal__decision-list {
-  max-height: 260px;
-}
 .obs-seg {
   display: inline-flex;
 }

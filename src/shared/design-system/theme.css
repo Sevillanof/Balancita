@@ -33,6 +33,7 @@
   --color-line-strong: #2a354d;
   --color-line-focus: #3b4866;
   --color-line-overlay: rgb(255 255 255 / 12%);
+  --color-row-selected: rgb(69 214 165 / 10%);
   --color-long: #10b981;
   --color-short: #ef4444;
   --color-warn: #f59e0b;
@@ -52,6 +53,11 @@
   --spacing-chart-inset: 0.6rem;
   --spacing-chart-control: 0.7rem;
   --spacing-chart-strip: 1.4rem;
+  --spacing-account: 0.55rem;
+  --spacing-panel-heading: 0.8rem;
+  --spacing-table-cell: 0.65rem;
+  --spacing-table-heading: 0.9rem;
+  --spacing-trade-list: 1.1rem;
 
   --text-*: initial;
   --text-label: 11px;
@@ -74,16 +80,23 @@
   --text-control: 0.8rem;
   --text-stat-label: 0.7rem;
   --text-stat-compact: 0.62rem;
+  --text-table: 0.82rem;
+  --text-table-mono: 0.68rem;
+  --text-table-summary: 0.72rem;
+  --text-panel-subtitle: 0.9rem;
+  --text-wait-run: 0.85em;
 
   --tracking-label: 0.04em;
   --tracking-title: -0.01em;
   --tracking-brand: -0.02em;
   --tracking-market: 0.06em;
+  --tracking-eyebrow: 0.09em;
   --container-shell: 1800px;
 
   --leading-*: initial;
   --leading-normal: 1.5;
   --leading-control: 21px;
+  --leading-browser: normal;
 
   --shadow-*: initial;
   --shadow-popover: 0 8px 24px -4px rgb(0 0 0 / 60%);
@@ -100,6 +113,7 @@
     'Inter', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
   --font-mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
   --font-brand-mono: 'IBM Plex Mono', ui-monospace, monospace;
+  --font-account-mono: 'IBM Plex Mono', monospace;
 
   --radius-*: initial;
   --radius-sm: 4px;
@@ -118,6 +132,69 @@
 @custom-variant source-phone (@media (width <= 480px));
 @custom-variant chart-phone (@media (width <= 600px));
 @custom-variant chart-desktop (@media (width >= 901px));
+@custom-variant terminal-wide (@media (width >= 1200px));
+@custom-variant terminal-stack (@media (width <= 900px));
+@custom-variant shell-link (& a);
+@custom-variant shell-link-focus (& a:focus-visible);
+@custom-variant shell-button-focus (& :where(button:focus-visible));
+@custom-variant shell-table (& table);
+@custom-variant shell-cell (& th, & td);
+@custom-variant shell-th (& th);
+@custom-variant shell-selected-row (& tr[data-selected='true']);
+@custom-variant panel-small (& small);
+@custom-variant panel-h2 (& h2);
+@custom-variant panel-h3 (& h3);
+@custom-variant panel-dl (& dl);
+@custom-variant panel-dd (& dd);
+@custom-variant portfolio-cell (& th, & td);
+@custom-variant portfolio-small (& td small);
+@custom-variant portfolio-summary (& > div:last-child);
+@custom-variant portfolio-value (& strong);
+@custom-variant terminal-last (& > :last-child);
+@custom-variant observer-history (&:where(.obs-history *));
+
+@utility font-features-terminal {
+  font-feature-settings: 'tnum', 'cv05', 'cv11';
+}
+
+@utility clip-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+}
+
+@utility break-word {
+  word-break: break-word;
+}
+
+@utility grid-cols-account {
+  grid-template-columns: 1fr auto;
+}
+
+@utility grid-cols-decisions {
+  grid-template-columns: 4.5rem 1fr auto;
+}
+
+@utility grid-cols-terminal {
+  grid-template-columns: minmax(0, 7fr) minmax(310px, 3fr);
+}
+
+@utility grid-cols-terminal-wide {
+  grid-template-columns: minmax(0, 1fr) 380px;
+}
+
+/* The renderer adds sub-pane heights to the same responsive base variable. */
+@utility chart-height {
+  --terminal-chart-height: 440px;
+  @media (min-width: 901px) and (max-width: 1199px) {
+    --terminal-chart-height: 500px;
+  }
+  @media (min-width: 1200px) {
+    --terminal-chart-height: clamp(520px, calc(100vh - 270px), 840px);
+  }
+}
 
 @utility grid-cols-chart-stats {
   grid-template-columns: repeat(auto-fill, minmax(11.5rem, 1fr));

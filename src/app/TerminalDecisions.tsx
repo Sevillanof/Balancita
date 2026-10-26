@@ -1,5 +1,9 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { groupDecisions, type DecisionRow } from './terminal-decisions.ts'
+import {
+  DECISION_TONES,
+  TERMINAL_FRAME,
+} from '../shared/design-system/terminal-styles.ts'
 
 type Filter = 'all' | 'signals'
 
@@ -53,16 +57,16 @@ export default function TerminalDecisions({
   const items = groupDecisions(visible)
   return (
     <section
-      className={
+      className={`flex max-h-none flex-col overscroll-contain ${
         embedded
-          ? 'connected-terminal__decisions connected-terminal__decisions--embedded'
-          : 'demo-terminal__panel connected-terminal__decisions'
-      }
+          ? 'h-auto overflow-visible'
+          : `${TERMINAL_FRAME} overflow-y-auto ${!notice && rows.length > 0 ? 'h-140 header-phone:h-105' : 'h-auto'}`
+      }`}
       aria-label="Decisiones del motor"
     >
-      <div className="connected-terminal__decisions-head">
+      <div className="flex items-center justify-between gap-2">
         {embedded ? (
-          <h3 className="obs-sr">Decisiones del motor</h3>
+          <h3 className="clip-hidden">Decisiones del motor</h3>
         ) : (
           <h2>Decisiones del motor</h2>
         )}
@@ -75,6 +79,7 @@ export default function TerminalDecisions({
               ] as const
             ).map(([value, label]) => (
               <button
+                className="aria-pressed:font-bold!"
                 key={value}
                 type="button"
                 aria-pressed={filter === value}
@@ -92,32 +97,53 @@ export default function TerminalDecisions({
       ) : rows.length === 0 ? (
         <p>Aún no hay análisis registrados.</p>
       ) : (
-        <ul ref={list} className="connected-terminal__decision-list">
-          {items.length === 0 && <li>No hay señales todavía.</li>}
+        <ul
+          ref={list}
+          aria-label="Lista de decisiones"
+          className="m-0 min-h-30 shrink grow basis-0 list-none overflow-y-auto overscroll-contain p-0 observer-history:max-h-65"
+        >
+          {items.length === 0 && (
+            <li className="border-t border-t-solid border-t-line py-1.5">
+              No hay señales todavía.
+            </li>
+          )}
           {items.map((item) =>
             item.kind === 'waits' ? (
               <li
                 key={item.rows[0]!.id}
-                className="connected-terminal__wait-run"
+                className="border-t border-t-solid border-t-line py-1.5 text-wait-run opacity-60"
               >
                 WAIT ×{item.rows.length} · {item.rows.at(-1)!.time}–
                 {item.rows[0]!.time}
               </li>
             ) : (
-              <li key={item.row.id}>
+              <li
+                className="border-t border-t-solid border-t-line py-1.5"
+                key={item.row.id}
+              >
                 <button
+                  className="grid w-full grid-cols-decisions cursor-pointer gap-x-2 gap-y-0.5 rounded-sm border-0 border-none border-current bg-transparent px-1.5 py-1 text-left text-inherit aria-pressed:bg-line aria-pressed:outline-0! aria-pressed:outline-current! aria-pressed:outline-none"
                   type="button"
                   aria-pressed={selectedId === item.row.id}
                   aria-label={`Seleccionar análisis ${item.row.id}`}
                   onClick={() => onSelect(item.row.id)}
                 >
-                  <strong data-action={item.row.action}>
+                  <strong
+                    className={DECISION_TONES[item.row.action]}
+                    data-action={item.row.action}
+                  >
                     {item.row.action}
                   </strong>
                   <span>{item.row.strategy}</span>
                   <time>{item.row.time}</time>
-                  <small>{item.row.reason}</small>
-                  {item.row.detail && <small>{item.row.detail}</small>}
+                  <small className="col-span-full line-clamp-2 text-ink-2">
+                    {item.row.reason}
+                  </small>
+                  {item.row.detail && (
+                    <small className="col-span-full line-clamp-2 text-ink-2">
+                      {item.row.detail}
+                    </small>
+                  )}
                 </button>
               </li>
             ),
@@ -125,7 +151,7 @@ export default function TerminalDecisions({
         </ul>
       )}
       {(selected || children) && (
-        <div className="connected-terminal__selected-wrap">
+        <div className="max-h-1/2 flex-initial overflow-y-auto border-t-2 border-t-solid border-t-line pt-2">
           {selected}
           {children}
         </div>

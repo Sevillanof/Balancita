@@ -1,6 +1,7 @@
 import { utcDateTime } from '../shared/finance/format.ts'
 import { useQwenTrades, type QwenTrade } from './useQwenTrades.ts'
 import { qwenTradesNotice, signedUsd } from './qwen-trades-text.ts'
+import { TERMINAL_PANEL } from '../shared/design-system/terminal-styles.ts'
 
 const CLOSED_BY: Record<string, string> = {
   qwen: 'la cerró Qwen',
@@ -37,7 +38,7 @@ export default function QwenTradesPanel({
   const notice = qwenTradesNotice(source, trades.length)
   return (
     <section
-      className="connected-terminal__panel qwen-trades"
+      className={`${TERMINAL_PANEL} mt-4`}
       aria-label="Operaciones de Qwen"
     >
       <h2>Operaciones de Qwen</h2>
@@ -65,7 +66,7 @@ export default function QwenTradesPanel({
           {closed.length > 0 && (
             <>
               <h3>Cerradas ({signedUsd(total)} en total)</h3>
-              <ul>
+              <ul className="m-0 pl-trade-list">
                 {closed.map((trade) => (
                   <li key={trade.tradeNo} data-testid="qwen-closed-trade">
                     <strong>{trade.side === 'LONG' ? 'LARGO' : 'CORTO'}</strong>{' '}

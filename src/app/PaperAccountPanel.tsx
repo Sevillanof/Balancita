@@ -1,4 +1,5 @@
 import { money, quantity } from './terminal-labels.ts'
+import { TERMINAL_PANEL } from '../shared/design-system/terminal-styles.ts'
 
 export default function PaperAccountPanel({
   account,
@@ -15,7 +16,7 @@ export default function PaperAccountPanel({
   historical?: boolean
 }) {
   return (
-    <section className="connected-terminal__panel" aria-label="Cuenta paper">
+    <section className={TERMINAL_PANEL} aria-label="Cuenta paper">
       <h2>Cuenta paper</h2>
       <div>
         <dl>
