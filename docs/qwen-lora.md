@@ -40,7 +40,9 @@ el LoRA se entrena igual por decisión de Fran.
    congelados en 4 bits y solo se entrena el adaptador; `QWEN_LORA_HF=Qwen/Qwen3-4B` usaría los pesos completos, ~8 GB. El GGUF
    Q8 de llama-server no sirve para entrenar).
 3. `train.sh speed`: 50 pasos para medir tokens/s y memoria. El entrenamiento completo son ~16 millones de tokens.
-4. `train.sh train` de noche (reanudable: guarda el adaptador cada 500 pasos y retoma si se cortó). Hiperparámetros en
+4. `train.sh train` de noche (reanudable: guarda el adaptador cada 500 pasos y retoma si se cortó). En la Mac de Fran un paso
+   (un ejemplo de ~1.000 tokens) tarda 3,3-4 s con Qwen en vivo abierto: la pasada completa (15.200 pasos) son ~16 h, así que se
+   parte en dos noches con `train.sh train 7600` (la segunda noche el mismo comando retoma el adaptador guardado). Hiperparámetros en
    `ops/qwen-lora/lora.yaml`: rango 8 en las 7 proyecciones de las últimas 16 capas, lote 1, una pasada, solo la línea de
    respuesta entra en la pérdida (`mask_prompt`).
 5. `train.sh convert`: el adaptador de mlx-lm pasa al GGUF que llama-server carga (`futures_qwen_lora_adapter.py`).

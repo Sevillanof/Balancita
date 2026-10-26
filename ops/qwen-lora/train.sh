@@ -5,7 +5,8 @@
 #   ops/qwen-lora/train.sh setup      crea el entorno (venv) e instala mlx-lm, gguf y safetensors (~0,5 GB)
 #   ops/qwen-lora/train.sh download   baja Qwen3-4B en versión MLX de 4 bits (QLoRA, ~2,5 GB): pide confirmación
 #   ops/qwen-lora/train.sh speed      50 pasos de prueba: mide tokens/s y memoria para estimar la noche
-#   ops/qwen-lora/train.sh train      el entrenamiento completo (reanudable: si hay adaptador guardado, sigue desde ahí)
+#   ops/qwen-lora/train.sh train [N]  el entrenamiento (reanudable: si hay adaptador guardado, sigue desde ahí); N pasos en vez
+#                                     de los del yaml, p. ej. `train 7600` para hacer la mitad una noche y la otra mitad la siguiente
 #   ops/qwen-lora/train.sh convert    adaptador mlx -> qwen-lora.gguf (el que carga llama-server con LLAMA_LORA)
 set -euo pipefail
 ROOT=${0:A:h:h:h}
@@ -50,7 +51,9 @@ case "${1:-help}" in
     [ -f "$DATASET/train.jsonl" ] || { echo "falta $DATASET/train.jsonl"; exit 1; }
     resume=()
     [ -f "$ADAPTERS/adapters.safetensors" ] && resume=(--resume-adapter-file "$ADAPTERS/adapters.safetensors") && echo "retoma desde $ADAPTERS/adapters.safetensors"
-    "$VENV/bin/mlx_lm.lora" -c "$ROOT/ops/qwen-lora/lora.yaml" --model "$MODEL" --data "$DATASET" --adapter-path "$ADAPTERS" "${resume[@]}"
+    iters=()
+    [ -n "${2:-}" ] && iters=(--iters "$2") && echo "$2 pasos (el yaml trae la pasada completa)"
+    "$VENV/bin/mlx_lm.lora" -c "$ROOT/ops/qwen-lora/lora.yaml" --model "$MODEL" --data "$DATASET" --adapter-path "$ADAPTERS" "${resume[@]}" "${iters[@]}"
     ;;
   convert)
     [ -f "$ADAPTERS/adapters.safetensors" ] || { echo "falta $ADAPTERS/adapters.safetensors: entrená primero"; exit 1; }
@@ -58,6 +61,6 @@ case "${1:-help}" in
     echo "Ahora: LLAMA_LORA=$DATA/qwen-lora.gguf en .env.local y reiniciar pnpm dev; después ops/qwen-lora/check_adapter.py"
     ;;
   *)
-    sed -n '2,10p' "$0"
+    sed -n '2,11p' "$0"
     ;;
 esac
