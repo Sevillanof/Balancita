@@ -3,6 +3,7 @@ import {
   productPair,
 } from '../features/trading-view/domain/product-label.ts'
 import { money } from './terminal-labels.ts'
+import TerminalNotices from './TerminalNotices.tsx'
 
 export default function MarketStrip({
   product,
@@ -27,22 +28,22 @@ export default function MarketStrip({
 }) {
   return (
     <section
-      className="connected-terminal__strip"
+      className="mt-0 mr-0 mb-1.5 ml-0 flex flex-wrap items-baseline gap-x-4 gap-y-0.5"
       aria-label={`Mercado ${productPair(product)}`}
     >
-      <h1>
+      <h1 className="m-0 text-brand-compact font-semibold">
         {product && productBase(product) !== 'BTC'
           ? productBase(product)
           : 'Bitcoin'}{' '}
-        <span>/ Dólar</span>
-        <small>{`${product ?? 'PF_XBTUSD'} · perpetuo`}</small>
+        <span className="font-medium text-ink-2">/ Dólar</span>
+        <small className="ml-2.5 font-brand-mono text-label leading-normal font-medium tracking-market text-ink-2">{`${product ?? 'PF_XBTUSD'} · perpetuo`}</small>
       </h1>
-      <strong className="connected-terminal__price">
+      <strong className="font-brand-mono text-brand-compact font-semibold">
         {money(displayedPrice)}
       </strong>
       {typeof change24h === 'number' && (
         <span
-          className="connected-terminal__change"
+          className={`font-brand-mono text-note leading-normal ${change24h >= 0 ? 'text-long' : 'text-short'}`}
           data-tone={change24h >= 0 ? 'ok' : 'bad'}
         >
           {change24h >= 0 ? '+' : ''}
@@ -52,10 +53,7 @@ export default function MarketStrip({
           % 24 h
         </span>
       )}
-      <span
-        className="connected-terminal__quote-label"
-        title={eventTimes ?? undefined}
-      >
+      <span className="text-hint text-ink-2" title={eventTimes ?? undefined}>
         <span>{quoteLabel}</span>
         {mode === 'paper_live' && quoteReceivedAt !== null && (
           <span>
@@ -64,16 +62,7 @@ export default function MarketStrip({
         )}
       </span>
       {alerts.length > 0 && (
-        <ul
-          className="connected-terminal__chips connected-terminal__alerts"
-          aria-label="Avisos"
-        >
-          {alerts.map((item) => (
-            <li key={item.key} data-tone={item.tone}>
-              {item.text}
-            </li>
-          ))}
-        </ul>
+        <TerminalNotices items={alerts} label="Avisos" compact />
       )}
     </section>
   )

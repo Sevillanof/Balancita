@@ -4,6 +4,13 @@ import { parseSpecText, type StrategySpec } from '../domain/strategy-spec.ts'
 import type { StrategyApi } from '../infrastructure/strategy-api.ts'
 import ModalFrame from './ModalFrame.tsx'
 import { describeFailure } from './describe-failure.ts'
+import {
+  MODAL_ACTIONS,
+  MODAL_BUTTON,
+  MODAL_HINT,
+  MODAL_NOTICE,
+  MODAL_FIELD,
+} from './modal-styles.ts'
 
 type Props = {
   api: StrategyApi
@@ -103,17 +110,17 @@ export default function StrategyEditorModal({
     <ModalFrame label={label} onClose={onClose} wide>
       <h2>{label}</h2>
       {loading ? (
-        <p className="smodal__hint" role="status">
+        <p className={MODAL_HINT} role="status">
           Cargando la estrategia…
         </p>
       ) : (
         <>
-          <p className="smodal__hint">
+          <p className={MODAL_HINT}>
             {creating
               ? 'Poné un título y pegá el JSON de la estrategia que querés probar. Queda como borrador y se suma a la lista.'
               : 'Cambiar solo el título no toca nada más. Si cambiás el JSON se guarda como versión nueva y sus pruebas empiezan de cero.'}
           </p>
-          <label className="smodal__field">
+          <label className={MODAL_FIELD}>
             Título
             <input
               ref={first}
@@ -126,7 +133,7 @@ export default function StrategyEditorModal({
               }}
             />
           </label>
-          <label className="smodal__field">
+          <label className={MODAL_FIELD}>
             JSON de la estrategia
             <textarea
               value={text}
@@ -140,17 +147,17 @@ export default function StrategyEditorModal({
         </>
       )}
       {error && (
-        <p role="alert" className="smodal__notice" data-tone="warn">
+        <p role="alert" className={MODAL_NOTICE} data-tone="warn">
           {error}
         </p>
       )}
-      <div className="smodal__actions">
-        <button type="button" className="smodal__button" onClick={onClose}>
+      <div className={MODAL_ACTIONS}>
+        <button type="button" className={MODAL_BUTTON} onClick={onClose}>
           Cancelar
         </button>
         <button
           type="button"
-          className="smodal__button"
+          className={MODAL_BUTTON}
           data-primary="true"
           disabled={busy || loading || (creating && text.trim() === '')}
           onClick={() => void save()}

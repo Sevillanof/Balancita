@@ -1,4 +1,4 @@
-import { act, render, screen } from '@testing-library/react'
+import { act, fireEvent, render, screen, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import TerminalChartPanel from './TerminalChartPanel.tsx'
 
@@ -33,7 +33,7 @@ const flow = (extra: Record<string, number | null>) => ({
   ...extra,
 })
 
-function panel() {
+function panel(live = true) {
   return (
     <TerminalChartPanel
       candles={[candle(1_000), candle(1_060)]}
@@ -41,7 +41,7 @@ function panel() {
       selectedId=""
       onSelect={() => undefined}
       apiBase="http://x"
-      live
+      live={live}
       ticker={null}
       position={{}}
       orders={[]}
@@ -50,6 +50,7 @@ function panel() {
 }
 
 beforeEach(() => {
+  state.remote = null
   vi.useFakeTimers()
   localStorage.setItem(
     'balancita.terminal-chart.v1',
@@ -59,6 +60,74 @@ beforeEach(() => {
       panes: ['positioning', 'premium'],
     }),
   )
+})
+
+describe('chart controls and market facts', () => {
+  it('keeps the two market fact groups and their source labels', () => {
+    render(panel())
+    const compact = screen.getByLabelText('Datos del mercado')
+    expect(within(compact).getByText('Cambio 24 h')).toBeTruthy()
+    expect(within(compact).getByText('Funding (por hora)')).toBeTruthy()
+    expect(within(compact).getByText('Bid / ask')).toBeTruthy()
+    expect(within(compact).getByText('Interés abierto')).toBeTruthy()
+    const more = screen.getByLabelText('Más datos del mercado')
+    expect(within(more).getByText('Máx / mín 24 h')).toBeTruthy()
+    expect(within(more).getByText('Cuentas en largo')).toBeTruthy()
+    expect(screen.getByLabelText('Leyenda del gráfico')).toHaveTextContent(
+      'entrada larga',
+    )
+  })
+
+  it('preserves indicator and pane selection and persists both settings', () => {
+    render(panel())
+    fireEvent.click(screen.getByLabelText('EMA 9'))
+    fireEvent.click(screen.getByLabelText('RSI 14'))
+    expect(screen.getByLabelText('EMA 9')).toBeChecked()
+    expect(screen.getByLabelText('RSI 14')).toBeChecked()
+    expect(
+      JSON.parse(localStorage.getItem('balancita.terminal-chart.v1')!),
+    ).toEqual({
+      intervalMs: 60_000,
+      overlays: ['ema9'],
+      panes: ['positioning', 'premium', 'rsi'],
+    })
+  })
+
+  it('keeps the selected timeframe pressed and reports missing candles explicitly', () => {
+    render(panel())
+    fireEvent.click(screen.getByRole('button', { name: '5m' }))
+    expect(screen.getByRole('button', { name: '5m' })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    )
+    expect(screen.getByRole('button', { name: '1m' })).toHaveAttribute(
+      'aria-pressed',
+      'false',
+    )
+    expect(screen.getByText('Cargando velas de 5m…')).toHaveAttribute(
+      'role',
+      'status',
+    )
+    expect(screen.queryByTestId('chart')).toBeNull()
+  })
+
+  it('keeps unavailable live-only panels disabled in historical mode', () => {
+    render(panel(false))
+    for (const name of [
+      'Compra/venta',
+      'Interés abierto',
+      'Liquidaciones',
+      'Long/short',
+      'Prima perpetuo-contado (pb)',
+    ])
+      expect(screen.getByLabelText(name)).toBeDisabled()
+    expect(screen.getByLabelText('RSI 14')).toBeEnabled()
+    expect(screen.getByLabelText('EMA 9')).toBeEnabled()
+    expect(
+      screen.getByText(/solo están disponibles con el mercado real/),
+    ).toBeTruthy()
+    expect(screen.queryByText('Cargando Long/short…')).toBeNull()
+  })
 })
 afterEach(() => {
   vi.useRealTimers()

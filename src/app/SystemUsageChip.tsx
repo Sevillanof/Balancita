@@ -60,7 +60,7 @@ export default function SystemUsageChip({ apiBase }: { apiBase: string }) {
   const usage = summarizeUsage(current?.body, now)
   return (
     <span
-      className="demo-shell__badge demo-shell__badge--usage"
+      className="justify-self-start rounded-badge border border-solid border-line-strong bg-canvas px-2 py-1 font-brand-mono text-badge font-medium whitespace-nowrap text-ink-2 header-compact:px-1.5 header-compact:text-badge-compact"
       data-testid="system-usage"
       title={
         current?.error

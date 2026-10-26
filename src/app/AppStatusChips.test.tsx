@@ -71,6 +71,33 @@ describe('AppStatusChips', () => {
     )
   })
 
+  it('opens the flow diagnosis without fetching or controlling a process', async () => {
+    const user = userEvent.setup()
+    const fetch = vi.fn()
+    vi.stubGlobal('fetch', fetch)
+    render(
+      <AppStatusChips
+        apiBase="/api-live"
+        override={{ connected: false, processes: null, quoteAgeMs: null }}
+        showUsage={false}
+        diagnosis={<p>Detalle técnico del terminal</p>}
+      />,
+    )
+    await user.click(screen.getByTestId('health-indicator'))
+    const dialog = screen.getByRole('dialog', { name: 'Salud del sistema' })
+    const summary = within(dialog).getByText(
+      'Diagnóstico del flujo, uso y modo',
+    )
+    expect(summary.closest('details')).not.toHaveAttribute('open')
+    await user.click(summary)
+    expect(summary.closest('details')).toHaveAttribute('open')
+    expect(
+      within(dialog).getByText('Detalle técnico del terminal'),
+    ).toBeVisible()
+    expect(within(dialog).getByText(/sin órdenes reales/)).toBeInTheDocument()
+    expect(fetch).not.toHaveBeenCalled()
+  })
+
   it('without a B1 read says «sin datos», never healthy; where B1 does not apply it says so', async () => {
     const override = { connected: true, processes: {}, quoteAgeMs: 1000 }
     const { rerender } = render(

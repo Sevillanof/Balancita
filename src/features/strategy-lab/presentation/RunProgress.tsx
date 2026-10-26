@@ -1,3 +1,4 @@
+import { RUN } from './run-view-styles.ts'
 import type { ReactNode } from 'react'
 
 type Segments = {
@@ -33,7 +34,7 @@ export default function RunProgress({
   const now = Math.round(Math.min(Math.max(percent ?? 0, 0), 100))
   return (
     <div
-      className="runview__progress"
+      className={RUN.progress}
       role="progressbar"
       aria-label={label}
       aria-valuemin={0}
@@ -42,11 +43,11 @@ export default function RunProgress({
       aria-valuetext={valueText}
     >
       {segments ? (
-        <ol className="runview__progress-steps">
+        <ol className={RUN.progressSteps}>
           {Array.from({ length: segments.total }, (_, index) => (
             <li
               key={index}
-              className="runview__progress-step"
+              className={RUN.progressStep}
               data-state={
                 index < segments.done
                   ? 'done'
@@ -56,7 +57,8 @@ export default function RunProgress({
               }
             >
               <span
-                className="runview__progress-fill"
+                className={RUN.progressFill}
+                data-testid="run-progress-fill"
                 style={{
                   width: `${index < segments.done ? 100 : index === segments.done ? Math.min(Math.max(segments.live ?? 0, 0), 100) : 0}%`,
                 }}
@@ -65,9 +67,10 @@ export default function RunProgress({
           ))}
         </ol>
       ) : (
-        <div className="runview__progress-track" aria-hidden="true">
+        <div className={RUN.progressTrack} aria-hidden="true">
           <div
-            className="runview__progress-fill"
+            className={RUN.progressFill}
+            data-testid="run-progress-fill"
             style={{ width: `${Math.min(Math.max(percent ?? 0, 0), 100)}%` }}
           />
         </div>

@@ -1,0 +1,558 @@
+/*
+ * Balancita design system: the only token source (Tailwind v4 `@theme`).
+ * Color is semantic only (long, short, warn, info) and Tailwind's default
+ * palette is removed, so `text-red-500` does not compile.
+ *
+ * Preflight is intentionally omitted: browser heading, list and table defaults
+ * are part of the existing layout. App-scoped base rules supply only the
+ * document/control defaults; reusable components do not reset their host.
+ */
+@layer theme, base, components, utilities;
+@import 'tailwindcss/theme.css' layer(theme);
+@import 'tailwindcss/utilities.css' layer(utilities) source(none);
+
+/* Scan application code, not documentation examples or negative fixtures. */
+@source '../../';
+@source not '../../**/*.{test,spec}.{ts,tsx}';
+
+@import '@fontsource/inter/latin-400.css';
+@import '@fontsource/inter/latin-500.css';
+@import '@fontsource/inter/latin-600.css';
+@import '@fontsource/inter/latin-700.css';
+@import '@fontsource/ibm-plex-mono/latin-400.css';
+@import '@fontsource/ibm-plex-mono/latin-500.css';
+
+@theme static {
+  --color-*: initial;
+  --color-canvas: #0a0d14;
+  --color-surface-1: #0f1420;
+  --color-surface-2: #141b2b;
+  --color-surface-hover: #182033;
+  --color-line: #1e2638;
+  --color-line-strong: #2a354d;
+  --color-line-focus: #3b4866;
+  --color-line-overlay: rgb(255 255 255 / 12%);
+  --color-row-selected: rgb(69 214 165 / 10%);
+  --color-long: #10b981;
+  --color-short: #ef4444;
+  --color-warn: #f59e0b;
+  --color-info: #60a5fa;
+  --color-ink: #f1f5f9;
+  --color-ink-2: #94a3b8;
+  /* About 2.6:1 on the canvas: decoration only, never text. */
+  --color-ink-3: #475569;
+  --color-on-long: #0a0d14;
+  --color-modal-overlay: rgb(0 0 0 / 55%);
+  --color-on-primary: oklch(0.2 0.04 170);
+  --color-on-danger: #fff;
+  --color-line-quick: rgba(128, 128, 128, 0.3);
+  --color-health-overlay: rgb(8 10 15 / 70%);
+  --color-chart-surface: #171c20;
+  --color-chart-text: #8b969a;
+  --color-chart-line: #252d31;
+  --color-chart-up: #55c7a2;
+  --color-chart-down: #ee7777;
+  --color-chart-warn: #d4aa62;
+  --color-chart-info: #79a9bd;
+  --color-chart-volume-up: #285d50;
+  --color-chart-volume-down: #653f42;
+
+  --spacing: 4px;
+  --spacing-chart-unit: 0.1rem;
+  --spacing-chart-tight: 0.2rem;
+  --spacing-chart-label: 0.3rem;
+  --spacing-chart-gap: 0.4rem;
+  --spacing-chart-row: 0.35rem;
+  --spacing-chart-inset: 0.6rem;
+  --spacing-chart-control: 0.7rem;
+  --spacing-chart-strip: 1.4rem;
+  --spacing-account: 0.55rem;
+  --spacing-panel-heading: 0.8rem;
+  --spacing-table-cell: 0.65rem;
+  --spacing-table-heading: 0.9rem;
+  --spacing-trade-list: 1.1rem;
+
+  --text-*: initial;
+  --text-label: 11px;
+  --text-label--line-height: 14px;
+  --text-hint: 12px;
+  --text-hint--line-height: 18px;
+  --text-note: 13px;
+  --text-note--line-height: 20px;
+  --text-body: 14px;
+  --text-body--line-height: 1.5;
+  --text-title: 16px;
+  --text-title--line-height: 24px;
+  --text-value: 20px;
+  --text-value--line-height: 28px;
+  --text-brand-mark: 17px;
+  --text-brand-compact: 18px;
+  --text-provenance: 0.78rem;
+  --text-badge: 10px;
+  --text-badge-compact: 9px;
+  --text-control: 0.8rem;
+  --text-stat-label: 0.7rem;
+  --text-stat-compact: 0.62rem;
+  --text-table: 0.82rem;
+  --text-table-mono: 0.68rem;
+  --text-table-summary: 0.72rem;
+  --text-panel-subtitle: 0.9rem;
+  --text-wait-run: 0.85em;
+  --text-run-title: 22px;
+  --text-run-value: 30px;
+  --text-section: 15px;
+  --text-health-summary: 12.5px;
+  --text-health-detail: 11.5px;
+  --text-observer-label: 10.5px;
+  --text-observer-heading: 0.95rem;
+  --spacing-legend: 1.4em;
+
+  --tracking-label: 0.04em;
+  --tracking-title: -0.01em;
+  --tracking-brand: -0.02em;
+  --tracking-market: 0.06em;
+  --tracking-eyebrow: 0.09em;
+  --tracking-section: 0.08em;
+  --tracking-health: 0.03em;
+  --tracking-observer: 0.07em;
+  --container-shell: 1800px;
+  --container-dialog: 560px;
+  --container-dialog-wide: 760px;
+  --container-dialog-xwide: 1120px;
+
+  --leading-*: initial;
+  --leading-normal: 1.5;
+  --leading-control: 21px;
+  --leading-browser: normal;
+  --leading-none: 1;
+  --leading-kpi: 1.1;
+  --leading-emphasis: 1.2;
+  --leading-flow: 1.45;
+
+  --shadow-*: initial;
+  --shadow-popover: 0 8px 24px -4px rgb(0 0 0 / 60%);
+  --shadow-menu: 0 6px 18px rgb(0 0 0 / 35%);
+}
+
+@theme static {
+  --font-*: initial;
+  --font-sans:
+    'Inter', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+  --font-brand-mono: 'IBM Plex Mono', ui-monospace, monospace;
+  --font-account-mono: 'IBM Plex Mono', monospace;
+
+  --radius-*: initial;
+  --radius-sm: 4px;
+  --radius-lg: 8px;
+  --radius-brand: 5px;
+  --radius-badge: 3px;
+  --radius-panel: 0.375rem;
+  --radius-swatch: 2px;
+  --radius-control: 6px;
+}
+
+@layer base {
+  :where(html[data-balancita-app]) {
+    min-width: 320px;
+    color-scheme: dark;
+    background: var(--color-canvas);
+  }
+
+  :where([data-balancita-app], [data-balancita-app] *) {
+    box-sizing: border-box;
+  }
+
+  :where([data-balancita-app] body) {
+    margin: 0;
+    min-width: 320px;
+    color: var(--color-ink);
+    background: var(--color-canvas);
+    font-family: var(--font-sans);
+    font-size: var(--text-title);
+    line-height: var(--leading-normal);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  :where(
+    [data-balancita-app] button,
+    [data-balancita-app] input,
+    [data-balancita-app] select
+  ) {
+    font: inherit;
+  }
+
+  :where([data-balancita-app] button, [data-balancita-app] select) {
+    cursor: pointer;
+  }
+
+  :where([data-balancita-app] button) {
+    color: inherit;
+    background: var(--color-surface-2);
+    border-color: var(--color-line-strong);
+  }
+
+  :where([data-balancita-app] input, [data-balancita-app] select) {
+    min-height: 44px;
+    padding: 8px 12px;
+    color: var(--color-ink);
+    background: var(--color-surface-1);
+    border: 1px solid var(--color-line-strong);
+    border-radius: var(--radius-control);
+  }
+
+  :where(
+    [data-balancita-app] input[aria-invalid='true'],
+    [data-balancita-app] select[aria-invalid='true']
+  ) {
+    border-color: var(--color-short);
+  }
+
+  :where(
+    [data-balancita-app] button:disabled,
+    [data-balancita-app] select:disabled,
+    [data-balancita-app] input:disabled
+  ) {
+    cursor: not-allowed;
+    opacity: 0.56;
+  }
+
+  :where(
+    [data-balancita-app] button:focus-visible,
+    [data-balancita-app] input:focus-visible,
+    [data-balancita-app] select:focus-visible
+  ) {
+    outline: 3px solid var(--color-info);
+    outline-offset: 2px;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    :where([data-balancita-app], [data-balancita-app] *),
+    :where([data-balancita-app], [data-balancita-app] *)::before,
+    :where([data-balancita-app], [data-balancita-app] *)::after {
+      scroll-behavior: auto !important;
+      transition-duration: 0.01ms !important;
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+    }
+  }
+}
+
+/* Preserve the legacy inclusive header breakpoints while screens migrate. */
+@custom-variant header-wrap (@media (width <= 1080px));
+@custom-variant header-stack (@media (width <= 760px));
+@custom-variant header-phone (@media (width <= 640px));
+@custom-variant header-compact (@media (width <= 460px));
+@custom-variant source-phone (@media (width <= 480px));
+@custom-variant chart-phone (@media (width <= 600px));
+@custom-variant chart-desktop (@media (width >= 901px));
+@custom-variant terminal-wide (@media (width >= 1200px));
+@custom-variant terminal-stack (@media (width <= 900px));
+@custom-variant shell-link (& a);
+@custom-variant shell-link-focus (& a:focus-visible);
+@custom-variant shell-button-focus (& :where(button:focus-visible));
+@custom-variant shell-table (& table);
+@custom-variant shell-cell (& th, & td);
+@custom-variant shell-th (& th);
+@custom-variant shell-selected-row (& tr[data-selected='true']);
+@custom-variant panel-small (& small);
+@custom-variant panel-h2 (& h2);
+@custom-variant panel-h3 (& h3);
+@custom-variant panel-dl (& dl);
+@custom-variant panel-dd (& dd);
+@custom-variant portfolio-cell (& th, & td);
+@custom-variant portfolio-small (& td small);
+@custom-variant portfolio-summary (& > div:last-child);
+@custom-variant portfolio-value (& strong);
+@custom-variant terminal-last (& > :last-child);
+@custom-variant observer-history (&:where(.group\/observer-history *));
+@custom-variant data-warn (&[data-tone='warn']);
+@custom-variant data-active (&[data-state='active']);
+@custom-variant data-tracking (&[data-state='tracking']);
+@custom-variant data-draft (&[data-state='draft']);
+@custom-variant data-shadow (&[data-state='shadow']);
+@custom-variant data-retired (&[data-state='retired']);
+@custom-variant data-closed (&[data-state='closed']);
+@custom-variant data-off (&[data-state='off']);
+@custom-variant data-inactive (&[data-state='inactive']);
+@custom-variant data-primary (&[data-primary='true']);
+@custom-variant data-danger (&[data-danger='true']);
+@custom-variant data-passed (&[data-verdict='PASA']);
+@custom-variant data-failed (&[data-verdict='NO PASA']);
+@custom-variant data-inconclusive (&[data-verdict='INCONCLUSO']);
+@custom-variant modal-copy (& h2, & h3, & p);
+@custom-variant modal-h2 (& h2);
+@custom-variant modal-h3 (& h3);
+@custom-variant modal-dl (& dl);
+@custom-variant modal-dt (& dt);
+@custom-variant modal-dd (& dd);
+@custom-variant modal-ul (& ul);
+@custom-variant modal-pre (& pre);
+@custom-variant field-control (& input, & textarea);
+@custom-variant field-input (& input);
+@custom-variant field-textarea (& textarea);
+@custom-variant run-stack (@media (width <= 720px));
+@custom-variant stage-reached (&[data-reached='true'] > span:first-child);
+@custom-variant stage-current (&[aria-current='step'] > span:last-child);
+@custom-variant data-bad (&[data-tone='bad']);
+@custom-variant run-heading (& h4);
+@custom-variant run-warning (& [data-tone='warn']);
+@custom-variant run-chart (& .chart-height);
+@custom-variant run-symbol (& b);
+@custom-variant run-bad (& dd[data-tone='bad']);
+@custom-variant run-good (& dd[data-tone='good']);
+@custom-variant run-report-table (&:where(.group\/vbt-report *));
+@custom-variant run-caption (& caption);
+@custom-variant run-cell (& th, & td);
+@custom-variant run-th (& th);
+@custom-variant run-table-button (& button);
+@custom-variant run-button (& button);
+@custom-variant run-label (& label);
+@custom-variant run-copy (& p, & ul);
+@custom-variant field-select (& select);
+@custom-variant analyzer-stack (@media (width <= 860px));
+@custom-variant analyzer-row (& tbody th);
+@custom-variant analyzer-td (& td);
+@custom-variant analyzer-value-label (& span);
+@custom-variant analyzer-value (& strong);
+@custom-variant analyzer-gain (& strong[data-tone='gain']);
+@custom-variant analyzer-loss (& strong[data-tone='loss']);
+@custom-variant analyzer-svg (& svg);
+@custom-variant analyzer-caption (& figcaption);
+@custom-variant data-gain (&[data-tone='gain']);
+@custom-variant data-loss (&[data-tone='loss']);
+@custom-variant vbt-heading (& h4, & h5);
+@custom-variant vbt-subhead (& h5);
+@custom-variant vbt-legend (& legend);
+@custom-variant vbt-choice-copy (& label span);
+@custom-variant vbt-summary (& summary);
+@custom-variant health-summary (& summary);
+@custom-variant health-item (& li);
+@custom-variant health-ok (&[data-status='ok']);
+@custom-variant health-warning (&[data-status='warning']);
+@custom-variant health-error (&[data-status='error']);
+@custom-variant health-row-summary (& > p);
+@custom-variant health-row-title (& h3);
+@custom-variant health-row-details (& details);
+@custom-variant health-row-details-summary (& details summary);
+@custom-variant flow-content (& details > :not(summary));
+@custom-variant flow-warn (&[data-level='warn']);
+@custom-variant flow-bad (&[data-level='bad']);
+@custom-variant observer-long (& [data-action='LONG']);
+@custom-variant observer-short (& [data-action='SHORT']);
+
+@utility health-beacon {
+  --health-tone: var(--color-ink-2);
+  border-color: color-mix(in oklab, var(--health-tone) 25%, var(--color-line));
+  background: color-mix(
+    in oklab,
+    var(--health-tone) 10%,
+    var(--color-surface-1)
+  );
+  &:hover {
+    background: color-mix(
+      in oklab,
+      var(--health-tone) 16%,
+      var(--color-surface-1)
+    );
+  }
+  &[data-tone='ok'] {
+    --health-tone: var(--color-long);
+  }
+  &[data-tone='warning'] {
+    --health-tone: var(--color-warn);
+  }
+  &[data-tone='error'] {
+    --health-tone: var(--color-short);
+  }
+}
+
+@utility bg-health-tone {
+  background: var(--health-tone);
+}
+
+@utility border-health-warning {
+  border-color: color-mix(in srgb, var(--color-warn) 45%, transparent);
+}
+
+@utility border-health-error {
+  border-color: color-mix(in srgb, var(--color-short) 45%, transparent);
+}
+
+@utility bg-health-warning {
+  background: color-mix(in srgb, var(--color-warn) 6%, var(--color-surface-2));
+}
+
+@utility bg-health-error {
+  background: color-mix(in srgb, var(--color-short) 7%, var(--color-surface-2));
+}
+
+@utility bg-observer-selected {
+  background: color-mix(in srgb, var(--color-long) 12%, transparent);
+}
+
+@utility max-h-inspector {
+  max-height: calc(100vh - 48px);
+}
+
+@utility grid-cols-health-row {
+  grid-template-columns: 19rem minmax(0, 1fr);
+}
+
+@utility observer-height {
+  height: calc(var(--terminal-chart-height, 560px) + 60px);
+  @media (width >= 901px) {
+    height: calc(100vh - 160px);
+  }
+}
+
+@utility grid-cols-analyzer {
+  grid-template-columns: minmax(0, 1.5fr) minmax(260px, 1fr);
+}
+
+@utility shadow-chip {
+  box-shadow: inset 0 -2px 0 var(--color-long);
+}
+
+@utility analyzer-cell-tone {
+  background: color-mix(in srgb, var(--color-ink-2) 14%, transparent);
+
+  &[data-tone='gain'] {
+    background: color-mix(
+      in srgb,
+      var(--color-long) calc(var(--k) * 100%),
+      transparent
+    );
+  }
+  &[data-tone='loss'] {
+    background: color-mix(
+      in srgb,
+      var(--color-short) calc(var(--k) * 100%),
+      transparent
+    );
+  }
+}
+
+@utility stroke-dashes {
+  stroke-dasharray: 3 3;
+}
+
+@utility stroke-round {
+  stroke-linejoin: round;
+}
+
+@utility strategy-chart-height {
+  --terminal-chart-height: clamp(380px, 56vh, 600px);
+  @media (width <= 720px) {
+    --terminal-chart-height: 340px;
+  }
+}
+
+@utility grid-cols-run-facts {
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+}
+
+@utility transition-progress {
+  transition-property: width;
+}
+
+@utility max-h-dialog {
+  max-height: 90vh;
+}
+
+@utility w-modal {
+  width: min(var(--container-dialog), 100%);
+}
+
+@utility w-modal-wide {
+  width: min(var(--container-dialog-wide), 100%);
+}
+
+@utility w-modal-xwide {
+  width: min(var(--container-dialog-xwide), 100%);
+}
+
+@utility font-features-terminal {
+  font-feature-settings: 'tnum', 'cv05', 'cv11';
+}
+
+@utility clip-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+}
+
+@utility break-word {
+  word-break: break-word;
+}
+
+@utility grid-cols-account {
+  grid-template-columns: 1fr auto;
+}
+
+@utility grid-cols-modal-facts {
+  grid-template-columns: max-content minmax(0, 1fr);
+}
+
+@utility grid-cols-strategies {
+  grid-template-columns: minmax(180px, 24%) minmax(0, 1fr);
+}
+
+@utility grid-cols-decisions {
+  grid-template-columns: 4.5rem 1fr auto;
+}
+
+@utility grid-cols-terminal {
+  grid-template-columns: minmax(0, 7fr) minmax(310px, 3fr);
+}
+
+@utility grid-cols-terminal-wide {
+  grid-template-columns: minmax(0, 1fr) 380px;
+}
+
+/* The renderer adds sub-pane heights to the same responsive base variable. */
+@utility chart-height {
+  --terminal-chart-height: 440px;
+  @media (min-width: 901px) and (max-width: 1199px) {
+    --terminal-chart-height: 500px;
+  }
+  @media (min-width: 1200px) {
+    --terminal-chart-height: clamp(520px, calc(100vh - 270px), 840px);
+  }
+}
+
+@utility grid-cols-chart-stats {
+  grid-template-columns: repeat(auto-fill, minmax(11.5rem, 1fr));
+}
+
+@utility grid-cols-fill-facts {
+  grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
+}
+
+@utility w-chart-popover {
+  width: min(46rem, 80vw);
+}
+
+@utility top-popover {
+  top: calc(100% + --spacing(1));
+}
+
+@utility h-terminal-chart {
+  height: var(--terminal-chart-height, 440px);
+}
+
+@utility w-shell-content {
+  width: min(calc(100% - --spacing(14)), var(--container-shell));
+}
+
+@utility w-shell-content-compact {
+  width: calc(100% - --spacing(8));
+}
+
+@utility content-colon {
+  --tw-content: ':';
+  content: var(--tw-content);
+}

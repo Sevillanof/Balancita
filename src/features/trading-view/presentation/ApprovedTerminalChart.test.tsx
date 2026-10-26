@@ -116,7 +116,7 @@ describe('approved connected terminal chart', () => {
             type: 'solid',
             color:
               getComputedStyle(document.documentElement)
-                .getPropertyValue('--card')
+                .getPropertyValue('--color-chart-surface')
                 .trim() || '#171c20',
           },
         }),
@@ -130,6 +130,51 @@ describe('approved connected terminal chart', () => {
       priceFormat: { formatter: (price: number) => string }
     }
     expect(seriesOptions.priceFormat.formatter(76_600)).toBe('76.600,00 €')
+  })
+
+  it('reads chart colors from the semantic theme instead of retired aliases or fallbacks', () => {
+    const style = document.documentElement.style
+    const colors = {
+      '--color-chart-surface': '#111222',
+      '--color-chart-line': '#333444',
+      '--color-chart-up': '#555666',
+    }
+    const previous = Object.keys(colors).map((name) => [
+      name,
+      style.getPropertyValue(name),
+      style.getPropertyPriority(name),
+    ])
+    try {
+      for (const [name, value] of Object.entries(colors))
+        style.setProperty(name, value)
+      render(
+        <ApprovedTerminalChart
+          candles={candles}
+          markers={[]}
+          selectedId=""
+          intervalSeconds={60}
+          onSelect={vi.fn()}
+        />,
+      )
+      expect(chartMocks.createChart).toHaveBeenCalledWith(
+        expect.any(HTMLDivElement),
+        expect.objectContaining({
+          layout: expect.objectContaining({
+            background: { type: 'solid', color: '#111222' },
+          }),
+          grid: expect.objectContaining({
+            vertLines: expect.objectContaining({ color: '#333444' }),
+          }),
+        }),
+      )
+      expect(chartMocks.chart.addSeries).toHaveBeenCalledWith(
+        'candles',
+        expect.objectContaining({ upColor: '#555666' }),
+      )
+    } finally {
+      for (const [name, value, priority] of previous)
+        style.setProperty(name, value, priority)
+    }
   })
 
   it('sorts newest-first decisions chronologically, keeps the selected newest marker, and preserves viewport on candle refresh', () => {

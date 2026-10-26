@@ -8,6 +8,11 @@ import ApprovedTerminalLayout from '../features/trading-view/presentation/Approv
 import { AppShell, DataState } from '../shared/mission-control/index.ts'
 import GatewayHistory from './GatewayHistory.tsx'
 import MarketStrip from './MarketStrip.tsx'
+import TerminalNotices from './TerminalNotices.tsx'
+import {
+  TERMINAL_FRAME,
+  TERMINAL_PANEL,
+} from '../shared/design-system/terminal-styles.ts'
 import PaperAccountPanel from './PaperAccountPanel.tsx'
 import { appNavigation } from './app-navigation.ts'
 import ApprovedPortfolioTables from '../features/trading-view/presentation/ApprovedPortfolioTables.tsx'
@@ -322,15 +327,7 @@ export default function FuturesTerminal({
         </p>
       )}
       <p>Run: {activeRunId ?? 'cargando'}</p>
-      {statusItems.length > 0 && (
-        <ul className="connected-terminal__chips">
-          {statusItems.map((item) => (
-            <li key={item.key} data-tone={item.tone}>
-              {item.text}
-            </li>
-          ))}
-        </ul>
-      )}
+      {statusItems.length > 0 && <TerminalNotices items={statusItems} />}
       {state && bootstrap.mode === 'paper_live' && (
         <>
           <p>
@@ -413,7 +410,7 @@ export default function FuturesTerminal({
           <ApprovedTerminalLayout
             chart={
               <section
-                className="demo-terminal__panel"
+                className={TERMINAL_FRAME}
                 aria-label={`Gráfico ${productPair(product)}`}
               >
                 <TerminalMarketChart
@@ -540,13 +537,13 @@ export default function FuturesTerminal({
           <QwenTradesPanel product={product} enabled={liveGateway} />
           {!engineOff && (
             <div
-              className="mc-terminal__secondary"
+              className="mt-4 grid grid-cols-1 items-start gap-4"
               data-testid="terminal-secondary"
             >
-              <div className="mc-terminal__secondary-main">
+              <div className="grid min-w-0 gap-4">
                 {gatewayEngine && (
                   <section
-                    className="connected-terminal__panel"
+                    className={TERMINAL_PANEL}
                     aria-label="Posición actual"
                   >
                     <h2>Posición actual</h2>

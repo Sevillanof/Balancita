@@ -333,6 +333,54 @@ describe('StrategiesPage list', () => {
 })
 
 describe('StrategiesPage menu', () => {
+  it.each(['escape', 'outside', 'toggle'])(
+    'closes the options menu through %s without changing the registry',
+    async (method) => {
+      const api = fakeApi()
+      renderPage(api)
+      const user = await openMenu('C40 Ruptura')
+      const options = screen.getByRole('button', {
+        name: 'Opciones de C40 Ruptura',
+      })
+      expect(options).toHaveAttribute('aria-expanded', 'true')
+      if (method === 'escape') await user.keyboard('{Escape}')
+      else if (method === 'outside')
+        await user.click(screen.getByTestId('strategy-pane'))
+      else await user.click(options)
+      expect(screen.queryByRole('menu')).toBeNull()
+      expect(options).toHaveAttribute('aria-expanded', 'false')
+      expect(api.setState).not.toHaveBeenCalled()
+      expect(api.deleteStrategy).not.toHaveBeenCalled()
+    },
+  )
+
+  it('moves the current selection without editing either strategy', async () => {
+    const api = fakeApi()
+    const onSelect = vi.fn()
+    render(
+      <StrategiesPage
+        api={api}
+        connectError={null}
+        reload={0}
+        gate={emptyGate}
+        onSelect={onSelect}
+      />,
+    )
+    const user = userEvent.setup()
+    const nav = await screen.findByRole('navigation', {
+      name: 'Lista de estrategias',
+    })
+    const first = within(nav).getByRole('button', { name: 'C40 Ruptura' })
+    const second = within(nav).getByRole('button', { name: 'Kronos' })
+    expect(first).toHaveAttribute('aria-current', 'true')
+    await user.click(second)
+    expect(second).toHaveAttribute('aria-current', 'true')
+    expect(first).not.toHaveAttribute('aria-current')
+    expect(onSelect).toHaveBeenCalledExactlyOnceWith('kronos-small-1h-h4-v1')
+    expect(api.setState).not.toHaveBeenCalled()
+    expect(api.save).not.toHaveBeenCalled()
+  })
+
   it('offers detalles, modificar and borrar on a strategy of rules', async () => {
     renderPage(fakeApi())
     await openMenu('C40 Ruptura')

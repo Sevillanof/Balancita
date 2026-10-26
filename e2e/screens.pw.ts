@@ -128,7 +128,7 @@ test('terminal decisions list keeps its height whatever the number of verdicts',
   await shot(page, 'terminal-400')
 
   // The list itself is visible and scrolls inside the panel.
-  const list = panel.locator('.connected-terminal__decision-list')
+  const list = panel.locator('[aria-label="Lista de decisiones"]')
   expect((await list.boundingBox())!.height).toBeGreaterThan(100)
   expect(large!.height).toBe(small!.height)
   expect(largePage).toBe(smallPage)

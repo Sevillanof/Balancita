@@ -314,7 +314,7 @@ describe('progreso de la exploración', () => {
     })
     expect(bar).toHaveAttribute('aria-valuenow', '38')
     expect(bar).toHaveAttribute('aria-valuemax', '100')
-    const fill = bar.querySelector<HTMLElement>('.runview__progress-fill')
+    const fill = within(bar).getAllByTestId('run-progress-fill')[0]
     expect(fill?.style.width).toBe('37.5%')
     const text = screen.getByTestId('vbt-progress-text')
     expect(text).toHaveTextContent('Descargando velas de Kraken (ETH 2/3)')

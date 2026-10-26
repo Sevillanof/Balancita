@@ -55,11 +55,16 @@ export default function DataProvenance({
     ['Última actualización recibida', received && `${received}${age}`],
   ]
   return (
-    <dl className="mc-provenance" aria-label={label}>
+    <dl
+      className="m-0 flex flex-wrap gap-x-5 gap-y-1 text-provenance text-ink-2"
+      aria-label={label}
+    >
       {rows.map(([name, value]) => (
-        <div key={name} data-known={value !== null}>
-          <dt>{name}</dt>
-          <dd>{value ?? PROVENANCE_UNAVAILABLE}</dd>
+        <div className="flex gap-1.5" key={name} data-known={value !== null}>
+          <dt className="after:content-colon">{name}</dt>
+          <dd className={`m-0${value === null ? ' italic' : ''}`}>
+            {value ?? PROVENANCE_UNAVAILABLE}
+          </dd>
         </div>
       ))}
     </dl>

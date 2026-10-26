@@ -1098,9 +1098,7 @@ describe('FuturesTerminal on the live gateway with paper execution', () => {
       const spies = () => {
         const pageScroll = vi.fn()
         Element.prototype.scrollIntoView = pageScroll
-        const list = document.querySelector<HTMLElement>(
-          '.connected-terminal__decision-list',
-        )!
+        const list = screen.getByRole('list', { name: 'Lista de decisiones' })
         return { pageScroll, list }
       }
 
@@ -1111,9 +1109,7 @@ describe('FuturesTerminal on the live gateway with paper execution', () => {
           .spyOn(window, 'scrollTo')
           .mockImplementation(() => {})
         await renderReady()
-        const list = document.querySelector<HTMLElement>(
-          '.connected-terminal__decision-list',
-        )!
+        const list = screen.getByRole('list', { name: 'Lista de decisiones' })
         expect(list.scrollTop).toBe(0)
         expect(pageScroll).not.toHaveBeenCalled()
         expect(windowScroll).not.toHaveBeenCalled()
@@ -1599,7 +1595,7 @@ describe('FuturesTerminal on the live gateway with paper execution', () => {
 
     it('names proposals, WAIT, EJEC. and exits in the visible legend', async () => {
       await renderLive()
-      const legend = document.querySelector('.terminal-chart__legend')!
+      const legend = screen.getByLabelText('Leyenda del gráfico')
       expect(legend.textContent).toMatch(/propuesta LONG\/SHORT/)
       expect(legend.textContent).toMatch(/W = WAIT/)
       expect(legend.textContent).toMatch(/EJEC\. ejecución paper/)

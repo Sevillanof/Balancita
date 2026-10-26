@@ -1,3 +1,5 @@
+import { RUN } from './run-view-styles.ts'
+import { VBT } from './vectorbt-styles.ts'
 import { useEffect, useState } from 'react'
 import type { StrategyApi } from '../infrastructure/strategy-api.ts'
 import type { VectorbtApi } from '../infrastructure/vectorbt-api.ts'
@@ -66,8 +68,8 @@ export default function VectorbtVariantLink({
 
   if (!link) return null
   return (
-    <section className="vbt-report" aria-label="Origen en VectorBT">
-      <div className="vbt-report__head">
+    <section className={VBT.report} aria-label="Origen en VectorBT">
+      <div className={VBT.reportHead}>
         <h4>Nació de una exploración de VectorBT</h4>
         <button
           type="button"
@@ -78,7 +80,7 @@ export default function VectorbtVariantLink({
           VectorBT vs simulador
         </button>
       </div>
-      <p className="runview__hint" data-testid="vbt-origin">
+      <p className={RUN.hint} data-testid="vbt-origin">
         Es una variante de «{link.parentName}» que VectorBT puso entre las
         mejores. Es un borrador: lo que valga lo dice el simulador.
         {!hasPractice &&

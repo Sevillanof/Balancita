@@ -1,3 +1,4 @@
+import { ANALYZER } from './analyzer-styles.ts'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   ENTRY_SIZES,
@@ -12,7 +13,12 @@ import type {
 } from '../infrastructure/analyzer-api.ts'
 import { dayText } from '../domain/vectorbt-format.ts'
 import ModalFrame from './ModalFrame.tsx'
-import './AnalyzerModal.css'
+import {
+  MODAL_ACTIONS,
+  MODAL_BUTTON,
+  MODAL_HINT,
+  MODAL_NOTICE,
+} from './modal-styles.ts'
 
 type Props = {
   api: AnalyzerApi
@@ -200,12 +206,12 @@ export default function AnalyzerModal({ api, onClose }: Props) {
 
   return (
     <ModalFrame label="Analizador de señales" onClose={onClose} xwide>
-      <div className="analyzer__head">
+      <div className={ANALYZER.head}>
         <h2>Analizador de señales</h2>
         <button
           ref={closeRef}
           type="button"
-          className="smodal__button"
+          className={MODAL_BUTTON}
           onClick={onClose}
         >
           Cerrar
@@ -213,19 +219,19 @@ export default function AnalyzerModal({ api, onClose }: Props) {
       </div>
 
       {loaded.kind === 'loading' && (
-        <p role="status" className="smodal__hint">
+        <p role="status" className={MODAL_HINT}>
           Cargando el estudio…
         </p>
       )}
       {loaded.kind === 'error' && (
         <div>
-          <p role="alert" className="smodal__notice" data-tone="warn">
+          <p role="alert" className={MODAL_NOTICE} data-tone="warn">
             No se pudo leer el estudio: {loaded.text}
           </p>
-          <div className="smodal__actions">
+          <div className={MODAL_ACTIONS}>
             <button
               type="button"
-              className="smodal__button"
+              className={MODAL_BUTTON}
               onClick={() => {
                 setLoaded({ kind: 'loading' })
                 setAttempt((value) => value + 1)
@@ -237,16 +243,16 @@ export default function AnalyzerModal({ api, onClose }: Props) {
         </div>
       )}
       {loaded.kind === 'done' && !loaded.response.available && (
-        <div className="analyzer__off" data-testid="analyzer-off">
-          <p className="smodal__notice" data-tone="warn">
+        <div data-testid="analyzer-off">
+          <p className={MODAL_NOTICE} data-tone="warn">
             {loaded.response.reason}
           </p>
-          <p className="smodal__hint">Para generarlo, corré este comando:</p>
+          <p className={MODAL_HINT}>Para generarlo, corré este comando:</p>
           <pre aria-label="Comando">{loaded.response.command}</pre>
-          <div className="smodal__actions">
+          <div className={MODAL_ACTIONS}>
             <button
               type="button"
-              className="smodal__button"
+              className={MODAL_BUTTON}
               onClick={() =>
                 loaded.response.available
                   ? undefined
@@ -261,15 +267,15 @@ export default function AnalyzerModal({ api, onClose }: Props) {
 
       {data && layout && summary && (
         <>
-          <p className="smodal__hint">
+          <p className={MODAL_HINT}>
             Son hipótesis con datos de práctica del {dayText(data.window.from)}{' '}
             al {dayText(lastDayOf(data.window.to))}, no una aprobación.
           </p>
 
-          <div className="analyzer__controls">
+          <div className={ANALYZER.controls}>
             <div role="group" aria-label="Apalancamiento">
-              <span className="analyzer__label">Apalancamiento</span>
-              <div className="analyzer__chips">
+              <span className={ANALYZER.label}>Apalancamiento</span>
+              <div className={ANALYZER.chips}>
                 {LEVERAGES.map((item) => (
                   <button
                     key={item}
@@ -283,10 +289,10 @@ export default function AnalyzerModal({ api, onClose }: Props) {
               </div>
             </div>
             <div role="group" aria-label="Entrada por operación (USD)">
-              <span className="analyzer__label">
+              <span className={ANALYZER.label}>
                 Entrada por operación (USD)
               </span>
-              <div className="analyzer__chips">
+              <div className={ANALYZER.chips}>
                 {ENTRY_SIZES.map((item) => (
                   <button
                     key={item}
@@ -299,8 +305,8 @@ export default function AnalyzerModal({ api, onClose }: Props) {
                 ))}
               </div>
             </div>
-            <label className="analyzer__view">
-              <span className="analyzer__label">Ver</span>
+            <label className={ANALYZER.view}>
+              <span className={ANALYZER.label}>Ver</span>
               <select
                 value={view}
                 onChange={(event) => setView(event.target.value as View)}
@@ -311,7 +317,7 @@ export default function AnalyzerModal({ api, onClose }: Props) {
             </label>
           </div>
 
-          <p className="analyzer__summary" data-testid="analyzer-summary">
+          <p className={ANALYZER.summary} data-testid="analyzer-summary">
             Con {leverage}× y {WHOLE.format(margin)} USD:{' '}
             <b>
               {summary.gross} de {summary.total}
@@ -329,10 +335,10 @@ export default function AnalyzerModal({ api, onClose }: Props) {
             )}
           </p>
 
-          <div className="analyzer__body">
-            <div className="analyzer__gridwrap">
+          <div className={ANALYZER.body}>
+            <div className={ANALYZER.gridwrap}>
               <table
-                className="analyzer__grid"
+                className={ANALYZER.grid}
                 aria-label={
                   view === 'gross'
                     ? 'Combinaciones, resultado antes de costes en USD'
@@ -359,7 +365,7 @@ export default function AnalyzerModal({ api, onClose }: Props) {
                         )
                         if (!cell)
                           return (
-                            <td key={horizon} className="analyzer__none">
+                            <td key={horizon} className={ANALYZER.none}>
                               <span aria-hidden="true">·</span>
                             </td>
                           )
@@ -383,7 +389,7 @@ export default function AnalyzerModal({ api, onClose }: Props) {
                           <td key={horizon}>
                             <button
                               type="button"
-                              className="analyzer__cell"
+                              className={ANALYZER.cell}
                               data-tone={tone}
                               style={
                                 {
@@ -407,15 +413,15 @@ export default function AnalyzerModal({ api, onClose }: Props) {
                               onClick={() => setPicked(cell.id)}
                             >
                               {shown === null ? (
-                                <span className="analyzer__cell-main">
+                                <span className={ANALYZER.cellMain}>
                                   sin datos
                                 </span>
                               ) : (
                                 <>
-                                  <span className="analyzer__cell-main">
+                                  <span className={ANALYZER.cellMain}>
                                     {usd(shown)}
                                   </span>
-                                  <span className="analyzer__cell-sub">
+                                  <span className={ANALYZER.cellSub}>
                                     {view === 'gross' ? 'neto' : 'bruto'}{' '}
                                     {usd(other ?? 0)}
                                   </span>
@@ -423,7 +429,7 @@ export default function AnalyzerModal({ api, onClose }: Props) {
                               )}
                               {sim && sim.liquidations > 0 && (
                                 <span
-                                  className="analyzer__flag"
+                                  className={ANALYZER.flag}
                                   aria-hidden="true"
                                 >
                                   ⚠ {sim.liquidations}
@@ -437,7 +443,7 @@ export default function AnalyzerModal({ api, onClose }: Props) {
                   ))}
                 </tbody>
               </table>
-              <p className="analyzer__legend">
+              <p className={ANALYZER.legend}>
                 Verde: ganancia. Rojo: pérdida. Gris: sin operaciones. ⚠ n:
                 operaciones liquidadas.
               </p>
@@ -445,12 +451,12 @@ export default function AnalyzerModal({ api, onClose }: Props) {
 
             {selected && detail && (
               <section
-                className="analyzer__detail"
+                className={ANALYZER.detail}
                 aria-label="Detalle de la combinación"
               >
                 <h3>{rowLabel(selected)}</h3>
-                <p className="smodal__hint">Mantener {selected.horizon} min</p>
-                <div className="analyzer__bigs">
+                <p className={MODAL_HINT}>Mantener {selected.horizon} min</p>
+                <div className={ANALYZER.bigs}>
                   <div>
                     <span>Antes de costes</span>
                     <strong
@@ -499,7 +505,7 @@ export default function AnalyzerModal({ api, onClose }: Props) {
                 {detail.liquidations > 0 && (
                   <p
                     role="alert"
-                    className="smodal__notice"
+                    className={MODAL_NOTICE}
                     data-tone="warn"
                     data-testid="detail-alert"
                   >
@@ -513,14 +519,14 @@ export default function AnalyzerModal({ api, onClose }: Props) {
             )}
           </div>
 
-          <div className="analyzer__notes">
+          <div className={ANALYZER.notes}>
             {data.funding_complete === false && (
-              <p className="smodal__notice" data-tone="warn">
+              <p className={MODAL_NOTICE} data-tone="warn">
                 El funding está incompleto en parte del período: el resultado
                 puede estar algo errado.
               </p>
             )}
-            <p className="smodal__hint">
+            <p className={MODAL_HINT}>
               Los costes están medidos para operaciones de unos 1.000 USD; con
               posiciones mucho más grandes el costo real sería peor. La
               liquidación es una aproximación (se pierde todo el margen cuando
@@ -555,7 +561,7 @@ function EquityCurve({ equity }: { equity: number[] }) {
     (points.length > 1 ? (i / (points.length - 1)) * (width - 2 * pad) : 0)
   const last = equity[equity.length - 1] ?? 0
   return (
-    <figure className="analyzer__curve">
+    <figure className={ANALYZER.curve}>
       <svg
         viewBox={`0 0 ${width} ${height}`}
         role="img"
@@ -566,12 +572,12 @@ function EquityCurve({ equity }: { equity: number[] }) {
           x2={width - pad}
           y1={y(0)}
           y2={y(0)}
-          className="analyzer__zero"
+          className={ANALYZER.zero}
         />
         {points.length > 1 && (
           <polyline
             fill="none"
-            className="analyzer__line"
+            className={ANALYZER.line}
             data-tone={last >= 0 ? 'gain' : 'loss'}
             points={points.map((v, i) => `${x(i)},${y(v)}`).join(' ')}
           />

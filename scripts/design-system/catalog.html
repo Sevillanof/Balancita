@@ -1,0 +1,587 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Balancita — Design system</title>
+    <link rel="stylesheet" href="./bundle.css" />
+    <style>
+      :root {
+        color-scheme: dark;
+        font-family: var(--font-sans);
+        color: var(--color-ink);
+        background: var(--color-canvas);
+        font-size: var(--text-body);
+        line-height: var(--text-body--line-height);
+        font-synthesis: none;
+      }
+      *,
+      *::before,
+      *::after {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+      }
+      a {
+        color: inherit;
+        text-decoration: none;
+      }
+      a:focus-visible,
+      button:focus-visible,
+      input:focus-visible,
+      select:focus-visible {
+        outline: 2px solid var(--color-info);
+        outline-offset: 4px;
+      }
+      button,
+      input,
+      select {
+        font: inherit;
+      }
+      button,
+      select {
+        cursor: pointer;
+      }
+      button,
+      input,
+      select,
+      .download {
+        padding: 8px 12px;
+        border: 1px solid var(--color-line-strong);
+        border-radius: var(--radius-sm);
+        background: var(--color-surface-2);
+        color: var(--color-ink);
+      }
+      button:hover,
+      .download:hover {
+        background: var(--color-surface-hover);
+      }
+      h1,
+      h2,
+      h3,
+      p {
+        margin-top: 0;
+      }
+      h1 {
+        font-size: clamp(32px, 5vw, 56px);
+        line-height: 1.08;
+        letter-spacing: -0.045em;
+        margin-bottom: 24px;
+        font-weight: 600;
+      }
+      h2 {
+        font-size: 24px;
+        letter-spacing: -0.025em;
+        margin-bottom: 8px;
+        font-weight: 600;
+      }
+      h3 {
+        font-size: 14px;
+        margin-bottom: 4px;
+      }
+      p {
+        color: var(--color-ink-2);
+      }
+      code,
+      .mono,
+      .eyebrow,
+      .section-number {
+        font-family: var(--font-mono);
+      }
+      .skip {
+        position: absolute;
+        top: -80px;
+        left: 16px;
+        z-index: 2;
+        padding: 12px;
+        background: var(--color-surface-2);
+      }
+      .skip:focus {
+        top: 8px;
+      }
+      .layout {
+        display: grid;
+        grid-template-columns: 232px minmax(0, 1fr);
+        min-height: 100vh;
+      }
+      .sidebar {
+        position: sticky;
+        top: 0;
+        height: 100vh;
+        padding: 32px 24px;
+        border-right: 1px solid var(--color-line);
+        display: flex;
+        flex-direction: column;
+        gap: 40px;
+      }
+      .brand {
+        font-size: 20px;
+        font-weight: 600;
+        letter-spacing: -0.04em;
+      }
+      .brand span {
+        color: var(--color-long);
+      }
+      .eyebrow {
+        font-size: 11px;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--color-ink-2);
+        margin-bottom: 12px;
+      }
+      .sidebar nav {
+        display: grid;
+        gap: 4px;
+      }
+      .sidebar nav a {
+        padding: 10px 12px;
+        border-radius: var(--radius-sm);
+        color: var(--color-ink-2);
+      }
+      .sidebar nav a:hover {
+        background: var(--color-surface-2);
+        color: var(--color-ink);
+      }
+      .sidebar footer {
+        margin-top: auto;
+        font-size: 12px;
+        color: var(--color-ink-2);
+      }
+      .content {
+        width: min(100%, 1248px);
+        padding: 64px 56px;
+        margin-inline: auto;
+        min-width: 0;
+      }
+      .hero {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 240px;
+        gap: 48px;
+        padding-bottom: 48px;
+      }
+      .hero p {
+        max-width: 52ch;
+        font-size: 16px;
+      }
+      .stamp {
+        align-self: start;
+        border-top: 2px solid var(--color-long);
+        padding: 16px 0;
+      }
+      .stamp strong {
+        display: block;
+        margin-bottom: 8px;
+      }
+      .stamp p {
+        font-size: 12px;
+      }
+      .downloads {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-top: 24px;
+        font-size: 12px;
+      }
+      .principles {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        border-block: 1px solid var(--color-line);
+        margin-bottom: 64px;
+      }
+      .principles article {
+        padding: 20px 24px 20px 0;
+      }
+      .principles p {
+        font-size: 12px;
+        margin: 8px 0 0;
+      }
+      section {
+        scroll-margin-top: 24px;
+        margin-bottom: 64px;
+      }
+      .section-heading {
+        display: flex;
+        align-items: baseline;
+        gap: 16px;
+        margin-bottom: 24px;
+      }
+      .section-number {
+        color: var(--color-long);
+        font-size: 12px;
+      }
+      .section-heading p {
+        margin-bottom: 0;
+      }
+      .swatches {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(155px, 1fr));
+        gap: 12px;
+      }
+      .swatch {
+        padding: 12px;
+        border: 1px solid var(--color-line);
+        border-radius: var(--radius-lg);
+        min-width: 0;
+        background: var(--color-surface-1);
+      }
+      .swatch-color {
+        height: 64px;
+        border-radius: var(--radius-sm);
+        border: 1px solid var(--color-line-strong);
+        margin-bottom: 12px;
+      }
+      .swatch code {
+        display: block;
+        font-size: 11px;
+        overflow-wrap: anywhere;
+      }
+      .swatch p {
+        font-size: 11px;
+        margin: 4px 0 0;
+      }
+      .type-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 16px;
+      }
+      .specimen {
+        padding: 24px;
+        border: 1px solid var(--color-line);
+        border-radius: var(--radius-lg);
+        background: var(--color-surface-1);
+      }
+      .specimen .sample {
+        margin-bottom: 24px;
+        overflow-wrap: anywhere;
+      }
+      .specimen p:last-child {
+        font-size: 12px;
+        margin: 0;
+      }
+      .component {
+        border: 1px solid var(--color-line);
+        border-radius: var(--radius-lg);
+        margin-bottom: 20px;
+        overflow: hidden;
+      }
+      .component-heading {
+        padding: 20px 24px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+        border-bottom: 1px solid var(--color-line);
+      }
+      .component-heading p {
+        font-size: 12px;
+        margin: 0;
+      }
+      .component-heading label {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 12px;
+        color: var(--color-ink-2);
+      }
+      .preview {
+        padding: 24px;
+        background: var(--color-surface-1);
+        font-feature-settings: 'tnum', 'cv05', 'cv11';
+        min-width: 0;
+      }
+      .preview a {
+        text-decoration: none;
+      }
+      .preview dl {
+        line-height: 1.5;
+      }
+      .shell-preview {
+        padding: 0;
+        overflow-x: auto;
+      }
+      .shell-preview > .demo-shell {
+        min-height: 0;
+      }
+      .shell-preview main {
+        padding-block: 24px;
+      }
+      .code {
+        display: block;
+        margin: 0;
+        padding: 16px 24px;
+        border-top: 1px solid var(--color-line);
+        font-size: 12px;
+        color: var(--color-ink-2);
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+      }
+      .token-tools {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+        margin-bottom: 16px;
+      }
+      .token-tools input {
+        width: min(100%, 360px);
+      }
+      .token-scroll {
+        overflow-x: auto;
+        border: 1px solid var(--color-line);
+        border-radius: var(--radius-lg);
+      }
+      table {
+        border-collapse: collapse;
+        width: 100%;
+        font-size: 12px;
+      }
+      th,
+      td {
+        text-align: left;
+        padding: 12px 16px;
+        border-bottom: 1px solid var(--color-line);
+        vertical-align: top;
+      }
+      th {
+        color: var(--color-ink-2);
+        font-weight: 500;
+        background: var(--color-surface-1);
+      }
+      td {
+        overflow-wrap: anywhere;
+      }
+      td:first-child {
+        min-width: 180px;
+      }
+      td:last-child {
+        color: var(--color-ink-2);
+        min-width: 200px;
+      }
+      .notice {
+        padding: 16px;
+        border-left: 2px solid var(--color-info);
+        background: var(--color-surface-1);
+        margin-bottom: 24px;
+        font-size: 12px;
+      }
+      .endnote {
+        border-top: 1px solid var(--color-line);
+        padding-top: 24px;
+        font-size: 12px;
+        color: var(--color-ink-2);
+      }
+      @media (max-width: 1000px) {
+        .layout {
+          grid-template-columns: 1fr;
+        }
+        .sidebar {
+          position: static;
+          height: auto;
+          padding: 20px 24px;
+          border-right: 0;
+          border-bottom: 1px solid var(--color-line);
+          gap: 16px;
+        }
+        .sidebar nav {
+          display: flex;
+          flex-wrap: wrap;
+        }
+        .sidebar footer,
+        .sidebar .eyebrow {
+          display: none;
+        }
+        .content {
+          padding: 40px 24px;
+        }
+      }
+      @media (max-width: 600px) {
+        .hero {
+          grid-template-columns: 1fr;
+          gap: 24px;
+        }
+        .principles,
+        .type-grid {
+          grid-template-columns: 1fr;
+        }
+        .principles article {
+          padding-block: 16px;
+        }
+        .component-heading {
+          align-items: flex-start;
+          flex-direction: column;
+        }
+        .preview,
+        .component-heading {
+          padding: 16px;
+        }
+        .shell-preview {
+          padding: 0;
+        }
+        .token-tools {
+          align-items: flex-start;
+          flex-direction: column;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <a class="skip" href="#content">Saltar al contenido</a>
+    <div class="layout">
+      <aside class="sidebar">
+        <a href="#overview" class="brand">balancita<span>.</span></a>
+        <div>
+          <p class="eyebrow">Sistema de diseño / 01</p>
+          <nav aria-label="Secciones del design system">
+            <a href="#foundations">01 · Color</a>
+            <a href="#typography">02 · Tipografía</a>
+            <a href="#components">03 · Componentes</a>
+            <a href="#tokens">04 · Tokens</a>
+          </nav>
+        </div>
+        <footer>React + Tailwind<br />Código real. Una sola fuente.</footer>
+      </aside>
+      <main id="content" class="content">
+        <header id="overview" class="hero">
+          <div>
+            <p class="eyebrow">Balancita / Mission Control</p>
+            <h1>Datos claros.<br />Decisiones con contexto.</h1>
+            <p>
+              Una interfaz serena para información que no para. Color con
+              significado, cifras legibles y estados que no ocultan lo que
+              falta.
+            </p>
+            <div class="downloads">
+              <a class="download" href="./tokens.json" download
+                >Tokens JSON ↗</a
+              >
+              <a class="download" href="./bundle.js" download
+                >Componentes JS ↗</a
+              >
+              <a class="download" href="./bundle.css" download>Estilos CSS ↗</a>
+            </div>
+          </div>
+          <div class="stamp">
+            <p class="eyebrow">Fuente única</p>
+            <strong>Del producto al catálogo.</strong>
+            <p>
+              Los ejemplos montan los mismos componentes React que usa
+              Balancita. No son una réplica en HTML.
+            </p>
+            <span id="runtime-version" class="mono"></span>
+          </div>
+        </header>
+        <div class="principles">
+          <article>
+            <h3>01 / Semántica, no decoración</h3>
+            <p>
+              Verde no significa «hay datos». Cada estado comunica una condición
+              verificable.
+            </p>
+          </article>
+          <article>
+            <h3>02 / Jerarquía sin ruido</h3>
+            <p>
+              Superficies planas, bordes discretos y cifras tabulares. La
+              información tiene prioridad.
+            </p>
+          </article>
+          <article>
+            <h3>03 / Incertidumbre explícita</h3>
+            <p>
+              Sin datos, error y no disponible son estados diferentes. Ninguno
+              se disfraza de éxito.
+            </p>
+          </article>
+        </div>
+        <section id="foundations">
+          <div class="section-heading">
+            <span class="section-number">01</span>
+            <div>
+              <h2>Color con una tarea.</h2>
+              <p>Paleta generada de los tokens del tema.</p>
+            </div>
+          </div>
+          <div id="palette" class="swatches"></div>
+        </section>
+        <section id="typography">
+          <div class="section-heading">
+            <span class="section-number">02</span>
+            <div>
+              <h2>Primero, legibilidad.</h2>
+              <p>Inter para leer. IBM Plex Mono para comparar.</p>
+            </div>
+          </div>
+          <div id="type-specimens" class="type-grid"></div>
+        </section>
+        <section id="components">
+          <div class="section-heading">
+            <span class="section-number">03</span>
+            <div>
+              <h2>Primitivas en vivo.</h2>
+              <p>Cambiá los estados para explorar sus variantes reales.</p>
+            </div>
+          </div>
+          <div id="component-previews"></div>
+        </section>
+        <section id="tokens">
+          <div class="section-heading">
+            <span class="section-number">04</span>
+            <div>
+              <h2>El contrato visual.</h2>
+              <p>
+                Valores exportados directamente del tema, sin transcripción
+                manual.
+              </p>
+            </div>
+          </div>
+          <div class="notice">
+            ink-3 se reserva para decoración: no tiene contraste suficiente para
+            texto sobre canvas. Los ejemplos son datos de demostración, no
+            resultados de trading.
+          </div>
+          <div class="token-tools">
+            <label
+              >Buscar token
+              <input
+                id="token-search"
+                type="search"
+                placeholder="color, spacing, font…" /></label
+            ><span id="token-count" class="mono" role="status"></span>
+          </div>
+          <div class="token-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th scope="col">Token</th>
+                  <th scope="col">Valor</th>
+                  <th scope="col">Uso</th>
+                </tr>
+              </thead>
+              <tbody id="token-rows"></tbody>
+            </table>
+          </div>
+        </section>
+        <footer class="endnote">
+          Generado localmente · Sin CDN, conexiones al mercado ni órdenes ·
+          Cambiá el código fuente y volvé a ejecutar
+          <code>pnpm design-system:build</code>. Licencias:
+          <a href="./runtime-licenses.json">React / ReactDOM</a> ·
+          <a href="./inter-LICENSE.txt">Inter</a> ·
+          <a href="./ibm-plex-mono-LICENSE.txt">IBM Plex Mono</a>.
+        </footer>
+      </main>
+    </div>
+    <noscript
+      >Activá JavaScript para ver los componentes interactivos.</noscript
+    >
+    <script src="./runtime.js"></script>
+    <script>
+      window.React = window.BalancitaRuntime.React
+      window.ReactDOM = window.BalancitaRuntime.ReactDOM
+      window.BalancitaTokenData = /* TOKEN_DATA */ null
+    </script>
+    <script src="./bundle.js"></script>
+    <script src="./catalog.js"></script>
+  </body>
+</html>

@@ -658,7 +658,7 @@ describe('StrategyRunView actions', () => {
     renderView(gate, visualWith())
     const bar = await screen.findByRole('progressbar')
     expect(bar).toHaveAttribute('aria-valuenow', '40')
-    const fill = bar.querySelector<HTMLElement>('.runview__progress-fill')
+    const fill = within(bar).getAllByTestId('run-progress-fill')[0]
     expect(fill?.style.width).toBe('40%')
     expect(bar).toHaveTextContent('simulando')
   })

@@ -1,5 +1,11 @@
 import { NOT_PASSED_WARNING } from '../domain/lifecycle-text.ts'
 import ModalFrame from './ModalFrame.tsx'
+import {
+  MODAL_ACTIONS,
+  MODAL_BUTTON,
+  MODAL_HINT,
+  MODAL_NOTICE,
+} from './modal-styles.ts'
 
 /** Activating is always the user's decision; a version that did not pass the gate is warned about, never blocked. */
 export default function ActivationDialog({
@@ -19,25 +25,25 @@ export default function ActivationDialog({
   return (
     <ModalFrame label={`Activar ${name}`} onClose={onClose}>
       <h2>Activar {name}</h2>
-      <p className="smodal__hint">
+      <p className={MODAL_HINT}>
         Va a operar en el paper real, con 100 USD por operación y sin dinero
         real. Podés apagarla cuando quieras.
       </p>
       {passed === false && (
-        <p role="alert" className="smodal__notice" data-tone="warn">
+        <p role="alert" className={MODAL_NOTICE} data-tone="warn">
           {NOT_PASSED_WARNING}
         </p>
       )}
       {passed === true && (
-        <p className="smodal__notice">Esta versión pasó la prueba.</p>
+        <p className={MODAL_NOTICE}>Esta versión pasó la prueba.</p>
       )}
-      <div className="smodal__actions">
-        <button type="button" className="smodal__button" onClick={onClose}>
+      <div className={MODAL_ACTIONS}>
+        <button type="button" className={MODAL_BUTTON} onClick={onClose}>
           Cancelar
         </button>
         <button
           type="button"
-          className="smodal__button"
+          className={MODAL_BUTTON}
           data-primary="true"
           disabled={busy || passed === null}
           onClick={onConfirm}

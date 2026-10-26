@@ -182,10 +182,10 @@ test('history rows and chart markers are the same decisions and select each othe
   const chart = page.getByTestId('approved-chart-renderer')
   const entries = facts.PF_XBTUSD!.filter((f) => f.action !== 'WAIT')
   expect(entries).toHaveLength(3)
-  const rows = page.locator('.connected-terminal__decision-list li button')
+  const rows = page.locator('[aria-label="Lista de decisiones"] li button')
   await expect(rows).toHaveCount(3)
   // The visible legend names every kind of marker, apart from each other.
-  const legend = page.locator('.terminal-chart__legend')
+  const legend = page.getByLabel('Leyenda del gráfico')
   await expect(legend).toContainText('propuesta LONG/SHORT')
   await expect(legend).toContainText('W = WAIT')
   await expect(legend).toContainText('EJEC. ejecución paper')
@@ -261,7 +261,7 @@ test('clicking the EJEC. marker on the canvas opens the facts of its fill, apart
   const positions = await markerPositions(chart)
   const target = positions.find((p) => p.id.startsWith('fill:'))!
   const pressedBefore = await page
-    .locator('.connected-terminal__decision-list li button')
+    .locator('[aria-label="Lista de decisiones"] li button')
     .evaluateAll((buttons) =>
       buttons.map((button) => button.getAttribute('aria-pressed')),
     )
@@ -291,7 +291,7 @@ test('clicking the EJEC. marker on the canvas opens the facts of its fill, apart
   // No decision row is pressed because of it and its detail is the same.
   expect(
     await page
-      .locator('.connected-terminal__decision-list li button')
+      .locator('[aria-label="Lista de decisiones"] li button')
       .evaluateAll((buttons) =>
         buttons.map((button) => button.getAttribute('aria-pressed')),
       ),
@@ -426,7 +426,7 @@ test('changing product swaps AHORA, rows and markers; nothing leaks across', asy
     expect(ethIds).toContain(f.analysisId)
   // ETH has no executed operation in D: no executed marker may appear.
   expect(ethIds.filter((id) => id.startsWith('fill:'))).toEqual([])
-  const rows = page.locator('.connected-terminal__decision-list li button')
+  const rows = page.locator('[aria-label="Lista de decisiones"] li button')
   await expect(rows).toHaveCount(2)
   for (const xbt of facts.PF_XBTUSD!.filter((f) => f.action !== 'WAIT'))
     await expect(

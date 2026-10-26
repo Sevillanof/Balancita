@@ -22,23 +22,29 @@ export default function Panel({
   const hasHeader = title !== undefined || eyebrow !== undefined || actions
   return (
     <section
-      className={className ? `mc-panel ${className}` : 'mc-panel'}
+      className={`min-w-0 rounded-sm border border-solid border-line bg-surface-1 text-ink${className ? ` ${className}` : ''}`}
       aria-label={label}
     >
       {hasHeader && (
-        <header className="mc-panel__header">
-          <div className="mc-panel__titles">
+        <header className="flex items-baseline justify-between gap-3 border-b border-b-solid border-line px-4 py-3">
+          <div className="min-w-0">
             {eyebrow !== undefined && (
-              <p className="mc-panel__eyebrow">{eyebrow}</p>
+              <p className="m-0 text-label font-medium tracking-label text-ink-2 uppercase">
+                {eyebrow}
+              </p>
             )}
             {title !== undefined && (
-              <h2 className="mc-panel__title">{title}</h2>
+              <h2 className="m-0 text-title font-semibold tracking-title">
+                {title}
+              </h2>
             )}
           </div>
-          {actions && <div className="mc-panel__actions">{actions}</div>}
+          {actions && (
+            <div className="flex flex-none items-center gap-2">{actions}</div>
+          )}
         </header>
       )}
-      <div className="mc-panel__body">{children}</div>
+      <div className="p-4">{children}</div>
     </section>
   )
 }

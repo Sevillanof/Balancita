@@ -22,6 +22,20 @@ describe('Mission Control components', () => {
     expect(screen.getByText('cuerpo')).toBeTruthy()
   })
 
+  it('Panel preserves its region label and caller class without an empty header', () => {
+    const { container } = render(
+      <Panel label="Detalle" className="caller-panel">
+        cuerpo
+      </Panel>,
+    )
+    expect(
+      screen
+        .getByRole('region', { name: 'Detalle' })
+        .classList.contains('caller-panel'),
+    ).toBe(true)
+    expect(container.querySelector('header')).toBeNull()
+  })
+
   it('Metric shows the given value unchanged', () => {
     const { container } = render(
       <Metric label="Neto" value="−11,2 pb" tone="down" hint="n=625" />,
@@ -44,6 +58,19 @@ describe('Mission Control components', () => {
     expect(screen.getByText('Capturando').getAttribute('data-tone')).toBe('ok')
   })
 
+  it.each([
+    ['ok', 'Correcto'],
+    ['warn', 'Advertencia'],
+    ['bad', 'Error'],
+    ['nodata', 'Sin datos'],
+  ] as const)(
+    'StatusPill preserves the default label for %s',
+    (tone, label) => {
+      render(<StatusPill tone={tone} />)
+      expect(screen.getByText(label).getAttribute('data-tone')).toBe(tone)
+    },
+  )
+
   it('DataState announces errors as alerts and the rest as status', () => {
     render(
       <>
@@ -54,6 +81,24 @@ describe('Mission Control components', () => {
     expect(screen.getByRole('alert').textContent).toContain('Falló la carga')
     expect(screen.getByRole('status').textContent).toContain('No disponible')
   })
+
+  it.each([
+    ['loading', 'Cargando…'],
+    ['error', 'Error'],
+    ['empty', 'Sin elementos'],
+    ['unavailable', 'No disponible'],
+    ['nodata', 'Sin datos'],
+  ] as const)(
+    'DataState preserves the role and title for %s',
+    (kind, title) => {
+      const { container, rerender } = render(<DataState kind={kind} />)
+      const role = kind === 'error' ? 'alert' : 'status'
+      expect(screen.getByRole(role).textContent).toBe(title)
+      expect(container.querySelectorAll('p')).toHaveLength(1)
+      rerender(<DataState kind={kind} title="Título propio" detail="Detalle" />)
+      expect(screen.getByRole(role).textContent).toBe('Título propioDetalle')
+    },
+  )
 
   it('TopBar marks the current page and keeps the header test id', () => {
     render(

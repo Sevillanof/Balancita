@@ -1,3 +1,5 @@
+import { VBT } from './vectorbt-styles.ts'
+import { RUN } from './run-view-styles.ts'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import ApprovedTerminalChart from '../../trading-view/presentation/ApprovedTerminalChart.tsx'
 import { amount } from '../../../shared/finance/format.ts'
@@ -70,8 +72,6 @@ import VectorbtProgress from './VectorbtProgress.tsx'
 import VectorbtReportPanel from './VectorbtReportPanel.tsx'
 import VectorbtVariantLink from './VectorbtVariantLink.tsx'
 import { useVectorbt } from './use-vectorbt.ts'
-import './StrategyRunView.css'
-import './VectorbtPanel.css'
 
 const STAGE_LABEL = [
   'En hipótesis',
@@ -781,27 +781,27 @@ export default function StrategyRunView({
 
   return (
     <section
-      className="runview"
+      className={RUN.card}
       aria-label={`Última prueba de ${strategyName}`}
       data-testid="run-view"
     >
-      <header className="runview__head">
+      <header className={RUN.head}>
         <div>
-          <p className="runview__title">
+          <p className={RUN.title}>
             {titleOf(strategyName)} <small>v{version}</small>
           </p>
-          <p className="runview__sub">
+          <p className={RUN.hint}>
             {lastRun
               ? `Prueba mostrada · ${runName(lastRun)}`
               : 'Sin prueba terminada con operaciones guardadas'}
             {running && ' · hay una prueba en curso'}
           </p>
         </div>
-        <div className="runview__side">
-          <p className="runview__stage-label" title={stage.reason}>
+        <div className={RUN.side}>
+          <p className={RUN.stageLabel} title={stage.reason}>
             {STAGE_LABEL[stage.index]}
           </p>
-          <div className="runview__actions" role="group" aria-label="Acciones">
+          <div className={RUN.actions} role="group" aria-label="Acciones">
             <button type="button" onClick={onModify} disabled={!onModify}>
               Modificar
             </button>
@@ -879,11 +879,7 @@ export default function StrategyRunView({
         (quickState?.state !== 'none' ||
           quickError ||
           quickVariants.some((variant) => variant.summary)) && (
-          <div
-            className="runview__quick"
-            role="group"
-            aria-label="Prueba rápida"
-          >
+          <div className={RUN.quick} role="group" aria-label="Prueba rápida">
             {quickError && <p role="alert">{quickError}</p>}
             {quickState?.state === 'running' && (
               <QuickProgress state={quickState} />
@@ -898,11 +894,7 @@ export default function StrategyRunView({
           </div>
         )}
       {panelOpen && (
-        <div
-          className="runview__series"
-          role="group"
-          aria-label="Pruebas seguidas"
-        >
+        <div className={RUN.series} role="group" aria-label="Pruebas seguidas">
           <label>
             ¿Cuántas pruebas seguidas?
             <input
@@ -913,14 +905,14 @@ export default function StrategyRunView({
               onChange={(event) => setHowMany(Number(event.target.value) || 1)}
             />
           </label>
-          <p className="runview__hint">
+          <p className={RUN.hint}>
             Cada una en una etapa distinta del mercado, una después de otra:{' '}
             {plan.map((stage) => stage.label).join(' → ')}.{' '}
             {repeatable
               ? 'Se pueden repetir cuantas veces quieras.'
               : `Quedan ${untried.length} etapas sin probar.`}
           </p>
-          <div className="runview__series-actions">
+          <div className={RUN.seriesActions}>
             <button type="button" onClick={() => void runSeries(plan)}>
               Empezar
             </button>
@@ -931,19 +923,19 @@ export default function StrategyRunView({
         </div>
       )}
       {testError && (
-        <p role="alert" className="runview__warn">
+        <p role="alert" className={RUN.warn}>
           {testError}
         </p>
       )}
       {vbtWhy && vbtState && (
-        <p className="runview__hint" data-testid="vbt-why">
+        <p className={RUN.hint} data-testid="vbt-why">
           {vbtWhy}
         </p>
       )}
       {vbtState && !vbtState.available && vbtState.reason && (
-        <details className="vbt-install" data-testid="vbt-install">
+        <details className={VBT.install} data-testid="vbt-install">
           <summary>Cómo instalar VectorBT</summary>
-          <p className="runview__hint">{vbtState.reason}</p>
+          <p className={RUN.hint}>{vbtState.reason}</p>
           <pre aria-label="Comandos de instalación">{commands.join('\n')}</pre>
           <button type="button" onClick={copyCommands}>
             {copied ? 'Copiado' : 'Copiar comandos'}
@@ -951,21 +943,21 @@ export default function StrategyRunView({
         </details>
       )}
       {vbtProblem && !shown && (
-        <p role="alert" className="runview__warn">
+        <p role="alert" className={RUN.warn}>
           {vbtProblem}
         </p>
       )}
 
-      <ol className="runview__stages" aria-label="Etapa de la estrategia">
+      <ol className={RUN.stages} aria-label="Etapa de la estrategia">
         {STAGES.map((name, index) => (
           <li
             key={name}
-            className="runview__stage"
+            className={RUN.stage}
             data-reached={index <= stage.index}
             aria-current={index === stage.index ? 'step' : undefined}
           >
-            <span className="runview__stage-bar" aria-hidden="true" />
-            <span className="runview__stage-name">{name}</span>
+            <span className={RUN.stageBar} aria-hidden="true" />
+            <span className={RUN.stageName}>{name}</span>
           </li>
         ))}
       </ol>
@@ -976,7 +968,7 @@ export default function StrategyRunView({
           percent={overallPercent}
           valueText={`${progressLabel} · ${overallPercent} %`}
         >
-          <p className="runview__progress-text">
+          <p className={RUN.progressText}>
             <span>
               {progressLabel} · {overallPercent} %
               {activeRun?.phase ? ` · ${activeRun.phase}` : ''}
@@ -1005,7 +997,7 @@ export default function StrategyRunView({
         lastFailed &&
         (lastFailed.status === 'failed' ||
           lastFailed.status === 'cancelled') && (
-          <p className="runview__hint" data-testid="vbt-last-failed">
+          <p className={RUN.hint} data-testid="vbt-last-failed">
             {lastFailed.status === 'cancelled'
               ? 'La última exploración con VectorBT se canceló.'
               : `La última exploración con VectorBT no terminó: ${lastFailed.detail}`}
@@ -1019,12 +1011,12 @@ export default function StrategyRunView({
         hasPractice={finished.length > 0}
       />
       {overviewError && !unknownToGate && (
-        <p role="alert" className="runview__warn">
+        <p role="alert" className={RUN.warn}>
           No se pudieron leer las pruebas: {overviewError}
         </p>
       )}
 
-      <div className="runview__kpis" data-testid="run-kpis">
+      <div className={RUN.kpis} data-testid="run-kpis">
         <Kpi
           label="Operaciones cerradas"
           value={summary ? amount(summary.trades, 0) : '—'}
@@ -1067,7 +1059,7 @@ export default function StrategyRunView({
         />
       </div>
       {scopeRun && (
-        <ul className="runview__scope" data-testid="run-evaluation-scope">
+        <ul className={RUN.scope} data-testid="run-evaluation-scope">
           {runScopeLines(scopeRun).map((line) => (
             <li key={line.key} data-tone={line.tone ?? undefined}>
               {line.text}
@@ -1088,20 +1080,12 @@ export default function StrategyRunView({
           problem={vbtProblem}
         />
       )}
-      <div className="runview__chart-card">
+      <div className={RUN.chartCard}>
         {overview && !unknownToGate && (
-          <div className="runview__tabs-wrap">
-            <div
-              className="runview__tabs"
-              role="group"
-              aria-label="Tramos probados"
-            >
+          <div className={RUN.tabsWrap}>
+            <div className={RUN.tabs} role="group" aria-label="Tramos probados">
               {fallbackRun && (
-                <button
-                  type="button"
-                  className="runview__tab"
-                  aria-pressed={true}
-                >
+                <button type="button" className={RUN.tab} aria-pressed={true}>
                   {fallbackLabel}
                 </button>
               )}
@@ -1115,7 +1099,7 @@ export default function StrategyRunView({
                   <button
                     key={tab.stage.from}
                     type="button"
-                    className="runview__tab"
+                    className={RUN.tab}
                     aria-pressed={shownNow}
                     disabled={tab.run === null}
                     data-untested={tab.run === null ? 'true' : undefined}
@@ -1130,22 +1114,22 @@ export default function StrategyRunView({
                 )
               })}
             </div>
-            <p className="runview__hint" data-testid="stage-count">
+            <p className={RUN.hint} data-testid="stage-count">
               {triedTabs.length} de {stageList.length} tramos probados
             </p>
           </div>
         )}
-        <div className="runview__chart-head">
+        <div className={RUN.chartHead}>
           <h4>
             {data
               ? `${data.product} · Velas de la prueba`
               : 'Velas de la prueba'}
           </h4>
-          <span className="runview__chart-tags">LONG / SHORT / Salidas</span>
+          <span className={RUN.chartTags}>LONG / SHORT / Salidas</span>
         </div>
         {data?.candles && (
-          <div className="runview__scope">
-            <p className="runview__hint" data-testid="run-scope">
+          <div className={RUN.scope}>
+            <p className={RUN.hint} data-testid="run-scope">
               {data.view === 'full'
                 ? fullViewText(
                     data.candles.resolution,
@@ -1155,29 +1139,29 @@ export default function StrategyRunView({
                 : `Velas de ${resolutionText(data.candles.resolution)} · zoom a la operación${selected ? ` del ${dayLabel(selected.entry_time_ms)}` : ''}`}
             </p>
             {data.view === 'zoom' && (
-              <button type="button" className="runview__tab" onClick={showAll}>
+              <button type="button" className={RUN.tab} onClick={showAll}>
                 Ver todo el tramo
               </button>
             )}
           </div>
         )}
         {data?.view === 'full' && markers.some((m) => isGroupId(m.id)) && (
-          <p className="runview__hint" data-testid="run-groups-hint">
+          <p className={RUN.hint} data-testid="run-groups-hint">
             Las marcas con «+N» agrupan varias operaciones: al hacer clic en una
             se abre la primera de su grupo.
           </p>
         )}
 
         {unknownToGate && (
-          <p className="runview__empty" data-testid="run-empty">
+          <p className={RUN.empty} data-testid="run-empty">
             Esta estrategia no tiene pruebas guardadas.
           </p>
         )}
         {state.kind === 'loading' && overviewError === null && (
-          <p className="runview__empty">Cargando la última prueba…</p>
+          <p className={RUN.empty}>Cargando la última prueba…</p>
         )}
         {state.kind === 'empty' && (
-          <p className="runview__empty" data-testid="run-empty">
+          <p className={RUN.empty} data-testid="run-empty">
             {state.reason === 'no-runs'
               ? 'Todavía no hay pruebas terminadas de esta estrategia.'
               : state.reason === 'run-not-saved'
@@ -1186,7 +1170,7 @@ export default function StrategyRunView({
           </p>
         )}
         {state.kind === 'error' && (
-          <p role="alert" className="runview__empty">
+          <p role="alert" className={RUN.empty}>
             {state.code === 'exam_not_unlocked'
               ? 'El examen todavía no terminó: sus velas y operaciones se muestran recién después.'
               : state.text}
@@ -1196,11 +1180,11 @@ export default function StrategyRunView({
         {data && (
           <>
             {data.candlesError ? (
-              <p className="runview__empty" data-testid="run-no-candles">
+              <p className={RUN.empty} data-testid="run-no-candles">
                 Sin datos de velas para esta ventana: {data.candlesError}
               </p>
             ) : (
-              <div className="runview__chart">
+              <div className={RUN.chart}>
                 <ApprovedTerminalChart
                   key={`${data.summary.run_id}:${data.product}:${data.view}`}
                   candles={chartCandles}
@@ -1236,25 +1220,25 @@ export default function StrategyRunView({
               </div>
             )}
             {data.candles && data.candles.missing_minutes > 0 && (
-              <p className="runview__hint" data-testid="run-gaps">
+              <p className={RUN.hint} data-testid="run-gaps">
                 Faltan {data.candles.missing_minutes} velas de 1 minuto que
                 Kraken no publicó en esta ventana; no se rellenaron.
               </p>
             )}
             {!data.tradesDone && (
-              <p className="runview__hint" data-testid="run-trades-loading">
+              <p className={RUN.hint} data-testid="run-trades-loading">
                 Cargando las operaciones del tramo: {data.trades.length} de{' '}
                 {data.total}…
               </p>
             )}
             {data.tradesError && (
-              <p className="runview__hint" data-testid="run-trades-error">
+              <p className={RUN.hint} data-testid="run-trades-error">
                 No se pudieron cargar todas las operaciones (se ven{' '}
                 {data.trades.length} de {data.total}): {data.tradesError}
               </p>
             )}
             {fullView && traced && (traced.ignored_position_open ?? 0) > 0 && (
-              <p className="runview__hint" data-testid="run-ignored">
+              <p className={RUN.hint} data-testid="run-ignored">
                 {traced.ignored_position_open === 1
                   ? '1 señal ignorada porque ya había una posición abierta'
                   : `${amount(traced.ignored_position_open ?? 0, 0)} señales ignoradas porque ya había una posición abierta`}{' '}
@@ -1262,34 +1246,34 @@ export default function StrategyRunView({
               </p>
             )}
             {decided?.error && (
-              <p className="runview__hint" data-testid="run-decisions-error">
+              <p className={RUN.hint} data-testid="run-decisions-error">
                 No se pudo leer el detalle de decisiones: {decided.error}
               </p>
             )}
             {(!hasTrace || decided?.value?.captured === false) && (
-              <p className="runview__hint" data-testid="run-no-decisions">
+              <p className={RUN.hint} data-testid="run-no-decisions">
                 Esta prueba se guardó sin el detalle de decisiones; las entradas
                 y salidas sí se ven.
               </p>
             )}
             {traced?.truncated && (
-              <p className="runview__hint" data-testid="run-decisions-cut">
+              <p className={RUN.hint} data-testid="run-decisions-cut">
                 Hay más descartes en esta ventana de los que se muestran (los
                 primeros {traced.signals.length}).
               </p>
             )}
             {data.total === 0 && (
-              <p className="runview__hint" data-testid="run-no-trades">
+              <p className={RUN.hint} data-testid="run-no-trades">
                 La estrategia no abrió posiciones en este producto durante la
                 prueba.
               </p>
             )}
-            <ul className="runview__legend" aria-label="Leyenda">
+            <ul className={RUN.legend} aria-label="Leyenda">
               <li>
-                <b className="runview__long">L</b> Entrada LONG
+                <b className={RUN.long}>L</b> Entrada LONG
               </li>
               <li>
-                <b className="runview__short">S</b> Entrada SHORT
+                <b className={RUN.short}>S</b> Entrada SHORT
               </li>
               <li>
                 <b>×</b> Salida (motivo en el detalle)
@@ -1297,7 +1281,7 @@ export default function StrategyRunView({
               <li>
                 <b>◦</b> Descarte
               </li>
-              <li className="runview__legend-note">
+              <li className={RUN.legendNote}>
                 {data.summary.label} · eje del gráfico en UTC, tablas en hora de
                 Madrid
               </li>
@@ -1333,12 +1317,12 @@ function Kpi({
   tone: 'bad' | null
 }) {
   return (
-    <div className="runview__kpi">
-      <span className="runview__kpi-label">{label}</span>
-      <strong className="runview__kpi-value" data-tone={tone ?? undefined}>
+    <div className={RUN.kpi}>
+      <span className={RUN.kpiLabel}>{label}</span>
+      <strong className={RUN.kpiValue} data-tone={tone ?? undefined}>
         {value}
       </strong>
-      <span className="runview__kpi-note">{note}</span>
+      <span className={RUN.kpiLabel}>{note}</span>
     </div>
   )
 }
@@ -1375,11 +1359,11 @@ function QuickProgress({ state }: { state: QuickState }) {
       valueText={text}
       percent={percent}
     >
-      <p className="runview__progress-text">
+      <p className={RUN.progressText}>
         <span>{text}</span>
       </p>
       {silent > 120_000 && (
-        <p className="runview__hint" role="alert">
+        <p className={RUN.hint} role="alert">
           Sin avances hace {Math.round(silent / 60_000)} min: puede estar
           trabada.
         </p>
@@ -1458,7 +1442,7 @@ function QuickResult({ state }: { state: QuickState }) {
         </li>
       </ul>
       {summary.ficha && <QuickFichaTables ficha={summary.ficha} />}
-      <p className="runview__hint">{summary.note}</p>
+      <p className={RUN.hint}>{summary.note}</p>
     </div>
   )
 }
@@ -1478,8 +1462,8 @@ function QuickFichaTables({ ficha }: { ficha: QuickFicha }) {
         {ficha.readings.length} renglones leídos, sobre {ficha.photos} fotos con
         espejo
       </p>
-      <div className="runview__table-wrap">
-        <table className="runview__table" aria-label="Lectura por renglón">
+      <div className={RUN.tableWrap}>
+        <table className={RUN.table} aria-label="Lectura por renglón">
           <thead>
             <tr>
               <th scope="col">Renglón</th>
@@ -1516,7 +1500,7 @@ function QuickFichaTables({ ficha }: { ficha: QuickFicha }) {
           </tbody>
         </table>
       </div>
-      <p className="runview__hint">
+      <p className={RUN.hint}>
         Votar y leer son cosas distintas. «Vota»: parte de las fotos donde el
         gradiente real es de al menos 0,25 (F4 cuenta solo las fotos con el
         precio fuera del área). «Da vuelta»: entre las que votó, parte donde el
@@ -1532,8 +1516,8 @@ function QuickFichaTables({ ficha }: { ficha: QuickFicha }) {
       <p>
         <strong>Contra la regla sin Qwen</strong> · en las mismas fotos
       </p>
-      <div className="runview__table-wrap">
-        <table className="runview__table" aria-label="Contra la regla sin Qwen">
+      <div className={RUN.tableWrap}>
+        <table className={RUN.table} aria-label="Contra la regla sin Qwen">
           <thead>
             <tr>
               <th scope="col">Plazo</th>
@@ -1556,7 +1540,7 @@ function QuickFichaTables({ ficha }: { ficha: QuickFicha }) {
           </tbody>
         </table>
       </div>
-      <p className="runview__hint">
+      <p className={RUN.hint}>
         Correlación (Spearman) de cada suma con el movimiento del precio; la
         regla usa F1, F2, F3, F4 y F6 con signo de reversión y pesos iguales.
         Siempre largo y siempre corto: neto por operación después de costos.
