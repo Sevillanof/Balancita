@@ -1,0 +1,77 @@
+/*
+ * Balancita design system: the only token source (Tailwind v4 `@theme`).
+ * Color is semantic only (long, short, warn, info) and Tailwind's default
+ * palette is removed, so `text-red-500` does not compile.
+ *
+ * Preflight is left out until T8 retires ui.css: the legacy global rules still
+ * style buttons, inputs and tables, and a reset would change every screen.
+ * Utilities live in a cascade layer, so an unlayered legacy rule still wins:
+ * drop the old class from an element when migrating it.
+ */
+@layer theme, base, components, utilities;
+@import 'tailwindcss/theme.css' layer(theme);
+@import 'tailwindcss/utilities.css' layer(utilities);
+
+@import '@fontsource/inter/latin-400.css';
+@import '@fontsource/inter/latin-500.css';
+@import '@fontsource/inter/latin-600.css';
+@import '@fontsource/inter/latin-700.css';
+@import '@fontsource/ibm-plex-mono/latin-400.css';
+@import '@fontsource/ibm-plex-mono/latin-500.css';
+
+@theme static {
+  --color-*: initial;
+  --color-canvas: #0a0d14;
+  --color-surface-1: #0f1420;
+  --color-surface-2: #141b2b;
+  --color-surface-hover: #182033;
+  --color-line: #1e2638;
+  --color-line-strong: #2a354d;
+  --color-line-focus: #3b4866;
+  --color-long: #10b981;
+  --color-short: #ef4444;
+  --color-warn: #f59e0b;
+  --color-info: #60a5fa;
+  --color-ink: #f1f5f9;
+  --color-ink-2: #94a3b8;
+  /* About 2.6:1 on the canvas: decoration only, never text. */
+  --color-ink-3: #475569;
+  --color-on-long: #0a0d14;
+
+  --spacing: 4px;
+
+  --text-*: initial;
+  --text-label: 11px;
+  --text-label--line-height: 14px;
+  --text-hint: 12px;
+  --text-hint--line-height: 18px;
+  --text-note: 13px;
+  --text-note--line-height: 20px;
+  --text-body: 14px;
+  --text-body--line-height: 1.5;
+  --text-title: 16px;
+  --text-title--line-height: 24px;
+  --text-value: 20px;
+  --text-value--line-height: 28px;
+
+  --leading-*: initial;
+
+  --shadow-*: initial;
+  --shadow-popover: 0 8px 24px -4px rgb(0 0 0 / 60%);
+}
+
+/*
+ * ui.css also defines `--font-sans`, `--radius-sm` and `--radius-lg` on :root
+ * with other values, and its unlayered rule wins. `inline` embeds these values
+ * in the utilities so they never read ui.css; T8 can drop `inline` with ui.css.
+ */
+@theme inline {
+  --font-*: initial;
+  --font-sans:
+    'Inter', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  --radius-*: initial;
+  --radius-sm: 4px;
+  --radius-lg: 8px;
+}

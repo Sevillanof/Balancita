@@ -62,16 +62,16 @@ The status pill formula (10% fill, 25% border, full-strength text) becomes `bg-l
 
 ## Tasks
 
-| ID  | Specs          | Route  | Status                              | Commit |
-| --- | -------------- | ------ | ----------------------------------- | ------ |
-| T1  | S1, S3, S5     | inline | pending (needs dependency approval) | —      |
-| T2  | S1, S2, S5     | inline | pending                             | —      |
-| T3  | S4             | inline | pending                             | —      |
-| T4  | S2, S3         | inline | pending                             | —      |
-| T5  | S1, S2, S5, S6 | inline | pending                             | —      |
-| T6  | S1, S2, S5, S6 | inline | pending                             | —      |
-| T7  | S1, S2, S5     | inline | pending                             | —      |
-| T8  | S1             | inline | pending                             | —      |
+| ID  | Specs          | Route  | Status                     | Commit |
+| --- | -------------- | ------ | -------------------------- | ------ |
+| T1  | S1, S3, S5     | inline | done (pending user commit) | —      |
+| T2  | S1, S2, S5     | inline | pending                    | —      |
+| T3  | S4             | inline | pending                    | —      |
+| T4  | S2, S3         | inline | pending                    | —      |
+| T5  | S1, S2, S5, S6 | inline | pending                    | —      |
+| T6  | S1, S2, S5, S6 | inline | pending                    | —      |
+| T7  | S1, S2, S5     | inline | pending                    | —      |
+| T8  | S1             | inline | pending                    | —      |
 
 ### T1 — Tailwind and the single theme (no visual change)
 
@@ -131,4 +131,12 @@ Each task is one work-unit commit and, where it passes ~400 authored lines, its 
 - **L1 (2026-10-23, user, verbatim):** «Hablemos en espeañol. Pensemos con cual lo podemos hacer, si no es tailwing» · «Tambien el plan es dejar de usar css plano, y empezar a usar otra cosa, pensaba en tailwing? Que decis vos? Se critico» · «Lo que me molesta es que el css que tenemos hoy es feo y no tiene buen performance. Yo quiero algo limpio y que funcione bien.» · «El design system tiene que estar unificado. Tailwind puede ser la mejor opcion para unificarlo y hacerlo escalable?» · «Escribime un archivo .md para implementarlo.»
 - **L2 (2026-10-23, evidence):** CSS audit: 11 potentially expensive properties across 13 files, all screen CSS uses only `--mc-*`. The Terminal slowness was the gateway (85% of CPU in two SQLite tails), fixed in 9365be8d; CPU ~65% → ~4%, bootstrap ~0.1 s.
 - **L3 (2026-10-23, decision):** Rust migration not recommended (about 158k lines, the Python engine ecosystem, and the ADR freeze on C25-C31 and Kronos). Tailwind v4 accepted as the unification tool, under the rules in S2 and S3.
-- **Next step:** approve the two Tailwind dependencies, then T1.
+- **L4 (2026-10-23, T1 done):** `tailwindcss` and `@tailwindcss/vite` 4.3.3 pinned. Deviations from the T1 text, all forced by the unlayered `ui.css` that lives until T8:
+  - Only `tailwindcss/theme.css` and `utilities.css` are imported; no preflight, because it would change the visuals while `ui.css` exists.
+  - `--font-*` and `--radius-*` use `@theme inline`, because `ui.css` redefines `--font-sans`, `--radius-sm` and `--radius-lg` on `:root`. The `--text-*`, `--leading-*` and `--shadow-*` namespaces are reset to `initial` for the same reason.
+  - The `:root` block in `mission-control.css` is not deleted; it becomes `--mc-*` aliases to the theme. `--mc-font`, `--mc-font-mono`, `--mc-radius` and `--mc-radius-lg` stay literal because of that collision.
+  - No `--chart-up` / `--chart-down` aliases: they were never defined, and the chart uses its fallbacks, so defining them would change the colors.
+  - Fonts moved from `AppShell.tsx` to `theme.css`.
+- **L4 checks:** computed styles identical before and after (391 elements in Terminal, 191 in Estrategias, 0 differences, same fonts loaded). The build has no default palette (`red-500` is absent). tsc, eslint and 483/483 tests pass.
+- **L5 (2026-10-23, performance, measured before T1):** 60 s in Terminal with live data, prod build: CPU 3.2%, 60 FPS, 0 long tasks. The main cost was the chart's price formatter, which created an `Intl.NumberFormat` on every call. Caching it in `src/shared/finance/format.ts` cut formatter time from ~656 ms to ~9 ms. Rust/WASM is not needed.
+- **Next step:** T2.
