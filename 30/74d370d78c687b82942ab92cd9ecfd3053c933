@@ -1,0 +1,31 @@
+src/features/strategy-lab/presentation/AnalyzerModal.test.tsx
+  s_e15f51fa943e1d::t_b72a8c39bffba0 153-202
+src/features/strategy-lab/presentation/AnalyzerModal.tsx
+  s_e15f51fa943e1d::t_f9328972738fb4 1,209,246,275,277-278,292,295,308-309,320,338-339,341,368,392,416,421,424,432,446,454,459,522,564,575,580
+src/features/strategy-lab/presentation/StrategyRunView.tsx
+  s_e15f51fa943e1d::t_5be7f6446a087f 1,936
+src/features/strategy-lab/presentation/VectorbtCompare.tsx
+  s_e15f51fa943e1d::t_5d5b6cf1a18779 1,107-108,164
+src/features/strategy-lab/presentation/VectorbtModal.tsx
+  s_e15f51fa943e1d::t_a0c013d95740a7 1,133,164,200,223,266
+src/features/strategy-lab/presentation/VectorbtReportPanel.tsx
+  s_e15f51fa943e1d::t_53b4c2dddf36ca 1,88,92,127,200,204,216,297,331,396,408
+src/features/strategy-lab/presentation/analyzer-styles.ts
+  s_e15f51fa943e1d::t_011673ef0c0a34 1-26
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "3074d370d78c687b82942ab92cd9ecfd3053c933",
+  "prompts": {},
+  "sessions": {
+    "s_e15f51fa943e1d": {
+      "agent_id": {
+        "tool": "github-copilot-cli",
+        "id": "ff6016a2-cdbf-403f-99d2-004567e63f82",
+        "model": "unknown"
+      },
+      "human_author": "Franco Sevillano <79455847+Sevillanof@users.noreply.github.com>"
+    }
+  }
+}
