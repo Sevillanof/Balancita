@@ -154,6 +154,10 @@ def run_exam(history, db_path, provider, cfg, holdout_ms, *, max_minutes=55.0, c
                 log("examen: armando las fotos de {} (lee velas guardadas, sin modelo)…".format(product))
                 photos += make_photos(history, cfg, product, holdout_ms)
             chosen = choose_photos(photos, cfg, holdout_ms)
+            if cfg.get("memory"):                       # situaciones parecidas ya resueltas (``futures_qwen_memory``)
+                from . import futures_qwen_memory as memory
+                enough = memory.attach(chosen, photos, cfg)
+                log("memoria: {} de {} fotos tienen casos parecidos suficientes".format(enough, len(chosen)))
             _store_photos(pdb, chosen)
             log("examen: {} fotos posibles, {} elegidas al azar repartidas en el tiempo".format(len(photos), len(chosen)))
             if factors:
