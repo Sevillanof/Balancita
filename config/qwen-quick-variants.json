@@ -158,6 +158,20 @@
         "PF_ETHUSD",
         "PF_SOLUSD"
       ]
+    },
+    {
+      "id": "memoria",
+      "label": "Actual + memoria de casos",
+      "kind": "memory",
+      "base": "live",
+      "prompt_version": 6.1,
+      "memory": {
+        "k": 8,
+        "horizon_min": 240,
+        "min_cases": 5,
+        "library_step_h": 1
+      },
+      "note": "Lo mismo que Qwen en vivo (la ficha de 8 factores, real y espejo) más un renglón al final: cómo terminaron las 8 situaciones más parecidas del pasado a 4 h (cuántas subieron, cuántas bajaron, movimiento mediano). Los casos salen de las fotos del mismo examen, solo los que ya estaban resueltos en el momento de la foto (estrictamente anteriores, con el plazo cumplido) y separados por al menos 4 h entre sí. El espejo ve los mismos casos con el resultado dado vuelta. Qwen en vivo NO cambia con esto."
     }
   ]
 }

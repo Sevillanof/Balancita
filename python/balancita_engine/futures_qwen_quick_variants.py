@@ -60,7 +60,9 @@ def apply_variant(cfg, variant):
         out["state_ficha"] = bool(variant.get("state_ficha", True))
         out["state_context"] = list(variant.get("state_context") or ())
         out["factors"] = copy.deepcopy(variant["factors"])
-    if change or factors or "state_extras" in variant:
+    if "memory" in variant:                              # similar past cases at the end of the STATE (``futures_qwen_memory``)
+        out["memory"] = copy.deepcopy(variant["memory"])
+    if change or factors or "state_extras" in variant or "memory" in variant:
         prompt["version"] = variant["prompt_version"]
     return out
 

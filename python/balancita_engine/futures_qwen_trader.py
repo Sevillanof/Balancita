@@ -1740,9 +1740,9 @@ def main(argv=None):
             from . import futures_qwen_quick_variants as variants
             from .futures_qwen_trader_exam import run_exam
             variant = variants.get_variant(args.variant) if args.variant or args.quick is not None else None
-            if args.version == "live" and variant is not None and variant["kind"] != "control":
-                raise TraderError("con --version live se pregunta lo que pregunta Qwen en vivo (variante «actual»): las otras "
-                                  "variantes se aplican sobre la v3")
+            if args.version == "live" and variant is not None and variant["kind"] not in ("control", "memory"):
+                raise TraderError("con --version live se pregunta lo que pregunta Qwen en vivo (variante «actual» o «memoria»): "
+                                  "las otras variantes se aplican sobre la v3")
             if variant is not None and variant.get("model") is None:
                 cfg = variants.apply_variant(cfg, variant)       # its own questions / state: hashed in the identity
             if args.positioning_db:
