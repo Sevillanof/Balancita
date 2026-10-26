@@ -1,3 +1,4 @@
+import { RUN } from './run-view-styles.ts'
 import { etaText } from '../domain/vectorbt-format.ts'
 import type { VbtExploration } from '../infrastructure/vectorbt-api.ts'
 import RunProgress from './RunProgress.tsx'
@@ -28,7 +29,7 @@ export default function VectorbtProgress({
       percent={percent}
       valueText={`${Math.round(percent)} %: ${what}`}
     >
-      <p className="runview__progress-text" data-testid="vbt-progress-text">
+      <p className={RUN.progressText} data-testid="vbt-progress-text">
         <span>
           Explorando con VectorBT · {Math.round(percent)} % · {what}
           {eta && ` · faltan ${eta}`}
@@ -38,7 +39,7 @@ export default function VectorbtProgress({
         </button>
       </p>
       {SLOW_FIRST_TIME.includes(exploration.phase) && (
-        <p className="runview__hint">
+        <p className={RUN.hint}>
           La primera vez tarda más: baja datos de Kraken y prepara el simulador.
           Las siguientes son bastante más rápidas.
         </p>

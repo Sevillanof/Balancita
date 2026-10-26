@@ -69,7 +69,7 @@ The status pill formula (10% fill, 25% border, full-strength text) becomes `bg-l
 | T3  | S4             | inline | local done; publication pending | 292ff226 |
 | T4  | S2, S3         | inline | done                            | 6b727b23 |
 | T5  | S1, S2, S5, S6 | inline | done                            | 694e81a3 |
-| T6  | S1, S2, S5, S6 | inline | in progress; T6b local done     | —        |
+| T6  | S1, S2, S5, S6 | inline | in progress; T6c local done     | —        |
 | T7  | S1, S2, S5     | inline | pending                         | —        |
 | T8  | S1             | inline | pending                         | —        |
 
@@ -128,7 +128,7 @@ pnpm exec vitest run --dir src --exclude '.claude/**' --exclude '**/node_modules
 
 The test uses the existing TypeScript compiler to inspect JSX `className` values and reachable static strings (templates, branches, aliases, imported variant maps and class-helper arguments). It ignores comments, display text and unrelated strings such as chart colors. Tests/specs are excluded from the application-source scan so negative fixtures do not flag themselves. This is a static guard, not a runtime evaluator: classes assembled from arbitrary runtime data or custom function return values still require review.
 
-Only `theme.css` and the 7 explicitly listed legacy source stylesheets are allowed. New or renamed CSS files under `src` fail; when retiring a legacy stylesheet, remove its entry from `LEGACY_CSS` in the same slice. Stale entries fail too, preventing retired paths from silently remaining exempt. The standalone T3 catalog is tooling under `scripts/design-system`, outside this app-source rule.
+Only `theme.css` and the 6 explicitly listed legacy source stylesheets are allowed. New or renamed CSS files under `src` fail; when retiring a legacy stylesheet, remove its entry from `LEGACY_CSS` in the same slice. Stale entries fail too, preventing retired paths from silently remaining exempt. The standalone T3 catalog is tooling under `scripts/design-system`, outside this app-source rule.
 
 ### T5 — Terminal screens
 
@@ -183,14 +183,14 @@ Temporary important modifiers override unlayered native-control styles until
 T8. The generic button-focus variant uses `:where` so the more specific selected
 row and present/copy button retain their original focus treatment.
 
-The `demo-terminal__chart` hook remains solely for the strategy-detail height
-override in `StrategyRunView.css`; remove it with that stylesheet in T6. The
-`demo-shell__status` hook likewise remains for the existing test contract, not
-for removed CSS. Neither hook requires keeping an app stylesheet.
+T6c removed the `demo-terminal__chart` hook with the strategy-detail stylesheet;
+the shared chart keeps its `chart-height` utility and the strategy wrapper
+applies the responsive height through a named descendant variant.
+`demo-shell__status` remains for the existing test contract, not for CSS.
 
 ### T6 — Estrategias screens
 
-- Migrate `StrategiesPage.css` (146), `StrategyLab.css` (5), `StrategyModals.css` (185), `StrategyRunView.css` (491), `AnalyzerModal.css` (254), `VectorbtPanel.css` (261) under `src/features/strategy-lab/presentation/`.
+- Migrate `StrategiesPage.css` (146), `StrategyLab.css` (5), `StrategyModals.css` (185), `StrategyRunView.css` (456), `AnalyzerModal.css` (254), `VectorbtPanel.css` (261) under `src/features/strategy-lab/presentation/`.
 - Check: screenshots; strategy switch shows no frame gap over 50 ms.
 
 T6 follows the same independent-unit boundary as T5:
@@ -198,8 +198,8 @@ T6 follows the same independent-unit boundary as T5:
 | Unit | Scope                                                                | Status                          |
 | ---- | -------------------------------------------------------------------- | ------------------------------- |
 | T6a  | Strategy list, responsive composition, row menus and notices         | Done; ecaf7b4a                  |
-| T6b  | Shared strategy dialogs, editor, details and lifecycle confirmations | Local done; pending user commit |
-| T6c  | Strategy-run detail, test stages, results and chart composition      | Pending                         |
+| T6b  | Shared strategy dialogs, editor, details and lifecycle confirmations | Done; 7fcfdffc                  |
+| T6c  | Strategy-run detail, test stages, results and chart composition      | Local done; pending user commit |
 | T6d  | Signal analyzer and VectorBT panels                                  | Pending                         |
 
 T6a retires `StrategiesPage.css` (166 actual lines) and `StrategyLab.css` (5).
@@ -222,6 +222,22 @@ Native field/button overrides and modal paragraph margins temporarily need
 important utilities while unlayered legacy styles remain. These preserve
 the old cascade, including the analyzer legend's zero margin, rather than
 introducing new behavior. Primary/danger text and backdrop colors are tokens.
+
+T6c retires `StrategyRunView.css` (456 actual lines) and 36 coupled lines in
+`VectorbtPanel.css`. Shared `run-view-styles.ts` covers the run header, stages,
+KPIs, tabs, chart wrapper, tables and both progress-bar shapes. Report,
+comparison and variant-origin consumers migrate together; their remaining
+`vbt-*` styles and analyzer styles stay for T6d. The unused selected-table-row
+rule is not carried forward: no run-detail table sets that attribute.
+
+The inclusive 720 px breakpoint keeps two KPI columns and a 340 px chart;
+larger screens retain `clamp(380px, 56vh, 600px)`. The named chart-height
+variant targets the real chart element, not an obsolete hook. Table cells
+retain native `normal` line-height and the existing blue, unboxed row actions;
+important utilities bridge unlayered VectorBT/native controls until T6d/T8.
+Only the pending-stage and progress-copy text intentionally changes from
+decoration-only `ink-3` to readable `ink-2`. Progress remains bounded to 0–100,
+uses the previously winning 0.6 s transition and honors reduced motion.
 
 ### T7 — Observability screens
 
@@ -306,4 +322,15 @@ Each task or explicitly named sub-unit is one work-unit commit; report slices ov
   - Live integration harness: **18 additional comparisons** for the strategy list, create/edit/details/delete-preview dialogs and Terminal at 1600/760/390 px, replaying the same GET responses/public snapshot. No differences. The harness rejects non-GET API requests; it never accepts a real create, edit, activation or delete.
   - Runtime measurement: six real create/edit/details open-and-close transitions per version, **60 FPS**, max frame **16.8 ms**, zero frames >50 ms, long tasks or runtime errors. Browser task CPU **2.06% before / 2.44% after**; no optimization is claimed. No service restarts, new ports, dependencies or strategy/data writes.
   - Catalog rebuilt: **85 source tokens**, seven previews/variants at 1440/768/390 px, no external requests; three exporter tests pass. Rollback: restore `StrategyModals.css`, its `ModalFrame` import/guard entry, T6b consumer/theme/frame edits and this plan; remove `modal-styles.ts` and `ModalFrame.test.tsx`. T6a remains independent. Local-only; user owns all Git writes.
-- **Next step:** user reviews/commits T6b; continue with T6c strategy-run detail. External T3 publication and React 18 host validation remain pending.
+- **L14 (T6c local delivery):** T6b was committed by the user as `7fcfdffc`. Migrated run-detail composition and all shared report/progress consumers. Removed **492 CSS lines** (456 from the retired run stylesheet and 36 coupled VectorBT lines), the obsolete chart hook and one guard entry. Six legacy CSS files remain.
+  - Review first: `run-view-styles.ts` and named theme variants against the removed selectors; then the six mechanical consumer migrations, shared chart-hook removal and progress tests. **975 changed lines before this documentation update** exceed the ~400-line target, including 492 CSS deletions and 84 new regression-test lines. This is one shared-style retirement; splitting consumers away would leave an invalid cascade. Analyzer and remaining VectorBT styles are out of scope.
+  - Logic check: transpiled ASTs of the six run/report/progress consumers and `ApprovedTerminalChart.tsx` match the committed baseline after removing only presentation class attributes, the retired/new style imports and the new progress-fill test hook. Fetching, polling, handlers, chart data/markers, calculations, progress values and lifecycle permissions are unchanged.
+  - Tests: **220/220 across ten files**, with nine new progress cases for bounds, fractional percentages, completed/current/pending segments, accessible values, children and updates. Existing tests cover stage selection, marker/zoom wiring, test sequencing/cancellation, report ranking/comparison and strategy actions. Exact command: `npx vitest run --dir src --exclude '.claude/**' --exclude '**/node_modules/**' src/features/strategy-lab/presentation src/shared/design-system/guardrails.test.ts src/shared/mission-control/mission-control.test.tsx src/app/FuturesTerminal.test.tsx`. Typecheck, focused ESLint, production build, Prettier, editor diagnostics and whitespace checks pass; the pre-existing chunk-size advisory remains.
+  - Isolated production harness: **396 comparisons** at **1600/1120/901/900/761/760/721/720/601/600/390 px**, covering empty/loading/error/missing artifacts, all five stages, populated real charts, stage tabs/focus, consecutive-test form/count/cancel, segmented/continuous progress, unavailable VectorBT, populated diagnostic/ranking/comparison/error/loading, and quick-test running/done/failed/stalled states with factor tables. **Nine additional edge cases** cover positive totals, no-trade rows and unsupported diagnostics at 1600/720/390 px. All geometry/styles match except the explicitly approved `ink-3` → `ink-2` text contrast. Screenshots reviewed; no runtime errors.
+  - Reduced motion: **nine additional comparisons** for test/VectorBT/quick progress at 1600/720/390 px. The migrated fill uses `transition-property: none`; the global reduced-motion rule keeps computed duration at **0.01 ms or less**. Both accessibility preferences and chart-height thresholds are asserted, not inferred from screenshots.
+  - Live integration: **20 comparisons** at 1600/721/720/390 px for default Estrategias, Kronos selection, C29 detail/chart, its test-options form and live Terminal, replaying identical GET responses/public snapshots. No unexpected differences. Non-GET API requests are rejected; no real test, activation, create, edit or deletion was initiated.
+  - Runtime: six live selections (Qwen/Kronos/C29/C30/Qwen/C29), **60.0 FPS before / 60.1 after**, max frame **16.8 ms**, zero frames >50 ms, long tasks or runtime errors. Browser task CPU **3.06% before / 3.24% after**; no performance improvement is claimed.
+  - Local harness evidence lives in session `ff6016a2-cdbf-403f-99d2-004567e63f82/files` under `~/.copilot/session-state/`. Commands: `node "$SESSION_FILES/t6c-runview.mjs"`; `MODES=vbt-positive,vbt-no-trades,vbt-unsupported WIDTHS=1600,720,390 REPORT_NAME=t6c-edge node "$SESSION_FILES/t6c-runview.mjs"`; `REDUCED=1 MODES=running,vbt-running,quick-running WIDTHS=1600,720,390 REPORT_NAME=t6c-reduced node "$SESSION_FILES/t6c-runview.mjs"`; `SLICE=t6c SCENARIOS=strategies,strategy-select,strategy-run-chart,strategy-run-series,live WIDTHS=1600,721,720,390 node "$SESSION_FILES/t5b-visual.mjs"`; `SLICE=t6c STRATEGIES=1 node "$SESSION_FILES/t5b-perf.mjs"`. `$SESSION_FILES` denotes that session's absolute files directory. Harnesses intercept the existing localhost origin; no new ports or service restarts.
+  - Offline catalog: **91 source tokens**, seven previews/variants at 1440/768/390 px, no external requests, three exporter tests pass. No dependencies or real strategy/data writes.
+  - Rollback: restore `StrategyRunView.css`, its import/guard entry, the 36 removed `VectorbtPanel.css` lines, the shared chart hook, six consumers, both existing test-selector edits, theme additions and this plan; remove `run-view-styles.ts` and `RunProgress.test.tsx`. T6a/T6b remain independent. Local-only; user performs all Git writes.
+- **Next step:** user reviews/commits T6c; continue with T6d analyzer and remaining VectorBT panels. External T3 publication and React 18 host validation remain pending.

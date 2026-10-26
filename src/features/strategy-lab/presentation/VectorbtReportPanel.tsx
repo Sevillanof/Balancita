@@ -1,3 +1,4 @@
+import { RUN } from './run-view-styles.ts'
 import { useState } from 'react'
 import { count } from '../domain/strategy-format.ts'
 import {
@@ -117,14 +118,14 @@ export default function VectorbtReportPanel({
           {open ? 'Ocultar' : 'Mostrar'}
         </button>
       </div>
-      <p className="runview__hint" data-testid="vbt-window">
+      <p className={RUN.hint} data-testid="vbt-window">
         {modeText(exploration)} · datos de práctica del {windowText} (el examen
         queda intacto). Es un diagnóstico rápido, no un veredicto.
       </p>
       {open && (
         <div className="vbt-report__body">
           {report.status === 'unsupported' || report.diagnostic === null ? (
-            <p className="runview__hint" data-testid="vbt-unsupported">
+            <p className={RUN.hint} data-testid="vbt-unsupported">
               VectorBT no puede reproducir esta estrategia:{' '}
               {report.unsupported?.reason ?? exploration.detail}. No es un
               problema de la estrategia: para probarla usá Testear, que corre en
@@ -150,14 +151,14 @@ export default function VectorbtReportPanel({
             </>
           )}
           {problem && (
-            <p role="alert" className="runview__warn">
+            <p role="alert" className={RUN.warn}>
               {problem}
             </p>
           )}
-          <p className="runview__warn" data-testid="vbt-warning">
+          <p className={RUN.warn} data-testid="vbt-warning">
             {report.warning}
           </p>
-          <p className="runview__hint">
+          <p className={RUN.hint}>
             pb = punto básico: 1 pb es el 0,01 % de lo operado. Neto es lo que
             queda después de comisiones, costo de ejecución y funding.
           </p>
@@ -171,7 +172,7 @@ function Diagnostic({ diagnostic }: { diagnostic: VbtDiagnostic }) {
   const totals = diagnostic.totals
   return (
     <>
-      <dl className="runview__facts" aria-label="Totales">
+      <dl className={RUN.facts} aria-label="Totales">
         <div>
           <dt>Operaciones</dt>
           <dd>{count(totals.trades)}</dd>
@@ -205,7 +206,7 @@ function Diagnostic({ diagnostic }: { diagnostic: VbtDiagnostic }) {
               ))}
             </ul>
           ) : (
-            <p className="runview__hint">Nada que destacar por ahora.</p>
+            <p className={RUN.hint}>Nada que destacar por ahora.</p>
           )}
         </div>
         <div>
@@ -217,27 +218,27 @@ function Diagnostic({ diagnostic }: { diagnostic: VbtDiagnostic }) {
               ))}
             </ul>
           ) : (
-            <p className="runview__hint">No se vio nada que falle.</p>
+            <p className={RUN.hint}>No se vio nada que falle.</p>
           )}
         </div>
       </div>
       {diagnostic.by_product.length > 0 && (
-        <div className="runview__table-wrap">
-          <table className="runview__table" aria-label="Por producto">
+        <div className={RUN.tableWrap}>
+          <table className={RUN.table} aria-label="Por producto">
             <caption>Por producto</caption>
             <thead>
               <tr>
                 <th scope="col">Producto</th>
-                <th scope="col" className="runview__num">
+                <th scope="col" className={RUN.num}>
                   Operaciones
                 </th>
-                <th scope="col" className="runview__num">
+                <th scope="col" className={RUN.num}>
                   Antes de costos
                 </th>
-                <th scope="col" className="runview__num">
+                <th scope="col" className={RUN.num}>
                   Neto
                 </th>
-                <th scope="col" className="runview__num">
+                <th scope="col" className={RUN.num}>
                   Aciertos
                 </th>
               </tr>
@@ -246,10 +247,10 @@ function Diagnostic({ diagnostic }: { diagnostic: VbtDiagnostic }) {
               {diagnostic.by_product.map((row) => (
                 <tr key={row.product}>
                   <th scope="row">{row.product}</th>
-                  <td className="runview__num">{count(row.trades)}</td>
-                  <td className="runview__num">{bpText(row.gross_bp_mean)}</td>
-                  <td className="runview__num">{bpText(row.net_bp_mean)}</td>
-                  <td className="runview__num">{shareText(row.hit_rate)}</td>
+                  <td className={RUN.num}>{count(row.trades)}</td>
+                  <td className={RUN.num}>{bpText(row.gross_bp_mean)}</td>
+                  <td className={RUN.num}>{bpText(row.net_bp_mean)}</td>
+                  <td className={RUN.num}>{shareText(row.hit_rate)}</td>
                 </tr>
               ))}
             </tbody>
@@ -257,22 +258,22 @@ function Diagnostic({ diagnostic }: { diagnostic: VbtDiagnostic }) {
         </div>
       )}
       {diagnostic.by_exit.length > 0 && (
-        <div className="runview__table-wrap">
-          <table className="runview__table" aria-label="Por tipo de salida">
+        <div className={RUN.tableWrap}>
+          <table className={RUN.table} aria-label="Por tipo de salida">
             <caption>Por tipo de salida</caption>
             <thead>
               <tr>
                 <th scope="col">Salida</th>
-                <th scope="col" className="runview__num">
+                <th scope="col" className={RUN.num}>
                   Operaciones
                 </th>
-                <th scope="col" className="runview__num">
+                <th scope="col" className={RUN.num}>
                   Del total
                 </th>
-                <th scope="col" className="runview__num">
+                <th scope="col" className={RUN.num}>
                   Antes de costos
                 </th>
-                <th scope="col" className="runview__num">
+                <th scope="col" className={RUN.num}>
                   Neto
                 </th>
               </tr>
@@ -281,10 +282,10 @@ function Diagnostic({ diagnostic }: { diagnostic: VbtDiagnostic }) {
               {diagnostic.by_exit.map((row) => (
                 <tr key={row.reason}>
                   <th scope="row">{row.label}</th>
-                  <td className="runview__num">{count(row.trades)}</td>
-                  <td className="runview__num">{shareText(row.share)}</td>
-                  <td className="runview__num">{bpText(row.gross_bp_mean)}</td>
-                  <td className="runview__num">{bpText(row.net_bp_mean)}</td>
+                  <td className={RUN.num}>{count(row.trades)}</td>
+                  <td className={RUN.num}>{shareText(row.share)}</td>
+                  <td className={RUN.num}>{bpText(row.gross_bp_mean)}</td>
+                  <td className={RUN.num}>{bpText(row.net_bp_mean)}</td>
                 </tr>
               ))}
             </tbody>
@@ -331,8 +332,8 @@ function Ranking({
   return (
     <div className="vbt-ranking" data-testid="vbt-ranking">
       <h5>Ranking de variantes · {label}</h5>
-      {headline && <p className="runview__hint">{headline}</p>}
-      <p className="runview__hint" data-testid="vbt-attempts">
+      {headline && <p className={RUN.hint}>{headline}</p>}
+      <p className={RUN.hint} data-testid="vbt-attempts">
         {attempts === null
           ? 'No se pudo leer cuántos intentos lleva esta estrategia.'
           : `Llevás ${attempts} ${attempts === 1 ? 'intento' : 'intentos'} con esta estrategia.`}{' '}
@@ -340,22 +341,22 @@ function Ranking({
         por casualidad. Lo que importa es cómo le va después en el simulador y
         en el examen.
       </p>
-      <div className="runview__table-wrap">
-        <table className="runview__table" aria-label="Ranking de variantes">
+      <div className={RUN.tableWrap}>
+        <table className={RUN.table} aria-label="Ranking de variantes">
           <thead>
             <tr>
               <th scope="col">#</th>
               <th scope="col">Valor</th>
-              <th scope="col" className="runview__num">
+              <th scope="col" className={RUN.num}>
                 Entradas por día
               </th>
-              <th scope="col" className="runview__num">
+              <th scope="col" className={RUN.num}>
                 Neto por operación
               </th>
-              <th scope="col" className="runview__num">
+              <th scope="col" className={RUN.num}>
                 Operaciones
               </th>
-              <th scope="col" className="runview__num">
+              <th scope="col" className={RUN.num}>
                 Aciertos
               </th>
               <th scope="col">&nbsp;</th>
@@ -377,25 +378,21 @@ function Ranking({
                     {row.is_base && ' (la actual)'}
                   </th>
                   {row.status === 'error' ? (
-                    <td colSpan={4} className="runview__hint">
+                    <td colSpan={4} className={RUN.hint}>
                       No se pudo probar: {row.error ?? 'falló'}
                     </td>
                   ) : row.status === 'no_trades' ? (
-                    <td colSpan={4} className="runview__hint">
+                    <td colSpan={4} className={RUN.hint}>
                       No operó nunca con este valor.
                     </td>
                   ) : (
                     <>
-                      <td className="runview__num">
+                      <td className={RUN.num}>
                         {perDayText(row.entries_per_day)}
                       </td>
-                      <td className="runview__num">
-                        {bpText(row.net_bp_mean)}
-                      </td>
-                      <td className="runview__num">{count(row.trades)}</td>
-                      <td className="runview__num">
-                        {shareText(row.hit_rate)}
-                      </td>
+                      <td className={RUN.num}>{bpText(row.net_bp_mean)}</td>
+                      <td className={RUN.num}>{count(row.trades)}</td>
+                      <td className={RUN.num}>{shareText(row.hit_rate)}</td>
                     </>
                   )}
                   <td className="vbt-ranking__action">

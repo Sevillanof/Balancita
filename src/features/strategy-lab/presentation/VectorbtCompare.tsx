@@ -1,3 +1,4 @@
+import { RUN } from './run-view-styles.ts'
 import { useEffect, useState } from 'react'
 import {
   bpText,
@@ -112,19 +113,15 @@ export default function VectorbtCompare({
         )}
       </div>
       {error && (
-        <p
-          role="alert"
-          className="runview__hint"
-          data-testid="vbt-compare-error"
-        >
+        <p role="alert" className={RUN.hint} data-testid="vbt-compare-error">
           {error}
         </p>
       )}
-      {!error && !data && <p className="runview__hint">Comparando…</p>}
+      {!error && !data && <p className={RUN.hint}>Comparando…</p>}
       {data && (
         <>
-          <div className="runview__table-wrap">
-            <table className="runview__table">
+          <div className={RUN.tableWrap}>
+            <table className={RUN.table}>
               <caption>
                 Las dos columnas miden lo mismo: resultado neto = antes de
                 costos − costos − funding, en pb por operación.
@@ -132,13 +129,13 @@ export default function VectorbtCompare({
               <thead>
                 <tr>
                   <th scope="col">&nbsp;</th>
-                  <th scope="col" className="runview__num">
+                  <th scope="col" className={RUN.num}>
                     VectorBT
                   </th>
-                  <th scope="col" className="runview__num">
+                  <th scope="col" className={RUN.num}>
                     Simulador
                   </th>
-                  <th scope="col" className="runview__num">
+                  <th scope="col" className={RUN.num}>
                     Diferencia
                   </th>
                 </tr>
@@ -147,17 +144,15 @@ export default function VectorbtCompare({
                 {ROWS.map((row) => (
                   <tr key={row.label}>
                     <th scope="row">{row.label}</th>
-                    <td className="runview__num">{row.of(data.vectorbt)}</td>
-                    <td className="runview__num">{row.of(data.simulator)}</td>
-                    <td className="runview__num">
-                      {row.diff(data.difference)}
-                    </td>
+                    <td className={RUN.num}>{row.of(data.vectorbt)}</td>
+                    <td className={RUN.num}>{row.of(data.simulator)}</td>
+                    <td className={RUN.num}>{row.diff(data.difference)}</td>
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
-          <p className="runview__hint">
+          <p className={RUN.hint}>
             Ventana de VectorBT: {dayText(data.window.vectorbt.from)} a{' '}
             {dayText(data.window.vectorbt.to)}. Ventana del simulador:{' '}
             {dayText(data.window.simulator.from)} a{' '}
@@ -172,7 +167,7 @@ export default function VectorbtCompare({
             </ul>
           )}
           {data.warning && (
-            <p className="runview__warn" data-testid="vbt-compare-warning">
+            <p className={RUN.warn} data-testid="vbt-compare-warning">
               {data.warning}
             </p>
           )}

@@ -46,6 +46,7 @@
   --color-modal-overlay: rgb(0 0 0 / 55%);
   --color-on-primary: oklch(0.2 0.04 170);
   --color-on-danger: #fff;
+  --color-line-quick: rgba(128, 128, 128, 0.3);
 
   --spacing: 4px;
   --spacing-chart-unit: 0.1rem;
@@ -88,6 +89,10 @@
   --text-table-summary: 0.72rem;
   --text-panel-subtitle: 0.9rem;
   --text-wait-run: 0.85em;
+  --text-run-title: 22px;
+  --text-run-value: 30px;
+  --text-section: 15px;
+  --spacing-legend: 1.4em;
 
   --tracking-label: 0.04em;
   --tracking-title: -0.01em;
@@ -105,6 +110,7 @@
   --leading-control: 21px;
   --leading-browser: normal;
   --leading-none: 1;
+  --leading-kpi: 1.1;
 
   --shadow-*: initial;
   --shadow-popover: 0 8px 24px -4px rgb(0 0 0 / 60%);
@@ -186,6 +192,39 @@
 @custom-variant field-control (& input, & textarea);
 @custom-variant field-input (& input);
 @custom-variant field-textarea (& textarea);
+@custom-variant run-stack (@media (width <= 720px));
+@custom-variant stage-reached (&[data-reached='true'] > span:first-child);
+@custom-variant stage-current (&[aria-current='step'] > span:last-child);
+@custom-variant data-bad (&[data-tone='bad']);
+@custom-variant run-heading (& h4);
+@custom-variant run-warning (& [data-tone='warn']);
+@custom-variant run-chart (& .chart-height);
+@custom-variant run-symbol (& b);
+@custom-variant run-bad (& dd[data-tone='bad']);
+@custom-variant run-good (& dd[data-tone='good']);
+@custom-variant run-report-table (&:where(.vbt-report *));
+@custom-variant run-caption (& caption);
+@custom-variant run-cell (& th, & td);
+@custom-variant run-th (& th);
+@custom-variant run-table-button (& button);
+@custom-variant run-button (& button);
+@custom-variant run-label (& label);
+@custom-variant run-copy (& p, & ul);
+
+@utility strategy-chart-height {
+  --terminal-chart-height: clamp(380px, 56vh, 600px);
+  @media (width <= 720px) {
+    --terminal-chart-height: 340px;
+  }
+}
+
+@utility grid-cols-run-facts {
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+}
+
+@utility transition-progress {
+  transition-property: width;
+}
 
 @utility max-h-dialog {
   max-height: 90vh;

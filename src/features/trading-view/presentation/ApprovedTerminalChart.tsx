@@ -831,7 +831,7 @@ export default function ApprovedTerminalChart({
         data-candle-count={candles.length}
         data-marker-count={markers.length}
         data-selected-marker={selectedId}
-        className="demo-terminal__chart chart-height h-terminal-chart w-full"
+        className="chart-height h-terminal-chart w-full"
         style={
           panes.length > 0
             ? {
