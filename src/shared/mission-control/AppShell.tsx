@@ -24,14 +24,14 @@ export default function AppShell({
   children,
 }: AppShellProps) {
   return (
-    <div className="demo-shell connected-terminal">
+    <div className="demo-shell connected-terminal min-h-svh bg-canvas font-sans text-body text-ink">
       <TopBar
         brandHref={brandHref}
         brandLabel={brandLabel}
         navigation={navigation}
         status={status}
       />
-      <main className="demo-shell__main connected-terminal__main">
+      <main className="connected-terminal__main mx-auto w-shell-content pt-2 pb-12 header-stack:w-shell-content-compact header-stack:pt-5">
         {children}
       </main>
     </div>

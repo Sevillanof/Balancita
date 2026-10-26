@@ -98,7 +98,7 @@ function TerminalView() {
 /** Dark frame for states where the terminal header is not rendered. */
 function SwitchBar({ children }: { children: ReactNode }) {
   return (
-    <div className="demo-shell">
+    <div className="demo-shell min-h-svh bg-canvas font-sans text-body text-ink">
       <div className="source-switch-bar">{children}</div>
     </div>
   )

@@ -11,6 +11,14 @@ const TITLES: Record<DataStateKind, string> = {
   nodata: 'Sin datos',
 }
 
+const KIND_CLASSES: Record<DataStateKind, { border: string; title: string }> = {
+  loading: { border: 'border-line-strong', title: 'text-ink' },
+  error: { border: 'border-short/40', title: 'text-short' },
+  empty: { border: 'border-line-strong', title: 'text-ink' },
+  unavailable: { border: 'border-line-strong', title: 'text-ink' },
+  nodata: { border: 'border-line-strong', title: 'text-ink' },
+}
+
 type DataStateProps = {
   kind: DataStateKind
   /** Replaces the default title of the kind. */
@@ -23,12 +31,14 @@ type DataStateProps = {
 export default function DataState({ kind, title, detail }: DataStateProps) {
   return (
     <div
-      className="mc-datastate"
+      className={`grid gap-1 rounded-sm border border-dashed p-4 text-note text-ink-2 ${KIND_CLASSES[kind].border}`}
       data-kind={kind}
       role={kind === 'error' ? 'alert' : 'status'}
     >
-      <p className="mc-datastate__title">{title ?? TITLES[kind]}</p>
-      {detail !== undefined && <p className="mc-datastate__detail">{detail}</p>}
+      <p className={`m-0 font-semibold ${KIND_CLASSES[kind].title}`}>
+        {title ?? TITLES[kind]}
+      </p>
+      {detail !== undefined && <p className="m-0">{detail}</p>}
     </div>
   )
 }

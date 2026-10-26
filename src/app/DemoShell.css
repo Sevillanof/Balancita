@@ -1,11 +1,5 @@
 .demo-shell {
-  min-height: 100svh;
-  color: var(--mc-text);
-  background: var(--mc-canvas);
-  font-family: var(--mc-font);
   font-feature-settings: 'tnum', 'cv05', 'cv11';
-  font-size: 14px;
-  line-height: 1.5;
 }
 
 .demo-shell *,
@@ -22,83 +16,6 @@
 .demo-shell a:focus-visible {
   outline: 2px solid var(--mc-long);
   outline-offset: 3px;
-}
-
-.demo-shell__header {
-  border-bottom: 1px solid var(--mc-border);
-  background: var(--mc-canvas);
-}
-
-.demo-shell__header-inner {
-  display: flex;
-  width: min(100%, 1800px);
-  min-height: 52px;
-  align-items: center;
-  gap: 28px;
-  margin-inline: auto;
-  padding: 4px 24px;
-}
-
-.demo-shell__brand {
-  display: inline-flex;
-  flex: 0 0 auto;
-  align-items: center;
-  gap: 10px;
-  font-size: 20px;
-  font-weight: 600;
-  letter-spacing: -0.02em;
-}
-
-.demo-shell__brand-mark {
-  display: grid;
-  width: 32px;
-  height: 32px;
-  place-items: center;
-  border-radius: 5px;
-  color: var(--mc-canvas);
-  background: var(--mc-long);
-  font-family: 'IBM Plex Mono', ui-monospace, monospace;
-  font-size: 17px;
-  font-weight: 700;
-}
-
-.demo-shell__brand-period {
-  color: var(--mc-long);
-}
-
-.demo-shell__navigation {
-  display: flex;
-  align-self: stretch;
-  gap: 4px;
-}
-
-.demo-shell__nav-link {
-  display: inline-flex;
-  min-height: 40px;
-  align-items: center;
-  padding: 0 12px;
-  border-bottom: 2px solid transparent;
-  color: var(--mc-text-2) !important;
-  font-size: 12px;
-  white-space: nowrap;
-}
-
-.demo-shell__nav-link:hover,
-.demo-shell__nav-link[aria-current='page'] {
-  color: var(--mc-long) !important;
-}
-
-.demo-shell__nav-link[aria-current='page'] {
-  border-bottom-color: var(--mc-long);
-}
-
-.demo-shell__status {
-  display: flex;
-  min-width: 0;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 16px;
-  margin-left: auto;
 }
 
 .demo-shell__badge {
@@ -130,12 +47,6 @@
   border-color: var(--mc-border-strong);
   background: var(--mc-canvas);
   font-weight: 500;
-}
-
-.demo-shell__main {
-  width: min(100% - 56px, 1800px);
-  margin-inline: auto;
-  padding-block: 8px 48px;
 }
 
 .demo-shell__eyebrow {
@@ -328,74 +239,7 @@
   }
 }
 
-/* The status chips (flow, usage, source) need ~620px: below that width they
-   take a row of their own instead of overlapping the menu. */
-
-@media (max-width: 1080px) {
-  .demo-shell__header-inner {
-    flex-wrap: wrap;
-    gap: 8px 18px;
-  }
-
-  .demo-shell__status {
-    order: 3;
-    width: 100%;
-    flex-wrap: wrap;
-    justify-content: flex-start;
-    gap: 8px;
-    padding-bottom: 8px;
-  }
-}
-
-@media (max-width: 760px) {
-  .demo-shell__header-inner {
-    flex-wrap: wrap;
-    gap: 8px 18px;
-    padding: 8px 16px 0;
-  }
-
-  .demo-shell__status {
-    gap: 8px;
-  }
-
-  .demo-shell__navigation {
-    order: 3;
-    width: 100%;
-    overflow-x: auto;
-  }
-
-  .demo-shell__main {
-    width: calc(100% - 32px);
-    padding-top: 20px;
-  }
-}
-
-/* Phone: logo and menu on the first row, data source and badges full width below. */
-
-@media (max-width: 640px) {
-  .demo-shell__navigation {
-    order: 2;
-    width: auto;
-    margin-left: auto;
-  }
-
-  .demo-shell__status {
-    order: 3;
-    width: 100%;
-    flex-wrap: wrap;
-    padding-bottom: 8px;
-  }
-}
-
 @media (max-width: 460px) {
-  .demo-shell__header-inner {
-    column-gap: 12px;
-  }
-
-  .demo-shell__brand {
-    font-size: 18px;
-  }
-
   .demo-shell__badge {
     padding-inline: 6px;
     font-size: 9px;

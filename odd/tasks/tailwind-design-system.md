@@ -62,16 +62,16 @@ The status pill formula (10% fill, 25% border, full-strength text) becomes `bg-l
 
 ## Tasks
 
-| ID  | Specs          | Route  | Status                     | Commit |
-| --- | -------------- | ------ | -------------------------- | ------ |
-| T1  | S1, S3, S5     | inline | done (pending user commit) | —      |
-| T2  | S1, S2, S5     | inline | pending                    | —      |
-| T3  | S4             | inline | pending                    | —      |
-| T4  | S2, S3         | inline | pending                    | —      |
-| T5  | S1, S2, S5, S6 | inline | pending                    | —      |
-| T6  | S1, S2, S5, S6 | inline | pending                    | —      |
-| T7  | S1, S2, S5     | inline | pending                    | —      |
-| T8  | S1             | inline | pending                    | —      |
+| ID  | Specs          | Route  | Status                     | Commit   |
+| --- | -------------- | ------ | -------------------------- | -------- |
+| T1  | S1, S3, S5     | inline | done                       | 3cf55be8 |
+| T2  | S1, S2, S5     | inline | done (pending user commit) | —        |
+| T3  | S4             | inline | pending                    | —        |
+| T4  | S2, S3         | inline | pending                    | —        |
+| T5  | S1, S2, S5, S6 | inline | pending                    | —        |
+| T6  | S1, S2, S5, S6 | inline | pending                    | —        |
+| T7  | S1, S2, S5     | inline | pending                    | —        |
+| T8  | S1             | inline | pending                    | —        |
 
 ### T1 — Tailwind and the single theme (no visual change)
 
@@ -124,7 +124,7 @@ The status pill formula (10% fill, 25% border, full-strength text) becomes `bg-l
 
 ## Delivery
 
-Each task is one work-unit commit and, where it passes ~400 authored lines, its own PR in a chain against `main`. Push and PR creation use the Sevillanof account.
+Each task is one work-unit commit; report slices over ~400 authored changed lines rather than compressing them. The assistant only edits and validates: the user runs all branch, commit, push and PR commands. Per the user's 2026-10-26 instruction, commit commands for this work omit the Copilot co-author trailer.
 
 ## Log
 
@@ -139,4 +139,11 @@ Each task is one work-unit commit and, where it passes ~400 authored lines, its 
   - Fonts moved from `AppShell.tsx` to `theme.css`.
 - **L4 checks:** computed styles identical before and after (391 elements in Terminal, 191 in Estrategias, 0 differences, same fonts loaded). The build has no default palette (`red-500` is absent). tsc, eslint and 483/483 tests pass.
 - **L5 (2026-10-23, performance, measured before T1):** 60 s in Terminal with live data, prod build: CPU 3.2%, 60 FPS, 0 long tasks. The main cost was the chart's price formatter, which created an `Intl.NumberFormat` on every call. Caching it in `src/shared/finance/format.ts` cut formatter time from ~656 ms to ~9 ms. Rust/WASM is not needed.
-- **Next step:** T2.
+- **L6 (2026-10-26, T2 done):** `Panel`, `Metric`, `StatusPill`, `DataState`, `DataProvenance`, `TopBar` and the `AppShell` frame use semantic Tailwind utilities. Removed 193 lines of component CSS and 156 lines from `DemoShell.css`. `Metric` is retained as specified by T2; its removal is not part of this migration.
+  - Added semantic brand/provenance typography, tracking, brand radius and shell-width tokens/utilities. Named header variants preserve the inclusive 1080/760/640/460px breakpoints, including the exact boundary widths. No arbitrary sizing/color values in `className`, new dependencies or strategy logic changes.
+  - `TerminalEntry`'s loading/error frame gets the same shell utilities because it shared the removed root styles. Legacy link/reset/font-feature rules and screen-owned badge/select rules remain until T5/T8. `demo-shell__status` remains a hook for the selector CSS and existing tests.
+  - Without preflight, a side-only border must use `border-b-solid`, not `border-solid`: the latter also enables the browser's default medium borders on the other sides.
+- **L6 checks:** production builds compared in headless Chrome through the existing localhost port, with the same captured public-market snapshot and GET responses replayed to both versions. Terminal (395 elements), Estrategias (191), and a component fixture (112, including all tones, data states and known/unknown provenance) compared at 1600/1081/1080/761/760/641/640/461/460/390px, in normal, navigation hover/focus and product-selector focus states: zero computed visual-style/geometry differences after normalizing equivalent color syntax and ignoring non-rendered border colors and the equivalent header max-width constraint. Screenshots reviewed: Estrategias is byte-identical at all 10 widths; pills have at most one channel level of pixel rounding from srgb vs oklab interpolation, and two chart pixels at 1081px differ by at most three levels. No browser runtime errors. No new ports or server restarts.
+  - Focused validation: `npx vitest run --dir src --exclude '.claude/**' --exclude '**/node_modules/**' src/shared/mission-control/mission-control.test.tsx src/app/FuturesTerminal.test.tsx src/app/TerminalEntry.test.tsx src/features/strategy-lab/presentation/StrategiesPage.test.tsx src/features/observability/presentation/Observability.test.tsx`: **155/155 pass**, including 10 new regression cases. `npx tsc -b`, targeted ESLint and the production build pass. The existing >500kB chunk warning remains; no runtime-performance improvement is claimed for this styling slice.
+  - Rollback boundary: the seven shared component TSX files and their test, `theme.css`, `mission-control.css`, `DemoShell.css`, `TerminalEntry.tsx`, plus this T2 log/status. The slice exceeds the ~400-line review target mainly because old CSS is removed; it remains one cohesive migration, with no unrelated work.
+- **Next step:** user reviews/commits T2, then T3.
