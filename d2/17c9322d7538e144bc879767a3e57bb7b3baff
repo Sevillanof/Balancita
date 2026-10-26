@@ -1,0 +1,39 @@
+odd/tasks/tailwind-design-system.md
+  s_e15f51fa943e1d::t_0108c8731431e7 65-74,134-142
+package.json
+  s_e15f51fa943e1d::t_a6eaf5b4565d7d 37,53
+pnpm-lock.yaml
+  s_e15f51fa943e1d::t_d8909000b6b5f2 38,44-47,50,71,77,80,83,93-95,101,104,107,390,397,404,411,418,425,465-558,854-857,984-986,1037-1040,1076-1081,1088-1093,1100-1105,1112-1117,1124-1129,1136-1142,1148-1155,1162-1169,1176-1183,1190-1196,1204-1209,1216-1219,1242-1244,1409-1415,1783,1785,1806,1808,1919,1926,1930-1997,2017,2027,2091,2094,2096-2097,2099,2107,2114,2137,2141,2143,2166,2168,2172,2182,2185,2187,2190,2197,2304-2308,2317,2321,2328,2330,2343,2345,2375-2376,2444-2445,2484-2485,2530-2532,2536-2538,2542-2544,2548-2550,2554-2556,2560-2562,2566-2568,2572-2574,2578-2580,2584-2586,2590-2592,2596-2611,2644-2647,2792-2795,2827,2829-2830,2832-2833,2854,2864,2866,2869,2880
+src/main.tsx
+  s_e15f51fa943e1d::t_e12ef5c2357c4a 4
+src/shared/mission-control/mission-control.css
+  s_e15f51fa943e1d::t_fc119b0036128c 5-6,9-15,17-20,22-25,27-30,37-43
+src/shared/design-system/theme.css
+  s_1e33ee86f2c16c::t_fba09c2e74b591 1-77
+vite.config.ts
+  s_e15f51fa943e1d::t_2670ec79cb8339 3,10-14
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "d217c9322d7538e144bc879767a3e57bb7b3baff",
+  "prompts": {},
+  "sessions": {
+    "s_1e33ee86f2c16c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "a4e6dbab-ddd9-42a8-b1aa-267c70cba5d7",
+        "model": "unknown"
+      },
+      "human_author": "Franco Sevillano <79455847+Sevillanof@users.noreply.github.com>"
+    },
+    "s_e15f51fa943e1d": {
+      "agent_id": {
+        "tool": "github-copilot-cli",
+        "id": "ff6016a2-cdbf-403f-99d2-004567e63f82",
+        "model": "unknown"
+      },
+      "human_author": "Franco Sevillano <79455847+Sevillanof@users.noreply.github.com>"
+    }
+  }
+}

@@ -1,0 +1,29 @@
+odd/tasks/tailwind-design-system.md
+  s_e15f51fa943e1d::t_15e3b2dbea749f 65-74,127,142-149
+src/shared/mission-control/DataState.tsx
+  s_e15f51fa943e1d::t_fa1b86732eea16 14-21,34,38-41
+src/shared/mission-control/Metric.tsx
+  s_e15f51fa943e1d::t_1231fdff5a780f 14-19,29-47
+src/shared/mission-control/mission-control.test.tsx
+  s_e15f51fa943e1d::t_d2bab4c55fbbb7 25-38,61-73,85-102
+src/app/TerminalEntry.tsx
+  s_e15f51fa943e1d::t_eabb5c1d0b2f04 101
+src/shared/mission-control/AppShell.tsx
+  s_e15f51fa943e1d::t_4df2cf6e41bf06 27,34
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "9dc182b142151a27febcb0acb9935b6fb0bf3aac",
+  "prompts": {},
+  "sessions": {
+    "s_e15f51fa943e1d": {
+      "agent_id": {
+        "tool": "github-copilot-cli",
+        "id": "ff6016a2-cdbf-403f-99d2-004567e63f82",
+        "model": "unknown"
+      },
+      "human_author": "Franco Sevillano <79455847+Sevillanof@users.noreply.github.com>"
+    }
+  }
+}
