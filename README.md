@@ -145,6 +145,7 @@ Sin red, `capture` y la fuente Real avisan; `vite` y el resto siguen funcionando
 | `LLAMA_CTX`             | `8192`        | Contexto                                                                                                                                 |
 | `LLAMA_PARALLEL`        | `2`           | Slots paralelos                                                                                                                          |
 | `LLAMA_THREADS`         | `6` en macOS  | Hilos de `llama-server` (`-t`); fuera de macOS lo decide el servidor. Un valor que no sea entero ≥ 1 se ignora                           |
+| `LLAMA_CACHE_RAM`       | `1024`        | Caché de prompts en RAM de `llama-server` (`--cache-ram`, MiB); el servidor solo dejaría crecerla hasta 8192                             |
 | `LLAMA_UBATCH`          | (servidor)    | Opcional, `-ub`. Con modelos híbridos (Qwen3.5) decide dónde se guarda el punto de reuso del prompt; ver `futures_qwen_prefill_probe.py` |
 | `LLAMA_CTX_CHECKPOINTS` | (servidor)    | Opcional, `--ctx-checkpoints`                                                                                                            |
 | `DECISIONS_PRODUCTS`    | `PF_XBTUSD`   | Productos que decide Q (separados por comas)                                                                                             |
