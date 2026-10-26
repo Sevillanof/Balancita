@@ -71,7 +71,7 @@ The status pill formula (10% fill, 25% border, full-strength text) becomes `bg-l
 | T5  | S1, S2, S5, S6 | inline | done                            | 694e81a3 |
 | T6  | S1, S2, S5, S6 | inline | done                            | 3074d370 |
 | T7  | S1, S2, S5     | inline | done                            | 21fd03f5 |
-| T8  | S1, S5, S6     | inline | local done; pending user commit | —        |
+| T8  | S1, S5, S6     | inline | done                            | 83b544da |
 
 ### T1 — Tailwind and the single theme (no visual change)
 
@@ -109,11 +109,47 @@ The generated directory is ignored by Git. Open the HTML directly; no server, ne
 
 - `bundle.js` exposes `window.Balancita`. Load a host React and ReactDOM first; the component bundle does not embed either and uses classic `React.createElement`, not a version-specific JSX-runtime shim.
 - `bundle.css` contains the theme, embedded fonts and shared-component utilities, not screen CSS or compatibility aliases. Tailwind scans only shared component TSX, excluding tests. App base rules require the explicit `data-balancita-app` root marker; they do not reset a host document. A library host supplies its own base styles (box sizing, body margin, link defaults); the catalog provides its own document styling.
-- `runtime.js` is separate and uses the project's installed React/ReactDOM (19.3.0 in this validation) for the offline catalog. It is not required when the host already provides those globals. React 18 runtime compatibility has **not** been validated; classic JSX removes the known element-format coupling but is not a substitute for that validation. Generated runtime/font license notices travel with the catalog.
+- `runtime.js` is separate and uses the project's installed React/ReactDOM (19.3.0 in this validation) for the offline catalog. It is not required when the host already provides those globals. The same component bundle and catalog have also been validated with the official **React/ReactDOM 18.3.1 production UMD** host at 1440/768/390 px. This does not claim compatibility with every React 18 version or the external publishing host. Generated runtime/font license notices travel with the catalog.
 - `tokens.json` is a list of `{ name, value, type }`; names omit the CSS `--` prefix. `tokens.usage.json` stores usage guidance separately. Both the catalog and its token search consume the generated values.
 - Catalog HTML/JS live under `scripts/design-system/`; component examples instantiate the exported components, never hand-copied markup. The catalog's editorial layout does not change the app's visual design.
 - Rebuilding refreshes the output directory. A normal app build also replaces `dist`, so rerun `design-system:build` afterward if needed.
 - Republishing the existing external artifact is a manual user action, pending host/runtime verification. This task does not upload source or generated code to third-party services.
+
+#### Verify the React 18 host without changing the app
+
+The verifier can substitute pinned React 18 host files in the browser without
+rewriting the catalog, app dependencies or generated runtime. It runs the same
+seven real previews, variant interactions, token search, font loading and
+overflow/error/network checks as the normal verifier.
+
+```bash
+pnpm design-system:build
+runtime_dir="$(mktemp -d /tmp/balancita-react18-XXXXXX)"
+curl --fail --location --output "$runtime_dir/react.production.min.js" \
+  https://unpkg.com/react@18.3.1/umd/react.production.min.js
+curl --fail --location --output "$runtime_dir/react-dom.production.min.js" \
+  https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js
+pnpm design-system:verify --react18-runtime "$runtime_dir"
+pnpm design-system:verify
+rm "$runtime_dir/react.production.min.js" "$runtime_dir/react-dom.production.min.js"
+rmdir "$runtime_dir"
+```
+
+Only the two public runtime downloads need network access; verification itself
+reads local files and blocks browser HTTP(S). Nothing is uploaded or published.
+If verification fails, retain the files for diagnosis and clean up those exact
+paths afterward.
+
+- Both runtime inputs must match the pinned SHA-256 hashes in `verify.mjs`;
+  missing, modified or different-version files fail before browser execution.
+- React reports `18.3.1`. The official `react-dom@18.3.1` production UMD reports
+  `18.3.1-next-f1338f8080-20240426`; this exact artifact matches the npm release
+  tarball and is checked explicitly, not accepted through a broad version prefix.
+- Each viewport checks the actual React/ReactDOM globals, catalog version label
+  and injected host load. The normal command still validates the bundled app
+  runtime. The React 18 test does not replace generated license/runtime files.
+- Rollback: remove the optional host-verification path, its regression test and
+  this documentation; app source and dependency manifests are unaffected.
 
 ### T4 — Guard rails
 
@@ -386,4 +422,8 @@ Each task or explicitly named sub-unit is one work-unit commit; report slices ov
   - Final offline catalog: **110 source tokens**, seven previews/variants at 1440/768/390 px, three exporter tests, zero external requests, overflow or runtime errors. External publication and React 18 host verification remain pending.
   - Evidence: `t8-validation-summary.json`, `t8-base.json`, `t8-semantics.json`, `t8-live-light-reviewed.json`, `t8-live-final.json`, `t8-live-dark.json`, `t8-dialogs-{light,dark,short}.json`, `t8-run-light.json`, `t8-run-dark-reduced.json`, three `t8-perf-*.json` reports and screenshots in the same session files directory as L16. Reused local fixture/production harnesses with `SLICE=t8`; no servers or ports were started, dependencies added, uploads, Git writes or real strategy/data writes performed.
   - Rollback boundary: restore the three retired stylesheets and their imports/exemptions, the root HTML change, theme defaults/tokens, both chart token references, guard/chart tests and this plan. T1-T7 remain independent.
-- **Next step:** user reviews/commits T8. The T1-T8 app migration is locally complete; external T3 publication and React 18 host validation remain separate pending work.
+- **L18 (T3 host verification):** T8 was committed by the user as `83b544da`. Added `--react18-runtime DIRECTORY` to the existing catalog verifier, with strict CLI/input checks and SHA-256-pinned official 18.3.1 UMD files. The generated catalog/runtime and app dependency manifests remain unchanged; only the browser's local runtime request is substituted.
+  - Both hosts pass at **1440/768/390 px**: React 18.3.1 plus official ReactDOM 18.3.1 UMD (internal version noted above), and the installed React/ReactDOM 19.3.0. Each runs all seven previews/variants, neutral no-data states, token search, all 110 source tokens, offline font loading and no-overflow checks, with zero runtime/console errors or browser HTTP(S) requests.
+  - `pnpm design-system:test`: **4/4 pass**, including negative checks for unsupported/missing arguments, absent files and modified runtime rejection before execution. Targeted ESLint, Prettier and whitespace checks pass. No app behavior, ports/services, dependency installations, Git writes or publication. A live trading performance run is N/A: this changes only offline verification tooling.
+  - Public UMD downloads stayed in a temporary directory; SHA-256 values: React `d949f1c3687aedadcedac85261865f29b17cd273997e7f6b2bfc53b2f9d4c4dd`, ReactDOM `35f4f974f4b2bcd44da73963347f8952e341f83909e4498227d4e26b98f66f0d`. The latter was independently compared with `package/umd/react-dom.production.min.js` in the official npm `react-dom-18.3.1.tgz` release. Downloaded files were not committed or shipped.
+- **Next step:** user reviews/commits the T3 host-verification follow-up. T1-T8 and local React 18.3.1 verification are complete; external publication and verification inside that actual host remain pending user actions.
