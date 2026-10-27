@@ -6,7 +6,7 @@ import { TERMINAL_PANEL } from '../shared/design-system/terminal-styles.ts'
 const CLOSED_BY: Record<string, string> = {
   qwen: 'la cerró Qwen',
   stop: 'saltó el stop automático',
-  tiempo: 'cierre obligatorio por tiempo (4 h)',
+  tiempo: 'cierre obligatorio por tiempo (el límite de la versión)',
   fin_de_bloque: 'fin del periodo de prueba',
 }
 

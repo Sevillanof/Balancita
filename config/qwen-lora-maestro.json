@@ -2,60 +2,60 @@
  "schema": "balancita-qwen-lora-maestro.v1",
  "plazo_min": 720,
  "ajuste": {
-  "fotos": 52375,
-  "desde": "2024-12-31",
+  "fotos": 244976,
+  "desde": "2022-04-01",
   "hasta": "2025-09-30",
   "productos": [
    "PF_ETHUSD",
    "PF_XBTUSD"
   ],
   "l2": 10.0,
-  "acierto_signo": 0.5464,
+  "acierto_signo": 0.5326,
   "fuerte_share": 0.2,
   "flojo_share": 0.5
  },
  "umbrales": {
-  "flojo": 0.147458,
-  "fuerte": 0.285952
+  "flojo": 0.112925,
+  "fuerte": 0.187601
  },
  "sd": {
-  "ret_7d": 0.08381218,
-  "z_7d": 1.01661408,
-  "ret_24h": 0.03209723,
-  "z_24h": 0.92032458,
-  "ret_4h": 0.01285423,
-  "z_4h": 0.98615468,
-  "ret_1h": 0.00637066,
-  "z_1h": 1.00200223,
-  "move15_n": 1.02407535,
-  "pos24": 0.54394438,
-  "pos7": 0.54174637,
-  "since_diff": 13.90555146,
-  "area_signed": 0.34596164,
-  "area_out": 3.68530358,
-  "strength": 1.02332101
+  "ret_7d": 0.08556789,
+  "z_7d": 1.02721845,
+  "ret_24h": 0.03136913,
+  "z_24h": 0.87466826,
+  "ret_4h": 0.01274519,
+  "z_4h": 0.93627849,
+  "ret_1h": 0.00645037,
+  "z_1h": 0.97270694,
+  "move15_n": 1.00195794,
+  "pos24": 0.51936371,
+  "pos7": 0.54060971,
+  "since_diff": 13.49149596,
+  "area_signed": 0.37803573,
+  "area_out": 3.61534754,
+  "strength": 0.97121661
  },
  "coeficientes": {
-  "ret_7d": 0.001299,
-  "z_7d": 0.048077,
-  "ret_24h": -0.398606,
-  "z_24h": 0.538096,
-  "ret_4h": 0.043665,
-  "z_4h": -0.010135,
-  "ret_1h": -0.003837,
-  "z_1h": 0.024246,
-  "move15_n": 0.001648,
-  "pos24": -0.217261,
-  "pos7": -0.104509,
-  "since_diff": -0.150481,
-  "area_signed": 0.052312,
-  "area_out": 0.009912,
-  "strength": 0.04916
+  "ret_7d": 0.051474,
+  "z_7d": -0.048196,
+  "ret_24h": -0.116625,
+  "z_24h": 0.117029,
+  "ret_4h": 0.004384,
+  "z_4h": 0.028141,
+  "ret_1h": -0.009432,
+  "z_1h": -0.002572,
+  "move15_n": -0.014475,
+  "pos24": -0.08402,
+  "pos7": -0.01596,
+  "since_diff": -0.099418,
+  "area_signed": 0.033362,
+  "area_out": 0.003115,
+  "strength": 0.016438
  },
  "regla_paper": {
   "entra": "veredicto fuerte (±2)",
   "sale": "veredicto al menos flojo del lado opuesto, o 48 h",
   "stop": "ninguno"
  },
- "nota": "Ajustado en la nube el 27-oct-2026 con las fotos de BTC y ETH de 2024-12-31 a 2025-09-30 (todo lo que llega el caché de velas de la nube; la Mac tiene velas desde 2022-04). Etiqueta del ajuste: signo del movimiento a 12 h. Medido fuera de muestra en analisis/qwen-lora/informe-maestro-operacion-27oct.md."
+ "nota": "Ajustado en la nube el 27-oct-2026 con las fotos de BTC y ETH de 2022-04-01 a 2025-09-30 (caché de velas de la nube desde 2022-03). Etiqueta del ajuste: signo del movimiento a 12 h. Es el maestro de la versión 8 de Qwen en vivo (ficha corta); medición hacia adelante en analisis/qwen-v8/informe.md."
 }

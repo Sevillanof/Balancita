@@ -4,6 +4,21 @@ Hilo «Entrenar a Qwen con LoRA» (26-oct-2026). Un ajuste fino LoRA del MISMO Q
 para que aprenda a decidir cuándo entrar y cuándo salir, cosa que la ficha de 8 factores (v6) hoy no logra (~50 % a 4 h). Nada de
 esto toca a Qwen en vivo: el adaptador se aplica solo a los pedidos que lo piden.
 
+## Estado (27-oct-2026, tarde): el LoRA queda en pausa; Qwen en vivo pasa a la versión 8 con la ficha corta
+
+Fran (27-oct 13:38): «Me gusta, armémoslo así». En vez de entrenar al adaptador a copiar al maestro, el maestro y un **portero**
+(dos fórmulas fijas en CPU) leen la ficha por Qwen y le dicen el resultado en una línea cada una (`futures_qwen_corta`,
+`futures_qwen_portero`, `config/qwen-portero.json`); Qwen supervisa y decide entrar y salir. Detalles en `odd/tasks/qwen-trader.md`
+(«Versión 8») y medición en `analisis/qwen-v8/informe.md` (archivos del proyecto). Consecuencias para este documento:
+
+- `config/qwen-lora-maestro.json` se **reajustó** con las fotos de BTC y ETH de 2022-04-01 a 2025-09-30 (244.976 fotos, caché de
+  velas de la nube; antes 2025-01 a 2025-09): acierto del signo a 12 h 53,3 % en el ajuste y 54,3 % en la práctica (57,7 % en las
+  fuertes). Es el maestro de la versión 8; un dataset v3 nuevo saldría de él.
+- La config en vivo ya no tiene `factors`, `state_ficha` ni `lora`: las herramientas de este documento (`futures_qwen_lora dataset`,
+  `facts`, `exam --lora`) usan por defecto la **versión 7 congelada**, `config/qwen-live-v7.json` (`--config` para otra).
+- El adaptador v2 (7.600 pasos) no se aplica en vivo: la ficha corta es otro texto. `LLAMA_LORA` puede quedar en `.env.local`;
+  llama-server lo carga con escala 0 y nadie lo pide.
+
 ## Qué aprende
 
 **El veredicto del maestro de operación** (dataset v3, Fran 27-oct: «quiero que Qwen aprenda cuándo entrar y cuándo salir, que

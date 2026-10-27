@@ -155,9 +155,14 @@ class VersionTests(unittest.TestCase):
         self.assertEqual(cfg["products"], ["PF_XBTUSD", "PF_ETHUSD"])
         self.assertEqual((cfg["wake"]["flat_every_min"], cfg["wake"]["position_every_min"]), (15, 15))
         self.assertIs(cfg["wake"]["extra_wakes"], False)
-        self.assertEqual(cfg["guardrails"], {"stop_sigma_24h": 1.5, "min_stop_pct": 0.005, "max_stop_pct": 0.03,
-                                             "max_hold_min": 240, "cooldown_min": 15})
+        # version 8: no stop (stops turn noise into losses), 48 h limit (the exit is Qwen's, when the maestro turns)
+        self.assertEqual(cfg["guardrails"], {"stop_sigma_24h": None, "min_stop_pct": 0.005, "max_stop_pct": 0.03,
+                                             "max_hold_min": 2880, "cooldown_min": 15})
         self.assertTrue(cfg["mirror"])
+        self.assertTrue(cfg["state_corta"])
+        self.assertNotIn("lora", cfg)                       # the adapter learnt the 8-factor sheet: not applied to the short one
+        self.assertNotIn("factors", cfg)
+        self.assertEqual(cfg["live"]["force_window_h"], 0)  # no opportunity window: Qwen decides on the short sheet
 
     def test_the_prompt_tells_the_truth_about_the_rules(self):
         env = make(self, policy=Policy("LARGO"))
@@ -165,12 +170,13 @@ class VersionTests(unittest.TestCase):
         env.advance(60)
         texts = [r["state_text"] for r in env.rows("SELECT state_text FROM decisions WHERE kind='position'")]
         self.assertTrue(texts)
-        self.assertIn("stop automatico", texts[0])
-        self.assertIn("Distancia al stop automatico", texts[0])
-        self.assertNotIn("No hay stop", texts[0])
+        self.assertIn("sin stop automático", texts[0])
+        self.assertIn("cierre obligatorio a las 48 h", texts[0])
+        self.assertIn("Cierre obligatorio dentro de", texts[0])
+        self.assertNotIn("Distancia al stop", texts[0])
         question = LIVE_CFG["prompt"]["questions"]["position"]["instruction"]
-        self.assertIn("stop automático", question)
-        self.assertNotIn("No hay stop", question)
+        self.assertIn("No hay stop", question)
+        self.assertIn("48 h", question)
 
 
 class CadenceTests(unittest.TestCase):
@@ -218,18 +224,19 @@ class CadenceTests(unittest.TestCase):
         # 2 option orders per question; the entry reason is not asked; no mirror in this config
         self.assertEqual(len(env.provider.prompts), 2 * len(env.rows("SELECT * FROM decisions")))
 
-    def test_the_time_limit_closes_at_four_hours_and_the_stop_is_inside_its_bounds(self):
+    def test_the_time_limit_closes_at_48_hours_and_there_is_no_stop(self):
         env = make(self, policy=Policy(flat="LARGO"))
+        for i, product in enumerate(PRODUCTS):                       # three more days of candles: the limit is 48 h now
+            last = env.candles[product][-1]
+            env.candles[product] += walk(3 * 288, 70 + i, last["bucket_start"] + BAR, price=float(last["close"]))
         env.op.start()
-        env.advance(5 * 60)
+        env.advance(49 * 60)
         trades = env.rows("SELECT * FROM trades WHERE product='PF_XBTUSD' ORDER BY trade_no")
         self.assertEqual(trades[0]["status"], "closed")
         self.assertEqual(trades[0]["closed_by"], "tiempo")
-        self.assertEqual(trades[0]["hold_min"], 240)
-        entry = float(trades[0]["entry_px"])
-        stop = trades[0]["stop_px"]
-        if stop is not None:
-            self.assertTrue(0.005 <= abs(stop / entry - 1) <= 0.0305, stop / entry)
+        self.assertEqual(trades[0]["hold_min"], 2880)
+        self.assertIsNone(trades[0]["stop_px"])
+        self.assertEqual([r["closed_by"] for r in trades if r["closed_by"] == "stop"], [])
         # the cooldown: no decision in the 15 minutes after the close
         close_ms = trades[0]["exit_ms"]
         times = [r["t_ms"] for r in env.rows("SELECT t_ms FROM decisions WHERE product='PF_XBTUSD' AND kind='flat'")]
@@ -548,14 +555,18 @@ class ResilienceTests(unittest.TestCase):
             live.run(env.op, sleep=lambda s: None, max_polls=1)
 
 
+V7_CFG = qt.load_config(qt.CONFIG_PATH_LIVE_V7)      # the window lived in versions 4 to 7; version 8 turns it off (``force_window_h`` 0)
+
+
 class OpportunityWindowTests(unittest.TestCase):
     """Fran's rule: at least one trade a day, but choosing the moment. After ``force_side_after_h`` without opening, a window
-    opens: every 15 min wake asks LARGO / CORTO on the real numbers and on the mirror and enters only on a record candidate."""
+    opens: every 15 min wake asks LARGO / CORTO on the real numbers and on the mirror and enters only on a record candidate.
+    Tested on the frozen version 7 config (the live version 8 has no window)."""
 
     def window_env(self, plan, delay=0, window_h=12, min_looks=6, db=None, min_score=0.0, neutral=0.05, tol=0.0):
         """One product (the prompts of the fake model are counted in order). ``plan(look, mirrored)`` is p(LARGO) of that
         question; both option orders get the same answer, so the mean is that number. Looks are 0-based."""
-        cfg = live.apply_overrides(LIVE_CFG, {"QWEN_LIVE_FORCE_SIDE_AFTER_H": str(delay), "QWEN_LIVE_PRODUCTS": "PF_XBTUSD"})
+        cfg = live.apply_overrides(V7_CFG, {"QWEN_LIVE_FORCE_SIDE_AFTER_H": str(delay), "QWEN_LIVE_PRODUCTS": "PF_XBTUSD"})
         legacy_letters(cfg)
         cfg["live"]["force_window_h"], cfg["live"]["force_min_looks"] = window_h, min_looks
         cfg["live"]["force_min_score"], cfg["live"]["force_neutral_lean"] = min_score, neutral
@@ -589,7 +600,7 @@ class OpportunityWindowTests(unittest.TestCase):
         for path in (qt.CONFIG_PATH_V3, qt.CONFIG_PATH_V2):
             self.assertNotIn("force_question", qt.load_config(path).get("live", {}))
         live_cfg = LIVE_CFG["live"]
-        self.assertEqual((live_cfg["force_side_after_h"], live_cfg["force_window_h"], live_cfg["force_min_looks"]), (0, 12, 6))
+        self.assertEqual((live_cfg["force_side_after_h"], live_cfg["force_window_h"], live_cfg["force_min_looks"]), (0, 0, 6))   # v8: off
         self.assertEqual([o["id"] for o in live_cfg["force_question"]["options"]], ["LARGO", "CORTO"])
 
     def test_it_does_not_enter_before_the_minimum_looks_even_with_a_perfect_candidate(self):
@@ -898,7 +909,7 @@ class OpportunityWindowTests(unittest.TestCase):
         for key in ("force_window_h", "force_min_looks", "force_side_after_h", "force_question"):
             cfg["live"].pop(key)
         self.assertEqual(qt.config_hash(cfg), qt.config_hash(LIVE_CFG))
-        self.assertEqual(qt.config_hash(LIVE_CFG), "fab41b5d5b6475553e7cd2e1e14766d00281b0abe80d3c6f1a07b0db0e8b821d")
+        self.assertEqual(qt.config_hash(V7_CFG), "fab41b5d5b6475553e7cd2e1e14766d00281b0abe80d3c6f1a07b0db0e8b821d")   # v7, frozen
 
 
 class LockTests(unittest.TestCase):
@@ -1006,7 +1017,9 @@ class AccountingTests(unittest.TestCase):
 
 class LearningDataTests(unittest.TestCase):
     def test_every_decision_is_exported_in_the_practice_format(self):
-        env = make(self, policy=Policy(flat="LARGO"))
+        cfg = copy.deepcopy(LIVE_CFG)
+        cfg["guardrails"]["max_hold_min"] = 240               # a 4 h limit here, so the trade closes inside the test's 5 h
+        env = make(self, cfg=cfg, policy=Policy(flat="LARGO"))
         env.op.start()
         env.advance(5 * 60)
         out = os.path.join(env.tmp, "datos.jsonl")
