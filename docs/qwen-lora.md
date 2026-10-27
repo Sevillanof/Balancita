@@ -55,9 +55,12 @@ el LoRA se entrena igual por decisión de Fran.
    hasta que se quitó la línea). Con escala 0, Qwen en vivo no manda el campo `lora` y sigue contestando igual; solo `exam --lora 0`
    y `entry_eval.py --lora 0` piden `lora: [{id: 0, scale: 1}]` en sus pedidos. `ops/qwen-lora/check_adapter.py` lo comprueba
    (GET /lora-adapters debe mostrar scale 0 y la misma ficha debe cambiar con y sin el campo).
-7. Examen con el adaptador, en su propia base:
-   `python -m balancita_engine.futures_qwen_trader exam --version live --lora 0 --exam-from 2025-10-16 --exam-db data/qwen-trader/exam-lora.sqlite --quick 150`
-   y después el completo (`--max-minutes 240`, sin `--quick`). Informe: `exam-report` con los mismos `--lora` y `--exam-from`.
+7. Examen con el adaptador. Prueba rápida:
+   `python -m balancita_engine.futures_qwen_trader exam --version live --lora 0 --exam-from 2025-10-16 --quick 150`
+   (con `--quick` el examen escribe SIEMPRE en su propia base `data/qwen-trader/exam-v3-rapida.sqlite` e ignora `--exam-db`;
+   el informe es `exam-report --version live --lora 0 --exam-from 2025-10-16 --exam-db data/qwen-trader/exam-v3-rapida.sqlite`).
+   Después el completo, en su propia base: igual sin `--quick`, con `--exam-db data/qwen-trader/exam-lora.sqlite --max-minutes 240`,
+   y `exam-report` con los mismos `--lora`, `--exam-from` y `--exam-db`.
 8. La entrada, con el adaptador y sin él:
    `python ops/qwen-lora/entry_eval.py --lora 0 -n 300` y `python ops/qwen-lora/entry_eval.py --no-lora -n 300`. Compara el neto a
    4 h de la opción que eligió Qwen con entrar a mercado y con la mejor opción (oráculo), y cuántas veces eligió la mejor.
