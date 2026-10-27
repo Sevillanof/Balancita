@@ -893,11 +893,12 @@ class OpportunityWindowTests(unittest.TestCase):
         self.assertEqual(store.load_state("PF_XBTUSD")["window_json"], None)
         live.LiveStore(path).close()                          # a second open is harmless
         # the section lives outside config_hash; the pinned hash moved on purpose with version 6 (question without example, F5 out)
+        # and again with version 7 (the LoRA adapter, ``lora``, is part of the identity: the version 6 base archives itself)
         cfg = copy.deepcopy(LIVE_CFG)
         for key in ("force_window_h", "force_min_looks", "force_side_after_h", "force_question"):
             cfg["live"].pop(key)
         self.assertEqual(qt.config_hash(cfg), qt.config_hash(LIVE_CFG))
-        self.assertEqual(qt.config_hash(LIVE_CFG), "422e83c97a0ce12c5d42cfde08a81aac526ee7d92cecae2435f210d9a330f27d")
+        self.assertEqual(qt.config_hash(LIVE_CFG), "fab41b5d5b6475553e7cd2e1e14766d00281b0abe80d3c6f1a07b0db0e8b821d")
 
 
 class LockTests(unittest.TestCase):

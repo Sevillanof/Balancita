@@ -195,9 +195,10 @@ def template_of(cfg):
 
 
 def lora_of(cfg):
-    """``[{id, scale}]`` of ``runtime.lora`` (the adapter llama-server applies to these requests only), or ``None``. Not part
-    of the config identity (``runtime``): the exam adds it to its own identity (``futures_qwen_trader_exam.exam_identity``)."""
-    return (cfg.get("runtime") or {}).get("lora") or None
+    """``[{id, scale}]`` that every request of this config asks llama-server to apply, or ``None``: ``runtime.lora`` (``exam
+    --lora``, not identity: the exam adds it to its own identity, ``futures_qwen_trader_exam.exam_identity``) wins over
+    ``cfg["lora"]["request"]`` (the live config from version 7: the adapter IS the identity, ``config_hash`` covers the key)."""
+    return (cfg.get("runtime") or {}).get("lora") or (cfg.get("lora") or {}).get("request") or None
 
 
 def parse_lora(text):
