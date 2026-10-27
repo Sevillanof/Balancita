@@ -638,11 +638,12 @@ class QuickRunTests(unittest.TestCase):
         self.db = os.path.join(self.dir.name, qv.db_name("ficha"))
         self.state_path = os.path.join(self.dir.name, qv.state_name("ficha"))
 
-    def run_quick(self, script=None, cfg=None):
+    def run_quick(self, script=None, cfg=None, mirror_every=1):
         clock = [0.0]
         provider = ChatProvider(script or reading_script(clock))
         state = ex.run_quick(MemHistory(), self.db, provider, cfg or self.cfg, HOLDOUT, snapshots=30, max_minutes=500,
-                             clock=lambda: clock[0], log=lambda *a: None, state_path=self.state_path, variant=self.variant)
+                             clock=lambda: clock[0], log=lambda *a: None, state_path=self.state_path, variant=self.variant,
+                             mirror_every=mirror_every)
         return state, provider
 
     def test_the_factors_question_replaces_the_letters_two_calls_per_photo(self):

@@ -12,6 +12,7 @@ from balancita_engine import futures_qwen_quick_variants as qv
 from balancita_engine import futures_qwen_trader as qt
 from balancita_engine import futures_qwen_trader_exam as ex
 from test_futures_qwen_exam import CFG3, cfg3
+from test_futures_qwen_trader import HOLDOUT, MemHistory
 from test_futures_qwen_factors import LINE_OK, ChatProvider, build_trader, completion, row_of
 
 
@@ -121,6 +122,40 @@ class TimingsTests(unittest.TestCase):
         self.assertEqual((row["prompt_n"], row["cache_n"], row["prompt_ms"]), (None, None, None))
         self.assertIsNotNone(row["latency_ms"])
         self.assertEqual(factors, 1)
+
+
+class MirrorEveryTests(unittest.TestCase):
+    def run_quick(self, **kwargs):
+        clock = [0.0]
+        with tempfile.TemporaryDirectory() as tmp:
+            variant = qv.get_variant("ficha")
+            cfg = qv.apply_variant(cfg3(), variant)
+            cfg["state_context"] = ["PF_ETHUSD"]
+            db = os.path.join(tmp, "q.sqlite")
+            provider = ChatProvider(lambda body: completion(LINE_OK))
+            state = ex.run_quick(MemHistory(), db, provider, cfg, HOLDOUT, snapshots=30, max_minutes=500,
+                                 clock=lambda: clock[0], log=lambda *a: None, state_path=os.path.join(tmp, "q.json"),
+                                 variant=variant, **kwargs)
+            con = sqlite3.connect(db)
+            rows = con.execute("SELECT a.real_action, a.mirror_action, s.ord FROM exam_answers a JOIN exam_snapshots s "
+                               "USING(snap_id)").fetchall()
+            mirrors = con.execute("SELECT COUNT(*) FROM exam_factors WHERE step='mirror'").fetchone()[0]
+            con.close()
+            return state, provider, rows, mirrors
+
+    def test_the_quick_test_asks_the_mirror_for_one_photo_in_two_by_default(self):
+        self.assertEqual(ex.QUICK_MIRROR_EVERY, 2)
+        state, provider, rows, mirrors = self.run_quick()
+        self.assertEqual(state["state"], "done")
+        self.assertEqual((len(rows), mirrors, provider.calls), (30, 15, 45))
+        self.assertTrue(all(r[0] is not None for r in rows))
+        self.assertEqual({r[2] % 2 == 0 for r in rows if r[1] is not None}, {True})
+        self.assertEqual(sum(1 for r in rows if r[1] is None), 15)
+
+    def test_asking_every_photo_still_gives_the_full_mirror(self):
+        _, provider, rows, mirrors = self.run_quick(mirror_every=1)
+        self.assertEqual((mirrors, provider.calls), (30, 60))
+        self.assertTrue(all(r[1] is not None for r in rows))
 
 
 class PrefixSheetTests(unittest.TestCase):
