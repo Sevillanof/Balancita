@@ -142,6 +142,25 @@
       ]
     },
     {
+      "id": "ficha-prefijo",
+      "label": "Ficha de 8 factores, texto fijo primero",
+      "kind": "factors",
+      "prompt_version": 6.4,
+      "note": "La misma ficha, los mismos hechos y cifras, el mismo espejo y el mismo F8, pero con todo el texto fijo (leyenda de F1 a F8, costos y reglas) al principio y los datos de la foto al final. Así llama-server reutiliza el prefijo en memoria de una foto a la siguiente y trabaja menos la GPU. Mide si el orden cambia lo que Qwen lee.",
+      "prompt": {
+        "system": "Sos un operador de futuros perpetuos en papel (sin dinero real). Respondé con exactamente una línea con el formato que se pide y nada más."
+      },
+      "factors": {
+        "question": "Mirá los factores F1 a F8 en ese orden. Para cada uno decí hacia dónde empuja el precio en las próximas 4 horas: -2 baja fuerte, -1 baja, 0 no empuja, +1 sube, +2 sube fuerte. Todo renglón con datos tiene que votar según sus números; 0 es solo para un renglón que dice n/d o cuyos números están en el medio. F5 y F8 no votan: ponele 0. Respondé con una sola línea con los ocho valores en orden, cada uno con su signo, sin ejemplos ni explicaciones."
+      },
+      "state_ficha": true,
+      "state_context": [
+        "PF_ETHUSD",
+        "PF_SOLUSD"
+      ],
+      "state_ficha_layout": "prefijo"
+    },
+    {
       "id": "ficha-pista",
       "label": "Ficha de 8 factores con pista de reversión",
       "kind": "factors",

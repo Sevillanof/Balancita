@@ -712,8 +712,11 @@ class Trader:
             ", ".join(reasons))]
         if self.cfg.get("state_ficha"):        # quick-test variants "ficha": the 8 numbered factors instead of the plain lines
             from . import futures_qwen_ficha as ficha
+            cost = "Costo de entrar y salir: ~{} % del tamaño".format(es(float(round_trip_cost_bps(self.product)) / 100.0, 2))
+            if self.cfg.get("state_ficha_layout") == "prefijo":     # fixed text first, the photo's data last (cached prefix)
+                return ficha.prefixed(self, t_ms, sg, reasons, cost, self._state_tail([], t_ms, sigma5))
             lines.extend(ficha.lines(self, t_ms, sg))
-            lines.append("Costo de entrar y salir: ~{} % del tamaño".format(es(float(round_trip_cost_bps(self.product)) / 100.0, 2)))
+            lines.append(cost)
             return self._state_tail(lines, t_ms, sigma5)
         rets, zs = [], []
         for name, bars in (("1h", H1), ("4h", H4), ("24h", H24), ("7d", D7)):

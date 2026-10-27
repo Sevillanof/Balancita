@@ -58,6 +58,8 @@ def apply_variant(cfg, variant):
     factors = variant.get("kind") == "factors"
     if factors:                                          # the 8-line sheet and the question by factors (``futures_qwen_factors``)
         out["state_ficha"] = bool(variant.get("state_ficha", True))
+        if variant.get("state_ficha_layout"):
+            out["state_ficha_layout"] = variant["state_ficha_layout"]
         out["state_context"] = list(variant.get("state_context") or ())
         out["factors"] = copy.deepcopy(variant["factors"])
     if "memory" in variant:                              # similar past cases at the end of the STATE (``futures_qwen_memory``)
