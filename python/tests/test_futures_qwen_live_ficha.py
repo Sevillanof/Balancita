@@ -22,6 +22,7 @@ from test_futures_qwen_factors import ChatProvider, completion, positioning_db, 
 from test_futures_qwen_live import BASE, BAR, DAY, MIN, Policy, make, walk
 from test_futures_qwen_trader import HOLDOUT, MemHistory, SERIES, START_DAY
 from test_futures_qwen_trader import walk as walk_series
+from legacy_variants import restore_variants, use_legacy_variants
 
 LIVE_CFG = qt.load_config(qt.CONFIG_PATH_LIVE_V7)      # version 7: the 8-factor sheet, the factors question and the adapter, frozen
 HOUR = qt.HOUR_MS
@@ -40,6 +41,14 @@ def window_cfg(products=("PF_XBTUSD",), min_looks=1, min_score=0.05, **live_over
     cfg["live"].update(dict(dict(force_window_h=12, force_min_looks=min_looks, force_min_score=min_score,
                                  force_neutral_lean=0.05, force_record_tol=0.0), **live_over))
     return cfg
+
+
+def setUpModule():
+    use_legacy_variants()
+
+
+def tearDownModule():
+    restore_variants()
 
 
 class PlanScript:

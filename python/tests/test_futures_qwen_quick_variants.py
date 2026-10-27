@@ -11,6 +11,15 @@ from balancita_engine import strategy_gate_models as models
 from balancita_engine.futures_strategy_gate_api import GateApiError
 from test_futures_qwen_exam import CFG3, cfg3, state_policy
 from test_futures_qwen_trader import HOLDOUT, ClockedProvider, MemHistory
+from legacy_variants import restore_variants, use_legacy_variants
+
+
+def setUpModule():
+    use_legacy_variants()
+
+
+def tearDownModule():
+    restore_variants()
 
 
 class VariantConfigTests(unittest.TestCase):

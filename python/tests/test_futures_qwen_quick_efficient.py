@@ -14,6 +14,7 @@ from balancita_engine import futures_qwen_trader_exam as ex
 from test_futures_qwen_exam import CFG3, cfg3
 from test_futures_qwen_trader import HOLDOUT, MemHistory
 from test_futures_qwen_factors import LINE_OK, ChatProvider, build_trader, completion, row_of
+from legacy_variants import restore_variants, use_legacy_variants
 
 
 def digest(path):
@@ -26,6 +27,14 @@ def common_prefix(a, b):
     while n < min(len(a), len(b)) and a[n] == b[n]:
         n += 1
     return n
+
+
+def setUpModule():
+    use_legacy_variants()
+
+
+def tearDownModule():
+    restore_variants()
 
 
 class ReuseTests(unittest.TestCase):

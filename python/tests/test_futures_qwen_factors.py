@@ -22,6 +22,7 @@ from balancita_engine import strategy_gate_models as models
 from test_futures_qwen_exam import CFG3, cfg3
 from test_futures_qwen_trader import HOLDOUT, MemHistory
 from test_futures_value_area import _ts_value_area
+from legacy_variants import restore_variants, use_legacy_variants
 
 HOUR = qt.HOUR_MS
 
@@ -69,6 +70,14 @@ def completion(values, style="qwen", dist=None, finish="stop"):
             token = ":0" if value == 0 else ":{}{}".format(sign, abs(value))
             entries.append(_entry(token, alts))
     return {"choices": [{"finish_reason": finish, "message": {"content": ""}, "logprobs": {"content": entries}}]}
+
+
+def setUpModule():
+    use_legacy_variants()
+
+
+def tearDownModule():
+    restore_variants()
 
 
 class ChatProvider(llm.FakeProvider):
