@@ -49,7 +49,7 @@ def main():
     print("adaptadores en el servidor:", adapters)
     if any(float(a.get("scale", 0)) != 0 for a in adapters):
         print("ATENCION: hay un adaptador con escala distinta de 0 al arrancar: TODOS los pedidos sin campo `lora` (Qwen en vivo) lo usan. "
-              "pnpm dev debe arrancar llama-server con `--lora-scaled <gguf> 0` (LLAMA_LORA, scripts/dev-provider-env.mjs).")
+              "pnpm dev debe arrancar llama-server con `--lora-scaled <gguf>:0` (LLAMA_LORA, scripts/dev-provider-env.mjs).")
     with open(os.path.join(args.data, "valid.jsonl"), encoding="utf-8") as handle:
         rows = [json.loads(line) for _, line in zip(range(args.n), handle)]
     same = 0

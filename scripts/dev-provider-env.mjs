@@ -120,7 +120,10 @@ export const DEFAULT_LLAMA_PORT = 8088
 
 /** `[flag, value]` when the environment sets a value, else nothing (the server default stays). */
 /**
- * `--lora-scaled <path> 0 --lora-init-without-apply` when `LLAMA_LORA` names an adapter file; nothing otherwise.
+ * `--lora-scaled <path>:0 --lora-init-without-apply` when `LLAMA_LORA` names an adapter file; nothing otherwise.
+ * One argument `FNAME:SCALE`: the installed llama.cpp takes the scale after a colon (the older two-argument form
+ * `--lora-scaled <path> 0` exits with "lora-scaled format: FNAME:SCALE", which is what took llama-server down on
+ * 2026-10-27 after #415).
  * Scale 0 at start is what keeps the live trader unchanged: in the installed llama-server every request that does not
  * carry a `lora` field runs with the adapters' START scale (`--lora` alone would be 1.0, and `--lora-init-without-apply`
  * only delays that first application, as GET /lora-adapters showed on the Mac on 2026-10-27). A request that asks for
@@ -128,7 +131,7 @@ export const DEFAULT_LLAMA_PORT = 8088
  */
 export function loraFlags(value) {
   const path = (value ?? '').trim()
-  return path ? ['--lora-scaled', path, '0', '--lora-init-without-apply'] : []
+  return path ? ['--lora-scaled', `${path}:0`, '--lora-init-without-apply'] : []
 }
 
 function optionalFlag(flag, value) {
