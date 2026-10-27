@@ -7,9 +7,15 @@ etiqueta, neto por entrada de la opinión contra la fórmula, ganadoras, por mes
 También mide, en las miradas sin posición, si «lee la ficha» y no una costumbre: ``espejo_da_vuelta`` = en las miradas donde dijo
 LARGO o CORTO, la fracción donde con la ficha dada vuelta dice el lado contrario; ``costumbre`` = la opción que más repite.
 
+Dos modos:
+  --mode valid     acierto de la letra sobre valid.jsonl (los últimos meses del entrenamiento, con el embargo de 48 h): acierto, acierto
+                   por clase, reparto de lo que contesta y qué parte es la opción que más repite (costumbre). Es lo que se mira
+                   para decidir cuándo cortar y qué checkpoint guardar: NO se usa la práctica para elegir.
+  --mode practica  (por defecto) lo de arriba sobre practica.jsonl: opinión contra la fórmula, por mes, espejo.
+
 Uso (Mac, venv de ops/qwen-lora/train.sh; PYTHONPATH=python):
-  python ops/qwen-lora/aprende_eval.py --model MODEL --data CARPETA_CON_practica.jsonl --out RESULTADO.json \
-      [--adapter CARPETA_DEL_ADAPTADOR | --adapters CARPETA --step 1500] [--max 600]
+  python ops/qwen-lora/aprende_eval.py --model MODEL --data CARPETA --out RESULTADO.json [--mode valid|practica] \
+      [--adapter CARPETA_DEL_ADAPTADOR] [--max 600]
 Con --max se mide una muestra repartida (la misma para cualquier adaptador). Sin --adapter es el Qwen de hoy (sin entrenar).
 """
 import argparse
@@ -17,6 +23,7 @@ import collections
 import json
 import math
 import os
+import re
 import sys
 import time
 
@@ -54,6 +61,36 @@ def sample(rows, limit):
     return [rows[int(i * step)] for i in range(limit)]
 
 
+def valid_main(args):
+    """Acierto de la letra sobre ``valid.jsonl`` (formato chat): la letra más probable contra la letra del ejemplo."""
+    import mlx.core as mx
+    from mlx_lm import load
+
+    rows = [json.loads(line) for line in open(os.path.join(args.data, "valid.jsonl"), encoding="utf-8")]
+    rows = sample(rows, args.max)
+    model, tok = load(args.model, adapter_path=args.adapter)
+    hits, by_class, said, started = 0, collections.defaultdict(lambda: [0, 0]), collections.Counter(), time.time()
+    for row in rows:
+        user = row["messages"][1]["content"]
+        options = dict(re.findall(r"(?m)^([A-Z])\) (\w+)", user))
+        gold = row["messages"][2]["content"]
+        probs = letter_probs(mx, model, tok, row["messages"][:2], len(options))
+        pick = ap.LETTERS[max(range(len(probs)), key=probs.__getitem__)]
+        hits += pick == gold
+        by_class[options[gold]][0] += pick == gold
+        by_class[options[gold]][1] += 1
+        said[options.get(pick, pick)] += 1
+    n = len(rows)
+    result = {"modo": "valid", "n": n, "acierto": round(hits / n, 4) if n else None,
+              "acierto_por_clase": {k: round(v[0] / v[1], 3) for k, v in sorted(by_class.items())},
+              "acierto_balanceado": round(sum(v[0] / v[1] for v in by_class.values()) / len(by_class), 4) if by_class else None,
+              "reparto": dict(said), "costumbre_parte": round(max(said.values()) / n, 3) if n else None,
+              "adaptador": args.adapter, "segundos": round(time.time() - started)}
+    with open(args.out, "w", encoding="utf-8") as handle:
+        json.dump(result, handle, indent=2, ensure_ascii=False)
+    print(json.dumps(result, ensure_ascii=False))
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--model", required=True)
@@ -61,8 +98,11 @@ def main(argv=None):
     parser.add_argument("--out", required=True)
     parser.add_argument("--adapter", default=None, help="carpeta con adapters.safetensors y adapter_config.json")
     parser.add_argument("--max", type=int, default=0)
+    parser.add_argument("--mode", choices=("valid", "practica"), default="practica")
     parser.add_argument("--config", default=None)
     args = parser.parse_args(argv)
+    if args.mode == "valid":
+        return valid_main(args)
     import mlx.core as mx
     from mlx_lm import load
 

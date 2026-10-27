@@ -1,7 +1,7 @@
 """La FICHA CORTA de Qwen en vivo (versión 8): cuatro renglones y las reglas, nada más.
 
 Qwen ya no lee los ocho renglones de números de la ficha (``futures_qwen_ficha``): dos fórmulas fijas en CPU los leen por él y
-le dicen el resultado en una línea cada una, y él supervisa y decide entrar y salir.
+le dicen el resultado en una línea cada una (más el producto y la hora UTC como contexto), y él supervisa y decide entrar y salir.
 
     1. El MAESTRO (``futures_qwen_maestro``): dirección y claridad a 12 h (sube/baja, fuerte/flojo/nada), con su puntaje.
     2. El PORTERO (``futures_qwen_portero``): si conviene tomar esa señal ahora (probabilidad de ganar tras costos).
@@ -127,8 +127,21 @@ def lines(trader, t_ms, sg, reasons):
                "esperable en 24 h +-{} %).".format(r["volatilidad"], qt.es(r["range24"] * 100, 2), qt.es(r["range7"] * 100, 2),
                                                  qt.es(r["sigma24"] * 100, 2)))
     out.append(_position_line(trader, t_ms, r["veredicto"]))
+    out.append(_context_line(trader, t_ms))
     out.append("Costo de entrar y salir: ~{} % del tamaño.".format(qt.es(float(qt.round_trip_cost_bps(trader.product)) / 100.0, 2)))
     return out
+
+
+SESSIONS = ((6, "madrugada"), (13, "mañana de Europa"), (21, "sesión de EE. UU."), (24, "noche"))
+
+
+def _context_line(trader, t_ms):
+    """Producto y hora UTC (hechos, sin decir qué conviene): cuándo y en qué activo se mira."""
+    hour = (t_ms // qt.HOUR_MS) % 24
+    minute = (t_ms // qt.MINUTE_MS) % 60
+    session = next(name for end, name in SESSIONS if hour < end)
+    asset = {"PF_XBTUSD": "BTC", "PF_ETHUSD": "ETH"}.get(trader.product, trader.product)
+    return "Contexto: {}, {:02d}:{:02d} UTC ({}).".format(asset, hour, minute, session)
 
 
 def _position_line(trader, t_ms, verdict_now):

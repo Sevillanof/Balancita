@@ -112,10 +112,13 @@ class DatasetTests(unittest.TestCase):
             self.assertRegex(example["messages"][1]["content"], r"(?m)^{}\) CORTO\b".format(example["messages"][2]["content"]))
 
     def test_balance_split_and_files(self):
-        flat = [flat_row(label, month=m) for m in ("2025-01", "2025-02", "2025-03", "2025-04") for label in ["LARGO"] * 6 + ["CORTO"] * 3 + ["ESPERAR"] * 2]
-        position = [pos_row("T{}".format(i), i, 1.0, 2.0, "MANTENER" if i % 3 else "CERRAR") for i in range(30)]
-        for row in position:
+        months = ("2025-01", "2025-02", "2025-03", "2025-04")
+        flat = [flat_row(label, month=m, t_ms=(k + 1) * 30 * 24 * 3600_000) for k, m in enumerate(months)
+                for label in ["LARGO"] * 6 + ["CORTO"] * 3 + ["ESPERAR"] * 2]
+        position = [pos_row("T{}".format(i), (i % 4 + 1) * 30 * 24 * 3600_000, 1.0, 2.0, "MANTENER" if i % 3 else "CERRAR") for i in range(30)]
+        for i, row in enumerate(position):
             row["product"] = "PF_ETHUSD"
+            row["month"] = months[i % 4]
         with tempfile.TemporaryDirectory() as tmp:
             meta = ap.build_dataset(CFG, flat, position, tmp, per_class=3, log=lambda *_: None)
             train = [json.loads(x) for x in open(os.path.join(tmp, "train.jsonl"), encoding="utf-8")]
@@ -124,6 +127,66 @@ class DatasetTests(unittest.TestCase):
         self.assertEqual(meta["valid"]["sin_posicion"]["LARGO"], 1)                                   # the last two months
         self.assertTrue(all(len(e["messages"]) == 3 for e in train))
         self.assertEqual(len(train), 9 * 2 * 2 + 6 * 2)                          # flat: x mirror x orders; position: x orders
+
+    def test_the_embargo_drops_training_rows_whose_label_reaches_into_validation(self):
+        hour = 3600_000
+        rows = [dict(flat_row("LARGO", month="2025-01", t_ms=100 * hour - k * hour)) for k in (1, 30, 47, 49, 60)]
+        rows += [dict(flat_row("LARGO", month="2025-02", t_ms=100 * hour + k)) for k in range(3)]
+        train, valid = ap.split_valid(rows, 1)
+        self.assertEqual(len(valid), 3)
+        self.assertEqual(sorted((100 * hour - r["t_ms"]) // hour for r in train), [49, 60])      # 1, 30 and 47 h before: dropped
+
+
+class ReportTests(unittest.TestCase):
+    def result(self, neto, n, flips=0.95, reparto=None):
+        stats = {"n": n, "neto_bp": neto, "ganadoras": 0.6, "total_bp": 0.0}
+        return {"entradas": stats, "formula_entradas": {"n": 11, "neto_bp": 50.0, "ganadoras": 0.7, "total_bp": 1.0},
+                "cierres": stats, "formula_cierres": stats, "acierto_sin_posicion": 0.4, "acierto_con_posicion": 0.7,
+                "por_mes": {"2025-11": dict(stats, neto_bp=10.0), "2025-12": dict(stats, neto_bp=-5.0)},
+                "reparto": reparto or {"LARGO": 10, "CORTO": 10, "ESPERAR": 10}, "espejo_da_vuelta": flips}
+
+    def test_it_passes_only_when_it_beats_the_formula_and_the_untrained_model_without_a_habit(self):
+        base, best = self.result(5.0, 40), self.result(80.0, 40)
+        checks, ok = ap.verdict(base, best)
+        self.assertTrue(ok, checks)
+        self.assertFalse(ap.verdict(base, self.result(80.0, 5))[1])                         # too few entries
+        self.assertFalse(ap.verdict(base, self.result(20.0, 40))[1])                        # under the formula alone
+        self.assertFalse(ap.verdict(base, self.result(80.0, 40, flips=0.3))[1])             # the mirror does not turn: a habit
+        self.assertFalse(ap.verdict(base, self.result(80.0, 40, reparto={"ESPERAR": 29, "LARGO": 1}))[1])
+        self.assertFalse(ap.verdict(self.result(90.0, 40), best)[1])                        # the untrained one was better
+
+    def test_the_markdown_has_the_verdict_the_tables_and_the_history(self):
+        history = [{"paso": 500, "acierto": 0.4, "acierto_balanceado": 0.39, "costumbre_parte": 0.5}]
+        text = ap.report_md(self.result(5.0, 40), dict(self.result(80.0, 40), paso=1000), history)
+        for piece in ("**Veredicto: PASA**", "Qwen entrenado (paso 1000)", "| 500 | 40 % | 39 % | 50 % |", "2025-11: 40 entradas, +10.0 pb"):
+            self.assertIn(piece, text)
+
+
+class PositionBalanceTests(unittest.TestCase):
+    def test_half_of_the_close_class_comes_from_trades_that_hit_48_hours(self):
+        rows = []
+        for i in range(40):
+            rows.append(dict(pos_row("L{}".format(i), i, 0, 0, "CERRAR"), por_tiempo=True))
+        for i in range(200):
+            rows.append(dict(pos_row("F{}".format(i), i, 0, 0, "CERRAR"), por_tiempo=False))
+        for i in range(300):
+            rows.append(dict(pos_row("K{}".format(i), i, 0, 0, "MANTENER"), por_tiempo=False))
+        got = ap.balance_position(rows, 100, 1)
+        closes = [r for r in got if r["label"] == "CERRAR"]
+        self.assertEqual((len(closes), sum(1 for r in closes if r["por_tiempo"]), len(got) - len(closes)), (100, 40, 100))
+        few = ap.balance_position(rows[:10] + rows[40:], 100, 1)                    # 10 late rows only: all go in, the rest completes
+        self.assertEqual(sum(1 for r in few if r["label"] == "CERRAR"), 100)
+
+
+class ContextLineTests(unittest.TestCase):
+    def test_the_sheet_says_the_product_and_the_utc_hour_as_plain_facts(self):
+        class T:
+            product = "PF_ETHUSD"
+        hour = 3600_000
+        self.assertEqual(corta._context_line(T, 3 * hour + 15 * 60_000), "Contexto: ETH, 03:15 UTC (madrugada).")
+        self.assertIn("sesión de EE. UU.", corta._context_line(T, 15 * hour))
+        T.product = "PF_XBTUSD"
+        self.assertEqual(corta._context_line(T, 23 * hour + 5 * 60_000), "Contexto: BTC, 23:05 UTC (noche).")
 
 
 class LiveLabelTests(unittest.TestCase):

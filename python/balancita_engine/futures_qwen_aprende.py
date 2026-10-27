@@ -124,6 +124,7 @@ def collect(history, cfg, product, from_ms, to_ms, *, flat_rate=0.15, seed=20261
                 open_trade["final_bp"] = now
                 for row in open_trade["rows"]:
                     row["final_bp"] = now
+                    row["por_tiempo"] = held >= hold_ms         # the trade reached 48 h without the maestro turning
                     row["label"] = position_label(row["net_now_bp"], now)
                 if held < hold_ms:                         # the wake where the formulas close is a real, labelled look
                     rows_pos.append(dict(_position_row(trader, t_ms, reasons, r, now, open_trade), final_bp=now,
@@ -165,6 +166,7 @@ def _position_row(trader, t_ms, reasons, r, net_now_bp, trade):
             "state_text": trader.state_text(t_ms, reasons), "maestro": r["veredicto"], "portero_si": bool(r["portero_si"]),
             "net_now_bp": net_now_bp, "final_bp": None, "label": None, "trade": "{}:{}".format(trader.product, trade["trade_no"]),
             "side": position.side, "entry_ms": position.entry_ms,
+            "por_tiempo": False,
             "formula": "CERRAR" if corta.formula_action(r, 1 if position.side == "LONG" else -1)[0] == "CERRAR" else "MANTENER"}
 
 
@@ -181,6 +183,25 @@ def balance(rows, key, per_class, seed):
     for items in by.values():
         rng.shuffle(items)
         out += items[:per_class]
+    rng.shuffle(out)
+    return out
+
+
+def balance_position(rows, per_class, seed, late_share=0.5):
+    """Con posición: ``per_class`` de cada etiqueta, y la mitad de las CERRAR (``late_share``) de operaciones que llegaron a las 48 h
+    sin que el maestro se diera vuelta: ahí está toda la pérdida de la v8 (la cola de −420 a −560 pb) y cortarlas a tiempo es lo
+    que Qwen puede agregar. Sin suficientes de ese tipo, se completa con las demás."""
+    rng = random.Random(seed)
+    close = [r for r in rows if r["label"] == "CERRAR"]
+    keep = [r for r in rows if r["label"] == "MANTENER"]
+    late = [r for r in close if r.get("por_tiempo")]
+    other = [r for r in close if not r.get("por_tiempo")]
+    for items in (late, other, keep):
+        rng.shuffle(items)
+    want_late = min(len(late), int(per_class * late_share))
+    chosen = late[:want_late] + other[:per_class - want_late]
+    chosen += late[want_late:][:max(0, per_class - len(chosen))]
+    out = chosen + keep[:per_class]
     rng.shuffle(out)
     return out
 
@@ -210,11 +231,19 @@ def chat_examples(cfg, row, mirror=False):
             for messages, ids in prompts_for(cfg, row, mirror)]
 
 
+EMBARGO_MS = 48 * HOUR_MS        # la etiqueta mira hasta 48 h adelante: las filas de entrenamiento no pueden llegar a la validación
+
+
 def split_valid(rows, months):
-    """Los últimos ``months`` meses van a validación."""
+    """Los últimos ``months`` meses van a validación. Las filas de entrenamiento que caen en las 48 h anteriores se descartan
+    (embargo): su etiqueta mira hasta 48 h adelante y se superpondría con lo que se mide."""
     names = sorted({r["month"] for r in rows})
     keep = set(names[-months:]) if len(names) > months else set()
-    return [r for r in rows if r["month"] not in keep], [r for r in rows if r["month"] in keep]
+    valid = [r for r in rows if r["month"] in keep]
+    if not valid:
+        return list(rows), []
+    start = min(r["t_ms"] for r in valid)
+    return [r for r in rows if r["month"] not in keep and r["t_ms"] + EMBARGO_MS <= start], valid
 
 
 def write_jsonl(path, rows):
@@ -234,7 +263,7 @@ def build_dataset(cfg, flat, position, out_dir, *, per_class=400, seed=20261027,
     for name, f, p in (("train", flat_train, pos_train), ("valid", flat_valid, pos_valid)):
         share = 1.0 if name == "train" else 0.2
         f = balance(f, "label", max(1, int(per_class * share)), seed)
-        p = balance(p, "label", max(1, int(per_class * share)), seed + 1)
+        p = balance_position(p, max(1, int(per_class * share)), seed + 1)
         examples = [e for row in f for mirror in (False, True) for e in chat_examples(cfg, row, mirror)]
         examples += [e for row in p for e in chat_examples(cfg, row)]
         random.Random(seed + 2).shuffle(examples)
@@ -382,17 +411,79 @@ def export_live(db, cfg, out_path):
     return len(rows)
 
 
+# --------------------------------------------------------------------------- the morning report
+
+
+def _pb(x):
+    return "n/d" if x is None else "{:+.1f} pb".format(x)
+
+
+def _pct(x):
+    return "n/d" if x is None else "{:.0f} %".format(100 * x)
+
+
+def verdict(base, best, min_entries=30):
+    """¿La opinión entrenada le gana a la fórmula sola (y al Qwen sin entrenar) en la práctica? ``base`` y ``best``: resultado de
+    ``score_opinions`` (más ``espejo_da_vuelta`` y ``reparto``). Reglas fijas: más neto por entrada que la fórmula, al menos
+    ``min_entries`` entradas, más neto que el Qwen sin entrenar, positiva en la mitad de los meses con entradas o más, y que no
+    sea una costumbre (el espejo da vuelta en ≥ 90 % de las entradas, ninguna opción pasa del 70 % de las respuestas)."""
+    entries, formula = best["entradas"], best["formula_entradas"]
+    months = [m for m in best["por_mes"].values() if m["n"]]
+    positive = sum(1 for m in months if m["neto_bp"] is not None and m["neto_bp"] > 0)
+    reparto = best.get("reparto") or {}
+    habit = bool(reparto) and max(reparto.values()) / max(1, sum(reparto.values())) > 0.7
+    flips = best.get("espejo_da_vuelta")
+    checks = {
+        "mas neto que la fórmula sola": entries["neto_bp"] is not None and formula["neto_bp"] is not None and entries["neto_bp"] > formula["neto_bp"],
+        "al menos {} entradas".format(min_entries): entries["n"] >= min_entries,
+        "mas neto que Qwen sin entrenar": entries["neto_bp"] is not None and (base["entradas"]["neto_bp"] is None or entries["neto_bp"] > base["entradas"]["neto_bp"]),
+        "positiva en la mitad de los meses o más": bool(months) and positive * 2 >= len(months),
+        "no es una costumbre (espejo da vuelta ≥ 90 % y ninguna opción > 70 %)": flips is not None and flips >= 0.9 and not habit,
+    }
+    return checks, all(checks.values())
+
+
+def report_md(base, best, history, meta=None):
+    """El informe de la mañana (Markdown) con lo que dejó la noche: Qwen sin entrenar, el mejor checkpoint y la fórmula sola."""
+    checks, passes = verdict(base, best)
+    lines = ["# Qué dejó la noche: la opinión de Qwen contra la fórmula sola", "",
+             "Práctica 2025-10-16 a 2026-04-18 (holdout intacto). El checkpoint se eligió con la validación del entrenamiento, no con la práctica.", "",
+             "**Veredicto: {}**".format("PASA" if passes else "NO pasa"), ""]
+    lines += ["- {} {}".format("✓" if ok else "✗", name) for name, ok in checks.items()]
+    lines += ["", "## Entradas sin posición (neto tras costos por entrada)", "", "| | Entradas | Neto/op | Ganadoras | Acierto contra la etiqueta |", "|---|---|---|---|---|"]
+    for name, r in (("Fórmula sola", best), ("Qwen sin entrenar", base), ("Qwen entrenado (paso {})".format(best.get("paso", "?")), best)):
+        e = r["formula_entradas"] if name == "Fórmula sola" else r["entradas"]
+        acc = "—" if name == "Fórmula sola" else _pct(r["acierto_sin_posicion"])
+        lines.append("| {} | {} | {} | {} | {} |".format(name, e["n"], _pb(e["neto_bp"]), _pct(e["ganadoras"]), acc))
+    lines += ["", "## Cierres (operaciones de la fórmula, primer CERRAR de la opinión)", "", "| | Operaciones | Neto/op | Ganadoras |", "|---|---|---|---|"]
+    for name, c in (("Fórmula sola", best["formula_cierres"]), ("Qwen sin entrenar", base["cierres"]), ("Qwen entrenado", best["cierres"])):
+        lines.append("| {} | {} | {} | {} |".format(name, c["n"], _pb(c["neto_bp"]), _pct(c["ganadoras"])))
+    lines += ["", "## Por mes (neto por entrada del Qwen entrenado)", ""]
+    lines += ["- {}: {} entradas, {}".format(m, v["n"], _pb(v["neto_bp"])) for m, v in best["por_mes"].items()] or ["- sin entradas"]
+    lines += ["", "## Costumbre y espejo", "",
+              "- Qwen sin entrenar: contesta {} ; espejo da vuelta {}".format(base.get("reparto"), _pct(base.get("espejo_da_vuelta"))),
+              "- Qwen entrenado: contesta {} ; espejo da vuelta {}".format(best.get("reparto"), _pct(best.get("espejo_da_vuelta"))),
+              "", "## Medición cada 500 pasos (validación del entrenamiento)", "", "| Paso | Acierto | Acierto balanceado | Costumbre (parte de la opción más repetida) |", "|---|---|---|---|"]
+    for h in history:
+        lines.append("| {} | {} | {} | {} |".format(h["paso"], _pct(h["acierto"]), _pct(h["acierto_balanceado"]), _pct(h["costumbre_parte"])))
+    if meta:
+        lines += ["", "Dataset: {}".format(json.dumps(meta, ensure_ascii=False))]
+    lines += ["", "Muestras chicas: promesa, no prueba. Un PASA no cambia nada en vivo: el adaptador no se aplica solo."]
+    return "\n".join(lines) + "\n"
+
+
 # --------------------------------------------------------------------------- CLI
 
 
 def _parser():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("command", choices=("dataset", "referencias", "resolver", "exportar"))
+    p.add_argument("command", choices=("dataset", "referencias", "resolver", "exportar", "informe"))
     p.add_argument("--config", default=None, help="config de Qwen en vivo (por defecto config/qwen-live.json)")
     p.add_argument("--cache-dir", default=qt.DEFAULT_CACHE)
     p.add_argument("--out", required=True, help="carpeta (dataset) o archivo (exportar) de salida")
     p.add_argument("--per-class", type=int, default=400)
     p.add_argument("--flat-rate", type=float, default=0.15)
+    p.add_argument("--dir", default=None, help="carpeta de la noche (informe): base-practica.json, best-practica.json, historia.jsonl")
     p.add_argument("--db", default=None, help="base en vivo (resolver / exportar)")
     return p
 
@@ -403,6 +494,16 @@ def _history(args):
 
 def main(argv=None):
     args = _parser().parse_args(argv)
+    if args.command == "informe":
+        load = lambda name: json.load(open(os.path.join(args.dir, name), encoding="utf-8"))
+        history = [json.loads(x) for x in open(os.path.join(args.dir, "historia.jsonl"), encoding="utf-8") if x.strip()]
+        best = load("best-practica.json")
+        best["paso"] = load("best.json")["paso"]
+        text = report_md(load("base-practica.json"), best, history)
+        with open(args.out, "w", encoding="utf-8") as handle:
+            handle.write(text)
+        print(text)
+        return
     cfg = qt.load_config(args.config or qt.CONFIG_PATH_LIVE)
     if args.command in ("dataset", "referencias"):
         history = _history(args)
@@ -417,6 +518,12 @@ def main(argv=None):
                 print("{} {}: {} miradas sin posición, {} con posición".format(name, product, len(part["flat"]), len(part["position"])), flush=True)
             got[name] = (flat, position)
         if args.command == "dataset":
+            import gzip
+            os.makedirs(args.out, exist_ok=True)
+            for name, (f, p) in got.items():                  # the labelled rows with their results, for later analysis
+                with gzip.open(os.path.join(args.out, "filas-{}.jsonl.gz".format(name)), "wt", encoding="utf-8") as handle:
+                    for row in f + p:
+                        handle.write(json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n")
             build_dataset(cfg, *got["train"], args.out, per_class=args.per_class)
             write_jsonl(os.path.join(args.out, "practica.jsonl"), got["practica"][0] + got["practica"][1])
         report = {name: baselines(*rows) for name, rows in got.items()}
