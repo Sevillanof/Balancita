@@ -21,6 +21,7 @@ import type { TerminalBootstrap } from '../features/connected-trading/infrastruc
 import { useTerminalStream } from './useTerminalStream.ts'
 import { projectTerminalQuote } from './terminal-market.ts'
 import AppStatusChips from './AppStatusChips.tsx'
+import AccountBalance from './AccountBalance.tsx'
 import TerminalDecisions from './TerminalDecisions.tsx'
 import type { DecisionRow } from './terminal-decisions.ts'
 import SelectedDecision from './SelectedDecision.tsx'
@@ -374,6 +375,7 @@ export default function FuturesTerminal({
       brandHref="/"
       brandLabel="Balancita, volver a la aplicación"
       navigation={appNavigation('terminal')}
+      center={<AccountBalance />}
       status={
         <>
           {sourceSwitch}

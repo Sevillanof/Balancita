@@ -6,6 +6,7 @@ type AppShellProps = {
   brandHref: string
   brandLabel: string
   status: ReactNode
+  center?: ReactNode
   children: ReactNode
 }
 
@@ -18,6 +19,7 @@ export default function AppShell({
   brandHref,
   brandLabel,
   status,
+  center,
   children,
 }: AppShellProps) {
   return (
@@ -27,6 +29,7 @@ export default function AppShell({
         brandLabel={brandLabel}
         navigation={navigation}
         status={status}
+        center={center}
       />
       <main className="mx-auto min-w-0 w-shell-content overflow-x-clip pt-2 pb-12 header-stack:w-shell-content-compact header-stack:pt-5">
         {children}

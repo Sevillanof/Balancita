@@ -384,6 +384,7 @@ export async function buildLiveGateway(
       return result.status === 'error' ? reply.code(400).send(result) : result
     },
   )
+  app.get('/api/qwen/account', () => qwenDecisions.account())
   const kronosScores =
     options.kronosScores ?? qwenScoresOff('kronos_not_configured')
   app.get<{ Querystring: { product?: string } }>(

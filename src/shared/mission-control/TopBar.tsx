@@ -12,6 +12,8 @@ type TopBarProps = {
   navigation: readonly NavigationItem[]
   /** Right side of the bar: health, product, mode. */
   status: ReactNode
+  /** Middle of the bar, between navigation and status (the account balance). */
+  center?: ReactNode
 }
 
 /** The shared header of every screen: brand, navigation and status. */
@@ -20,6 +22,7 @@ export default function TopBar({
   brandLabel,
   navigation,
   status,
+  center,
 }: TopBarProps) {
   return (
     <header
@@ -69,6 +72,11 @@ export default function TopBar({
             </a>
           ))}
         </nav>
+        {center && (
+          <div className="flex min-w-0 flex-1 items-center justify-center header-wrap:order-2 header-wrap:flex-none">
+            {center}
+          </div>
+        )}
         <div className="demo-shell__status ml-auto flex min-w-0 items-center justify-end gap-4 header-wrap:order-3 header-wrap:w-full header-wrap:flex-wrap header-wrap:justify-start header-wrap:gap-2 header-wrap:pb-2">
           {status}
         </div>
