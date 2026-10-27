@@ -2,6 +2,9 @@
 maestro, los datos incompletos que omiten el despertar sin preguntar, la posición sin stop con cierre a las 48 h, la identidad de las
 fórmulas y el Examen de fotos con la config en vivo. Proveedor falso, velas inventadas, bases temporales."""
 import copy
+import os
+import sqlite3
+import tempfile
 import re
 import unittest
 
@@ -158,17 +161,197 @@ class IdentityTests(unittest.TestCase):
 
 class ExamTests(unittest.TestCase):
     def test_the_photos_of_the_live_config_carry_the_short_sheet_and_its_mirror(self):
-        cfg = copy.deepcopy(LIVE_CFG)
-        cfg["practice"] = dict(cfg["practice"], **{"from": START_DAY})
-        cfg["exam"] = dict(cfg["exam"], horizons_min=[720])
-        history = MemHistory()
-        cfg["state_context"] = sorted(history.series)                      # the in-memory series (no SOL here)
-        photos = ex.make_photos(history, cfg, "PF_XBTUSD", HOLDOUT)
+        cfg = exam_cfg(horizons_min=[720])
+        photos = ex.make_photos(MemHistory(), cfg, "PF_XBTUSD", HOLDOUT)
         self.assertTrue(photos)
         self.assertTrue(all("1. Maestro" in p["state_text"] and "1. Maestro" in p["mirror_text"] for p in photos))
         self.assertTrue(all(score_of(p["state_text"]) == -score_of(p["mirror_text"]) for p in photos))
         self.assertTrue(all(p["t_ms"] % (15 * MIN) == 0 for p in photos))
         self.assertNotIn("hechos", photos[0])                              # the LoRA's facts belong to the 8-factor sheet (v7)
+
+    def test_the_photos_start_at_exam_from_and_never_before_practice_from(self):
+        cfg = copy.deepcopy(LIVE_CFG)
+        self.assertEqual(cfg["exam"]["from"], "2025-10-01")                  # after the day the two formulas were fitted with
+        self.assertEqual(cfg["exam"]["products"], ["PF_XBTUSD", "PF_ETHUSD"])  # the two products the live operator runs
+        cfg["practice"] = dict(cfg["practice"], **{"from": "2025-09-01"})
+        self.assertEqual(ex.exam_start_ms(cfg), qt.date_ms("2025-10-01"))
+        cfg["practice"] = dict(cfg["practice"], **{"from": "2025-10-16"})      # --exam-from later than exam.from wins
+        self.assertEqual(ex.exam_start_ms(cfg), qt.date_ms("2025-10-16"))
+        cfg["exam"].pop("from")
+        self.assertEqual(ex.exam_start_ms(cfg), qt.date_ms("2025-10-16"))
+        self.assertNotIn("from", qt.load_config(qt.CONFIG_PATH_LIVE_V7)["exam"])   # version 7 keeps its photos as they were
+
+
+def exam_cfg(**exam):
+    """The live config over the in-memory candles: photos from START_DAY, the in-memory series as context."""
+    cfg = copy.deepcopy(LIVE_CFG)
+    cfg["practice"] = dict(cfg["practice"], **{"from": START_DAY})
+    cfg["exam"] = dict(cfg["exam"], products=["PF_XBTUSD"], **exam)
+    cfg["exam"].pop("from", None)
+    cfg["state_context"] = sorted(MemHistory().series)
+    return cfg
+
+
+class OperationPhotosTests(unittest.TestCase):
+    """Every photo of the short sheet carries the version 8 operation: enter at the photo, out when the maestro turns at least
+    flojo against it or at 48 h, on each side."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.history = MemHistory()
+        cls.cfg = exam_cfg()
+        cls.photos = ex.make_photos(cls.history, cls.cfg, "PF_XBTUSD", HOLDOUT)
+
+    def test_every_photo_has_the_formulas_and_the_operation_on_both_sides(self):
+        self.assertGreater(len(self.photos), 100)
+        hold = self.cfg["guardrails"]["max_hold_min"] * MIN
+        for p in self.photos:
+            op = p["operacion"]
+            self.assertIn(op["maestro"], (-2, -1, 0, 1, 2))
+            self.assertIsInstance(op["portero_si"], bool)
+            self.assertIn(op["volatilidad"], ("ALTA", "NORMAL", "BAJA"))
+            for side in ("largo", "corto"):
+                leg = op[side]
+                self.assertIn(leg["motivo"], (ex.OP_WHY_FLIP, ex.OP_WHY_TIME))
+                self.assertTrue(0 < leg["salida_ms"] - p["t_ms"] <= hold)
+                self.assertEqual((leg["salida_ms"] - p["t_ms"]) % (15 * MIN), 0)
+                self.assertAlmostEqual(leg["horas"], (leg["salida_ms"] - p["t_ms"]) / qt.HOUR_MS)
+                if leg["motivo"] == ex.OP_WHY_TIME:
+                    self.assertEqual(leg["salida_ms"], p["t_ms"] + hold)
+        kinds = {p["operacion"]["largo"]["motivo"] for p in self.photos} | {p["operacion"]["corto"]["motivo"] for p in self.photos}
+        self.assertEqual(kinds, {ex.OP_WHY_FLIP, ex.OP_WHY_TIME})
+
+    def test_the_net_is_the_move_to_the_exit_candle_minus_the_round_trip_cost(self):
+        closes = {int(b["bucket_start"]) + qt.BAR_MS: float(b["close"]) for b in self.history.bars("PF_XBTUSD", 0, HOLDOUT)}
+        for p in self.photos[::25]:
+            for side, sign in (("largo", 1), ("corto", -1)):
+                leg = p["operacion"][side]
+                expected = sign * (closes[leg["salida_ms"]] / closes[p["t_ms"]] - 1) * 1e4 - p["cost_bp"]
+                self.assertAlmostEqual(leg["neto_bp"], expected, places=6)
+        same = [p for p in self.photos if p["operacion"]["largo"]["salida_ms"] == p["operacion"]["corto"]["salida_ms"]]
+        for p in same:                                            # the same exit on both sides: one wins what the other loses
+            self.assertAlmostEqual(p["operacion"]["largo"]["neto_bp"] + p["operacion"]["corto"]["neto_bp"], -2 * p["cost_bp"], places=6)
+
+    def test_a_flip_exit_is_the_first_later_wake_where_the_maestro_says_at_least_flojo_against(self):
+        teacher = corta.formulas(self.cfg)[0]
+        weak = teacher["umbrales"]["flojo"]
+        # the photos are every wake with complete data (the last ones, without a 48 h close, are not photos): their scores
+        scores = {p["t_ms"]: p["operacion"]["puntaje"] for p in self.photos}
+        checked = 0
+        for p in self.photos[::10]:
+            for side, sign in (("largo", 1), ("corto", -1)):
+                leg = p["operacion"][side]
+                between = [t for t in scores if p["t_ms"] < t < leg["salida_ms"]]
+                self.assertTrue(all(sign * scores[t] > -weak for t in between), "an earlier wake already said against")
+                if leg["motivo"] == ex.OP_WHY_FLIP and leg["salida_ms"] in scores:
+                    self.assertLessEqual(sign * scores[leg["salida_ms"]], -weak)
+                    checked += 1
+        self.assertGreater(checked, 10)
+
+    def test_a_wake_with_incomplete_data_is_no_photo(self):
+        cfg = exam_cfg()
+        cfg["state_context"] = []                                 # without the other assets the live operator is never asked
+        self.assertEqual(ex.make_photos(MemHistory(), cfg, "PF_XBTUSD", HOLDOUT), [])
+
+    def test_the_eight_factor_sheet_has_no_operation(self):
+        cfg = qt.load_config(qt.CONFIG_PATH_LIVE_V7)
+        cfg["practice"] = dict(cfg["practice"], **{"from": START_DAY})
+        cfg["exam"] = dict(cfg["exam"], products=["PF_XBTUSD"], horizons_min=[240])
+        cfg["state_context"] = sorted(MemHistory().series)
+        photos = ex.make_photos(MemHistory(), cfg, "PF_XBTUSD", HOLDOUT)
+        self.assertTrue(photos)
+        self.assertTrue(all("operacion" not in p for p in photos))
+
+
+def op_row(t_ms, action, mirror, maestro, portero, long_net, short_net, why="vuelta", p=0.9):
+    leg = lambda net: {"salida_ms": t_ms + 4 * qt.HOUR_MS, "motivo": why, "horas": 4.0, "neto_bp": net}
+    return {"snap_id": "exam:PF_XBTUSD:{}".format(t_ms), "t_ms": t_ms, "real_action": action, "real_p": p, "mirror_action": mirror,
+            "mirror_p": p, "cost_bp": 10.0, "moves": {"720": 0.0, "1440": 0.0, "2880": 0.0},
+            "operacion": {"maestro": maestro, "puntaje": 0.1 * maestro, "portero_si": portero, "portero_p": 0.7,
+                          "volatilidad": "NORMAL", "largo": leg(long_net), "corto": leg(short_net)}}
+
+
+class OperationNumbersTests(unittest.TestCase):
+    def setUp(self):
+        day = qt.DAY_MS
+        self.cfg = exam_cfg()
+        self.cfg["exam_rules"] = dict(self.cfg["exam_rules"], random_draws=200)
+        self.rows = [
+            op_row(1 * day, "LARGO", "CORTO", 2, True, 30.0, -50.0),            # enters long with the formulas: +30
+            op_row(2 * day, "CORTO", "LARGO", -1, False, 20.0, -40.0),          # enters short against the portero: -40
+            op_row(3 * day, "LARGO", "LARGO", 2, True, 60.0, -80.0),            # blocked by the mirror: no entry (formula +60)
+            op_row(4 * day, "ESPERAR", None, -2, True, 15.0, -35.0),            # waits (formula short: -35)
+            op_row(5 * day, "CORTO", "LARGO", 1, True, -70.0, 50.0, why="tiempo"),   # enters short, closed at 48 h: +50
+            op_row(6 * day, "LARGO", "CORTO", 0, False, 10.0, -30.0, p=0.2),    # under the threshold: no entry
+        ]
+
+    def test_the_entries_are_what_the_live_operator_would_take_and_the_formulas_are_measured_on_the_same_photos(self):
+        op = ex.analyse_operation(self.rows, self.cfg)
+        q = op["qwen"]
+        self.assertEqual((op["fotos"], q["n"], op["espejo_bloqueo"], op["espera"]), (6, 3, 1, 1))
+        self.assertAlmostEqual(q["neto_bp"], (30.0 - 40.0 + 50.0) / 3)
+        self.assertAlmostEqual(q["ganadoras"], 2 / 3)
+        self.assertAlmostEqual(q["total_bp"], 40.0)
+        self.assertEqual((q["por_vuelta"], q["por_tiempo"]), (2, 1))
+        self.assertAlmostEqual(q["con_maestro"], 2 / 3)                      # the last entry (short, maestro +1) goes against
+        self.assertAlmostEqual(q["con_portero"], 2 / 3)
+        self.assertEqual(op["qwen_todas"]["n"], 5)
+        self.assertEqual(op["formula"]["n"], 3)                               # photos 1, 3 and 4: strong maestro with portero
+        self.assertAlmostEqual(op["formula"]["neto_bp"], (30.0 + 60.0 - 35.0) / 3)
+        self.assertEqual(op["maestro_fuerte"]["n"], 3)
+        self.assertAlmostEqual(op["siempre_largo"]["neto_bp"], (30.0 + 20.0 - 70.0) / 3)
+        self.assertAlmostEqual(op["siempre_corto"]["neto_bp"], (-50.0 - 40.0 + 50.0) / 3)
+        self.assertEqual(op["signals"]["gana"], True)
+        self.assertEqual(op["signals"]["mejor_que_formula"], False)
+        self.assertIsNotNone(q["vs_azar_pct"])
+        self.assertEqual(op["max_horas"], 48.0)
+        self.assertIn("48 h", op["salida"])
+
+    def test_without_operations_in_the_photos_there_is_no_block_and_no_section(self):
+        rows = [dict(r, operacion=None) for r in self.rows]
+        self.assertIsNone(ex.analyse_operation(rows, self.cfg))
+        self.assertEqual(ex.operation_lines(rows, self.cfg), [])
+
+    def test_the_report_section_says_the_entries_the_exits_and_the_table(self):
+        text = "\n".join(ex.operation_lines(self.rows, self.cfg))
+        self.assertIn("## Por operación (como opera la versión 8)", text)
+        self.assertIn("**Qwen entró en 3 de 6 fotos**", text)
+        self.assertIn("2 porque el maestro se dio vuelta, 1 por tiempo", text)
+        self.assertIn("| La fórmula sola: maestro fuerte con portero a favor | 3 |", text)
+        no_entry = ex.operation_lines([op_row(qt.DAY_MS, "ESPERAR", None, 2, True, 1.0, -2.0)], self.cfg)
+        self.assertIn("Qwen no hizo ninguna entrada", "\n".join(no_entry))
+
+
+class OperationExamTests(unittest.TestCase):
+    """The exam of the live config stores the operation with the photos and the quick test reports it."""
+
+    def test_the_quick_test_and_the_report_carry_the_operation(self):
+        from test_futures_qwen_exam import state_policy
+        from test_futures_qwen_trader import ClockedProvider
+        cfg = ex.quick_cfg(exam_cfg(), 30)
+        with tempfile.TemporaryDirectory() as tmp:
+            db = os.path.join(tmp, "e.sqlite")
+            clock = [0.0]
+            result = ex.run_exam(MemHistory(), db, ClockedProvider(clock, entries=state_policy), cfg, HOLDOUT, max_minutes=500,
+                                 clock=lambda: clock[0], log=lambda *a: None)
+            self.assertEqual(result["stop_reason"], "done")
+            rows, _ = ex.load_answers(db)
+            self.assertEqual(len(rows), 30)
+            self.assertTrue(all(r["operacion"] and "largo" in r["operacion"] for r in rows))
+            summary = ex.quick_summary(db, cfg)
+            self.assertEqual(summary["operacion"]["fotos"], 30)
+            self.assertEqual(summary["operacion"]["qwen"]["n"] + summary["operacion"]["espera"] + summary["operacion"]["espejo_bloqueo"]
+                             + sum(1 for r in rows if r["real_action"] in ("LARGO", "CORTO") and r["real_p"] < cfg["practice_entry_threshold"]
+                                   and qt.mirror_passes(r["real_action"], r["mirror_action"])), 30)
+            self.assertIn("## Por operación (como opera la versión 8)", ex.build_exam_report(db, cfg))
+            # a database written before the operation existed: the report still reads
+            con = sqlite3.connect(db)
+            with con:
+                con.execute("DROP TABLE exam_operacion")
+            con.close()
+            rows, _ = ex.load_answers(db)
+            self.assertTrue(all(r["operacion"] is None for r in rows))
+            self.assertNotIn("operacion", ex.quick_summary(db, cfg))
 
 
 if __name__ == "__main__":

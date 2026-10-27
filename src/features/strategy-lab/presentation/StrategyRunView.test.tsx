@@ -302,6 +302,22 @@ describe('StrategyRunView actions', () => {
 
   it('Qwen en vivo has a quick test button; it asks, polls and shows an orientative result', async () => {
     const user = userEvent.setup()
+    const stats = (
+      n: number,
+      net: number,
+      winners: number,
+      flips: number,
+      timeouts: number,
+    ) => ({
+      n,
+      neto_bp: net,
+      ganadoras: winners,
+      ic: [net - 20, net + 20] as [number, number],
+      total_bp: net * n,
+      por_vuelta: flips,
+      por_tiempo: timeouts,
+      horas: 11.6,
+    })
     const states = [
       { state: 'none', snapshots: 300, note: 'n' },
       {
@@ -328,6 +344,30 @@ describe('StrategyRunView actions', () => {
           vs_random_pct: 97,
           signals: { extremes: true, random: true, spearman: true },
           note: 'Es orientativa: no es el Examen.',
+          operacion: {
+            fotos: 300,
+            max_horas: 48,
+            salida: 'cuando el maestro se da vuelta o a las 48 h, sin stop',
+            qwen: {
+              ...stats(12, 31.5, 0.67, 10, 2),
+              con_maestro: 0.75,
+              con_portero: 0.5,
+              vs_azar_pct: 96,
+            },
+            qwen_todas: stats(40, 4.1, 0.5, 30, 10),
+            formula: stats(20, 45.2, 0.65, 16, 4),
+            maestro_fuerte: stats(60, 12, 0.55, 50, 10),
+            siempre_largo: stats(12, -3, 0.42, 11, 1),
+            siempre_corto: stats(12, 2, 0.5, 11, 1),
+            espejo_bloqueo: 19,
+            espera: 200,
+            signals: {
+              gana: true,
+              ic_positivo: false,
+              azar: true,
+              mejor_que_formula: false,
+            },
+          },
         },
       },
     ] as const
@@ -364,6 +404,22 @@ describe('StrategyRunView actions', () => {
       timeout: 8000,
     })
     expect(screen.getByText(/Es orientativa/)).toBeInTheDocument()
+    // version 8: the operation as the live operator runs it, against the formulas alone
+    const operation = screen.getByTestId('quick-operation')
+    expect(operation).toHaveTextContent('Como opera la versión 8')
+    expect(operation).toHaveTextContent(
+      /Qwen entró en 12 de 300 fotos: \+31,5 pb por operación/,
+    )
+    expect(operation).toHaveTextContent('67 % ganadoras')
+    expect(operation).toHaveTextContent(
+      '10 porque el maestro se dio vuelta, 2 por tiempo',
+    )
+    const table = screen.getByRole('table', { name: 'Por operación' })
+    expect(
+      within(table).getByRole('row', {
+        name: /La fórmula sola: maestro fuerte con portero a favor 20 \+45,2 pb 65 % 16 \/ 4/,
+      }),
+    ).toBeInTheDocument()
   }, 15000)
 
   it('the quick test lets you pick a variant and compares the finished ones', async () => {

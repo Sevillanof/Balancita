@@ -45,6 +45,46 @@ export type QuickFicha = {
   comparison: QuickComparisonRow[]
 }
 
+/** One row of the operation table (version 8): operations closed by the fixed exit rule, net after costs. */
+export type QuickOperationStats = {
+  n: number
+  neto_bp: number | null
+  ganadoras: number | null
+  ic: [number | null, number | null]
+  total_bp: number | null
+  por_vuelta: number
+  por_tiempo: number
+  horas: number | null
+}
+
+/**
+ * How the version 8 operator would have done on the photos (the short sheet only): each entry Qwen makes, closed when the
+ * maestro turns against it or at the time limit, against the formulas alone on the same photos.
+ */
+export type QuickOperation = {
+  fotos: number
+  max_horas: number
+  salida: string
+  qwen: QuickOperationStats & {
+    con_maestro: number | null
+    con_portero: number | null
+    vs_azar_pct: number | null
+  }
+  qwen_todas: QuickOperationStats
+  formula: QuickOperationStats
+  maestro_fuerte: QuickOperationStats
+  siempre_largo: QuickOperationStats
+  siempre_corto: QuickOperationStats
+  espejo_bloqueo: number
+  espera: number
+  signals: {
+    gana: boolean | null
+    ic_positivo: boolean | null
+    azar: boolean | null
+    mejor_que_formula: boolean | null
+  }
+}
+
 export type QuickSummary = {
   photos: number
   horizon_min: number
@@ -61,6 +101,8 @@ export type QuickSummary = {
   note: string
   /** Only the variants with the 8-factor sheet (`kind` `factors`). */
   ficha?: QuickFicha
+  /** Only the short sheet (Qwen en vivo version 8): the operation as the live operator runs it. */
+  operacion?: QuickOperation
 }
 
 /** One candidate of the quick test (another prompt or another model) with its last state; the finished ones are compared. */
