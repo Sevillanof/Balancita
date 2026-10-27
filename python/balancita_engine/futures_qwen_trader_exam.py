@@ -139,7 +139,7 @@ def _store_photos(pdb, photos):
 
 
 def run_exam(history, db_path, provider, cfg, holdout_ms, *, max_minutes=55.0, clock=time.monotonic, log=print,
-             on_progress=None, concurrent=True, reference_db=None):
+             on_progress=None, concurrent=True, reference_db=None, mirror_every=1):
     """Asks Qwen about the photos not answered yet, inside ``max_minutes``. Returns
     ``{stop_reason, answered, total, calls}``; ``stop_reason``: ``done``, ``budget``, ``model_down``.
 
@@ -148,7 +148,10 @@ def run_exam(history, db_path, provider, cfg, holdout_ms, *, max_minutes=55.0, c
     own switch (``runtime.concurrent_orders`` in the config).
 
     ``reference_db`` (factors question only): a full exam database of the same version; answers it already has for exactly
-    the same question are copied instead of asked (``FactorsDecider``). The result carries ``reused``."""
+    the same question are copied instead of asked (``FactorsDecider``). The result carries ``reused``.
+
+    ``mirror_every`` (factors question only): the mirror is asked for 1 photo in every ``mirror_every`` (the ones whose position
+    in the sample is a multiple of it); the others keep the real answer only. 1 (the exam) asks it for every photo."""
     if not provider.health():
         raise qt.TraderError("llama-server no responde en {}: arrancalo con el modelo local y volvé a lanzar `exam`. Este "
                              "comando no descarga ningún modelo y solo habla con 127.0.0.1.".format(
@@ -205,17 +208,25 @@ def run_exam(history, db_path, provider, cfg, holdout_ms, *, max_minutes=55.0, c
             real_action, real_p, mirror_action, mirror_p = row["real_action"], row["real_p"], None, None
             try:
                 if factors:                            # one call per state: 8 gradients; real and mirror together
-                    if real_action is None:
+                    with_mirror = row["ord"] % mirror_every == 0
+                    if real_action is None and with_mirror:
                         real, mirror = decider.ask_pair(row["snap_id"], row["t_ms"], row["state_text"], row["mirror_text"])
                         real_action, real_p = real["chosen"], real["probabilities"][real["chosen"]]
-                    else:
+                    elif real_action is None:
+                        real = decider.ask(row["snap_id"], row["t_ms"], "action", row["state_text"])
+                        real_action, real_p = real["chosen"], real["probabilities"][real["chosen"]]
+                        mirror = None
+                    elif with_mirror:
                         mirror = decider.ask(row["snap_id"], row["t_ms"], "mirror", row["mirror_text"])
+                    else:
+                        mirror = None
                 else:
                     if real_action is None:
                         real = decider.ask(row["snap_id"], row["t_ms"], "action", question, row["state_text"])
                         real_action, real_p = real["chosen"], real["probabilities"][real["chosen"]]
                     mirror = decider.ask(row["snap_id"], row["t_ms"], "mirror", question, row["mirror_text"])
-                mirror_action, mirror_p = mirror["chosen"], mirror["probabilities"][mirror["chosen"]]
+                if mirror is not None:
+                    mirror_action, mirror_p = mirror["chosen"], mirror["probabilities"][mirror["chosen"]]
             except qt.DecisionError as error:
                 # kept as it is (None): counted in the report, never retried. A factors pair keeps the real answer if only the mirror failed
                 done = getattr(error, "answers", None) or {}
@@ -254,6 +265,7 @@ def run_exam(history, db_path, provider, cfg, holdout_ms, *, max_minutes=55.0, c
 # --------------------------------------------------------------------------- the quick test
 
 QUICK_SNAPSHOTS = 150
+QUICK_MIRROR_EVERY = 2      # the quick test asks the mirror for 1 photo in every 2 (the exam asks it for all)
 QUICK_STATE = "rapida-v3.json"
 REFERENCE_DB = "exam-live.sqlite"      # the full exam of the live version: its answers are reused by the quick test
 QUICK_NOTE = ("Prueba rápida: solo una muestra de fotos del pasado, para filtrar cambios de prompt o modelo. Es orientativa: "
@@ -304,7 +316,8 @@ def _write_state(path, state):
 
 
 def run_quick(history, db_path, provider, cfg, holdout_ms, *, snapshots=QUICK_SNAPSHOTS, max_minutes=55.0,
-              clock=time.monotonic, log=print, state_path=None, variant=None, concurrent=True, reference_db=None):
+              clock=time.monotonic, log=print, state_path=None, variant=None, concurrent=True, reference_db=None,
+              mirror_every=QUICK_MIRROR_EVERY):
     """Asks Qwen about a small stratified sample of the photos, in its own database (the full exam's is never touched),
     and leaves ``{state, answered, total, summary}`` in ``state_path`` for the screen. Every run starts from scratch: a
     changed prompt or model is exactly what it is for, and an old sample would be refused by the config identity.
@@ -337,7 +350,7 @@ def run_quick(history, db_path, provider, cfg, holdout_ms, *, snapshots=QUICK_SN
         if reference_db is None:
             reference_db = os.path.join(os.path.dirname(os.path.abspath(db_path)), REFERENCE_DB)
         outcome = run_exam(history, db_path, provider, quick, holdout_ms, max_minutes=max_minutes, clock=clock, log=log,
-                           on_progress=progress, concurrent=concurrent, reference_db=reference_db)
+                           on_progress=progress, concurrent=concurrent, reference_db=reference_db, mirror_every=mirror_every)
         state.update(answered=outcome["answered"], total=outcome["total"])
         if outcome["stop_reason"] == "done":
             state.update(state="done", summary=quick_summary(db_path, quick))

@@ -758,7 +758,8 @@ class QuickLiveTests(unittest.TestCase):
         db = os.path.join(self.dir.name, qv.db_name("actual"))
         state_path = os.path.join(self.dir.name, qv.state_name("actual"))
         state = ex.run_quick(history_with_sol(), db, provider, qv.apply_variant(exam_cfg(), variant), HOLDOUT, snapshots=30,
-                             max_minutes=500, clock=lambda: clock[0], log=lambda *a: None, state_path=state_path, variant=variant)
+                             max_minutes=500, clock=lambda: clock[0], log=lambda *a: None, state_path=state_path, variant=variant,
+                             mirror_every=1)
         self.assertEqual((state["state"], state["answered"]), ("done", 30))
         ficha = state["summary"]["ficha"]
         self.assertEqual([r["id"] for r in ficha["readings"]], ["F1", "F2", "F3", "F4", "F6", "F7"])
