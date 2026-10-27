@@ -232,6 +232,7 @@ describe('live market gateway', () => {
             ? { status: 'error', reason: 'invalid_product' }
             : { status: 'ok', trades: [] }
         },
+        account: () => ({ status: 'off', reason: 'test' }),
       },
     })
     const ok = await on.app.inject('/api/qwen/trades?product=PF_XBTUSD&limit=5')

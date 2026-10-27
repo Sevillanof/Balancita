@@ -14,6 +14,12 @@ import { serverConfigFrom } from '../platform/config.ts'
 import { createMovements } from '../features/live-gateway/movements.ts'
 import { qwenExitOffFromEnv } from '../features/live-gateway/qwen-exit-off.ts'
 
+/** A positive finite number from an environment value, else undefined (the default applies). */
+function positiveNumber(value: string | undefined): number | undefined {
+  const parsed = Number(value)
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined
+}
+
 function pythonUnavailableReason(status: string | undefined) {
   if (status === 'sqlite_too_old') return 'python_sqlite_too_old'
   return status === 'unavailable' ? 'python_unavailable' : undefined
@@ -98,6 +104,7 @@ async function main(): Promise<void> {
     qwenScores: qwenScoresFrom(process.env),
     qwenDecisions: createQwenDecisions({
       liveDbPath: process.env.QWEN_LIVE_DB_PATH || undefined,
+      startUsd: positiveNumber(process.env.QWEN_ACCOUNT_START_USD),
     }),
     kronosScores: kronosScoresFrom(process.env),
     movements: movementsFrom(process.env),
