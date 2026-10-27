@@ -4,6 +4,7 @@ import {
   bollinger,
   donchian,
   ema,
+  currentDayValueArea,
   priorDayValueArea,
   rsi,
   valueArea,
@@ -124,5 +125,19 @@ describe('volumeProfile', () => {
     expect(total).toBeCloseTo(1000)
     expect(profile.val).toBeLessThanOrEqual(profile.poc)
     expect(profile.vah).toBeGreaterThanOrEqual(profile.poc)
+  })
+})
+
+describe('currentDayValueArea', () => {
+  it('uses only the latest day and draws on that day', () => {
+    const day = 86_400
+    const source = [
+      { time: 0, high: 200, low: 100, close: 150, volume: 10 },
+      { time: day, high: 11, low: 9, close: 10, volume: 10 },
+      { time: day + 60, high: 11, low: 9, close: 10, volume: 10 },
+    ]
+    const area = currentDayValueArea(source, source)
+    expect(area.vah.map((point) => point.time)).toEqual([day, day + 60])
+    expect(area.vah[0]!.value).toBeLessThan(12)
   })
 })

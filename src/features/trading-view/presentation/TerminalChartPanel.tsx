@@ -9,6 +9,7 @@ import ApprovedTerminalChart, {
 } from './ApprovedTerminalChart.tsx'
 import {
   bollinger,
+  currentDayValueArea,
   donchian,
   ema,
   priorDayValueArea,
@@ -105,6 +106,7 @@ type Overlay =
   | 'donchian'
   | 'vwap'
   | 'valueArea'
+  | 'valueAreaToday'
   | 'volumeProfile'
 type Pane = 'flow' | 'oi' | 'liquidations' | 'positioning' | 'premium' | 'rsi'
 
@@ -115,6 +117,11 @@ const OVERLAYS: ReadonlyArray<{ id: Overlay; label: string; color: string }> = [
   { id: 'donchian', label: 'Donchian 20', color: '#5fc4d3' },
   { id: 'vwap', label: 'VWAP diario', color: '#e98fc0' },
   { id: 'valueArea', label: 'Área de valor (día previo)', color: '#d9a066' },
+  {
+    id: 'valueAreaToday',
+    label: 'Área de valor (día en curso, en vivo)',
+    color: '#4fd1a1',
+  },
   { id: 'volumeProfile', label: 'Perfil de volumen (24 h)', color: '#d9a066' },
 ]
 const PANES: ReadonlyArray<{ id: Pane; label: string; live: boolean }> = [
@@ -221,6 +228,19 @@ function overlayLines(
         dashed: true,
       },
       { id: 'va-val', color: color('valueArea'), points: area.val },
+    )
+  }
+  if (enabled.includes('valueAreaToday')) {
+    const area = currentDayValueArea(areaSource, candles)
+    out.push(
+      { id: 'vt-vah', color: color('valueAreaToday'), points: area.vah },
+      {
+        id: 'vt-poc',
+        color: color('valueAreaToday'),
+        points: area.poc,
+        dashed: true,
+      },
+      { id: 'vt-val', color: color('valueAreaToday'), points: area.val },
     )
   }
   return out
@@ -457,7 +477,9 @@ export default function TerminalChartPanel({
   // candles, more than the 500 the 1m stream holds (about 8 h): they read
   // their own 15m / 5m series, kept current by the same live 1m stream, so
   // they follow the chart whatever timeframe is on screen.
-  const wantsArea = settings.overlays.includes('valueArea')
+  const wantsArea =
+    settings.overlays.includes('valueArea') ||
+    settings.overlays.includes('valueAreaToday')
   const wantsProfile = settings.overlays.includes('volumeProfile')
   const areaRemote = useTerminalChart(
     apiBase,
