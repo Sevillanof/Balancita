@@ -1,4 +1,5 @@
 """El maestro de operación del LoRA (``futures_qwen_maestro``): hechos aplanados, antisimetría, veredictos, ajuste y el archivo del repo."""
+import importlib.util
 import json
 import math
 import os
@@ -68,6 +69,7 @@ class VerdictTests(unittest.TestCase):
         self.assertEqual(maestro.label_values(teacher(), maestro.flat_facts(facts())), [0] * 8)
 
 
+@unittest.skipUnless(importlib.util.find_spec("numpy"), "el ajuste necesita numpy (la CI no lo instala; leer el maestro no lo necesita)")
 class FitTests(unittest.TestCase):
     def rows(self, n=3000, seed=1):
         """Fotos sintéticas: el movimiento a 12 h sigue a z_24h (invertido) y a pos7, con ruido; las demás no dicen nada."""
@@ -102,6 +104,7 @@ class FitTests(unittest.TestCase):
     def test_the_logistic_fit_matches_a_closed_form_check_and_refuses_too_few_rows(self):
         # one feature, perfectly balanced: with a strong L2 the solution is small and has the sign of the correlation
         import numpy as np
+
         Z = np.array([[1.0], [-1.0]] * 500)
         y = np.array([1.0, 0.0] * 500)
         w = maestro.logistic_no_intercept(Z, y, l2=1000.0)

@@ -14,7 +14,8 @@ F5 y F8 en 0). La regla en paper que se midió con él (``analisis/qwen-lora/inf
 con veredicto fuerte, salir cuando el veredicto se da vuelta al menos flojo o a las 48 h, sin stop.
 
 ``fit``: ajusta el maestro con un archivo de hechos (``futures_qwen_lora facts``) y lo guarda. ``medir``: acierto y reparto de
-veredictos en otro archivo. Solo numpy; nada de esto toca Qwen en vivo.
+veredictos en otro archivo. Leer el maestro y etiquetar es Python puro; solo ``fit`` necesita numpy (la CI no lo instala, por eso
+se importa adentro). Nada de esto toca Qwen en vivo.
 """
 
 import argparse
@@ -22,8 +23,6 @@ import hashlib
 import json
 import math
 import os
-
-import numpy as np
 
 from . import futures_qwen_trader as qt
 from .futures_qwen_ficha import FACTORS, VOTING
@@ -128,6 +127,8 @@ def read_facts(path, from_day=None, to_day=None, products=None):
 
 
 def _matrix(rows, sd=None):
+    import numpy as np
+
     X = np.array([[row.get(f) or 0.0 for f in DIRECTIONAL] for row in rows], dtype=float)
     if sd is None:
         sd = X.std(axis=0)
@@ -138,6 +139,8 @@ def _matrix(rows, sd=None):
 def logistic_no_intercept(Z, y, l2=L2, iters=100):
     """Regresión logística sin intercepto con penalización L2 (Newton). Minimiza sum(log(1 + exp(-t z·w))) + l2/2 |w|²
     con t = ±1: lo mismo que scikit-learn ``LogisticRegression(C=1/l2, fit_intercept=False)``."""
+    import numpy as np
+
     t = 2.0 * y - 1.0
     w = np.zeros(Z.shape[1])
     for _ in range(iters):
@@ -153,6 +156,8 @@ def logistic_no_intercept(Z, y, l2=L2, iters=100):
 
 def fit(rows, horizon_min=DEFAULT_HORIZON_MIN, *, strong_share=STRONG_SHARE, weak_share=WEAK_SHARE, l2=L2, note=None):
     """El maestro ajustado con estas filas: etiqueta = signo del movimiento a ``horizon_min``; umbrales = cuantiles del |puntaje|."""
+    import numpy as np
+
     key = "move_{}".format(horizon_min)
     rows = [r for r in rows if r.get(key) is not None and r[key] != 0]
     if len(rows) < 1000:
