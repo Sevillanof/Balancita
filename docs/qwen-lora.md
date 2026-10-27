@@ -47,7 +47,7 @@ el LoRA se entrena igual por decisión de Fran.
    `ops/qwen-lora/lora.yaml`: rango 8 en las 7 proyecciones de las últimas 16 capas, lote 1, una pasada, solo la línea de
    respuesta entra en la pérdida (`mask_prompt`).
    Mejor `train.sh train-measured N` (ver «Medir mientras entrena»): entrena de a 500 pasos y mide después de cada tramo.
-4b. `train.sh eval [PASOS]`: mide los checkpoints guardados (o los que se nombren: `base,500,1000`) sobre 25 pares real/espejo de
+   4b. `train.sh eval [PASOS]`: mide los checkpoints guardados (o los que se nombren: `base,500,1000`) sobre 25 pares real/espejo de
    `valid.jsonl`, sin llama-server (`ops/qwen-lora/ckpt_eval.py`, ~3 min por checkpoint). Imprime, por checkpoint, qué valor
    contesta en F1, el acierto de signo contra la etiqueta, en qué fracción de pares el espejo da vuelta el lado, en cuántos contesta
    idéntico al espejo y la pérdida media por token de la respuesta. Un adaptador que lee la ficha da vuelta el lado en casi todos
