@@ -8,14 +8,16 @@ la misma cuenta que usa la práctica sobre historia (live == replay).
 Cómo decide (``config/qwen-live.json``)
     * Cada 15 minutos, con o sin posición, y NUNCA en otro momento: no hay despertares extra (movimiento fuerte, cerca del
       stop, funding, movimiento grande). La clave de cada despertar es (producto, ventana de 15 minutos).
-    * Qwen abre y cierra. Guardrails de explorador que no puede cambiar: stop a 1,5 x la volatilidad diaria acotado entre
-      0,5 % y 3 %, cierre obligatorio a las 4 h y espera de 15 min después de cerrar. Tamaño fijo de 100 USD.
+    * Qwen abre y cierra. Guardrails que no puede cambiar (versión 8): sin stop, cierre obligatorio a las 48 h y espera de
+      15 min después de cerrar. Tamaño fijo de 100 USD.
     * Si el modelo está caído o lento, ese despertar queda anotado como OMITIDO con el motivo y no se reintenta después:
-      nunca se inventa una decisión y sin respuesta no se opera.
-    * Versión 5 de la config: el estado es la ficha de 8 factores (``futures_qwen_ficha``) con las velas de los otros activos
-      (renglón F7) y el posicionamiento del colector, que se lee en SOLO lectura (renglón F6; sin base dice n/d y se sigue). La
-      ventana de oportunidad hace una llamada por factores con el estado real y otra con el espejo
-      (``futures_qwen_factors``); la pregunta de posición sigue siendo una letra.
+      nunca se inventa una decisión y sin respuesta no se opera. Lo mismo si la ficha está incompleta (``datos_incompletos``):
+      los datos viejos o faltantes no se le muestran.
+    * Versión 8 de la config (``state_corta``): el estado es la FICHA CORTA (``futures_qwen_corta``): el veredicto del maestro de
+      dirección (``futures_qwen_maestro``, 12 h), el del portero (``futures_qwen_portero``, ¿conviene entrar ahora?), el régimen
+      de volatilidad y la posición abierta. Las dos fórmulas corren en CPU. Preguntas de letras (LARGO / CORTO / ESPERAR con
+      espejo; MANTENER / CERRAR), sin ventana de oportunidad y sin adaptador LoRA. La versión 7 (ficha de 8 factores, pregunta
+      por factores, adaptador) queda congelada en ``config/qwen-live-v7.json`` para el examen y el LoRA.
 
 Una base propia (``data/qwen-live/live.sqlite`` o ``QWEN_LIVE_DB``) y UN solo proceso por base (candado de archivo). Si el
 proceso se reinicia, recupera la posición abierta y no repite un despertar ya decidido. Si la base es de OTRA configuración
@@ -63,6 +65,7 @@ SKIP_TEXT = {
     "modelo_lento": "el modelo local tardó más de lo permitido",
     "sin_respuesta": "el modelo contestó algo que no se pudo leer",
     "proceso_detenido": "el proceso estaba apagado a esa hora",
+    "datos_incompletos": "la ficha estaba incompleta (faltaban datos), no se le preguntó",
 }
 
 

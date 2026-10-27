@@ -1,4 +1,4 @@
-"""Qwen en vivo con la ficha de 8 factores (config versión 5): la ventana por factores, los datos que la ficha necesita en vivo
+"""Qwen en vivo con la ficha de 8 factores (config versiones 5 a 7, congelada en config/qwen-live-v7.json): la ventana por factores, los datos que la ficha necesita en vivo
 (otros activos y posicionamiento), el archivo de la base de otra configuración y el Examen de fotos de la config en vivo.
 Todo con proveedor falso, velas inventadas y bases temporales."""
 import contextlib
@@ -19,10 +19,11 @@ from balancita_engine import futures_qwen_trader_exam as ex
 from balancita_engine import positioning_data as pd
 from balancita_engine import strategy_gate_models as models
 from test_futures_qwen_factors import ChatProvider, completion, positioning_db, reading_script
-from test_futures_qwen_live import BASE, BAR, DAY, LIVE_CFG, MIN, Policy, make, walk
+from test_futures_qwen_live import BASE, BAR, DAY, MIN, Policy, make, walk
 from test_futures_qwen_trader import HOLDOUT, MemHistory, SERIES, START_DAY
 from test_futures_qwen_trader import walk as walk_series
 
+LIVE_CFG = qt.load_config(qt.CONFIG_PATH_LIVE_V7)      # version 7: the 8-factor sheet, the factors question and the adapter, frozen
 HOUR = qt.HOUR_MS
 LONG_LINE = [2, 2, 2, 2, 2, 2, 2, 0]
 SHORT_LINE = [-2, -2, -2, -2, -2, -2, -2, 0]

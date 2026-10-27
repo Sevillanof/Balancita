@@ -69,6 +69,7 @@ CONFIG_PATH_V2 = os.path.join(ROOT, "config", "qwen-trader-v2.json")
 CONFIG_PATH_V21 = os.path.join(ROOT, "config", "qwen-trader-v2.1.json")
 CONFIG_PATH_V3 = os.path.join(ROOT, "config", "qwen-trader-v3.json")
 CONFIG_PATH_LIVE = os.path.join(ROOT, "config", "qwen-live.json")
+CONFIG_PATH_LIVE_V7 = os.path.join(ROOT, "config", "qwen-live-v7.json")   # frozen version 7 (8-factor sheet + LoRA): exam / LoRA tooling
 GATE_CONFIG_PATH = os.path.join(ROOT, "config", "strategy-gate.json")
 DATA_DIR = os.path.join(ROOT, "data", "qwen-trader")
 DEFAULT_DB = os.path.join(DATA_DIR, "practice.sqlite")
@@ -707,6 +708,9 @@ class Trader:
             raise ValueError("el espejo solo se pregunta sin posición")
         c, last = self.c, self.c[-1]
         sg = -1.0 if mirror else 1.0
+        if self.cfg.get("state_corta"):        # version 8 of the live config: the short sheet (maestro, portero, volatility, position)
+            from . import futures_qwen_corta as corta
+            return corta.state(self, t_ms, sg, reasons)
         sigma5 = self._sigma5()
         lines = ["Mercado (velas cerradas; sin fechas ni precios absolutos). Despertaste por: {}.".format(
             ", ".join(reasons))]
@@ -1041,6 +1045,9 @@ class Trader:
         self.last_call_ms = t_ms
         in_position = self.position is not None
         kind = "position" if in_position else "flat"
+        if self.cfg.get("state_corta"):
+            from . import futures_qwen_corta as corta
+            corta.check(self, t_ms)              # incomplete data: the wake is omitted, Qwen is not asked (WakeSkipped)
         state = self.state_text(t_ms, reasons)
         question = self.questions["position" if in_position else "flat"]
         net_now = None

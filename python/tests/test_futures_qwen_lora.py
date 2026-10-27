@@ -15,7 +15,7 @@ from balancita_engine import futures_qwen_trader as qt
 from balancita_engine import futures_qwen_trader_exam as ex
 from balancita_engine.futures_qwen_ficha import FACTORS, VOTING
 
-LIVE = qt.load_config(qt.CONFIG_PATH_LIVE)
+LIVE = qt.load_config(qt.CONFIG_PATH_LIVE_V7)        # the sheet of 8 factors and the factors question live in version 7
 
 
 def read_jsonl(path):

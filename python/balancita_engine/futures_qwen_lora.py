@@ -292,7 +292,7 @@ def _parser():
                        ("facts", "una línea JSON por foto con todos los números de la ficha y los movimientos (para el maestro)"),
                        ("numbers", "una línea JSON por foto con los números de los renglones F1..F7 y los movimientos (sin modelo)")):
         p = sub.add_parser(name, help=text)
-        p.add_argument("--config", default=qt.CONFIG_PATH_LIVE, help="config del operador (default: la de Qwen en vivo)")
+        p.add_argument("--config", default=qt.CONFIG_PATH_LIVE_V7, help="config del operador (default: la versión 7 de Qwen en vivo, la de la ficha de 8 factores)")
         p.add_argument("--cache-dir", default=qt.DEFAULT_CACHE, help="caché de velas (default %(default)s)")
         p.add_argument("--products", default=",".join(DEFAULT_PRODUCTS))
         p.add_argument("--from", dest="from_day", default=TRAIN_FROM)

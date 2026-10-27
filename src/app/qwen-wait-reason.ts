@@ -59,6 +59,8 @@ export function skippedReason(reason: unknown, detail?: unknown): string {
       'No pudo decidir: el modelo contestó algo que no se pudo leer.',
     proceso_detenido:
       'No decidió: el proceso de Qwen estaba apagado a esa hora.',
+    datos_incompletos:
+      'No se le preguntó: la ficha estaba incompleta (faltaban datos), y los datos viejos no se le muestran.',
   }
   if (typeof reason === 'string' && known[reason]) return known[reason]
   const extra =

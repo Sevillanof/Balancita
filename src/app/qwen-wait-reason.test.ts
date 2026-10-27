@@ -82,6 +82,7 @@ describe('helpers', () => {
     expect(skippedReason('modelo_caido')).toContain('no respondió')
     expect(skippedReason('modelo_lento')).toContain('tardó')
     expect(skippedReason('proceso_detenido')).toContain('apagado')
+    expect(skippedReason('datos_incompletos')).toContain('incompleta')
     expect(skippedReason('rara', 'detalle')).toBe(
       'No decidió esta vez (detalle).',
     )
