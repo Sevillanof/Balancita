@@ -21,7 +21,10 @@ BAR = qt.BAR_MS
 DAY = qt.DAY_MS
 D = Decimal
 BASE = qt.date_ms("2026-10-20")                  # a day boundary: also a 15 minute boundary
-LIVE_CFG = qt.load_config(qt.CONFIG_PATH_LIVE)
+REAL_CFG = qt.load_config(qt.CONFIG_PATH_LIVE)
+LIVE_CFG = copy.deepcopy(REAL_CFG)
+LIVE_CFG["products"] = ["PF_XBTUSD", "PF_ETHUSD"]        # live runs ETH only since 27-oct; the tests keep two products to cover several at once
+LIVE_CFG["exam"]["products"] = ["PF_XBTUSD", "PF_ETHUSD"]
 PRODUCTS = tuple(LIVE_CFG["products"])
 START = BASE + 7 * MIN                           # the candle that ended at BASE + 5 min is 2 minutes old
 
@@ -154,7 +157,7 @@ class VersionTests(unittest.TestCase):
 
     def test_the_config_says_what_was_approved(self):
         cfg = LIVE_CFG
-        self.assertEqual(cfg["products"], ["PF_XBTUSD", "PF_ETHUSD"])
+        self.assertEqual(REAL_CFG["products"], ["PF_ETHUSD"])
         self.assertEqual((cfg["wake"]["flat_every_min"], cfg["wake"]["position_every_min"]), (15, 15))
         self.assertIs(cfg["wake"]["extra_wakes"], False)
         # version 9: no stop (stops turn noise into losses) and NO time limit (Fran, 27-oct: the exit is decided at every look)
@@ -402,8 +405,10 @@ class RestartTests(unittest.TestCase):
 
 class SizeLeverageProductsTests(unittest.TestCase):
     def test_defaults_are_100_usd_1x_btc_and_eth(self):
-        cfg = live.apply_overrides(LIVE_CFG, {})
-        self.assertEqual((cfg["notional_usd"], cfg["leverage"], cfg["products"]), ("100", "1", ["PF_XBTUSD", "PF_ETHUSD"]))
+        cfg = live.apply_overrides(REAL_CFG, {})
+        self.assertEqual((cfg["notional_usd"], cfg["leverage"], cfg["products"]), ("100", "1", ["PF_ETHUSD"]))      # ETH only since 27-oct
+        self.assertEqual(REAL_CFG["exam"]["products"], ["PF_ETHUSD"])
+        self.assertIn("PF_XBTUSD", REAL_CFG["state_context"])         # BTC stays as context of the sheet
 
     def test_environment_changes_them_with_no_caps(self):
         cfg = live.apply_overrides(LIVE_CFG, {"QWEN_LIVE_NOTIONAL_USD": "250000", "QWEN_LIVE_LEVERAGE": "50",
