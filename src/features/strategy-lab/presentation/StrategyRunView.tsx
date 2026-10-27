@@ -57,6 +57,8 @@ import {
   quickApi,
   type QuickApi,
   type QuickFicha,
+  type QuickOperation,
+  type QuickOperationStats,
   type QuickState,
   type QuickVariant,
 } from '../infrastructure/quick-api.ts'
@@ -1441,8 +1443,88 @@ function QuickResult({ state }: { state: QuickState }) {
           ): {SIGNAL_TEXT(summary.signals.spearman)}.
         </li>
       </ul>
+      {summary.operacion && <QuickOperationTable op={summary.operacion} />}
       {summary.ficha && <QuickFichaTables ficha={summary.ficha} />}
       <p className={RUN.hint}>{summary.note}</p>
+    </div>
+  )
+}
+
+const hoursText = (value: number | null | undefined) =>
+  value == null ? 'sin dato' : `${amount(value, 1)} h`
+
+/** Version 8: each entry Qwen would make, closed by the fixed exit rule, against the formulas alone on the same photos. */
+function QuickOperationTable({ op }: { op: QuickOperation }) {
+  const q = op.qwen
+  const rows: [string, QuickOperationStats][] = [
+    ['Qwen (entradas que haría en vivo)', q],
+    ['Qwen (todo lo que dijo LARGO o CORTO)', op.qwen_todas],
+    ['La fórmula sola: maestro fuerte con portero a favor', op.formula],
+    ['Maestro fuerte, sin portero', op.maestro_fuerte],
+    ['Siempre largo en las fotos donde Qwen entró', op.siempre_largo],
+    ['Siempre corto en las fotos donde Qwen entró', op.siempre_corto],
+  ]
+  return (
+    <div data-testid="quick-operation">
+      <p>
+        <strong>Como opera la versión 8</strong> · cada entrada se cierra{' '}
+        {op.salida}. Neto después de costos.
+      </p>
+      {q.n === 0 ? (
+        <p>
+          Qwen no entró en ninguna de las {op.fotos} fotos (esperar {op.espera},
+          bloqueadas por el espejo {op.espejo_bloqueo}).
+        </p>
+      ) : (
+        <ul>
+          <li>
+            Qwen entró en {q.n} de {op.fotos} fotos: {bp(q.neto_bp)} por
+            operación (rango del 95 % {bp(q.ic[0])} a {bp(q.ic[1])}),{' '}
+            {percentText(q.ganadoras)} ganadoras, {bp(q.total_bp)} en total:{' '}
+            {SIGNAL_TEXT(op.signals.gana)}.
+          </li>
+          <li>
+            Salidas: {q.por_vuelta} porque el maestro se dio vuelta,{' '}
+            {q.por_tiempo} por tiempo; {hoursText(q.horas)} abiertas en
+            promedio.
+          </li>
+          <li>
+            Del lado del maestro en el {percentText(q.con_maestro)} de sus
+            entradas, con el portero a favor en el {percentText(q.con_portero)}.
+            Contra entradas al azar:{' '}
+            {q.vs_azar_pct == null
+              ? 'sin dato'
+              : `${amount(q.vs_azar_pct, 0)} %`}{' '}
+            ({SIGNAL_TEXT(op.signals.azar)}).
+          </li>
+        </ul>
+      )}
+      <div className={RUN.tableWrap}>
+        <table className={RUN.table} aria-label="Por operación">
+          <thead>
+            <tr>
+              <th scope="col">Qué</th>
+              <th scope="col">Operaciones</th>
+              <th scope="col">Neto por operación</th>
+              <th scope="col">Ganadoras</th>
+              <th scope="col">Por vuelta / por tiempo</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map(([label, stats]) => (
+              <tr key={label}>
+                <th scope="row">{label}</th>
+                <td>{stats.n}</td>
+                <td>{bp(stats.neto_bp)}</td>
+                <td>{percentText(stats.ganadoras)}</td>
+                <td>
+                  {stats.por_vuelta} / {stats.por_tiempo}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   )
 }

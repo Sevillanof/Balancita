@@ -69,10 +69,11 @@ def check(trader, t_ms):
         raise qt.WakeSkipped("datos_incompletos", "faltan " + " y ".join(gaps))
 
 
-def readings(trader, t_ms):
-    """Los números de la foto: hechos aplanados, puntaje y veredicto del maestro, probabilidad y veredicto del portero, régimen."""
+def readings(trader, t_ms, f=None):
+    """Los números de la foto: hechos aplanados, puntaje y veredicto del maestro, probabilidad y veredicto del portero, régimen.
+    ``f``: los hechos de la ficha ya calculados (``ficha.facts``), para no repetirlos."""
     teacher, keeper = formulas(trader.cfg)
-    f = ficha.facts(trader, t_ms)
+    f = ficha.facts(trader, t_ms) if f is None else f
     row = maestro.flat_facts(f)
     s = maestro.score(teacher, row)
     v = maestro.verdict_of(teacher, s)

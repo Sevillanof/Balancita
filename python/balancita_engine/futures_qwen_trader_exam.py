@@ -20,6 +20,7 @@ import os
 import random
 import time
 
+from . import futures_qwen_corta as corta
 from . import futures_qwen_factors as fq
 from . import futures_qwen_ficha as fficha
 from . import futures_qwen_maestro as maestro
@@ -38,23 +39,39 @@ CREATE TABLE IF NOT EXISTS exam_snapshots(
   state_text TEXT NOT NULL, mirror_text TEXT NOT NULL, moves_json TEXT NOT NULL, cost_bp REAL NOT NULL);
 CREATE TABLE IF NOT EXISTS exam_answers(
   snap_id TEXT PRIMARY KEY, real_action TEXT, real_p REAL, mirror_action TEXT, mirror_p REAL, answered_ms INTEGER);
+CREATE TABLE IF NOT EXISTS exam_operacion(snap_id TEXT PRIMARY KEY, op_json TEXT NOT NULL);
 """
+
+# the operation of version 8 (the short sheet), measured on each photo: enter at the photo, leave at the first later wake where
+# the maestro says at least "flojo" against the position, or at the time limit (``guardrails.max_hold_min``); every 15 min
+OP_WHY_FLIP, OP_WHY_TIME = "vuelta", "tiempo"
 
 
 # --------------------------------------------------------------------------- the photos
 
 
+def exam_start_ms(cfg):
+    """First moment of the photos: ``exam.from`` when the config has it (the short sheet: after the day its formulas were fitted
+    with), never before ``practice.from`` (``--exam-from``)."""
+    practice, exam = cfg["practice"], cfg["exam"]
+    return max(qt.date_ms(practice["from"]), qt.date_ms(exam["from"]) if exam.get("from") else 0)
+
+
 def make_photos(history, cfg, product, holdout_ms):
     """Every moment the trader would have asked Qwen while flat, with its STATE, the mirrored STATE and the price moves (bp)
-    over each horizon. Only candles before the holdout are read, and a moment whose horizon would reach it is dropped."""
+    over each horizon. Only candles before the holdout are read, and a moment whose horizon would reach it is dropped.
+
+    With the short sheet (``state_corta``) a moment with incomplete data is no photo (the live operator skips that wake), and
+    every photo carries ``operacion``: the maestro and the portero at that moment and, for each side, the result of the
+    version 8 operation (``_operation``)."""
     practice, exam = cfg["practice"], cfg["exam"]
-    start = qt.date_ms(practice["from"])
+    start = exam_start_ms(cfg)
     horizons = [m * MINUTE_MS for m in exam["horizons_min"]]
     bars = history.bars(product, start - practice["warmup_days"] * DAY_MS, holdout_ms)
     if len(bars) < (holdout_ms - (start - practice["warmup_days"] * DAY_MS)) // BAR_MS * 0.98:
         raise qt.TraderError("{}: faltan velas para el examen; ejecutá `prefetch`".format(product))
     trader = qt.Trader(cfg, product, None, history.funding(product), key="exam", entry_threshold=cfg["practice_entry_threshold"])
-    ficha = bool(cfg.get("state_ficha"))
+    ficha, short = bool(cfg.get("state_ficha")), bool(cfg.get("state_corta"))
     if ficha:                                                           # row F6: the collector's database, read-only
         trader.positioning = positioning_data.PositioningFeed(positioning_path(cfg), product)
     for other in cfg.get("state_context") or ():                        # closes of the other assets shown in the STATE
@@ -62,20 +79,30 @@ def make_photos(history, cfg, product, holdout_ms):
             continue
         trader.context[other] = {int(b["bucket_start"]) + BAR_MS: float(b["close"]) for b in history.bars(
             other, start - practice["warmup_days"] * DAY_MS, holdout_ms)}
-    closes, found = {}, []
+    closes, found, readings = {}, [], {}
     for bar in bars:
         trader.feed(bar, trade=False)
         t_ms = int(bar["bucket_start"]) + BAR_MS
         closes[t_ms] = float(bar["close"])
-        if t_ms < start or len(trader.c) < qt.MIN_BARS:
+        if len(trader.c) < qt.MIN_BARS:
             continue
         reasons = trader.wake_reasons(t_ms)
-        if reasons:
-            trader.last_call_ms = t_ms               # the same spacing of extra wakes as the live trader
-            found.append((t_ms, reasons, trader.state_text(t_ms, reasons), trader.state_text(t_ms, reasons, mirror=True),
-                          fficha.numbers(trader, t_ms) if ficha else None,
-                          maestro.flat_facts(fficha.facts(trader, t_ms)) if ficha else None))
+        if not reasons:
+            continue
+        if short:
+            # the maestro at every wake, photo or not: the exit of the operation looks at the wakes AFTER the photo
+            facts = fficha.facts(trader, t_ms)
+            if corta.missing(facts):
+                continue                                 # datos_incompletos: the live operator is not asked, no photo either
+            readings[t_ms] = corta.readings(trader, t_ms, facts)
+        if t_ms < start:
+            continue
+        trader.last_call_ms = t_ms                       # the same spacing of extra wakes as the live trader
+        found.append((t_ms, reasons, trader.state_text(t_ms, reasons), trader.state_text(t_ms, reasons, mirror=True),
+                      fficha.numbers(trader, t_ms) if ficha else None,
+                      maestro.flat_facts(fficha.facts(trader, t_ms)) if ficha else None))
     cost = float(round_trip_cost_bps(product))
+    weak = corta.formulas(cfg)[0]["umbrales"]["flojo"] if short else None
     out = []
     for t_ms, reasons, state, mirror, numbers, facts in found:
         later = [closes.get(t_ms + h) for h in horizons]
@@ -87,8 +114,44 @@ def make_photos(history, cfg, product, holdout_ms):
         if numbers is not None:
             photo["ficha"] = numbers                                    # the number of each line, to measure what Qwen reads
             photo["hechos"] = facts                                     # every directional number, for the LoRA teacher
+        if short:
+            operation = _operation(cfg, t_ms, readings, closes, cost, weak)
+            if operation is None:
+                continue                                                # no candle at the exit: nothing to measure
+            photo["operacion"] = operation
         out.append(photo)
     return out
+
+
+def _v8_exit(cfg, t_ms, side, readings, closes, cost, weak):
+    """The version 8 operation opened at ``t_ms`` on ``side`` (+1 long, -1 short): out at the first later wake where the
+    maestro says at least flojo against it, or at ``guardrails.max_hold_min``. ``None`` without a candle at the exit."""
+    hold, step = cfg["guardrails"]["max_hold_min"], cfg["wake"]["position_every_min"]
+    exit_ms, why = t_ms + hold * MINUTE_MS, OP_WHY_TIME
+    for k in range(1, hold // step + 1):
+        at = t_ms + k * step * MINUTE_MS
+        r = readings.get(at)
+        if r is None:
+            continue                                     # a skipped wake (incomplete data): the position goes on
+        if side * r["puntaje"] <= -weak:
+            exit_ms, why = at, OP_WHY_FLIP
+            break
+    c0, c1 = closes.get(t_ms), closes.get(exit_ms)
+    if c0 is None or c1 is None:
+        return None
+    return {"salida_ms": exit_ms, "motivo": why, "horas": (exit_ms - t_ms) / qt.HOUR_MS, "neto_bp": side * (c1 / c0 - 1) * 1e4 - cost}
+
+
+def _operation(cfg, t_ms, readings, closes, cost, weak):
+    """What the formulas said at the photo and the result of the version 8 operation on each side."""
+    r = readings.get(t_ms)
+    if r is None:
+        return None
+    sides = {name: _v8_exit(cfg, t_ms, side, readings, closes, cost, weak) for name, side in (("largo", 1), ("corto", -1))}
+    if None in sides.values():
+        return None
+    return {"maestro": r["veredicto"], "puntaje": r["puntaje"], "portero_si": bool(r["portero_si"]), "portero_p": r["portero_p"],
+            "volatilidad": r["volatilidad"], **sides}
 
 
 def positioning_path(cfg):
@@ -99,7 +162,7 @@ def positioning_path(cfg):
 def choose_photos(photos, cfg, holdout_ms):
     """Seeded sample, stratified by product and time bin, ordered so that any prefix is balanced."""
     exam, products = cfg["exam"], cfg["exam"]["products"]
-    start = qt.date_ms(cfg["practice"]["from"])
+    start = exam_start_ms(cfg)
     span = holdout_ms - start
     strata = {}
     for photo in photos:
@@ -136,6 +199,9 @@ def _store_photos(pdb, photos):
             if p.get("ficha") is not None:
                 pdb.db.execute("INSERT OR IGNORE INTO exam_ficha VALUES(?,?)", (snap_id(p["product"], p["t_ms"]),
                                                                                  json.dumps(p["ficha"])))
+            if p.get("operacion") is not None:
+                pdb.db.execute("INSERT OR IGNORE INTO exam_operacion VALUES(?,?)", (snap_id(p["product"], p["t_ms"]),
+                                                                                     json.dumps(p["operacion"])))
 
 
 # --------------------------------------------------------------------------- asking
@@ -308,6 +374,9 @@ def quick_summary(db_path, cfg):
     ficha = fq.ficha_summary(rows, cfg["exam"]["horizons_min"])        # only the factors variants have photos with gradients
     if ficha:
         summary["ficha"] = ficha
+    operation = analyse_operation(rows, cfg)                           # only the short sheet (version 8) has operations
+    if operation:
+        summary["operacion"] = operation
     return summary
 
 
@@ -385,10 +454,14 @@ def load_answers(db_path):
         rows = pdb.db.execute("SELECT s.*, a.real_action, a.real_p, a.mirror_action, a.mirror_p FROM exam_snapshots s "
                               "JOIN exam_answers a USING(snap_id) ORDER BY s.ord").fetchall()
         factors = fq.load_photo_factors(pdb)                  # photos asked with the factors question (``ficha`` variants)
+        operations = {}                                       # photos of the short sheet (version 8): the operation per side
+        if pdb.db.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'exam_operacion'").fetchone():
+            operations = {r[0]: json.loads(r[1]) for r in pdb.db.execute("SELECT snap_id, op_json FROM exam_operacion")}
         out = []
         for r in rows:
             d = dict(r)
             d["moves"] = json.loads(d.pop("moves_json"))
+            d["operacion"] = operations.get(d["snap_id"])
             d["p_largo"], d["p_corto"] = leans.get((d["snap_id"], "action"), (None, None))
             d["p_largo_m"], d["p_corto_m"] = leans.get((d["snap_id"], "mirror"), (None, None)) \
                 if d["mirror_action"] is not None else (None, None)
@@ -522,6 +595,113 @@ def analyse(rows, meta, cfg):
     inconclusive = not groups["pasa"] or (others_ok and not checks[0]["ok"])
     out["verdict"] = PASS if all(c["ok"] for c in checks) else (INCONCLUSIVE if inconclusive else FAIL)
     return out
+
+
+# --------------------------------------------------------------------------- the operation (version 8)
+
+
+def _op_side(row, side):
+    return row["operacion"]["largo" if side > 0 else "corto"]
+
+
+def _op_stats(items, draws, seed):
+    """``items``: ``(row, side)``. Mean net bp per operation, winners, 95 % interval by day, exits and hours."""
+    nets = [_op_side(r, s)["neto_bp"] for r, s in items]
+    rows = [r for r, _ in items]
+    lo, hi = day_bootstrap(rows, nets, draws, seed)
+    return {"n": len(nets), "neto_bp": mean(nets), "ganadoras": mean([1.0 if v > 0 else 0.0 for v in nets]), "ic": [lo, hi],
+            "total_bp": math.fsum(nets) if nets else None,
+            "por_vuelta": sum(1 for r, s in items if _op_side(r, s)["motivo"] == OP_WHY_FLIP),
+            "por_tiempo": sum(1 for r, s in items if _op_side(r, s)["motivo"] == OP_WHY_TIME),
+            "horas": mean([_op_side(r, s)["horas"] for r, s in items])}
+
+
+def _op_random_percentile(items, draws, seed, observed):
+    """As ``random_percentile``, with the result of the version 8 operation: one coin per day flips all its sides or none."""
+    if not items or observed is None:
+        return None
+    rng = random.Random(seed)
+    days = sorted({r["t_ms"] // DAY_MS for r, _ in items})
+    below = 0
+    for _ in range(draws):
+        flip = {d: rng.choice((1, -1)) for d in days}
+        if mean([_op_side(r, flip[r["t_ms"] // DAY_MS] * s)["neto_bp"] for r, s in items]) < observed:
+            below += 1
+    return 100.0 * below / draws
+
+
+def analyse_operation(rows, cfg):
+    """How the version 8 operator would have done on the photos: every entry Qwen makes (LARGO / CORTO over the threshold and
+    confirmed by the mirror, as the live operator requires), closed when the maestro turns at least flojo against it or at the
+    time limit. The same for the formulas alone on the same photos. ``None`` when the photos carry no operation."""
+    rows = [r for r in rows if r.get("operacion")]
+    if not rows:
+        return None
+    exam, rules, threshold = cfg["exam"], cfg["exam_rules"], cfg["practice_entry_threshold"]
+    draws, seed = rules["random_draws"], exam["seed"]
+    entries = [(r, side_of(r)) for r in rows if classify(r, threshold) == "pasa"]
+    said = [(r, side_of(r)) for r in rows if r["real_action"] in ("LARGO", "CORTO")]
+    maestro_side = lambda r: 1 if r["operacion"]["maestro"] > 0 else -1
+    strong = [(r, maestro_side(r)) for r in rows if abs(r["operacion"]["maestro"]) == 2]
+    formula = [(r, s) for r, s in strong if r["operacion"]["portero_si"]]
+    qwen = _op_stats(entries, draws, seed)
+    qwen["con_maestro"] = mean([1.0 if r["operacion"]["maestro"] * s > 0 else 0.0 for r, s in entries])
+    qwen["con_portero"] = mean([1.0 if r["operacion"]["portero_si"] else 0.0 for r, _ in entries])
+    qwen["vs_azar_pct"] = _op_random_percentile(entries, draws, seed, qwen["neto_bp"])
+    out = {"fotos": len(rows), "max_horas": cfg["guardrails"]["max_hold_min"] / 60.0,
+           "salida": "cuando el maestro se da vuelta (al menos flojo en contra) o a las {} h, sin stop".format(
+               qt.es(cfg["guardrails"]["max_hold_min"] / 60.0, 0)),
+           "qwen": qwen, "qwen_todas": _op_stats(said, draws, seed), "formula": _op_stats(formula, draws, seed),
+           "maestro_fuerte": _op_stats(strong, draws, seed),
+           "siempre_largo": _op_stats([(r, 1) for r, _ in entries], draws, seed),
+           "siempre_corto": _op_stats([(r, -1) for r, _ in entries], draws, seed),
+           "espejo_bloqueo": sum(1 for r in rows if classify(r, threshold) == "espejo"),
+           "espera": sum(1 for r in rows if r["real_action"] == "ESPERAR")}
+    gains = qwen["neto_bp"] is not None and qwen["neto_bp"] > 0
+    out["signals"] = {"gana": gains if qwen["n"] else None,
+                      "ic_positivo": (qwen["ic"][0] is not None and qwen["ic"][0] > 0) if qwen["n"] else None,
+                      "azar": (qwen["vs_azar_pct"] is not None and qwen["vs_azar_pct"] >= rules["min_percentile_vs_random"])
+                      if qwen["n"] else None,
+                      "mejor_que_formula": (qwen["neto_bp"] > out["formula"]["neto_bp"])
+                      if qwen["n"] and out["formula"]["n"] else None}
+    return out
+
+
+def operation_lines(rows, cfg):
+    """The operation section of the report (version 8 only)."""
+    op = analyse_operation(rows, cfg)
+    if op is None:
+        return []
+    q = op["qwen"]
+    lines = ["## Por operación (como opera la versión 8)", "",
+             "Cada entrada de Qwen (LARGO o CORTO con seguridad suficiente y confirmada por el espejo, como exige el operador "
+             "en vivo) se cierra {}. Neto en puntos básicos después de costos. La salida es la regla fija, no lo que Qwen "
+             "habría contestado con la posición abierta.".format(op["salida"]), ""]
+    if not q["n"]:
+        lines += ["Qwen no hizo ninguna entrada en las {} fotos (esperar {}, bloqueadas por el espejo {}).".format(
+            op["fotos"], op["espera"], op["espejo_bloqueo"]), ""]
+    else:
+        lines.append("- **Qwen entró en {} de {} fotos**: {} por operación en promedio (rango del 95 % por día {} a {}), {} de "
+                     "las operaciones ganadoras, {} en total.".format(
+                         q["n"], op["fotos"], _bp(q["neto_bp"]), _bp(q["ic"][0]), _bp(q["ic"][1]), _pct(q["ganadoras"]),
+                         _bp(q["total_bp"])))
+        lines.append("- Salidas: {} porque el maestro se dio vuelta, {} por tiempo; {} h abiertas en promedio.".format(
+            q["por_vuelta"], q["por_tiempo"], "n/d" if q["horas"] is None else qt.es(q["horas"], 1)))
+        lines.append("- Entró del lado del maestro en el {} de sus entradas y con el portero a favor en el {}. Mejor que el {} de "
+                     "los sorteos con el lado al azar.".format(_pct(q["con_maestro"]), _pct(q["con_portero"]),
+                                                               "n/d" if q["vs_azar_pct"] is None else
+                                                               qt.es(q["vs_azar_pct"], 0) + " %"))
+    lines += ["", "| Qué | Operaciones | Neto por operación | Ganadoras | Por vuelta / por tiempo |", "|---|---|---|---|---|"]
+    for label, key in (("Qwen (entradas que haría en vivo)", "qwen"), ("Qwen (todo lo que dijo LARGO o CORTO)", "qwen_todas"),
+                       ("La fórmula sola: maestro fuerte con portero a favor", "formula"),
+                       ("Maestro fuerte, sin portero", "maestro_fuerte"),
+                       ("Siempre largo en las fotos donde Qwen entró", "siempre_largo"),
+                       ("Siempre corto en las fotos donde Qwen entró", "siempre_corto")):
+        b = op[key]
+        lines.append("| {} | {} | {} | {} | {} / {} |".format(label, b["n"], _bp(b["neto_bp"]), _pct(b["ganadoras"]),
+                                                              b["por_vuelta"], b["por_tiempo"]))
+    lines.append("")
+    return lines
 
 
 # --------------------------------------------------------------------------- the text
@@ -845,7 +1025,7 @@ def build_exam_report(db_path, cfg):
         return "# Qwen operador v3: examen con fotos del pasado\n\nTodavía no hay fotos contestadas (ejecutá `exam`).\n"
     rules, horizons = cfg["exam_rules"], cfg["exam"]["horizons_min"]
     lean, _ = lean_lines(rows, cfg)
-    lines = ["# Qwen operador v3: examen con fotos del pasado", ""] + lean + entries_lines(rows, cfg)
+    lines = ["# Qwen operador v3: examen con fotos del pasado", ""] + lean + operation_lines(rows, cfg) + entries_lines(rows, cfg)
     lines += ["## Glosario", "",
               "- **Foto**: un momento del pasado con el estado del mercado tal como lo vería el operador.",
               "- **Espejo**: la misma foto con los signos dados vuelta (lo que subió, bajó; máximos y mínimos cambiados; funding "
