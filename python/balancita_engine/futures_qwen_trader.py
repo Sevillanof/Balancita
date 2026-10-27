@@ -1792,7 +1792,7 @@ def main(argv=None):
                 from .futures_qwen_factors import check_parallel, parallel_text
                 if not cfg.get("state_ficha"):
                     raise TraderError("--check-parallel solo vale para la pregunta por factores (config con state_ficha, "
-                                      "como --version live)")
+                                      "como la versión 7: --config config/qwen-live-v7.json)")
                 if not os.path.exists(args.exam_db):
                     raise TraderError("no existe la base del examen: {}".format(args.exam_db))
                 provider = _provider(args.llama_url)

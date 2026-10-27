@@ -296,7 +296,9 @@ class ExamAndCheckTests(unittest.TestCase):
         provider = OverlapProvider(script, delay=0.005)
         out = io.StringIO()
         with mock.patch.object(qt, "_provider", return_value=provider), contextlib.redirect_stdout(out):
-            code = qt.main(["exam", "--version", "live", "--exam-db", db, "--check-parallel", "3"])
+            # the parallel check reads the 8-factor sheet (``state_ficha``): the frozen version 7 config, not the live v8 one
+            code = qt.main(["exam", "--version", "live", "--config", qt.CONFIG_PATH_LIVE_V7, "--exam-db", db,
+                            "--check-parallel", "3"])
         self.assertEqual(code, 0)
         self.assertIn("Lectura: sirve", out.getvalue())
         self.assertEqual(provider.requests, 12)
