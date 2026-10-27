@@ -9,9 +9,9 @@
 #                                     de los del yaml, p. ej. `train 7600` para hacer la mitad una noche y la otra mitad la siguiente
 #   ops/qwen-lora/train.sh convert    adaptador mlx -> qwen-lora.gguf (el que carga llama-server con LLAMA_LORA)
 #   ops/qwen-lora/train.sh eval [PASOS]        mide checkpoints (coma: base,500,1000; por defecto todos los guardados) sobre 25 pares
-#                                             real/espejo de valid.jsonl: acierto de signo, si el espejo da vuelta, pérdida (~3 min c/u)
+#                                             real/espejo de valid.jsonl: acuerdo con el maestro, si el espejo da vuelta, pérdida (~3 min c/u)
 #   ops/qwen-lora/train.sh train-measured N [TRAMO]  entrena de a tramos (500 pasos) y mide después de cada uno; CORTA solo cuando
-#                                             dos mediciones seguidas no mejoran ni la pérdida (2 %) ni el «espejo da vuelta»
+#                                             dos mediciones seguidas no mejoran ni la pérdida (2 %), ni el «espejo da vuelta», ni el acuerdo
 set -euo pipefail
 ROOT=${0:A:h:h:h}
 DATA=${BALANCITA_DATA:-$HOME/balancita-data.noindex}/qwen-lora
@@ -48,7 +48,7 @@ case "${1:-help}" in
     [ -f "$DATASET/train.jsonl" ] || { echo "falta $DATASET/train.jsonl (el dataset se arma en la nube y se copia aquí)"; exit 1; }
     "$VENV/bin/mlx_lm.lora" -c "$ROOT/ops/qwen-lora/lora.yaml" --model "$MODEL" --data "$DATASET" \
       --adapter-path "$DATA/adapters-prueba" --iters 50 --steps-per-report 10 --steps-per-eval 1000 --save-every 1000
-    echo "Con los tokens/s de arriba: el entrenamiento completo son ~16 millones de tokens (16.000.000 / tokens_s / 3600 = horas)."
+    echo "Con los tokens/s de arriba: la pasada completa son ~8 millones de tokens (8.000.000 / tokens_s / 3600 = horas)."
     ;;
   train)
     need_model
@@ -73,7 +73,7 @@ case "${1:-help}" in
     need_model
     [ -f "$DATASET/train.jsonl" ] || { echo "falta $DATASET/train.jsonl"; exit 1; }
     total=${2:?pasos totales, p. ej. 3000}; chunk=${3:-500}; log=$DATA/train-measured.log
-    done_steps=0; prev_loss=; prev_flip=; stale=0
+    done_steps=0; prev_loss=; prev_flip=; prev_agree=; stale=0
     [ -f "$ADAPTERS/adapters.safetensors" ] && echo "retoma desde $ADAPTERS/adapters.safetensors (los pasos se cuentan desde aquí)"
     while [ "$done_steps" -lt "$total" ]; do
       resume=()
@@ -85,13 +85,13 @@ case "${1:-help}" in
       line=$("$VENV/bin/python" "$ROOT/ops/qwen-lora/ckpt_eval.py" --model "$MODEL" --data "$DATASET" --adapters "$ADAPTERS" \
         --out "$DATA/ckpt-eval" --pairs "${PAIRS:-25}" --file "$ADAPTERS/paso-$done_steps.safetensors" | tail -n 1)
       echo "$line" | tee -a "$log"
-      read -r loss flip <<< "$(printf '%s' "$line" | "$VENV/bin/python" -c 'import json,sys; d=json.load(sys.stdin); print(d["perdida_respuesta"], d["espejo_da_vuelta"])')"
+      read -r loss flip agree <<< "$(printf '%s' "$line" | "$VENV/bin/python" -c 'import json,sys; d=json.load(sys.stdin); print(d["perdida_respuesta"], d["espejo_da_vuelta"] or 0, d["acuerdo_maestro"] or 0)')"
       if [ -n "$prev_loss" ]; then
-        better=$("$VENV/bin/python" -c "import sys; l,pl,f,pf=map(float,sys.argv[1:]); print(int(l < pl*0.98 or f > pf))" "$loss" "$prev_loss" "$flip" "$prev_flip")
+        better=$("$VENV/bin/python" -c "import sys; l,pl,f,pf,a,pa=map(float,sys.argv[1:]); print(int(l < pl*0.98 or f > pf or a > pa))" "$loss" "$prev_loss" "$flip" "$prev_flip" "$agree" "$prev_agree")
         if [ "$better" = 1 ]; then stale=0; else stale=$((stale + 1)); fi
       fi
-      prev_loss=$loss; prev_flip=$flip
-      echo "[train-measured] $done_steps pasos: pérdida $loss, espejo da vuelta $flip, sin mejora $stale" | tee -a "$log"
+      prev_loss=$loss; prev_flip=$flip; prev_agree=$agree
+      echo "[train-measured] $done_steps pasos: pérdida $loss, espejo da vuelta $flip, acuerdo con el maestro $agree, sin mejora $stale" | tee -a "$log"
       if [ "$stale" -ge 2 ]; then echo "[train-measured] dos mediciones seguidas sin mejora: corto en $done_steps pasos" | tee -a "$log"; break; fi
     done
     ;;

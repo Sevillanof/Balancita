@@ -22,6 +22,7 @@ import time
 
 from . import futures_qwen_factors as fq
 from . import futures_qwen_ficha as fficha
+from . import futures_qwen_maestro as maestro
 from . import futures_qwen_trader as qt
 from . import positioning_data
 from .futures_costs import round_trip_cost_bps
@@ -72,10 +73,11 @@ def make_photos(history, cfg, product, holdout_ms):
         if reasons:
             trader.last_call_ms = t_ms               # the same spacing of extra wakes as the live trader
             found.append((t_ms, reasons, trader.state_text(t_ms, reasons), trader.state_text(t_ms, reasons, mirror=True),
-                          fficha.numbers(trader, t_ms) if ficha else None))
+                          fficha.numbers(trader, t_ms) if ficha else None,
+                          maestro.flat_facts(fficha.facts(trader, t_ms)) if ficha else None))
     cost = float(round_trip_cost_bps(product))
     out = []
-    for t_ms, reasons, state, mirror, numbers in found:
+    for t_ms, reasons, state, mirror, numbers, facts in found:
         later = [closes.get(t_ms + h) for h in horizons]
         if None in later:
             continue
@@ -84,6 +86,7 @@ def make_photos(history, cfg, product, holdout_ms):
                  "cost_bp": cost}
         if numbers is not None:
             photo["ficha"] = numbers                                    # the number of each line, to measure what Qwen reads
+            photo["hechos"] = facts                                     # every directional number, for the LoRA teacher
         out.append(photo)
     return out
 

@@ -37,6 +37,16 @@ class PairsTests(unittest.TestCase):
         answers = sorted(p["messages"][-1]["content"][:5] for p in pairs[0])
         self.assertEqual(answers, ["F1:+1", "F1:-1"])
 
+    def test_a_sheet_and_its_mirror_that_both_say_nothing_are_still_a_pair(self):
+        zero = "F1:0 F2:0 F3:0 F4:0 F5:0 F6:0 F7:0 F8:0"
+        rows = [example("-+++", zero), example("+---", zero)]
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "valid.jsonl")
+            with open(path, "w", encoding="utf-8") as handle:
+                for row in rows:
+                    handle.write(json.dumps(row) + "\n")
+            self.assertEqual(len(ce.direction_pairs(path, 10)), 1)
+
     def test_values_and_sign(self):
         self.assertEqual(ce.values_of("F1:-1 F2:+2 F5:0"), {"F1": -1, "F2": 2, "F5": 0})
         self.assertEqual(ce.values_of("hola"), {})

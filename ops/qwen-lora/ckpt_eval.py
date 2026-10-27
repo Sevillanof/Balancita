@@ -1,7 +1,9 @@
 """Mide un adaptador LoRA (mlx) o sus checkpoints sobre pares real/espejo de valid.jsonl, SIN llama-server: reparto del valor de
-F1, acierto de signo contra la etiqueta, si el espejo da vuelta el lado, si contesta idéntico al espejo y la pérdida media por token
-de la respuesta. Es la medición que faltó la noche del 26 al 27 de octubre (hilo «Entrenar a Qwen con LoRA»): a los 500 pasos el
-adaptador ya contestaba un valor fijo y la pérdida (0,044) no bajó más en las 7 horas siguientes.
+F1, acuerdo con la etiqueta (el veredicto del maestro en el dataset v3), si el espejo da vuelta el lado, si contesta idéntico al
+espejo y la pérdida media por token de la respuesta. Es la medición que faltó la noche del 26 al 27 de octubre (hilo «Entrenar a
+Qwen con LoRA»): a los 500 pasos el adaptador ya contestaba un valor fijo y la pérdida (0,044) no bajó más en las 7 horas siguientes.
+
+Gate antes de llevar un adaptador a llama-server: ``espejo_da_vuelta`` >= 0,9 y ``acuerdo_maestro`` >= 0,85.
 
 Uso (en la Mac, con el venv de ops/qwen-lora/train.sh):
   python ops/qwen-lora/ckpt_eval.py --model MODEL --data DATASET --adapters ADAPTERS --out OUTDIR [--pairs 25] [--steps base,500,1000]
@@ -27,7 +29,7 @@ def key_of(user):
 
 
 def direction_pairs(valid_path, limit):
-    """Pares (real, espejo) de ejemplos de dirección de valid.jsonl, con etiquetas distintas."""
+    """Pares (real, espejo) de ejemplos de dirección de valid.jsonl (en el orden del archivo)."""
     groups = collections.defaultdict(list)
     with open(valid_path, encoding="utf-8") as handle:
         for line in handle:
@@ -36,7 +38,7 @@ def direction_pairs(valid_path, limit):
             if answer.startswith("E:"):
                 continue
             groups[key_of(row["messages"][1]["content"])].append(row)
-    pairs = [g for g in groups.values() if len(g) == 2 and g[0]["messages"][-1]["content"] != g[1]["messages"][-1]["content"]]
+    pairs = [g for g in groups.values() if len(g) == 2]          # with the v3 labels a sheet and its mirror can both be 0
     return pairs[:limit]
 
 
@@ -82,10 +84,11 @@ def measure(label, pairs, model_path, adapter_path):
     started = time.time()
     model, tok = load(model_path, adapter_path=adapter_path)
     f1 = collections.Counter()
-    ok = flips = same = zeros = n = 0
+    agree = agree_sign = zeros = n = 0
+    flips = sided = same = 0
     losses = []
     for pair in pairs:
-        outs = []
+        outs, labs = [], []
         for row in pair:
             answer = row["messages"][-1]["content"]
             prompt = tok.apply_chat_template(row["messages"][:2], add_generation_prompt=True, tokenize=False, enable_thinking=False)
@@ -95,23 +98,30 @@ def measure(label, pairs, model_path, adapter_path):
             v1 = vals.get("F1")
             f1[str(v1)] += 1
             n += 1
-            if v1 is not None and v1 != 0 and sign(v1) == sign(lab["F1"]):
-                ok += 1
+            if v1 == lab["F1"]:                                   # exactly the teacher's verdict (0, ±1 or ±2)
+                agree += 1
+            if v1 is not None and sign(v1) == sign(lab["F1"]):   # at least its side (0 counts as a side of its own)
+                agree_sign += 1
             if any(vals.get(k) == 0 for k in VOTERS):
                 zeros += 1
             prompt_ids = tok.encode(prompt, add_special_tokens=False)
             answer_ids = tok.encode(answer + "<|im_end|>", add_special_tokens=False)
             losses.append(answer_loss(mx, model, prompt_ids, answer_ids))
             outs.append(v1)
-        if None not in outs:
+            labs.append(lab["F1"])
+        if None in outs:
+            continue
+        if labs[0] != 0:                                          # a pair with a side: the mirror must take the other one
+            sided += 1
             if outs[0] != 0 and sign(outs[0]) == -sign(outs[1]):
                 flips += 1
-            if outs[0] == outs[1]:
-                same += 1
+        if outs[0] == outs[1] and outs[0] != 0:                   # the same non-zero answer to a sheet and its mirror: a habit
+            same += 1
     del model
     mx.clear_cache()
-    return {"paso": label, "fichas": n, "F1": dict(f1), "acierto_signo": round(ok / n, 3) if n else None,
-            "espejo_da_vuelta": round(flips / len(pairs), 3), "espejo_identico": round(same / len(pairs), 3),
+    return {"paso": label, "fichas": n, "F1": dict(f1), "acuerdo_maestro": round(agree / n, 3) if n else None,
+            "acuerdo_signo": round(agree_sign / n, 3) if n else None,
+            "espejo_da_vuelta": round(flips / sided, 3) if sided else None, "espejo_identico": round(same / len(pairs), 3),
             "algun_0_en_votantes": zeros, "perdida_respuesta": round(sum(losses) / len(losses), 4) if losses else None,
             "segundos": round(time.time() - started)}
 
