@@ -4,6 +4,7 @@ import {
   bollinger,
   donchian,
   ema,
+  currentDayValueArea,
   priorDayValueArea,
   rsi,
   valueArea,
@@ -93,6 +94,19 @@ describe('valueArea', () => {
     expect(area.vah[0]!.time).toBe(day)
     expect(area.vah[0]!.value).toBeLessThan(110)
   })
+  it('draws the levels of the source candles on the target candles', () => {
+    const day = 86_400
+    const source = [
+      { time: 0, high: 110, low: 90, close: 100, volume: 10 },
+      { time: day, high: 105, low: 95, close: 100, volume: 10 },
+    ]
+    const target = [
+      { time: day + 60, high: 101, low: 99, close: 100, volume: 1 },
+      { time: day + 120, high: 101, low: 99, close: 100, volume: 1 },
+    ]
+    const area = priorDayValueArea(source, target)
+    expect(area.vah.map((point) => point.time)).toEqual([day + 60, day + 120])
+  })
   it('gives nothing for a flat or empty range', () => {
     expect(valueArea([])).toBeNull()
   })
@@ -111,5 +125,19 @@ describe('volumeProfile', () => {
     expect(total).toBeCloseTo(1000)
     expect(profile.val).toBeLessThanOrEqual(profile.poc)
     expect(profile.vah).toBeGreaterThanOrEqual(profile.poc)
+  })
+})
+
+describe('currentDayValueArea', () => {
+  it('uses only the latest day and draws on that day', () => {
+    const day = 86_400
+    const source = [
+      { time: 0, high: 200, low: 100, close: 150, volume: 10 },
+      { time: day, high: 11, low: 9, close: 10, volume: 10 },
+      { time: day + 60, high: 11, low: 9, close: 10, volume: 10 },
+    ]
+    const area = currentDayValueArea(source, source)
+    expect(area.vah.map((point) => point.time)).toEqual([day, day + 60])
+    expect(area.vah[0]!.value).toBeLessThan(12)
   })
 })

@@ -223,7 +223,11 @@ export function valueArea(
  * Previous-session value area held flat through each UTC day: the levels of a
  * day come only from the day before, so no line uses a candle not yet closed.
  */
-export function priorDayValueArea(candles: readonly IndicatorCandle[]): {
+export function priorDayValueArea(
+  candles: readonly IndicatorCandle[],
+  /** Candles to draw the levels on; the levels still come from `candles`. */
+  target: readonly IndicatorCandle[] = candles,
+): {
   poc: LinePoint[]
   vah: LinePoint[]
   val: LinePoint[]
@@ -242,9 +246,39 @@ export function priorDayValueArea(candles: readonly IndicatorCandle[]): {
   }
   const levels = new Map<number, ValueArea | null>()
   for (const [day, list] of byDay) levels.set(day, valueArea(list))
-  for (const candle of candles) {
+  for (const candle of target) {
     const area = levels.get(Math.floor(candle.time / 86_400) - 1)
     if (!area) continue
+    out.poc.push({ time: candle.time, value: area.poc })
+    out.vah.push({ time: candle.time, value: area.vah })
+    out.val.push({ time: candle.time, value: area.val })
+  }
+  return out
+}
+
+/**
+ * Value area of the UTC day in progress, drawn flat over that day's target
+ * candles. It is recomputed with every candle, so it moves while the day
+ * forms (unlike the previous-day area, which is fixed for the whole day).
+ */
+export function currentDayValueArea(
+  candles: readonly IndicatorCandle[],
+  target: readonly IndicatorCandle[] = candles,
+): { poc: LinePoint[]; vah: LinePoint[]; val: LinePoint[] } {
+  const out = {
+    poc: [] as LinePoint[],
+    vah: [] as LinePoint[],
+    val: [] as LinePoint[],
+  }
+  const last = candles.at(-1)
+  if (!last) return out
+  const day = Math.floor(last.time / 86_400)
+  const area = valueArea(
+    candles.filter((candle) => Math.floor(candle.time / 86_400) === day),
+  )
+  if (!area) return out
+  for (const candle of target) {
+    if (Math.floor(candle.time / 86_400) !== day) continue
     out.poc.push({ time: candle.time, value: area.poc })
     out.vah.push({ time: candle.time, value: area.vah })
     out.val.push({ time: candle.time, value: area.val })

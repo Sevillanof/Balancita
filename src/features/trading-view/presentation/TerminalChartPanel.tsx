@@ -9,6 +9,7 @@ import ApprovedTerminalChart, {
 } from './ApprovedTerminalChart.tsx'
 import {
   bollinger,
+  currentDayValueArea,
   donchian,
   ema,
   priorDayValueArea,
@@ -105,6 +106,7 @@ type Overlay =
   | 'donchian'
   | 'vwap'
   | 'valueArea'
+  | 'valueAreaToday'
   | 'volumeProfile'
 type Pane = 'flow' | 'oi' | 'liquidations' | 'positioning' | 'premium' | 'rsi'
 
@@ -115,6 +117,11 @@ const OVERLAYS: ReadonlyArray<{ id: Overlay; label: string; color: string }> = [
   { id: 'donchian', label: 'Donchian 20', color: '#5fc4d3' },
   { id: 'vwap', label: 'VWAP diario', color: '#e98fc0' },
   { id: 'valueArea', label: 'Área de valor (día previo)', color: '#d9a066' },
+  {
+    id: 'valueAreaToday',
+    label: 'Área de valor (día en curso, en vivo)',
+    color: '#4fd1a1',
+  },
   { id: 'volumeProfile', label: 'Perfil de volumen (24 h)', color: '#d9a066' },
 ]
 const PANES: ReadonlyArray<{ id: Pane; label: string; live: boolean }> = [
@@ -179,6 +186,8 @@ function countdown(target: number | null | undefined, now: number): string {
 function overlayLines(
   candles: readonly ApprovedTerminalCandle[],
   enabled: readonly Overlay[],
+  /** Deeper candles (15m) the value area is computed from. */
+  areaSource: readonly ApprovedTerminalCandle[] = candles,
 ): ApprovedChartOverlay[] {
   const color = (id: Overlay) => OVERLAYS.find((item) => item.id === id)!.color
   const out: ApprovedChartOverlay[] = []
@@ -209,7 +218,7 @@ function overlayLines(
   if (enabled.includes('vwap'))
     out.push({ id: 'vwap', color: color('vwap'), points: vwap(candles) })
   if (enabled.includes('valueArea')) {
-    const area = priorDayValueArea(candles)
+    const area = priorDayValueArea(areaSource, candles)
     out.push(
       { id: 'va-vah', color: color('valueArea'), points: area.vah },
       {
@@ -219,6 +228,19 @@ function overlayLines(
         dashed: true,
       },
       { id: 'va-val', color: color('valueArea'), points: area.val },
+    )
+  }
+  if (enabled.includes('valueAreaToday')) {
+    const area = currentDayValueArea(areaSource, candles)
+    out.push(
+      { id: 'vt-vah', color: color('valueAreaToday'), points: area.vah },
+      {
+        id: 'vt-poc',
+        color: color('valueAreaToday'),
+        points: area.poc,
+        dashed: true,
+      },
+      { id: 'vt-val', color: color('valueAreaToday'), points: area.val },
     )
   }
   return out
@@ -451,16 +473,51 @@ export default function TerminalChartPanel({
     }),
     [],
   )
+  // The value area (previous day) and the 24 h profile need up to two days of
+  // candles, more than the 500 the 1m stream holds (about 8 h): they read
+  // their own 15m / 5m series, kept current by the same live 1m stream, so
+  // they follow the chart whatever timeframe is on screen.
+  const wantsArea =
+    settings.overlays.includes('valueArea') ||
+    settings.overlays.includes('valueAreaToday')
+  const wantsProfile = settings.overlays.includes('volumeProfile')
+  const areaRemote = useTerminalChart(
+    apiBase,
+    900_000,
+    live && wantsArea,
+    undefined,
+    product,
+  )
+  const profileRemote = useTerminalChart(
+    apiBase,
+    300_000,
+    live && wantsProfile,
+    undefined,
+    product,
+  )
+  const areaSource = useMemo(
+    () =>
+      wantsArea
+        ? timeframeCandles(candles, 900, areaRemote?.candles ?? null)
+        : [],
+    [candles, wantsArea, areaRemote],
+  )
+  const profileSource = useMemo(
+    () =>
+      wantsProfile
+        ? timeframeCandles(candles, 300, profileRemote?.candles ?? null)
+        : [],
+    [candles, wantsProfile, profileRemote],
+  )
   const overlays = useMemo(
-    () => overlayLines(shown, settings.overlays),
-    [shown, settings.overlays],
+    () => overlayLines(shown, settings.overlays, areaSource),
+    [shown, settings.overlays, areaSource],
   )
   const profile = useMemo(() => {
-    if (!settings.overlays.includes('volumeProfile') || shown.length === 0)
-      return null
-    const from = shown[shown.length - 1]!.time - 86_400
-    return volumeProfile(shown.filter((candle) => candle.time > from))
-  }, [shown, settings.overlays])
+    if (profileSource.length === 0) return null
+    const from = profileSource[profileSource.length - 1]!.time - 86_400
+    return volumeProfile(profileSource.filter((candle) => candle.time > from))
+  }, [profileSource])
   const panes = useMemo(
     () =>
       flowPanes(
