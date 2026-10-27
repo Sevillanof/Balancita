@@ -755,11 +755,16 @@ describe('optional LLM decision children (llm and q)', () => {
         llm,
       }),
     ).llm.args
+    // One argument FNAME:SCALE (the installed llama.cpp rejects the two-argument form); start scale 0: the live
+    // trader never gets the adapter unless its request asks for it.
     assert.equal(
       lora[lora.indexOf('--lora-scaled') + 1],
-      '/models/qwen-lora.gguf',
+      '/models/qwen-lora.gguf:0',
     )
-    assert.equal(lora[lora.indexOf('--lora-scaled') + 2], '0') // start scale 0: the live trader never gets the adapter
+    assert.equal(
+      lora[lora.indexOf('--lora-scaled') + 2],
+      '--lora-init-without-apply',
+    )
     assert.ok(!lora.includes('--lora'))
     assert.ok(lora.includes('--lora-init-without-apply'))
     const hf = byName(

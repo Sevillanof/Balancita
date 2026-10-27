@@ -48,7 +48,8 @@ el LoRA se entrena igual por decisión de Fran.
    respuesta entra en la pérdida (`mask_prompt`).
 5. `train.sh convert`: el adaptador de mlx-lm pasa al GGUF que llama-server carga (`futures_qwen_lora_adapter.py`).
 6. `.env.local`: `LLAMA_LORA=~/balancita-data.noindex/qwen-lora/qwen-lora.gguf` y reiniciar `pnpm dev`. llama-server arranca con
-   `--lora-scaled … 0`: el adaptador queda cargado con escala 0. En la versión instalada de llama-server, todo pedido que no trae el
+   `--lora-scaled <gguf>:0` (un solo argumento `ARCHIVO:ESCALA`; la forma vieja de dos argumentos tira llama-server con
+   «lora-scaled format: FNAME:SCALE»): el adaptador queda cargado con escala 0. En la versión instalada de llama-server, todo pedido que no trae el
    campo `lora` corre con la escala de arranque de los adaptadores (con `--lora` a secas sería 1,0, y `--lora-init-without-apply`
    solo retrasa esa primera aplicación: el 27-oct GET /lora-adapters mostró scale 1.0 y Qwen en vivo contestó con el adaptador
    hasta que se quitó la línea). Con escala 0, Qwen en vivo no manda el campo `lora` y sigue contestando igual; solo `exam --lora 0`
