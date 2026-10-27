@@ -5,9 +5,9 @@ fine_tune_type: lora
 # LoRA en las últimas 16 capas (de 36): el gradiente no baja de la capa 20 y el paso cuesta ~40 % menos que con todas.
 num_layers: 16
 batch_size: 1
-# Una pasada por los ~15.200 ejemplos de train.jsonl (lote 1; cuatro por foto: dirección y entrada, real y espejo). Se puede
-# cortar y retomar con --resume-adapter-file.
-iters: 15200
+# Una pasada por los ~7.600 ejemplos de train.jsonl del dataset v3 (lote 1; dos por foto: real y espejo). Se puede cortar y
+# retomar con --resume-adapter-file; train.sh train-measured mide cada 500 pasos y corta solo.
+iters: 7600
 learning_rate: 2.0e-5
 steps_per_report: 50
 steps_per_eval: 1000

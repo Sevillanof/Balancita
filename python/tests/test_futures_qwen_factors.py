@@ -11,6 +11,7 @@ from types import SimpleNamespace
 
 from balancita_engine import futures_llm_decisions as llm
 from balancita_engine import futures_qwen_factors as fq
+from balancita_engine import futures_qwen_maestro as maestro
 from balancita_engine import futures_qwen_ficha as ficha
 from balancita_engine import futures_qwen_quick_api as quick_api
 from balancita_engine import futures_qwen_quick_variants as qv
@@ -748,6 +749,8 @@ class QuickRunTests(unittest.TestCase):
     def test_the_positioning_database_gives_f6_a_number_and_a_correlation(self):
         photos = ex.make_photos(MemHistory(), self.cfg, "PF_XBTUSD", HOLDOUT)
         self.assertTrue(all(p["ficha"]["F6"] is None for p in photos))
+        self.assertTrue(all(set(p["hechos"]) == set(maestro.DIRECTIONAL) | set(maestro.SYMMETRIC) for p in photos))
+        self.assertTrue(all(p["hechos"]["z_24h"] == p["ficha"]["F1"] and p["hechos"]["pos7"] == p["ficha"]["F3"] for p in photos))
         first = min(p["t_ms"] for p in photos)
         path = os.path.join(self.dir.name, "positioning.sqlite")
         positioning_db(path, first_ms=(first // HOUR - 30) * HOUR, hours=24 * 70)

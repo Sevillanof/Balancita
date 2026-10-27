@@ -10,6 +10,7 @@ import unittest
 from balancita_engine import futures_qwen_factors as fq
 from balancita_engine import futures_qwen_lora as lora
 from balancita_engine import futures_qwen_lora_adapter as adapter
+from balancita_engine import futures_qwen_maestro as maestro
 from balancita_engine import futures_qwen_trader as qt
 from balancita_engine import futures_qwen_trader_exam as ex
 from balancita_engine.futures_qwen_ficha import FACTORS, VOTING
@@ -22,41 +23,43 @@ def read_jsonl(path):
         return [json.loads(line) for line in handle]
 
 
-def photo(product, day, hour, move4, move24=0.0, state="STATE A", mirror="STATE B"):
+def photo(product, day, hour, move4, move24=0.0, state="STATE A", mirror="STATE B", z24=-1.0):
+    """A photo like ``make_photos`` gives: the teacher reads ``hechos`` (here only z_24h carries a value)."""
     t_ms = qt.date_ms(day) + hour * qt.HOUR_MS
+    hechos = {f: 0.0 for f in maestro.DIRECTIONAL + maestro.SYMMETRIC}
+    hechos["z_24h"] = z24
     return {"product": product, "t_ms": t_ms, "wake": ["cada_15_min"], "state_text": state, "mirror_text": mirror,
-            "moves": {"240": move4, "1440": move24}, "cost_bp": 10.0, "ficha": {"F1": 0.1, "F6": None}}
+            "moves": {"240": move4, "1440": move24}, "cost_bp": 10.0, "ficha": {"F1": 0.1, "F6": None}, "hechos": hechos}
+
+
+# a teacher that only reads z_24h, inverted: z_24h = -1 -> score 1 -> strong long (+2); |z_24h| < 0.5 -> nothing
+TEACHER = {"schema": "balancita-qwen-lora-maestro.v1", "plazo_min": 720, "umbrales": {"flojo": 0.5, "fuerte": 1.0},
+           "sd": {f: 1.0 for f in maestro.DIRECTIONAL}, "coeficientes": {**{f: 0.0 for f in maestro.DIRECTIONAL}, "z_24h": -1.0}}
 
 
 class LabelTests(unittest.TestCase):
-    def test_the_voting_lines_take_the_sign_of_the_move_and_two_when_it_is_big(self):
-        self.assertEqual(lora.label_values(12.0, 40.0), [1, 1, 1, 1, 0, 1, 1, 0])
-        self.assertEqual(lora.label_values(-55.0, 40.0), [-2, -2, -2, -2, 0, -2, -2, 0])
-        self.assertEqual(lora.label_values(40.0, 40.0), [2, 2, 2, 2, 0, 2, 2, 0])
-        self.assertEqual(lora.label_values(0.0, 40.0), [0] * 8)
-        for values in (lora.label_values(3.0, 40.0), lora.label_values(-99.0, 40.0)):
-            self.assertEqual([values[i] for i, f in enumerate(FACTORS) if f not in VOTING], [0, 0])
-
     def test_the_line_is_what_the_grammar_accepts(self):
         line = lora.line_of([1, 1, 1, 1, 0, 1, 1, 0])
         self.assertEqual(line, "F1:+1 F2:+1 F3:+1 F4:+1 F5:0 F6:+1 F7:+1 F8:0")
         self.assertEqual(fq.parse_line(line), [1, 1, 1, 1, 0, 1, 1, 0])
         self.assertEqual(fq.parse_line(lora.line_of([-2, -2, -2, -2, 0, -2, -2, 0])), [-2, -2, -2, -2, 0, -2, -2, 0])
+        self.assertEqual(fq.parse_line(lora.line_of([0] * 8)), [0] * 8)
 
-    def test_big_threshold_is_the_median_absolute_move(self):
-        photos = [photo("PF_XBTUSD", "2024-01-01", h, m) for h, m in enumerate((10.0, -30.0, 50.0, -70.0, 90.0))]
-        self.assertEqual(lora.big_threshold(photos), 50.0)
-        self.assertEqual(lora.big_threshold([]), 0.0)
-
-    def test_an_example_is_the_live_prompt_with_the_answer_line_and_the_mirror_turns_it_over(self):
+    def test_an_example_is_the_live_prompt_with_the_teachers_verdict_and_the_mirror_turns_it_over(self):
         p = photo("PF_XBTUSD", "2024-01-01", 0, 20.0)
-        real, mirror = lora.examples_of(LIVE, p, 40.0)
+        real, mirror = lora.examples_of(LIVE, p, TEACHER)
         self.assertEqual([m["role"] for m in real["messages"]], ["system", "user", "assistant"])
         self.assertEqual(real["messages"][0]["content"], LIVE["prompt"]["system"])
         self.assertEqual(real["messages"][1]["content"], fq.build_prompt("STATE A", LIVE["factors"]["question"]))
         self.assertEqual(mirror["messages"][1]["content"], fq.build_prompt("STATE B", LIVE["factors"]["question"]))
-        self.assertEqual(real["messages"][2]["content"], "F1:+1 F2:+1 F3:+1 F4:+1 F5:0 F6:+1 F7:+1 F8:0")
-        self.assertEqual(mirror["messages"][2]["content"], "F1:-1 F2:-1 F3:-1 F4:-1 F5:0 F6:-1 F7:-1 F8:0")
+        self.assertEqual(real["messages"][2]["content"], "F1:+2 F2:+2 F3:+2 F4:+2 F5:0 F6:+2 F7:+2 F8:0")
+        self.assertEqual(mirror["messages"][2]["content"], "F1:-2 F2:-2 F3:-2 F4:-2 F5:0 F6:-2 F7:-2 F8:0")
+        weak, weak_mirror = lora.examples_of(LIVE, photo("PF_XBTUSD", "2024-01-01", 1, 20.0, z24=0.7), TEACHER)
+        self.assertEqual(weak["messages"][2]["content"], "F1:-1 F2:-1 F3:-1 F4:-1 F5:0 F6:-1 F7:-1 F8:0")
+        self.assertEqual(weak_mirror["messages"][2]["content"], "F1:+1 F2:+1 F3:+1 F4:+1 F5:0 F6:+1 F7:+1 F8:0")
+        none, none_mirror = lora.examples_of(LIVE, photo("PF_XBTUSD", "2024-01-01", 2, 20.0, z24=0.1), TEACHER)
+        self.assertEqual(none["messages"][2]["content"], none_mirror["messages"][2]["content"])
+        self.assertEqual(none["messages"][2]["content"], "F1:0 F2:0 F3:0 F4:0 F5:0 F6:0 F7:0 F8:0")
 
 
 def bars_from(day, closes, span=1.0, lead=0):
@@ -109,26 +112,6 @@ class EntryTests(unittest.TestCase):
         self.assertIsNone(lora.parse_entry_line("F1:+1"))
         self.assertIn('"E:"', lora.ENTRY_GRAMMAR)
 
-    def test_an_entry_example_names_the_side_and_the_mirror_turns_the_side_but_not_the_option(self):
-        p = photo("PF_XBTUSD", "2024-01-01", 0, 20.0)
-        real, mirror = lora.entry_examples_of(LIVE, p, -1)
-        self.assertEqual(real["messages"][1]["content"], fq.build_prompt("STATE A", lora.entry_question(1)))
-        self.assertIn("LARGO", real["messages"][1]["content"])
-        self.assertIn("CORTO", mirror["messages"][1]["content"])
-        self.assertEqual(mirror["messages"][1]["content"], fq.build_prompt("STATE B", lora.entry_question(-1)))
-        self.assertEqual(real["messages"][2]["content"], "E:-1")
-        self.assertEqual(mirror["messages"][2]["content"], "E:-1")
-
-    def test_entry_labels_skip_flat_moves_and_photos_without_candles_ahead(self):
-        bars = bars_from("2024-01-01", [100.0] * 300, span=0.0)
-        photos = [photo("PF_XBTUSD", "2024-01-01", 1, 5.0), photo("PF_XBTUSD", "2024-01-01", 2, 0.0),
-                  photo("PF_XBTUSD", "2024-01-01", 24, 5.0), photo("PF_XBTUSD", "2023-12-31", 23, 5.0)]
-        labels = lora.entry_labels(photos, lambda product: lora.Bars(bars))
-        self.assertEqual(set(labels), {("PF_XBTUSD", photos[0]["t_ms"])})
-        # nothing moves: the market entries lose the cost, the limits never fill and the confirmation does not enter (0 each);
-        # the tie among those goes to the confirmation (ENTRY_TIE_ORDER)
-        self.assertEqual(labels[("PF_XBTUSD", photos[0]["t_ms"])], 1)
-
 
 class SamplingTests(unittest.TestCase):
     def photos(self):
@@ -174,7 +157,8 @@ class FakeHistory:
 
 class BuildTests(unittest.TestCase):
     def test_build_dataset_writes_jsonl_and_meta_without_touching_the_holdout(self):
-        photos = {"PF_XBTUSD": [photo("PF_XBTUSD", "2024-0{}-01".format(m), h, (-1) ** h * (10.0 + h))
+        z = {0: -1.5, 1: 0.7, 2: 0.1, 3: 2.0, 4: -0.6, 5: 0.0}                        # verdicts +2, -1, 0, -2, +1, 0
+        photos = {"PF_XBTUSD": [photo("PF_XBTUSD", "2024-0{}-01".format(m), h, (-1) ** h * (10.0 + h), move24=5.0 * (-1) ** m, z24=z[h])
                                 for m in (1, 2, 3) for h in range(6)]}
         calls = []
         history = FakeHistory()
@@ -187,36 +171,52 @@ class BuildTests(unittest.TestCase):
         lora.photos_between = fake_between
         try:
             with tempfile.TemporaryDirectory() as tmp:
-                meta = lora.build_dataset(history, LIVE, tmp, products=("PF_XBTUSD",), from_day="2024-01-01",
-                                          to_day="2024-04-01", per_product=9, valid_months=1, log=lambda *a: None)
+                meta = lora.build_dataset(history, LIVE, tmp, teacher=dict(TEACHER, _path=os.path.join(qt.ROOT, "config", "x.json")),
+                                          products=("PF_XBTUSD",), from_day="2024-01-01", to_day="2024-04-01", per_product=9,
+                                          valid_months=1, log=lambda *a: None)
                 train, valid = read_jsonl(os.path.join(tmp, "train.jsonl")), read_jsonl(os.path.join(tmp, "valid.jsonl"))
                 with open(os.path.join(tmp, "meta.json"), encoding="utf-8") as handle:
                     stored = json.load(handle)
         finally:
             lora.photos_between = original
         self.assertEqual(calls, [("PF_XBTUSD", "2024-01-01", "2024-04-01")])
-        self.assertEqual(history.calls, [("PF_XBTUSD", qt.date_ms("2024-01-01") - LIVE["practice"]["warmup_days"] * qt.DAY_MS,
-                                          qt.date_ms("2024-04-01"))])
+        self.assertEqual(history.calls, [])                                       # the teacher needs no candles beyond the photos
         self.assertEqual(meta["photos_sampled"], 9)
-        # four examples per photo: direction (real + mirror) and entry (real + mirror); every photo here has candles ahead
-        self.assertEqual(len(train) + len(valid), 36)
-        self.assertEqual(len(valid), 12)                              # the 3 photos of March, four times
-        self.assertEqual(meta["examples_by_question"]["train"], {"direccion": 12, "entrada": 12})
+        self.assertEqual(len(train) + len(valid), 18)                              # two examples per photo: real and mirror
+        self.assertEqual(len(valid), 6)                                            # the 3 photos of March, twice
+        self.assertEqual(stored["schema"], "balancita-qwen-lora-dataset.v3")
         self.assertEqual(stored["config_hash"], qt.config_hash(LIVE))
-        self.assertEqual(stored["label_horizon_min"], 240)
-        self.assertIn("PF_XBTUSD", stored["big_move_bp"])
-        self.assertEqual(set(stored["entry_options"]), {"-2", "-1", "0", "1", "2"})
-        self.assertAlmostEqual(sum(stored["entry_label_share"].values()), 1.0)
-        direction = entry = 0
+        self.assertEqual(stored["maestro"], {"archivo": "config/x.json", "hash": maestro.teacher_hash(TEACHER), "plazo_min": 720,
+                                             "umbrales": {"flojo": 0.5, "fuerte": 1.0}})
+        self.assertAlmostEqual(sum(stored["label_share"].values()), 1.0)
+        self.assertEqual(set(stored["label_share"]), {"-2", "-1", "0", "1", "2"})
+        self.assertEqual(set(stored["acierto_maestro"]), {"240", "1440"})
+        self.assertNotIn("entry_options", stored)
         for row in train + valid:
-            answer = row["messages"][2]["content"]
-            if fq.parse_line(answer) is not None:
-                direction += 1
-            else:
-                self.assertIsNotNone(lora.parse_entry_line(answer))
-                self.assertIn("El lado ya esta decidido", row["messages"][1]["content"])
-                entry += 1
-        self.assertEqual((direction, entry), (18, 18))
+            values = fq.parse_line(row["messages"][2]["content"])
+            self.assertIsNotNone(values)
+            self.assertEqual(len(set(values[i] for i, f in enumerate(FACTORS) if f in VOTING)), 1)
+            self.assertEqual([values[i] for i, f in enumerate(FACTORS) if f not in VOTING], [0, 0])
+        # every real sheet has its mirror with the opposite verdict
+        answers = sorted(fq.parse_line(r["messages"][2]["content"])[0] for r in train + valid)
+        self.assertEqual(answers, sorted(-a for a in answers))
+
+    def test_build_dataset_refuses_photos_without_the_facts(self):
+        bare = [{k: v for k, v in photo("PF_XBTUSD", "2024-01-01", h, 1.0).items() if k != "hechos"} for h in range(3)]
+        original = lora.photos_between
+        lora.photos_between = lambda *a, **k: bare
+        try:
+            with tempfile.TemporaryDirectory() as tmp, self.assertRaises(qt.TraderError):
+                lora.build_dataset(FakeHistory(), LIVE, tmp, teacher=TEACHER, products=("PF_XBTUSD",), from_day="2024-01-01",
+                                   to_day="2024-02-01", per_product=3, valid_months=0, log=lambda *a: None)
+        finally:
+            lora.photos_between = original
+
+    def test_facts_rows_flatten_the_photo(self):
+        rows = list(lora.facts_rows([photo("PF_XBTUSD", "2024-01-01", 0, 20.0, move24=-3.0)]))
+        self.assertEqual(rows[0]["product"], "PF_XBTUSD")
+        self.assertEqual((rows[0]["z_24h"], rows[0]["move_240"], rows[0]["move_1440"]), (-1.0, 20.0, -3.0))
+        self.assertIn("realized", rows[0])
 
     def test_the_cli_refuses_a_period_that_reaches_the_holdout(self):
         holdout = qt.stamp(qt.load_holdout_ms())[:10]
