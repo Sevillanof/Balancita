@@ -139,18 +139,22 @@ def _store_photos(pdb, photos):
 
 
 def run_exam(history, db_path, provider, cfg, holdout_ms, *, max_minutes=55.0, clock=time.monotonic, log=print,
-             on_progress=None, concurrent=True):
+             on_progress=None, concurrent=True, reference_db=None):
     """Asks Qwen about the photos not answered yet, inside ``max_minutes``. Returns
     ``{stop_reason, answered, total, calls}``; ``stop_reason``: ``done``, ``budget``, ``model_down``.
 
     ``concurrent``: with the factors question the real and the mirrored state of a photo are asked at the same time
     (llama-server ``-np 2``); ``False`` asks them one after the other (``exam --sequential``). The letters question has its
-    own switch (``runtime.concurrent_orders`` in the config)."""
+    own switch (``runtime.concurrent_orders`` in the config).
+
+    ``reference_db`` (factors question only): a full exam database of the same version; answers it already has for exactly
+    the same question are copied instead of asked (``FactorsDecider``). The result carries ``reused``."""
     if not provider.health():
         raise qt.TraderError("llama-server no responde en {}: arrancalo con el modelo local y volvé a lanzar `exam`. Este "
                              "comando no descarga ningún modelo y solo habla con 127.0.0.1.".format(
                                  getattr(provider, "base_url", "el puerto local")))
     pdb = qt.PracticeDB(db_path)
+    decider = None
     try:
         factors = bool(cfg.get("state_ficha"))          # the factors question (``futures_qwen_factors``) instead of the letters
         pdb.db.executescript(_EXAM_SQL + (fq.FICHA_SQL if factors else ""))
@@ -186,7 +190,7 @@ def run_exam(history, db_path, provider, cfg, holdout_ms, *, max_minutes=55.0, c
             pdb.set_meta("served_models", pdb.meta().get("served_models", []) + [served])
         model = served or identity.get("model_ref") or "unknown"
         options = dict(store=pdb, clock=clock, deadline=clock() + max_minutes * 60.0, model=model)
-        decider = fq.FactorsDecider(provider, cfg, concurrent=concurrent, **options) if factors \
+        decider = fq.FactorsDecider(provider, cfg, concurrent=concurrent, reference=reference_db, **options) if factors \
             else qt.LlmDecider(provider, cfg, **options)
         questions = {}
         started, reason, handled = clock(), "done", 0
@@ -236,9 +240,14 @@ def run_exam(history, db_path, provider, cfg, holdout_ms, *, max_minutes=55.0, c
         answered = pdb.db.execute("SELECT COUNT(*) FROM exam_answers").fetchone()[0]
         log("examen terminado ({}): {} de {} fotos contestadas, {} llamadas nuevas en {}".format(
             reason, answered, total, decider.calls, qt._eta(clock() - started)))
+        reused = getattr(decider, "reused", 0)
+        if factors and decider.reference:
+            log("{} de {} respuestas reutilizadas del examen".format(reused, reused + decider.calls))
         return {"stop_reason": reason, "answered": answered, "total": total, "calls": decider.calls,
-                "remaining": len(pending) - handled}
+                "remaining": len(pending) - handled, "reused": reused}
     finally:
+        if hasattr(decider, "close"):
+            decider.close()
         pdb.close()
 
 
@@ -246,6 +255,7 @@ def run_exam(history, db_path, provider, cfg, holdout_ms, *, max_minutes=55.0, c
 
 QUICK_SNAPSHOTS = 150
 QUICK_STATE = "rapida-v3.json"
+REFERENCE_DB = "exam-live.sqlite"      # the full exam of the live version: its answers are reused by the quick test
 QUICK_NOTE = ("Prueba rápida: solo una muestra de fotos del pasado, para filtrar cambios de prompt o modelo. Es orientativa: "
               "no es el Examen ni sirve para dar una estrategia por ganadora.")
 
@@ -294,10 +304,13 @@ def _write_state(path, state):
 
 
 def run_quick(history, db_path, provider, cfg, holdout_ms, *, snapshots=QUICK_SNAPSHOTS, max_minutes=55.0,
-              clock=time.monotonic, log=print, state_path=None, variant=None, concurrent=True):
+              clock=time.monotonic, log=print, state_path=None, variant=None, concurrent=True, reference_db=None):
     """Asks Qwen about a small stratified sample of the photos, in its own database (the full exam's is never touched),
     and leaves ``{state, answered, total, summary}`` in ``state_path`` for the screen. Every run starts from scratch: a
-    changed prompt or model is exactly what it is for, and an old sample would be refused by the config identity."""
+    changed prompt or model is exactly what it is for, and an old sample would be refused by the config identity.
+
+    ``reference_db``: the full exam of the same version whose answers are reused when the question is exactly the same;
+    by default ``exam-live.sqlite`` next to ``db_path`` if it exists."""
     state_path = state_path or os.path.join(os.path.dirname(os.path.abspath(db_path)), QUICK_STATE)
     started = int(time.time() * 1000)
     state = {"state": "running", "pid": os.getpid(), "started_ms": started, "answered": 0, "total": snapshots,
@@ -321,8 +334,10 @@ def run_quick(history, db_path, provider, cfg, holdout_ms, *, snapshots=QUICK_SN
                     state["asking_ms"] = int(now * 1000)       # when the questions began: the rate is measured from here
                 _write_state(state_path, state)
 
+        if reference_db is None:
+            reference_db = os.path.join(os.path.dirname(os.path.abspath(db_path)), REFERENCE_DB)
         outcome = run_exam(history, db_path, provider, quick, holdout_ms, max_minutes=max_minutes, clock=clock, log=log,
-                           on_progress=progress, concurrent=concurrent)
+                           on_progress=progress, concurrent=concurrent, reference_db=reference_db)
         state.update(answered=outcome["answered"], total=outcome["total"])
         if outcome["stop_reason"] == "done":
             state.update(state="done", summary=quick_summary(db_path, quick))

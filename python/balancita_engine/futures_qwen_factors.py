@@ -27,7 +27,9 @@ en la ficha y en la línea de respuesta (con 0), pero no suman.
 
 import json
 import math
+import os
 import re
+import sqlite3
 import time
 from concurrent.futures import ThreadPoolExecutor
 
@@ -231,6 +233,9 @@ CREATE TABLE IF NOT EXISTS exam_ficha(snap_id TEXT PRIMARY KEY, numbers_json TEX
 CREATE TABLE IF NOT EXISTS exam_factors(
   snap_id TEXT NOT NULL, step TEXT NOT NULL, text TEXT NOT NULL, grads_json TEXT NOT NULL, detail_json TEXT NOT NULL,
   latency_ms INTEGER, prompt_hash TEXT, prompt_version REAL, model TEXT, asked_at_ms INTEGER, PRIMARY KEY(snap_id, step));
+CREATE TABLE IF NOT EXISTS exam_timings(
+  snap_id TEXT NOT NULL, step TEXT NOT NULL, prompt_n INTEGER, cache_n INTEGER, predicted_n INTEGER, prompt_ms REAL,
+  predicted_ms REAL, latency_ms INTEGER, PRIMARY KEY(snap_id, step));
 """
 
 
@@ -245,10 +250,18 @@ class FactorsDecider:
     parallel; ``concurrent=False`` asks them one after the other). Same pattern as ``LlmDecider._call_many``: only the HTTP
     request runs in a worker thread (``_request`` touches nothing shared); the counters, the SQLite inserts (the connection
     of ``PracticeDB`` belongs to the calling thread) and the call errors are all handled by the calling thread afterwards, so
-    no lock is needed."""
+    no lock is needed.
 
-    def __init__(self, provider, cfg, *, store=None, clock=time.monotonic, deadline=None, model=None, concurrent=True):
+    ``reference``: path of another exam database (the full exam of the same version, opened read-only). A question that has no
+    answer of its own but has one there with the same photo, step, prompt hash, prompt version and model is copied into the
+    own database instead of being asked (``reused`` counts them); the reference is never written."""
+
+    def __init__(self, provider, cfg, *, store=None, clock=time.monotonic, deadline=None, model=None, concurrent=True,
+                 reference=None):
         self.provider, self.cfg, self.store, self.clock, self.deadline, self.model = provider, cfg, store, clock, deadline, model
+        self.reference = reference if reference and os.path.isfile(reference) else None
+        self._reference_db = None
+        self.reused = 0
         self.template = qt.template_of(cfg)
         self.question = settings(cfg)["question"]
         self.temperature = float(cfg["prompt"]["temperature"])
@@ -261,9 +274,39 @@ class FactorsDecider:
         """Wall seconds per call: with a concurrent pair this is about half the latency of one call."""
         return self.spent / self.calls if self.calls else 0.0
 
-    def _stored(self, snap_id, step):
+    def _from_reference(self, snap_id, step, state_text):
+        """The row of the reference database that answers exactly this question (same photo, step, prompt, version and model),
+        copied into the own database; ``None`` when there is none."""
+        if not self.reference or state_text is None or not self.store:
+            return None
+        try:
+            if self._reference_db is None:
+                self._reference_db = sqlite3.connect("file:{}?mode=ro".format(self.reference), uri=True)
+                self._reference_db.row_factory = sqlite3.Row
+            row = self._reference_db.execute(
+                "SELECT * FROM exam_factors WHERE snap_id=? AND step=? AND prompt_hash=? AND prompt_version=? AND model=?",
+                (snap_id, step, llm.prompt_hash(build_prompt(state_text, self.question), self.template),
+                 self.template["version"], self.model)).fetchone()
+        except sqlite3.Error:
+            self.reference = None                       # not an exam database (or unreadable): from now on, ask as usual
+            return None
+        if row is None:
+            return None
+        with self.store.db:
+            self.store.db.execute("INSERT OR REPLACE INTO exam_factors VALUES(?,?,?,?,?,?,?,?,?,?)", tuple(row))
+        self.reused += 1
+        return row
+
+    def close(self):
+        if self._reference_db is not None:
+            self._reference_db.close()
+            self._reference_db = None
+
+    def _stored(self, snap_id, step, state_text=None):
         row = self.store.db.execute("SELECT * FROM exam_factors WHERE snap_id=? AND step=?", (snap_id, step)).fetchone() \
             if self.store else None
+        if row is None:
+            row = self._from_reference(snap_id, step, state_text)
         if row is None:
             return None
         return {"text": row["text"], "grads": json.loads(row["grads_json"]), "detail": json.loads(row["detail_json"]),
@@ -276,7 +319,7 @@ class FactorsDecider:
 
     def ask(self, snap_id, t_ms, step, state_text):
         """``{text, values, grads, detail, latency_ms, chosen, probabilities}`` (the last two: the side of the sum, for the tables)."""
-        result = self._stored(snap_id, step)
+        result = self._stored(snap_id, step, state_text)
         if result is None:
             result = self._call(snap_id, t_ms, step, state_text)
         return self._decorated(result)
@@ -297,7 +340,7 @@ class FactorsDecider:
           except that the answers that did arrive are handled first (and set ``down`` to 0): if one call of the pair is
           unreachable and the other answered, ``down`` ends at 1 and the unreachable one is asked again alone."""
         steps = (("action", real_text), ("mirror", mirror_text))
-        out = {step: self._stored(snap_id, step) for step, _ in steps}
+        out = {step: self._stored(snap_id, step, text) for step, text in steps}
         missing = [(step, text) for step, text in steps if out[step] is None]
         if len(missing) == 2 and self.concurrent:
             self._guard(2)
@@ -405,6 +448,11 @@ class FactorsDecider:
                     snap_id, step, result["text"], json.dumps(result["grads"]), json.dumps(result["detail"]),
                     result["latency_ms"], result["prompt_hash"], self.template["version"], self.model,
                     int(time.time() * 1000)))
+                timings = answer["completion"].get("timings")
+                timings = timings if isinstance(timings, dict) else {}
+                self.store.db.execute("INSERT OR REPLACE INTO exam_timings VALUES(?,?,?,?,?,?,?,?)", (
+                    snap_id, step, *(timings.get(k) for k in ("prompt_n", "cache_n", "predicted_n", "prompt_ms", "predicted_ms")),
+                    result["latency_ms"]))
         return result
 
     def _call(self, snap_id, t_ms, step, state_text):

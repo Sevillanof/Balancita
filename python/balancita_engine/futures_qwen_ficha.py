@@ -274,3 +274,35 @@ def lines(trader, t_ms, sg):
     out.append("F7 Otros activos (retornos): " + others + "." if others else "F7 Otros activos: n/d.")
     out.append("F8 Momento (no vota): " + trader._x_hora(t_ms))
     return out
+
+
+# --------------------------------------------------------------------------- layout "prefijo": fixed text first
+
+LEGEND = (
+    "Ficha de 8 factores, en orden fijo. Primero va la leyenda de cada renglón y los costos y reglas; después, al final, los "
+    "datos de esta foto (cada renglón de datos trae el número y su lectura en palabras).",
+    "- F1 = Tendencia larga: retornos de 7d y de 24h; z es el retorno dividido por el ruido normal de ese plazo (cerca de 0 es "
+    "lateral, +-2 es fuerte).",
+    "- F2 = Impulso corto: retornos de 4h y de 1h con su z, y el movimiento de los últimos 15 min contra lo normal.",
+    "- F3 = Lugar en el rango: dónde está el precio entre el mínimo (-1) y el máximo (+1) de 24h y de 7d, y las horas desde esos "
+    "extremos de 24h.",
+    "- F4 = Área de valor del día previo: perfil de volumen de las velas anteriores; dice si el precio está dentro, arriba (VAH) o "
+    "abajo (VAL) del área y si la salida fue aceptada o rechazada.",
+    "- F5 = Volumen y volatilidad (no vota): volumen de la última hora y de 24h contra su promedio, volatilidad de 4h contra la "
+    "mediana de 7d y rango de 24h.",
+    "- F6 = Posicionamiento y prima: cuentas largas, grandes operadores, prima del perpetuo contra el contado y funding.",
+    "- F7 = Otros activos: retornos de otros activos contra el del producto.",
+    "- F8 = Momento (no vota): hora y día.",
+)
+
+
+def prefixed(trader, t_ms, sg, reasons, cost_line, tail):
+    """The STATE with all the fixed text first (legend, cost, rules) and the data of the photo last: same facts and numbers as
+    ``lines`` (the data lines are those, unchanged) and the same mirror (``sg``). llama-server then reuses the cached prefix
+    from one photo to the next. ``tail`` is ``Trader._state_tail([], ...)``: the fixed rules, then the position (variable)."""
+    tail_lines = tail.split("\n")
+    cut = next((i for i, text in enumerate(tail_lines) if text.startswith("Posicion")), len(tail_lines))
+    data = lines(trader, t_ms, sg)[1:]                      # without the sheet header: the legend above replaces it
+    out = list(LEGEND) + [cost_line] + tail_lines[:cut]
+    out.append("Datos de esta foto (velas cerradas; sin fechas ni precios absolutos). Despertaste por: {}.".format(", ".join(reasons)))
+    return "\n".join(out + data + tail_lines[cut:])
