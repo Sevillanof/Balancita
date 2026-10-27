@@ -226,23 +226,38 @@ class BuildTests(unittest.TestCase):
         self.assertTrue(holdout <= "2027-01-01")
 
 
+PLAIN = {k: v for k, v in LIVE.items() if k != "lora"}      # the live config before version 7: no adapter
+
+
 class ExamLoraSwitchTests(unittest.TestCase):
-    def test_without_the_flag_no_request_names_an_adapter_and_the_identity_is_the_old_one(self):
-        self.assertIsNone(qt.lora_of(LIVE))
-        body = fq.request_body("hola", qt.template_of(LIVE))
+    def test_without_an_adapter_no_request_names_one_and_the_identity_is_the_old_one(self):
+        self.assertIsNone(qt.lora_of(PLAIN))
+        body = fq.request_body("hola", qt.template_of(PLAIN))
         self.assertNotIn("lora", body)
-        self.assertNotIn("lora", ex.exam_identity(LIVE, qt.load_holdout_ms()))
+        self.assertNotIn("lora", ex.exam_identity(PLAIN, qt.load_holdout_ms()))
 
     def test_with_the_flag_every_request_carries_it_and_the_identity_changes_but_not_the_config_hash(self):
-        cfg = dict(LIVE, runtime=dict(LIVE.get("runtime") or {}, lora=qt.parse_lora("0")))
+        cfg = dict(PLAIN, runtime=dict(PLAIN.get("runtime") or {}, lora=qt.parse_lora("0")))
         self.assertEqual(qt.lora_of(cfg), [{"id": 0, "scale": 1.0}])
         self.assertEqual(qt.parse_lora("1:0.5"), [{"id": 1, "scale": 0.5}])
         with self.assertRaises(qt.TraderError):
             qt.parse_lora("a")
         body = fq.request_body("hola", qt.template_of(cfg))
         self.assertEqual(body["lora"], [{"id": 0, "scale": 1.0}])
-        self.assertEqual(qt.config_hash(cfg), qt.config_hash(LIVE))            # runtime is not identity...
+        self.assertEqual(qt.config_hash(cfg), qt.config_hash(PLAIN))            # runtime is not identity...
         self.assertEqual(ex.exam_identity(cfg, 1)["lora"], [{"id": 0, "scale": 1.0}])   # ...but the exam's own identity is
+
+    def test_the_live_config_version_7_carries_the_adapter_as_identity(self):
+        # Fran (27-oct-2026): «dejalo en vivo». Every live request asks for the adapter at scale 1 (llama-server starts it at
+        # scale 0, scripts/dev-provider-env.mjs), the hash changes so the version 6 database archives itself.
+        self.assertEqual(LIVE["lora"]["request"], [{"id": 0, "scale": 1.0}])
+        self.assertEqual(qt.lora_of(LIVE), [{"id": 0, "scale": 1.0}])
+        self.assertEqual(fq.request_body("hola", qt.template_of(LIVE))["lora"], [{"id": 0, "scale": 1.0}])
+        self.assertNotEqual(qt.config_hash(LIVE), qt.config_hash(PLAIN))
+        self.assertEqual(ex.exam_identity(LIVE, 1)["lora"], [{"id": 0, "scale": 1.0}])
+        # the exam's own flag still wins (another adapter or scale on the same config)
+        cfg = dict(LIVE, runtime=dict(LIVE["runtime"], lora=qt.parse_lora("1:0.5")))
+        self.assertEqual(qt.lora_of(cfg), [{"id": 1, "scale": 0.5}])
 
     def test_the_exam_cli_applies_exam_from_and_lora_before_running(self):
         seen = {}

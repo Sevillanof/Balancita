@@ -747,7 +747,7 @@ describe('optional LLM decision children (llm and q)', () => {
     assert.equal(tuned[tuned.indexOf('-ub') + 1], '64')
     assert.equal(tuned[tuned.indexOf('--ctx-checkpoints') + 1], '16')
     assert.ok(!spec.args.includes('-ub'))
-    assert.ok(!spec.args.includes('--lora'))
+    assert.ok(!spec.args.includes('--lora-scaled'))
     const lora = byName(
       devChildSpecs({
         ...base,
@@ -755,7 +755,12 @@ describe('optional LLM decision children (llm and q)', () => {
         llm,
       }),
     ).llm.args
-    assert.equal(lora[lora.indexOf('--lora') + 1], '/models/qwen-lora.gguf')
+    assert.equal(
+      lora[lora.indexOf('--lora-scaled') + 1],
+      '/models/qwen-lora.gguf',
+    )
+    assert.equal(lora[lora.indexOf('--lora-scaled') + 2], '0') // start scale 0: the live trader never gets the adapter
+    assert.ok(!lora.includes('--lora'))
     assert.ok(lora.includes('--lora-init-without-apply'))
     const hf = byName(
       devChildSpecs({ ...base, env: { LLAMA_HF: 'org/other:Q6_K' }, llm }),

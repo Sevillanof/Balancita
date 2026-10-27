@@ -48,8 +48,12 @@ el LoRA se entrena igual por decisión de Fran.
    respuesta entra en la pérdida (`mask_prompt`).
 5. `train.sh convert`: el adaptador de mlx-lm pasa al GGUF que llama-server carga (`futures_qwen_lora_adapter.py`).
 6. `.env.local`: `LLAMA_LORA=~/balancita-data.noindex/qwen-lora/qwen-lora.gguf` y reiniciar `pnpm dev`. llama-server arranca con
-   `--lora … --lora-init-without-apply`: el adaptador queda cargado con escala 0. Qwen en vivo no manda el campo `lora`, así que
-   sigue contestando igual. `ops/qwen-lora/check_adapter.py` lo comprueba (misma ficha con y sin adaptador).
+   `--lora-scaled … 0`: el adaptador queda cargado con escala 0. En la versión instalada de llama-server, todo pedido que no trae el
+   campo `lora` corre con la escala de arranque de los adaptadores (con `--lora` a secas sería 1,0, y `--lora-init-without-apply`
+   solo retrasa esa primera aplicación: el 27-oct GET /lora-adapters mostró scale 1.0 y Qwen en vivo contestó con el adaptador
+   hasta que se quitó la línea). Con escala 0, Qwen en vivo no manda el campo `lora` y sigue contestando igual; solo `exam --lora 0`
+   y `entry_eval.py --lora 0` piden `lora: [{id: 0, scale: 1}]` en sus pedidos. `ops/qwen-lora/check_adapter.py` lo comprueba
+   (GET /lora-adapters debe mostrar scale 0 y la misma ficha debe cambiar con y sin el campo).
 7. Examen con el adaptador, en su propia base:
    `python -m balancita_engine.futures_qwen_trader exam --version live --lora 0 --exam-from 2025-10-16 --exam-db data/qwen-trader/exam-lora.sqlite --quick 150`
    y después el completo (`--max-minutes 240`, sin `--quick`). Informe: `exam-report` con los mismos `--lora` y `--exam-from`.

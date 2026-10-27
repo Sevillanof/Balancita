@@ -119,10 +119,16 @@ function pythonStatus(python) {
 export const DEFAULT_LLAMA_PORT = 8088
 
 /** `[flag, value]` when the environment sets a value, else nothing (the server default stays). */
-/** `--lora <path> --lora-init-without-apply` when `LLAMA_LORA` names an adapter file; nothing otherwise. */
+/**
+ * `--lora-scaled <path> 0 --lora-init-without-apply` when `LLAMA_LORA` names an adapter file; nothing otherwise.
+ * Scale 0 at start is what keeps the live trader unchanged: in the installed llama-server every request that does not
+ * carry a `lora` field runs with the adapters' START scale (`--lora` alone would be 1.0, and `--lora-init-without-apply`
+ * only delays that first application, as GET /lora-adapters showed on the Mac on 2026-10-27). A request that asks for
+ * `lora: [{id: 0, scale: 1}]` (`exam --lora 0`, entry_eval.py) gets the adapter for that request only.
+ */
 export function loraFlags(value) {
   const path = (value ?? '').trim()
-  return path ? ['--lora', path, '--lora-init-without-apply'] : []
+  return path ? ['--lora-scaled', path, '0', '--lora-init-without-apply'] : []
 }
 
 function optionalFlag(flag, value) {
@@ -816,8 +822,8 @@ export function devChildSpecs({
           ...optionalFlag('-ub', env.LLAMA_UBATCH),
           ...optionalFlag('--ctx-checkpoints', env.LLAMA_CTX_CHECKPOINTS),
           // A LoRA adapter (GGUF) loaded but NOT applied: the live operator never
-          // sends a `lora` field, so its answers do not change; only a request that
-          // asks for it (`exam --lora`, see futures_qwen_lora.py) gets the adapter.
+          // sends a `lora` field, so it runs at the start scale 0 and its answers do not change;
+          // only a request that asks for it (`exam --lora`, see futures_qwen_lora.py) gets the adapter.
           ...loraFlags(env.LLAMA_LORA),
           '--no-mmproj',
           '--no-webui',
