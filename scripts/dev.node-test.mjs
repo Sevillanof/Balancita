@@ -761,7 +761,10 @@ describe('optional LLM decision children (llm and q)', () => {
       lora[lora.indexOf('--lora-scaled') + 1],
       '/models/qwen-lora.gguf:0',
     )
-    assert.equal(lora[lora.indexOf('--lora-scaled') + 2], '--lora-init-without-apply')
+    assert.equal(
+      lora[lora.indexOf('--lora-scaled') + 2],
+      '--lora-init-without-apply',
+    )
     assert.ok(!lora.includes('--lora'))
     assert.ok(lora.includes('--lora-init-without-apply'))
     const hf = byName(
