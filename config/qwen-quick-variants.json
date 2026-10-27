@@ -8,6 +8,13 @@
       "kind": "control",
       "base": "live",
       "note": "Lo que pregunta Qwen en vivo hoy (config/qwen-live.json): la ficha de 8 factores con la pregunta por factores, real y espejo, con otros activos y posicionamiento. Es la misma pregunta que contesta el Examen de 2000 fotos (`exam --version live`). Sus fotos se arman con las reglas de despertar de Qwen en vivo (una cada 15 minutos), así que no son las mismas que las de las otras variantes, que usan las de la v3: la comparación con ellas es orientativa."
+    },
+    {
+      "id": "formula",
+      "label": "Solo la fórmula (sin Qwen, rápida)",
+      "kind": "formula",
+      "base": "live",
+      "note": "La misma regla que opera en vivo (maestro fuerte + portero a favor, una posición por producto, sale cuando el maestro se da vuelta, cierre de seguridad) probada sobre todas las miradas desde la fecha del examen. No usa Qwen ni el modelo: lee velas guardadas, tarda poco y no calienta la Mac."
     }
   ]
 }

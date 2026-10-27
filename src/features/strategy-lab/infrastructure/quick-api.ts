@@ -77,12 +77,43 @@ export type QuickOperation = {
   siempre_corto: QuickOperationStats
   espejo_bloqueo: number
   espera: number
+  /** Notional of each operation in USD, and the operations by time: for the charts (absent in older summaries). */
+  nocional_usd?: number
+  curvas?: Record<'qwen' | 'formula' | 'maestro_fuerte', QuickTrade[]>
   signals: {
     gana: boolean | null
     ic_positivo: boolean | null
     azar: boolean | null
     mejor_que_formula: boolean | null
   }
+}
+
+/** One operation of the screen's charts: product, side (1 long, −1 short), entry and exit, net bp after costs, why it closed. */
+export type QuickTrade = {
+  producto: string
+  lado: 1 | -1
+  entrada_ms: number
+  salida_ms: number
+  neto_bp: number
+  motivo: string
+}
+
+/** The formula alone (no Qwen) over every wake of the exam range, one position per product, as it operates live. */
+export type QuickFormula = {
+  fotos: number
+  desde_ms: number
+  hasta_ms: number
+  max_horas: number
+  nocional_usd: number
+  productos: string[]
+  formula: QuickOperationStats
+  maestro_fuerte: QuickOperationStats
+  siempre_largo: QuickOperationStats
+  siempre_corto: QuickOperationStats
+  curvas: Record<
+    'formula' | 'maestro_fuerte' | 'siempre_largo' | 'siempre_corto',
+    QuickTrade[]
+  >
 }
 
 export type QuickSummary = {
@@ -103,13 +134,15 @@ export type QuickSummary = {
   ficha?: QuickFicha
   /** Only the short sheet (Qwen en vivo version 8): the operation as the live operator runs it. */
   operacion?: QuickOperation
+  /** Only the formula-only variant (no Qwen). */
+  formula?: QuickFormula
 }
 
 /** One candidate of the quick test (another prompt or another model) with its last state; the finished ones are compared. */
 export type QuickVariant = {
   id: string
   label: string
-  kind: 'control' | 'prompt' | 'state' | 'factors' | 'model'
+  kind: 'control' | 'prompt' | 'state' | 'factors' | 'model' | 'formula'
   note?: string | null
   /** Size of the model to have on the Mac, for the model variants. */
   approx_gb?: number | null

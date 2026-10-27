@@ -57,13 +57,15 @@ def exam_start_ms(cfg):
     return max(qt.date_ms(practice["from"]), qt.date_ms(exam["from"]) if exam.get("from") else 0)
 
 
-def make_photos(history, cfg, product, holdout_ms):
+def make_photos(history, cfg, product, holdout_ms, texts=True):
     """Every moment the trader would have asked Qwen while flat, with its STATE, the mirrored STATE and the price moves (bp)
     over each horizon. Only candles before the holdout are read, and a moment whose horizon would reach it is dropped.
 
     With the short sheet (``state_corta``) a moment with incomplete data is no photo (the live operator skips that wake), and
     every photo carries ``operacion``: the maestro and the portero at that moment and, for each side, the result of the
-    version 8 operation (``_operation``)."""
+    version 8 operation (``_operation``).
+
+    ``texts=False`` (the formula-only test, no Qwen): the photos carry no STATE text nor sheet numbers, only the operation."""
     practice, exam = cfg["practice"], cfg["exam"]
     start = exam_start_ms(cfg)
     horizons = [m * MINUTE_MS for m in exam["horizons_min"]]
@@ -71,7 +73,7 @@ def make_photos(history, cfg, product, holdout_ms):
     if len(bars) < (holdout_ms - (start - practice["warmup_days"] * DAY_MS)) // BAR_MS * 0.98:
         raise qt.TraderError("{}: faltan velas para el examen; ejecutá `prefetch`".format(product))
     trader = qt.Trader(cfg, product, None, history.funding(product), key="exam", entry_threshold=cfg["practice_entry_threshold"])
-    ficha, short = bool(cfg.get("state_ficha")), bool(cfg.get("state_corta"))
+    ficha, short = bool(cfg.get("state_ficha")) and texts, bool(cfg.get("state_corta"))
     if ficha:                                                           # row F6: the collector's database, read-only
         trader.positioning = positioning_data.PositioningFeed(positioning_path(cfg), product)
     for other in cfg.get("state_context") or ():                        # closes of the other assets shown in the STATE
@@ -98,8 +100,8 @@ def make_photos(history, cfg, product, holdout_ms):
         if t_ms < start:
             continue
         trader.last_call_ms = t_ms                       # the same spacing of extra wakes as the live trader
-        found.append((t_ms, reasons, trader.state_text(t_ms, reasons), trader.state_text(t_ms, reasons, mirror=True),
-                      fficha.numbers(trader, t_ms) if ficha else None,
+        found.append((t_ms, reasons, trader.state_text(t_ms, reasons) if texts else "",
+                      trader.state_text(t_ms, reasons, mirror=True) if texts else "", fficha.numbers(trader, t_ms) if ficha else None,
                       maestro.flat_facts(fficha.facts(trader, t_ms)) if ficha else None))
     cost = float(round_trip_cost_bps(product))
     weak = corta.formulas(cfg)[0]["umbrales"]["flojo"] if short else None
@@ -343,6 +345,8 @@ QUICK_SNAPSHOTS = 150
 QUICK_MIRROR_EVERY = 2      # the quick test asks the mirror for 1 photo in every 2 (the exam asks it for all)
 QUICK_STATE = "rapida-v3.json"
 REFERENCE_DB = "exam-live.sqlite"      # the full exam of the live version: its answers are reused by the quick test
+FORMULA_NOTE = ("Solo la fórmula, sin Qwen: todas las miradas de 15 minutos desde la fecha del examen, con una posición por producto, "
+                "como opera en vivo. Mide lo que decide la fórmula; no mide a Qwen.")
 QUICK_NOTE = ("Prueba rápida: solo una muestra de fotos del pasado, para filtrar cambios de prompt o modelo. Es orientativa: "
               "no es el Examen ni sirve para dar una estrategia por ganadora.")
 
@@ -663,7 +667,9 @@ def analyse_operation(rows, cfg):
            "siempre_largo": _op_stats([(r, 1) for r, _ in entries], draws, seed),
            "siempre_corto": _op_stats([(r, -1) for r, _ in entries], draws, seed),
            "espejo_bloqueo": sum(1 for r in rows if classify(r, threshold) == "espejo"),
-           "espera": sum(1 for r in rows if r["real_action"] == "ESPERAR")}
+           "espera": sum(1 for r in rows if r["real_action"] == "ESPERAR"),
+           "nocional_usd": float(cfg.get("notional_usd") or 0),
+           "curvas": {"qwen": _trade_list(entries), "formula": _trade_list(formula), "maestro_fuerte": _trade_list(strong)}}
     gains = qwen["neto_bp"] is not None and qwen["neto_bp"] > 0
     out["signals"] = {"gana": gains if qwen["n"] else None,
                       "ic_positivo": (qwen["ic"][0] is not None and qwen["ic"][0] > 0) if qwen["n"] else None,
@@ -672,6 +678,78 @@ def analyse_operation(rows, cfg):
                       "mejor_que_formula": (qwen["neto_bp"] > out["formula"]["neto_bp"])
                       if qwen["n"] and out["formula"]["n"] else None}
     return out
+
+
+def _trade_list(items):
+    """The operations for the screen, by time: product, side, entry and exit, net bp after costs and why it closed."""
+    out = []
+    for r, s in sorted(items, key=lambda it: it[0]["t_ms"]):
+        o = _op_side(r, s)
+        out.append({"producto": r["product"], "lado": s, "entrada_ms": r["t_ms"], "salida_ms": o["salida_ms"],
+                    "neto_bp": round(o["neto_bp"], 2), "motivo": o["motivo"]})
+    return out
+
+
+def _one_at_a_time(items):
+    """As the live operator: one position per product. A photo while one is open is not an entry."""
+    free, out = {}, []
+    for r, s in sorted(items, key=lambda it: it[0]["t_ms"]):
+        if r["t_ms"] < free.get(r["product"], 0):
+            continue
+        free[r["product"]] = _op_side(r, s)["salida_ms"]
+        out.append((r, s))
+    return out
+
+
+def analyse_formula(photos, cfg):
+    """The formulas alone (no Qwen) over EVERY wake of the exam range, operating as the live operator does: enters when the
+    maestro is strong and the portero agrees, one position per product, out when the maestro turns (or at the time limit).
+    ``always long`` / ``always short`` open at the same moments. ``None`` when there is nothing to measure."""
+    rows = [r for r in photos if r.get("operacion")]
+    if not rows:
+        return None
+    draws, seed = cfg["exam_rules"]["random_draws"], cfg["exam"]["seed"]
+    side = lambda r: 1 if r["operacion"]["maestro"] > 0 else -1
+    strong = [(r, side(r)) for r in rows if abs(r["operacion"]["maestro"]) == 2]
+    formula = _one_at_a_time([(r, s) for r, s in strong if r["operacion"]["portero_si"]])
+    maestro = _one_at_a_time(strong)
+    hold = cfg["guardrails"]["max_hold_min"]
+    return {"fotos": len(rows), "desde_ms": min(r["t_ms"] for r in rows), "hasta_ms": max(r["t_ms"] for r in rows),
+            "max_horas": (hold or 0) / 60.0, "nocional_usd": float(cfg.get("notional_usd") or 0),
+            "productos": sorted({r["product"] for r in rows}),
+            "formula": _op_stats(formula, draws, seed), "maestro_fuerte": _op_stats(maestro, draws, seed),
+            "siempre_largo": _op_stats([(r, 1) for r, _ in formula], draws, seed),
+            "siempre_corto": _op_stats([(r, -1) for r, _ in formula], draws, seed),
+            "curvas": {"formula": _trade_list(formula), "maestro_fuerte": _trade_list(maestro),
+                       "siempre_largo": _trade_list([(r, 1) for r, _ in formula]),
+                       "siempre_corto": _trade_list([(r, -1) for r, _ in formula])}}
+
+
+def run_formula(history, cfg, holdout_ms, state_path, variant, *, log=print):
+    """The formula-only test: no Qwen, no llama-server, only stored candles. Leaves ``{state, summary}`` in ``state_path``."""
+    started = int(time.time() * 1000)
+    products = cfg["exam"]["products"]
+    state = {"state": "running", "pid": os.getpid(), "started_ms": started, "answered": 0, "total": len(products),
+             "phase": "fotos", "updated_ms": started, "summary": None, "error": None, "variant": variant["id"]}
+    _write_state(state_path, state)
+    try:
+        photos = []
+        for product in products:
+            log("fórmula: leyendo las velas de {} (sin modelo)…".format(product))
+            photos += make_photos(history, cfg, product, holdout_ms, texts=False)
+            state.update(answered=state["answered"] + 1, updated_ms=int(time.time() * 1000))
+            _write_state(state_path, state)
+        op = analyse_formula(photos, cfg)
+        h = cfg["exam_lean"]["decide_horizon_min"]
+        state.update(state="done", summary=None if op is None else {
+            "photos": op["fotos"], "horizon_min": h, "spearman": None, "spearman_ci": [None, None], "extremes_net_bp": None,
+            "extremes_ci": [None, None], "vs_random_pct": None,
+            "signals": {"extremes": None, "random": None, "spearman": None}, "note": FORMULA_NOTE, "formula": op})
+    except Exception as error:  # noqa: BLE001 - whatever went wrong must reach the screen
+        state.update(state="failed", error=str(error))
+    state["finished_ms"] = int(time.time() * 1000)
+    _write_state(state_path, state)
+    return state
 
 
 def operation_lines(rows, cfg):
