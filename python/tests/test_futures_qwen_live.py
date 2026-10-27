@@ -159,7 +159,7 @@ class VersionTests(unittest.TestCase):
         self.assertIs(cfg["wake"]["extra_wakes"], False)
         # version 9: no stop (stops turn noise into losses) and NO time limit (Fran, 27-oct: the exit is decided at every look)
         self.assertEqual(cfg["guardrails"], {"stop_sigma_24h": None, "min_stop_pct": 0.005, "max_stop_pct": 0.03,
-                                             "max_hold_min": None, "cooldown_min": 15})
+                                             "max_hold_min": 2160, "cooldown_min": 15})
         self.assertTrue(cfg["mirror"])
         self.assertTrue(cfg["state_corta"])
         self.assertNotIn("lora", cfg)                       # the adapter learnt the 8-factor sheet: not applied to the short one
@@ -173,13 +173,11 @@ class VersionTests(unittest.TestCase):
         texts = [r["state_text"] for r in env.rows("SELECT state_text FROM decisions WHERE kind='position'")]
         self.assertTrue(texts)
         self.assertIn("sin stop automático", texts[0])
-        self.assertIn("sin límite de tiempo", texts[0])
-        self.assertNotIn("Cierre obligatorio", texts[0])
-        self.assertNotIn("48 h", texts[0])
+        self.assertIn("cierre obligatorio a las 36 h", texts[0])
         self.assertNotIn("Distancia al stop", texts[0])
         question = LIVE_CFG["prompt"]["questions"]["position"]["instruction"]
         self.assertIn("No hay stop", question)
-        self.assertIn("ni límite de tiempo", question)
+        self.assertIn("36 h", question)
 
 
 class CadenceTests(unittest.TestCase):
