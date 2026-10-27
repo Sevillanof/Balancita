@@ -223,7 +223,11 @@ export function valueArea(
  * Previous-session value area held flat through each UTC day: the levels of a
  * day come only from the day before, so no line uses a candle not yet closed.
  */
-export function priorDayValueArea(candles: readonly IndicatorCandle[]): {
+export function priorDayValueArea(
+  candles: readonly IndicatorCandle[],
+  /** Candles to draw the levels on; the levels still come from `candles`. */
+  target: readonly IndicatorCandle[] = candles,
+): {
   poc: LinePoint[]
   vah: LinePoint[]
   val: LinePoint[]
@@ -242,7 +246,7 @@ export function priorDayValueArea(candles: readonly IndicatorCandle[]): {
   }
   const levels = new Map<number, ValueArea | null>()
   for (const [day, list] of byDay) levels.set(day, valueArea(list))
-  for (const candle of candles) {
+  for (const candle of target) {
     const area = levels.get(Math.floor(candle.time / 86_400) - 1)
     if (!area) continue
     out.poc.push({ time: candle.time, value: area.poc })
