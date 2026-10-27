@@ -266,7 +266,7 @@ class OperationPhotosTests(unittest.TestCase):
 
 def op_row(t_ms, action, mirror, maestro, portero, long_net, short_net, why="vuelta", p=0.9):
     leg = lambda net: {"salida_ms": t_ms + 4 * qt.HOUR_MS, "motivo": why, "horas": 4.0, "neto_bp": net}
-    return {"snap_id": "exam:PF_XBTUSD:{}".format(t_ms), "t_ms": t_ms, "real_action": action, "real_p": p, "mirror_action": mirror,
+    return {"snap_id": "exam:PF_XBTUSD:{}".format(t_ms), "product": "PF_XBTUSD", "t_ms": t_ms, "real_action": action, "real_p": p, "mirror_action": mirror,
             "mirror_p": p, "cost_bp": 10.0, "moves": {"720": 0.0, "1440": 0.0, "2880": 0.0},
             "operacion": {"maestro": maestro, "puntaje": 0.1 * maestro, "portero_si": portero, "portero_p": 0.7,
                           "volatilidad": "NORMAL", "largo": leg(long_net), "corto": leg(short_net)}}
@@ -307,6 +307,28 @@ class OperationNumbersTests(unittest.TestCase):
         self.assertIsNotNone(q["vs_azar_pct"])
         self.assertEqual(op["max_horas"], 48.0)
         self.assertIn("48 h", op["salida"])
+
+    def test_the_operation_carries_its_trades_by_time_for_the_screen(self):
+        op = ex.analyse_operation(self.rows, self.cfg)
+        self.assertEqual([t["neto_bp"] for t in op["curvas"]["qwen"]], [30.0, -40.0, 50.0])
+        self.assertEqual([t["lado"] for t in op["curvas"]["qwen"]], [1, -1, -1])
+        self.assertEqual(op["curvas"]["qwen"][2]["motivo"], "tiempo")
+        self.assertEqual(len(op["curvas"]["formula"]), 3)
+        self.assertEqual(op["nocional_usd"], float(self.cfg["notional_usd"]))
+
+    def test_the_formula_alone_opens_one_position_per_product(self):
+        # the second photo comes while the first (4 h long) is still open: it is not an entry
+        rows = [op_row(1 * qt.DAY_MS, "ESPERAR", None, 2, True, 30.0, -50.0),
+                op_row(1 * qt.DAY_MS + qt.HOUR_MS, "ESPERAR", None, 2, True, 99.0, -99.0),
+                op_row(2 * qt.DAY_MS, "ESPERAR", None, -2, True, 10.0, 25.0),
+                op_row(3 * qt.DAY_MS, "ESPERAR", None, 2, False, 5.0, -5.0)]          # the portero says no
+        out = ex.analyse_formula(rows, self.cfg)
+        self.assertEqual(out["formula"]["n"], 2)
+        self.assertAlmostEqual(out["formula"]["total_bp"], 30.0 + 25.0)
+        self.assertEqual(out["maestro_fuerte"]["n"], 3)
+        self.assertEqual([t["neto_bp"] for t in out["curvas"]["formula"]], [30.0, 25.0])
+        self.assertEqual([t["neto_bp"] for t in out["curvas"]["siempre_largo"]], [30.0, 10.0])
+        self.assertIsNone(ex.analyse_formula([dict(r, operacion=None) for r in rows], self.cfg))
 
     def test_without_operations_in_the_photos_there_is_no_block_and_no_section(self):
         rows = [dict(r, operacion=None) for r in self.rows]
@@ -357,3 +379,20 @@ class OperationExamTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class FormulaOnlyTests(unittest.TestCase):
+    def test_the_formula_test_needs_no_model_and_leaves_its_summary_in_the_state_file(self):
+        import json
+        cfg = exam_cfg()
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "rapida.json")
+            state = ex.run_formula(MemHistory(), cfg, HOLDOUT, path, {"id": "formula"}, log=lambda *a: None)
+            with open(path, encoding="utf-8") as handle:
+                saved = json.load(handle)
+        self.assertEqual((state["state"], saved["state"]), ("done", "done"))
+        self.assertEqual(saved["variant"], "formula")
+        op = saved["summary"]["formula"]
+        self.assertGreater(op["fotos"], 0)
+        self.assertEqual(op["formula"]["n"], len(op["curvas"]["formula"]))
+        self.assertTrue(all(not p for p in [saved["summary"]["spearman"]]))

@@ -1846,10 +1846,10 @@ def main(argv=None):
                                                   log=lambda *a: print(*a, flush=True))))
                 return 0
             variant = variants.get_variant(args.variant) if args.variant or args.quick is not None else None
-            if args.version == "live" and variant is not None and variant["kind"] not in ("control", "memory"):
+            if args.version == "live" and variant is not None and variant["kind"] not in ("control", "memory", "formula"):
                 raise TraderError("con --version live se pregunta lo que pregunta Qwen en vivo (variante «actual» o «memoria»): "
                                   "las otras variantes se aplican sobre la v3")
-            if variant is not None and variant.get("model") is None:
+            if variant is not None and variant.get("model") is None and variant["kind"] != "formula":
                 cfg = variants.apply_variant(cfg, variant)       # its own questions / state: hashed in the identity
             if args.positioning_db:
                 cfg = dict(cfg, positioning_db=os.path.abspath(args.positioning_db))
@@ -1862,10 +1862,14 @@ def main(argv=None):
             if args.sequential:
                 cfg = dict(cfg, runtime=dict(cfg.get("runtime") or {}, concurrent_orders=False))
             if args.quick is not None:
-                from .futures_qwen_trader_exam import fail_quick, run_quick
+                from .futures_qwen_trader_exam import fail_quick, run_formula, run_quick
                 base = os.path.dirname(os.path.abspath(args.exam_db))
                 quick_db = os.path.join(base, variants.db_name(variant["id"]))
                 state_path = os.path.join(base, variants.state_name(variant["id"]))
+                if variant["kind"] == "formula":                # no Qwen: only the formulas over the stored candles
+                    state = run_formula(history, cfg, holdout_ms, state_path, variant)
+                    print("prueba rápida {}: {}".format(variant["id"], state["state"]))
+                    return
                 try:
                     server = variants.ModelServer(variant["model"]) if variant.get("model") else None
                     with server or contextlib.nullcontext():

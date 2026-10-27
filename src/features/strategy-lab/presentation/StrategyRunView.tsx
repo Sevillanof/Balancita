@@ -1,6 +1,10 @@
 import { VBT } from './vectorbt-styles.ts'
 import { RUN } from './run-view-styles.ts'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import ResultsVisual, {
+  type VisualSeries,
+  type VisualTrade,
+} from './ResultsVisual.tsx'
 import ApprovedTerminalChart from '../../trading-view/presentation/ApprovedTerminalChart.tsx'
 import { amount } from '../../../shared/finance/format.ts'
 import { signedAmount } from '../domain/strategy-format.ts'
@@ -57,9 +61,11 @@ import {
   quickApi,
   type QuickApi,
   type QuickFicha,
+  type QuickFormula,
   type QuickOperation,
   type QuickOperationStats,
   type QuickState,
+  type QuickTrade,
   type QuickVariant,
 } from '../infrastructure/quick-api.ts'
 import { installCommands } from '../domain/vectorbt-format.ts'
@@ -858,7 +864,12 @@ export default function StrategyRunView({
                 type="button"
                 onClick={() => void startQuick()}
                 disabled={quickRunning}
-                title="Pregunta a Qwen solo sobre unas 150 fotos del pasado (unos 7 minutos) para filtrar un cambio de prompt o modelo. Es orientativa: no es el Examen."
+                title={
+                  quickVariants.find((v) => v.id === quickVariant)?.kind ===
+                  'formula'
+                    ? 'Prueba solo la fórmula (sin Qwen) sobre todo el período del examen: lee velas guardadas, tarda poco y no calienta la Mac.'
+                    : 'Pregunta a Qwen solo sobre unas 150 fotos del pasado (unos 7 minutos) para filtrar un cambio de prompt o modelo. Es orientativa: no es el Examen.'
+                }
               >
                 {quickRunning ? 'Prueba rápida en curso…' : 'Prueba rápida'}
               </button>
@@ -1080,6 +1091,25 @@ export default function StrategyRunView({
           onConfirm={confirmVariant}
           confirming={confirming}
           problem={vbtProblem}
+        />
+      )}
+      {data && data.tradesDone && data.trades.length > 0 && (
+        <ResultsVisual
+          series={[
+            {
+              id: 'run',
+              label: `Esta prueba · ${data.product}`,
+              trades: data.trades.map((trade) => ({
+                label: `${trade.product_id.replace(/^PF_|USD$/g, '')} ${trade.side === 'LONG' ? 'largo' : 'corto'}`,
+                entryMs: trade.entry_time_ms,
+                exitMs: trade.exit_time_ms,
+                bp: trade.net_bp,
+                why: trade.exit_reason ?? trade.reason_code ?? '',
+              })),
+            },
+          ]}
+          notionalUsd={Number(data.trades[0]?.notional_usd) || 0}
+          note="Neto después de costos de cada operación de la prueba. Pasá el cursor por una marca o una barra para ver entrada, salida y motivo."
         />
       )}
       <div className={RUN.chartCard}>
@@ -1381,7 +1411,9 @@ const variantLabel = (variant: QuickVariant) =>
 
 /** The finished variants side by side: the same photos, so the numbers compare. */
 function QuickComparison({ variants }: { variants: QuickVariant[] }) {
-  const done = variants.filter((variant) => variant.summary)
+  const done = variants.filter(
+    (variant) => variant.summary && variant.kind !== 'formula',
+  )
   if (done.length < 2) return null
   return (
     <table aria-label="Comparación de variantes">
@@ -1415,37 +1447,157 @@ function QuickComparison({ variants }: { variants: QuickVariant[] }) {
   )
 }
 
+const MAIN_TRADES = (items: QuickTrade[] | undefined): VisualTrade[] =>
+  (items ?? []).map((trade) => ({
+    label: `${trade.producto.replace(/^PF_|USD$/g, '')} ${trade.lado > 0 ? 'largo' : 'corto'}`,
+    entryMs: trade.entrada_ms,
+    exitMs: trade.salida_ms,
+    bp: trade.neto_bp,
+    why:
+      trade.motivo === 'tiempo'
+        ? 'cerró por tiempo'
+        : 'cerró porque el maestro se dio vuelta',
+  }))
+
+/** The formula alone, no Qwen: everything as pictures; the table is under «Ver el detalle». */
+function FormulaResult({ formula }: { formula: QuickFormula }) {
+  const series: VisualSeries[] = [
+    ['formula', 'La fórmula (como opera en vivo)'],
+    ['maestro_fuerte', 'Maestro fuerte, sin portero'],
+    ['siempre_largo', 'Siempre largo (mismas entradas)'],
+    ['siempre_corto', 'Siempre corto (mismas entradas)'],
+  ].map(([id, label]) => ({
+    id: id!,
+    label: label!,
+    trades: MAIN_TRADES(formula.curvas[id as keyof QuickFormula['curvas']]),
+  }))
+  return (
+    <div className="grid gap-3" data-testid="formula-result">
+      <p className="m-0 text-note text-ink-2">
+        <strong className="text-ink">Solo la fórmula, sin Qwen</strong> ·{' '}
+        {formula.productos.map((p) => p.replace(/^PF_|USD$/g, '')).join(' y ')}{' '}
+        · del {DAY_FORMAT.format(formula.desde_ms)} al{' '}
+        {DAY_FORMAT.format(formula.hasta_ms)} · {amount(formula.fotos, 0)}{' '}
+        miradas
+      </p>
+      <ResultsVisual
+        series={series}
+        notionalUsd={formula.nocional_usd}
+        note={`Cada operación mueve ${amount(formula.nocional_usd, 0)} USD. Neto después de costos. Una posición por producto; sale cuando el maestro se da vuelta${formula.max_horas ? ` o a las ${amount(formula.max_horas, 0)} h` : ''}. Pasá el cursor por una marca o una barra para ver entrada, salida y motivo.`}
+      />
+      <details>
+        <summary className="cursor-pointer text-note text-ink-2">
+          Ver el detalle en números
+        </summary>
+        <div className={RUN.tableWrap}>
+          <table className={RUN.table} aria-label="Detalle de la fórmula">
+            <thead>
+              <tr>
+                <th scope="col">Qué</th>
+                <th scope="col">Operaciones</th>
+                <th scope="col">Neto por operación</th>
+                <th scope="col">Ganadoras</th>
+                <th scope="col">Por vuelta / por tiempo</th>
+              </tr>
+            </thead>
+            <tbody>
+              {(
+                [
+                  ['La fórmula', formula.formula],
+                  ['Maestro fuerte, sin portero', formula.maestro_fuerte],
+                  ['Siempre largo', formula.siempre_largo],
+                  ['Siempre corto', formula.siempre_corto],
+                ] as [string, QuickOperationStats][]
+              ).map(([label, stats]) => (
+                <tr key={label}>
+                  <th scope="row">{label}</th>
+                  <td>{stats.n}</td>
+                  <td>{bp(stats.neto_bp)}</td>
+                  <td>{percentText(stats.ganadoras)}</td>
+                  <td>
+                    {stats.por_vuelta} / {stats.por_tiempo}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </details>
+    </div>
+  )
+}
+
+const DAY_FORMAT = new Intl.DateTimeFormat('es-ES', {
+  timeZone: 'Europe/Madrid',
+  day: 'numeric',
+  month: 'short',
+  year: '2-digit',
+})
+
 function QuickResult({ state }: { state: QuickState }) {
   const summary = state.summary
   if (!summary)
     return <p>Prueba rápida terminada, pero no alcanzó para una lectura.</p>
+  if (summary.formula) return <FormulaResult formula={summary.formula} />
+  const curvas = summary.operacion?.curvas
   return (
     <div>
-      <p>
-        <strong>Prueba rápida (orientativa)</strong> · {summary.photos} fotos ·
-        a {summary.horizon_min / 60} horas
-      </p>
-      <ul>
-        <li>
-          Los extremos de la inclinación ganan {bp(summary.extremes_net_bp)} por
-          operación después de costos: {SIGNAL_TEXT(summary.signals.extremes)}.
-        </li>
-        <li>
-          Contra entradas al azar:{' '}
-          {summary.vs_random_pct == null
-            ? 'sin dato'
-            : `${amount(summary.vs_random_pct, 0)} %`}{' '}
-          ({SIGNAL_TEXT(summary.signals.random)}).
-        </li>
-        <li>
-          La inclinación acompaña al movimiento (correlación{' '}
-          {summary.spearman == null ? 'sin dato' : amount(summary.spearman, 2)}
-          ): {SIGNAL_TEXT(summary.signals.spearman)}.
-        </li>
-      </ul>
-      {summary.operacion && <QuickOperationTable op={summary.operacion} />}
-      {summary.ficha && <QuickFichaTables ficha={summary.ficha} />}
-      <p className={RUN.hint}>{summary.note}</p>
+      {summary.operacion && curvas && (
+        <ResultsVisual
+          series={[
+            {
+              id: 'qwen',
+              label: 'Qwen (entradas que haría en vivo)',
+              trades: MAIN_TRADES(curvas.qwen),
+            },
+            {
+              id: 'formula',
+              label: 'La fórmula sola',
+              trades: MAIN_TRADES(curvas.formula),
+            },
+            {
+              id: 'maestro',
+              label: 'Maestro fuerte, sin portero',
+              trades: MAIN_TRADES(curvas.maestro_fuerte),
+            },
+          ]}
+          notionalUsd={summary.operacion.nocional_usd ?? 0}
+          note="Muestra de fotos del pasado: Qwen y la fórmula sobre las mismas fotos, entrada tras entrada (no una sola posición a la vez). Orientativa. Pasá el cursor por una marca o una barra para ver el detalle."
+        />
+      )}
+      <details open={!curvas}>
+        <summary className="cursor-pointer text-note text-ink-2">
+          Ver el detalle en números
+        </summary>
+        <p>
+          <strong>Prueba rápida (orientativa)</strong> · {summary.photos} fotos
+          · a {summary.horizon_min / 60} horas
+        </p>
+        <ul>
+          <li>
+            Los extremos de la inclinación ganan {bp(summary.extremes_net_bp)}{' '}
+            por operación después de costos:{' '}
+            {SIGNAL_TEXT(summary.signals.extremes)}.
+          </li>
+          <li>
+            Contra entradas al azar:{' '}
+            {summary.vs_random_pct == null
+              ? 'sin dato'
+              : `${amount(summary.vs_random_pct, 0)} %`}{' '}
+            ({SIGNAL_TEXT(summary.signals.random)}).
+          </li>
+          <li>
+            La inclinación acompaña al movimiento (correlación{' '}
+            {summary.spearman == null
+              ? 'sin dato'
+              : amount(summary.spearman, 2)}
+            ): {SIGNAL_TEXT(summary.signals.spearman)}.
+          </li>
+        </ul>
+        {summary.operacion && <QuickOperationTable op={summary.operacion} />}
+        {summary.ficha && <QuickFichaTables ficha={summary.ficha} />}
+        <p className={RUN.hint}>{summary.note}</p>
+      </details>
     </div>
   )
 }
