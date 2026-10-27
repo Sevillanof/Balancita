@@ -34,6 +34,9 @@ STARTED = time.time()
 OUT = os.path.join(DATA, "destila-noche", time.strftime("%Y%m%d-%H%M"))
 AD = os.path.join(OUT, "adapters")
 LOG = None
+SIGUE = bool(os.environ.get("DESTILA_SIGUE"))          # segunda etapa: retoma la noche que ya corre y la extiende hasta MAX_MIN_TOTAL
+MAX_MIN_TOTAL = float(os.environ.get("MAX_MIN_TOTAL", 420))
+PATIENCE = int(os.environ.get("PATIENCE", 3))
 
 
 def say(text):
@@ -76,7 +79,9 @@ def short(r):
 
 
 def main():
-    global LOG
+    global LOG, OUT, AD, STARTED
+    if SIGUE:
+        return sigue()
     os.makedirs(AD, exist_ok=True)
     LOG = open(os.path.join(OUT, "log.txt"), "a", encoding="utf-8")
     if not os.path.isfile(os.path.join(MODEL, "config.json")):
@@ -168,3 +173,90 @@ def run_night():
 
 if __name__ == "__main__":
     main()
+
+
+def sigue():
+    """Segunda etapa (Fran: «que entrene hasta 7 horas»): espera a que termine la noche que ya corre y, si paró solo por pasos o por
+    tiempo (no porque ya estaba lista, dejó de mejorar o falló el piloto), retoma del último adaptador y sigue de a CHUNK pasos hasta
+    MAX_MIN_TOTAL minutos desde el inicio. Mide cada tramo en la validación, y corta cuando PATIENCE mediciones seguidas no superan la
+    mejor (si empeora, memoriza). Después: el mejor de TODOS los tramos, una vez en la práctica, GGUF e informe."""
+    global LOG, OUT, AD, STARTED
+    base = os.path.join(DATA, "destila-noche")
+    OUT = os.path.join(base, sorted(d for d in os.listdir(base) if os.path.isfile(os.path.join(base, d, "log.txt")))[-1])
+    AD = os.path.join(OUT, "adapters")
+    LOG = open(os.path.join(OUT, "log.txt"), "a", encoding="utf-8")
+    first = open(os.path.join(OUT, "log.txt"), encoding="utf-8").readline()[1:20]
+    STARTED = time.mktime(time.strptime(first, "%Y-%m-%d %H:%M:%S"))
+    lock = os.path.join(DATA, "destila-noche.lock")
+    say("etapa 2: espero a que termine la noche que corre ({})".format(OUT))
+    while os.path.exists(lock):
+        try:
+            os.kill(int(open(lock).read()), 0)
+        except (ProcessLookupError, ValueError):
+            break
+        time.sleep(30)
+    text = open(os.path.join(OUT, "log.txt"), encoding="utf-8").read()
+    if "PILOTO NO PASA" in text or "CORTO:" in text.split("etapa 2")[0] or "corto el entrenamiento (listo" in text or "corto el entrenamiento (sin_mejora" in text:
+        say("etapa 2: la primera etapa ya paró por una buena razón (lista, sin mejora o falló): no sigo")
+        return
+    history = [json.loads(x) for x in open(os.path.join(OUT, "historia.jsonl"), encoding="utf-8") if x.strip()]
+    if not history:
+        return say("etapa 2: no hay mediciones; no sigo")
+    open(lock, "w").write(str(os.getpid()))
+    try:
+        for name in ("best-practica.json", "best.json", "informe.md"):         # lo de la etapa 1 queda aparte
+            if os.path.exists(os.path.join(OUT, name)):
+                os.replace(os.path.join(OUT, name), os.path.join(OUT, "etapa1-" + name))
+        done = history[-1]["paso"]
+        base_valid = os.path.join(OUT, "base-valid.json")
+        stall_msg = ""
+        while done < int(os.environ.get("TOTAL", 12000)):
+            elapsed = (time.time() - STARTED) / 60
+            if elapsed > MAX_MIN_TOTAL - RESERVE_MIN:
+                stall_msg = "tope de tiempo ({} min)".format(int(elapsed))
+                break
+            say("etapa 2: entrenando {} pasos más (van {})".format(CHUNK, done))
+            run(lora("--resume-adapter-file", os.path.join(AD, "adapters.safetensors"), "--iters", str(CHUNK), "--save-every", str(CHUNK),
+                     "--steps-per-eval", str(CHUNK), adapter_path=AD), "el entrenamiento")
+            done += CHUNK
+            step_dir = os.path.join(AD, "paso-{}".format(done))
+            os.makedirs(step_dir, exist_ok=True)
+            for name in ("adapters.safetensors", "adapter_config.json"):
+                subprocess.run(["cp", os.path.join(AD, name), step_dir])
+            r = measure(step_dir, os.path.join(step_dir, "valid.json"), VALID_N)
+            r["paso"] = done
+            history.append(r)
+            with open(os.path.join(OUT, "historia.jsonl"), "a", encoding="utf-8") as handle:
+                handle.write(json.dumps(r, ensure_ascii=False) + "\n")
+            say("paso {}: {}".format(done, short(r)))
+            action, why = dst.decide(history, patience_best=PATIENCE)
+            if action == "sin_mejora":
+                say("corto el entrenamiento (sin_mejora): " + why)
+                break
+            if action == "listo":
+                say("corto el entrenamiento (listo): " + why)
+                break
+            # los checkpoints viejos que no son el mejor ni el último se borran para no llenar el disco
+            keep = {dst.best_step(history), done}
+            for h in history[:-1]:
+                if h["paso"] not in keep:
+                    subprocess.run(["rm", "-rf", os.path.join(AD, "paso-{}".format(h["paso"]))])
+        if stall_msg:
+            say("etapa 2: " + stall_msg)
+        finish(history)
+    finally:
+        os.remove(lock) if os.path.exists(lock) else None
+
+
+def finish(history):
+    best = dst.best_step(history)
+    json.dump({"paso": best}, open(os.path.join(OUT, "best.json"), "w"))
+    say("3. el mejor es el paso {}: práctica ({} miradas de cada tipo)".format(best, PRACTICA_N))
+    run([PY, os.path.join(HERE, "aprende_eval.py"), "--mode", "practica", "--model", MODEL, "--data", DATASET, "--adapter", os.path.join(AD, "paso-{}".format(best)),
+         "--max", str(PRACTICA_N), "--out", os.path.join(OUT, "best-practica.json")], "la práctica")
+    gguf = os.path.join(DATA, "qwen-destila.gguf")
+    ok = subprocess.run([PY, "-m", "balancita_engine.futures_qwen_lora_adapter", os.path.join(AD, "paso-{}".format(best)), gguf],
+                        env=dict(os.environ, PYTHONPATH=os.path.join(ROOT, "python"))).returncode == 0
+    say("GGUF del mejor: {} (NO está cargado en ningún lado)".format(gguf) if ok else "la conversión a GGUF falló")
+    run([PY, "-m", "balancita_engine.futures_qwen_destila", "informe", "--dir", OUT, "--out", os.path.join(OUT, "informe.md")], "el informe")
+    say("fin. Informe: {}".format(os.path.join(OUT, "informe.md")))

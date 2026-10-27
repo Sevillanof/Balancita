@@ -396,7 +396,7 @@ DONE_AGREEMENT, DONE_MIRROR, HABIT = 0.90, 0.90, 0.70
 STALE_STEP = 0.005                               # un tramo «sube» el acuerdo si lo mejora en más de medio punto
 
 
-def decide(history):
+def decide(history, patience_best=None):
     """``history``: una medición de validación por tramo (``paso``, ``acuerdo``, ``espejo_da_vuelta``, ``costumbre_parte``), en orden.
     Devuelve ``(acción, motivo)``: ``piloto_falla`` (corta la noche), ``listo`` (acuerdo y espejo ≥ 90 %), ``sin_mejora`` (dos tramos
     seguidos no suben el acuerdo) o ``sigue``."""
@@ -407,7 +407,12 @@ def decide(history):
             last["paso"], "n/d" if mirror is None else "{:.0f} %".format(100 * mirror), int(100 * PILOT_MIRROR))
     if (last["acuerdo"] or 0) >= DONE_AGREEMENT and (mirror or 0) >= DONE_MIRROR and (last["costumbre_parte"] or 1) <= HABIT:
         return "listo", "acuerdo y espejo ≥ 90 %"
-    if len(history) >= 3 and all(history[-i]["acuerdo"] <= history[-i - 1]["acuerdo"] + STALE_STEP for i in (1, 2)):
+    if patience_best:        # etapa larga: corta si en las últimas N mediciones ninguna superó la mejor de antes (empeora o se estanca = memoriza)
+        if len(history) > patience_best:
+            before = max(h["acuerdo"] or 0 for h in history[:-patience_best])
+            if all((h["acuerdo"] or 0) <= before + STALE_STEP for h in history[-patience_best:]):
+                return "sin_mejora", "{} mediciones seguidas sin superar la mejor".format(patience_best)
+    elif len(history) >= 3 and all(history[-i]["acuerdo"] <= history[-i - 1]["acuerdo"] + STALE_STEP for i in (1, 2)):
         return "sin_mejora", "dos tramos seguidos no suben el acuerdo"
     return "sigue", ""
 
