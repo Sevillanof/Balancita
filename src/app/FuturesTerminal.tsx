@@ -101,8 +101,10 @@ export default function FuturesTerminal({
     position,
   })
   const displayedPrice = quote.price
+  // The default view (no product pinned) is the first product: Qwen loads without touching the selector.
+  const qwenProduct = product ?? bootstrap.products?.[0]
   const { rows: qwen, source: qwenSource } = useQwenDecisions(
-    product,
+    qwenProduct,
     bootstrap.mode === 'paper_live',
   )
   const analyses = [
@@ -491,7 +493,7 @@ export default function FuturesTerminal({
                   glance={
                     liveGateway ? (
                       <QwenGlance
-                        product={product}
+                        product={qwenProduct}
                         latest={
                           analyses.length > 0 ? record(analyses.at(-1)) : null
                         }
@@ -560,7 +562,7 @@ export default function FuturesTerminal({
               )
             }
           />
-          <QwenTradesPanel product={product} enabled={liveGateway} />
+          <QwenTradesPanel product={qwenProduct} enabled={liveGateway} />
           {!engineOff && (
             <div
               className="mt-4 grid grid-cols-1 items-start gap-4"
