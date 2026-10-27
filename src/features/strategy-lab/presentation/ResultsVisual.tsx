@@ -143,14 +143,14 @@ function BalanceCurve({
           </g>
         )
       })}
-      <text x={PAD.left} y={H - 4} className="fill-ink-2 text-[10px]">
+      <text x={PAD.left} y={H - 4} className="fill-ink-2 text-hint">
         {DAY.format(lo)}
       </text>
       <text
         x={W - PAD.right}
         y={H - 4}
         textAnchor="end"
-        className="fill-ink-2 text-[10px]"
+        className="fill-ink-2 text-hint"
       >
         {DAY.format(hi)}
       </text>
@@ -221,14 +221,14 @@ function TotalsBars({
       {series.map((item, index) => {
         const value = totals[index]!
         return (
-          <li
-            key={item.id}
-            className="grid grid-cols-[minmax(0,12rem)_1fr_auto] items-center gap-2 text-note"
-          >
-            <span className="truncate text-ink-2" title={item.label}>
+          <li key={item.id} className="flex items-center gap-2 text-note">
+            <span
+              className="w-48 shrink-0 truncate text-ink-2"
+              title={item.label}
+            >
               {item.label}
             </span>
-            <span className="relative block h-3 rounded-sm bg-surface-2">
+            <span className="relative block h-3 min-w-0 grow rounded-sm bg-surface-2">
               <span
                 className={`absolute inset-y-0 rounded-sm ${value >= 0 ? 'bg-long' : 'bg-short'}`}
                 style={{
@@ -278,7 +278,7 @@ export default function ResultsVisual({
           </span>
           <strong
             data-testid="results-total"
-            className={`text-[2rem] leading-none tabular-nums ${n === 0 ? 'text-ink-2' : net >= 0 ? 'text-long' : 'text-short'}`}
+            className={`text-run-value leading-none tabular-nums ${n === 0 ? 'text-ink-2' : net >= 0 ? 'text-long' : 'text-short'}`}
           >
             {n === 0 ? 'Sin operaciones' : moneyText(net, notionalUsd)}
           </strong>
