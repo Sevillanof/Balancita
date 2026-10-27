@@ -157,9 +157,9 @@ class VersionTests(unittest.TestCase):
         self.assertEqual(cfg["products"], ["PF_XBTUSD", "PF_ETHUSD"])
         self.assertEqual((cfg["wake"]["flat_every_min"], cfg["wake"]["position_every_min"]), (15, 15))
         self.assertIs(cfg["wake"]["extra_wakes"], False)
-        # version 8: no stop (stops turn noise into losses), 48 h limit (the exit is Qwen's, when the maestro turns)
+        # version 9: no stop (stops turn noise into losses) and NO time limit (Fran, 27-oct: the exit is decided at every look)
         self.assertEqual(cfg["guardrails"], {"stop_sigma_24h": None, "min_stop_pct": 0.005, "max_stop_pct": 0.03,
-                                             "max_hold_min": 2880, "cooldown_min": 15})
+                                             "max_hold_min": None, "cooldown_min": 15})
         self.assertTrue(cfg["mirror"])
         self.assertTrue(cfg["state_corta"])
         self.assertNotIn("lora", cfg)                       # the adapter learnt the 8-factor sheet: not applied to the short one
@@ -173,12 +173,13 @@ class VersionTests(unittest.TestCase):
         texts = [r["state_text"] for r in env.rows("SELECT state_text FROM decisions WHERE kind='position'")]
         self.assertTrue(texts)
         self.assertIn("sin stop automático", texts[0])
-        self.assertIn("cierre obligatorio a las 48 h", texts[0])
-        self.assertIn("Cierre obligatorio dentro de", texts[0])
+        self.assertIn("sin límite de tiempo", texts[0])
+        self.assertNotIn("Cierre obligatorio", texts[0])
+        self.assertNotIn("48 h", texts[0])
         self.assertNotIn("Distancia al stop", texts[0])
         question = LIVE_CFG["prompt"]["questions"]["position"]["instruction"]
         self.assertIn("No hay stop", question)
-        self.assertIn("48 h", question)
+        self.assertIn("ni límite de tiempo", question)
 
 
 class CadenceTests(unittest.TestCase):
@@ -227,8 +228,10 @@ class CadenceTests(unittest.TestCase):
         self.assertEqual(len(env.provider.prompts), 2 * len(env.rows("SELECT * FROM decisions")))
 
     def test_the_time_limit_closes_at_48_hours_and_there_is_no_stop(self):
-        env = make(self, policy=Policy(flat="LARGO"))
-        for i, product in enumerate(PRODUCTS):                       # three more days of candles: the limit is 48 h now
+        cfg = copy.deepcopy(LIVE_CFG)
+        cfg["guardrails"]["max_hold_min"] = 2880                     # version 9 has no time limit; the operator still honours one when the config sets it
+        env = make(self, cfg=cfg, policy=Policy(flat="LARGO"))
+        for i, product in enumerate(PRODUCTS):                       # three more days of candles: the limit is 48 h here
             last = env.candles[product][-1]
             env.candles[product] += walk(3 * 288, 70 + i, last["bucket_start"] + BAR, price=float(last["close"]))
         env.op.start()

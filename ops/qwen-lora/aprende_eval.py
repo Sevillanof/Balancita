@@ -67,10 +67,13 @@ def valid_main(args):
     from mlx_lm import load
 
     rows = [json.loads(line) for line in open(os.path.join(args.data, "valid.jsonl"), encoding="utf-8")]
-    rows = sample(rows, args.max)
+    infos = [json.loads(line) for line in open(os.path.join(args.data, "valid-info.jsonl"), encoding="utf-8")]
+    both = sample(list(zip(rows, infos)), args.max)
+    rows = [r for r, _ in both]
     model, tok = load(args.model, adapter_path=args.adapter)
     hits, by_class, said, started = 0, collections.defaultdict(lambda: [0, 0]), collections.Counter(), time.time()
-    for row in rows:
+    flat_nets, position_gain = [], []
+    for row, info in both:
         user = row["messages"][1]["content"]
         options = dict(re.findall(r"(?m)^([A-Z])\) (\w+)", user))
         gold = row["messages"][2]["content"]
@@ -80,10 +83,18 @@ def valid_main(args):
         by_class[options[gold]][0] += pick == gold
         by_class[options[gold]][1] += 1
         said[options.get(pick, pick)] += 1
+        answer = options.get(pick, pick)
+        if info["kind"] == "flat":                           # the net of following the answer: the side it chose, or nothing
+            flat_nets.append(info["largo_bp"] if answer == "LARGO" else info["corto_bp"] if answer == "CORTO" else 0.0)
+        else:                                                # closing now instead of holding to the formula's end
+            position_gain.append(info["net_now_bp"] - info["final_bp"] if answer == "CERRAR" else 0.0)
     n = len(rows)
     result = {"modo": "valid", "n": n, "acierto": round(hits / n, 4) if n else None,
               "acierto_por_clase": {k: round(v[0] / v[1], 3) for k, v in sorted(by_class.items())},
               "acierto_balanceado": round(sum(v[0] / v[1] for v in by_class.values()) / len(by_class), 4) if by_class else None,
+              "neto_por_mirada_bp": round(sum(flat_nets) / len(flat_nets), 2) if flat_nets else None,
+              "entradas": sum(1 for x in flat_nets if x != 0.0),
+              "ganancia_por_cierre_bp": round(sum(position_gain) / len(position_gain), 2) if position_gain else None,
               "reparto": dict(said), "costumbre_parte": round(max(said.values()) / n, 3) if n else None,
               "adaptador": args.adapter, "segundos": round(time.time() - started)}
     with open(args.out, "w", encoding="utf-8") as handle:

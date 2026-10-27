@@ -162,6 +162,24 @@ class ReportTests(unittest.TestCase):
             self.assertIn(piece, text)
 
 
+class ExitTests(unittest.TestCase):
+    def test_without_a_time_limit_the_trade_lasts_until_the_maestro_turns_and_never_turning_is_not_measurable(self):
+        from balancita_engine import futures_qwen_trader_exam as ex
+        cfg = dict(CFG)
+        self.assertIsNone(cfg["guardrails"]["max_hold_min"])
+        t0 = 1000 * 15 * MIN
+        scores = [0.5] * 600 + [-0.5] * 5                                   # up for 150 hours, then it turns (a long leaves)
+        readings = {t0 + k * 15 * MIN: {"puntaje": s} for k, s in enumerate(scores)}
+        closes = {t0 + k * 15 * MIN: 100.0 + (k == 600) * 3.0 for k in range(len(scores))}
+        out = ex._v8_exit(cfg, t0, 1, readings, closes, 10.0, 0.11)
+        self.assertEqual((out["motivo"], out["horas"]), ("vuelta", 150.0))
+        self.assertAlmostEqual(out["neto_bp"], 300.0 - 10.0, places=6)
+        self.assertIsNone(ex._v8_exit(cfg, t0 + 601 * 15 * MIN, -1, readings, closes, 10.0, 0.11))    # the maestro never turned afterwards
+        with_limit = dict(cfg, guardrails=dict(cfg["guardrails"], max_hold_min=2880))
+        out = ex._v8_exit(with_limit, t0, 1, readings, closes, 10.0, 0.11)                             # the old v8 rule still works
+        self.assertEqual((out["motivo"], out["horas"]), ("tiempo", 48.0))
+
+
 class PositionBalanceTests(unittest.TestCase):
     def test_half_of_the_close_class_comes_from_trades_that_hit_48_hours(self):
         rows = []
@@ -204,29 +222,26 @@ class LiveLabelTests(unittest.TestCase):
                 "INSERT INTO decisions(product, bucket_ms, t_ms, decided_at_ms, kind, action, state_text, formula_json, net_bp_now, position_json, trade_no) "
                 "VALUES(?,?,?,?,?,?,?,?,?,?,?)", (product, bucket, t_ms, t_ms, kind, "ESPERAR", "STATE", formula, net_now, position, trade_no))
 
-    def test_a_flat_look_gets_its_label_after_48_hours_from_the_candles_and_the_maestro_turn(self):
+    def test_a_flat_look_gets_its_label_when_both_exits_happened_from_the_candles_and_the_maestro_turn(self):
         store = self.make_db()
         cfg = dict(CFG, products=["PF_XBTUSD"])
         t0 = 1_000_000 * 15 * MIN
         step = 15 * MIN
-        # the look; the maestro stays up for 6 looks, then turns clearly down (score under -weak) -> the long exits there
         weak = corta.formulas(cfg)[0]["umbrales"]["flojo"]
-        self.insert(store, t0 - step, t0, "flat", 0.5)
-        for k in range(1, 7):
+        # the maestro stays up for 6 looks: the short leaves at the first one, the long has not left yet -> nothing to label
+        for k in range(0, 7):
             self.insert(store, t0 + k * step - step, t0 + k * step, "flat", 0.5)
-        self.insert(store, t0 + 7 * step - step, t0 + 7 * step, "flat", -(weak + 0.1))
-        closes = {t0: 100.0, t0 + step: 100.0, t0 + 7 * step: 101.0}      # the short leaves at the first look (the maestro is up)
+        closes = {t0: 100.0, t0 + step: 100.0, t0 + 7 * step: 101.0}
         cost = float(ap.round_trip_cost_bps("PF_XBTUSD"))
-        before = 0
-        self.assertEqual(ap.resolve_live(store.db, lambda p, a, b: closes, cfg, t0 + 10 * MIN), before)    # too early: not 48 h yet
-        done = ap.resolve_live(store.db, lambda p, a, b: closes, cfg, t0 + 49 * 60 * MIN)
-        self.assertGreaterEqual(done, 1)
+        self.assertEqual(ap.resolve_live(store.db, lambda p, a, b: closes, cfg, t0 + 10 * 60 * MIN), 0)
+        # it turns clearly down: the long leaves there (+100 bp less costs) and now the look can be labelled
+        self.insert(store, t0 + 7 * step - step, t0 + 7 * step, "flat", -(weak + 0.1))
+        self.assertGreaterEqual(ap.resolve_live(store.db, lambda p, a, b: closes, cfg, t0 + 10 * 60 * MIN), 1)
         row = store.db.execute("SELECT * FROM examples WHERE t_ms=?", (t0,)).fetchone()
         detail = json.loads(row["label_json"])
-        self.assertAlmostEqual(detail["largo_bp"], 100.0 - cost, places=6)            # +100 bp (100 -> 101) less the costs
+        self.assertAlmostEqual(detail["largo_bp"], 100.0 - cost, places=6)
         self.assertEqual(row["label"], "LARGO")
         self.assertAlmostEqual(detail["corto_bp"], 0.0 - cost, places=6)             # out at the first look at the same price
-        self.assertEqual(ap.resolve_live(store.db, lambda p, a, b: closes, cfg, t0 + 50 * 60 * MIN) >= 0, True)
         count = ap.export_live(store.db, cfg, os.path.join(tempfile.mkdtemp(), "x.jsonl"))
         self.assertGreaterEqual(count, 1)
 
@@ -263,7 +278,7 @@ class FormulaDecidesTests(unittest.TestCase):
     def test_the_formula_opens_and_closes_whatever_qwen_says(self):
         env = make(self, policy=Policy(flat="ESPERAR", position="MANTENER"), formula=True)
         answers = iter([("LARGO", "maestro fuerte y portero a favor")] + [("MANTENER", "x")] * 3 + [("CERRAR", "el maestro se dio vuelta en contra")] + [("ESPERAR", "x")] * 500)
-        with mock.patch.object(corta, "formula_action", side_effect=lambda r, side: next(answers)):
+        with mock.patch.object(corta, "formula_action", side_effect=lambda r, side, *rest: next(answers)):
             env.op.start()
             env.advance(120)
         trades = env.rows("SELECT * FROM trades")

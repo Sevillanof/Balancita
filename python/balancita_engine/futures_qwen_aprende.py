@@ -87,17 +87,19 @@ def collect(history, cfg, product, from_ms, to_ms, *, flat_rate=0.15, seed=20261
     practice = cfg["practice"]
     warmup = practice["warmup_days"] * DAY_MS
     rng = random.Random("{}:{}".format(seed, product))
-    bars = history.bars(product, from_ms - warmup, min(to_ms + cfg["guardrails"]["max_hold_min"] * MINUTE_MS, history.holdout_ms))
+    hold = cfg["guardrails"]["max_hold_min"]
+    ahead = to_ms + hold * MINUTE_MS if hold else history.holdout_ms       # without a time limit the exits can be far: read up to the holdout
+    bars = history.bars(product, from_ms - warmup, min(ahead, history.holdout_ms))
     funding = qt.FundingLine(history.funding(product))
     trader = qt.Trader(cfg, product, None, funding, key="aprende", entry_threshold=cfg["practice_entry_threshold"])
     for other in cfg.get("state_context") or ():
         if other != product:
             trader.context[other] = {int(b["bucket_start"]) + qt.BAR_MS: float(b["close"]) for b in history.bars(
-                other, from_ms - warmup, min(to_ms + cfg["guardrails"]["max_hold_min"] * MINUTE_MS, history.holdout_ms))}
+                other, from_ms - warmup, min(ahead, history.holdout_ms))}
     teacher = corta.formulas(cfg)[0]
     weak = teacher["umbrales"]["flojo"]
     cost = float(round_trip_cost_bps(product))
-    hold_ms = cfg["guardrails"]["max_hold_min"] * MINUTE_MS
+    hold_ms = hold * MINUTE_MS if hold else None
     closes, readings, flat_found, trades, rows_pos = {}, {}, [], [], []
     open_trade = None
     for bar in bars:
@@ -120,15 +122,16 @@ def collect(history, cfg, product, from_ms, to_ms, *, flat_rate=0.15, seed=20261
             now = qt.settle(product, trader.position, closes[t_ms], "strategy_exit", t_ms, funding, trader.notional)["net_bp"]
             side = 1 if trader.position.side == "LONG" else -1
             action, _ = corta.formula_action(r, side)
-            if held >= hold_ms or action == "CERRAR":
+            if (hold_ms and held >= hold_ms) or action == "CERRAR":
                 open_trade["final_bp"] = now
                 for row in open_trade["rows"]:
                     row["final_bp"] = now
-                    row["por_tiempo"] = held >= hold_ms         # the trade reached 48 h without the maestro turning
+                    row["por_tiempo"] = bool(hold_ms) and held >= hold_ms     # reached the time limit, if there is one
+                    row["salida_ms"] = t_ms
                     row["label"] = position_label(row["net_now_bp"], now)
-                if held < hold_ms:                         # the wake where the formulas close is a real, labelled look
+                if not hold_ms or held < hold_ms:          # the wake where the formulas close is a real, labelled look
                     rows_pos.append(dict(_position_row(trader, t_ms, reasons, r, now, open_trade), final_bp=now,
-                                         label="CERRAR"))
+                                         label="CERRAR", salida_ms=t_ms))
                 trader.position = None
                 open_trade = None
                 trader.cooldown_until = t_ms + cfg["guardrails"]["cooldown_min"] * MINUTE_MS
@@ -147,7 +150,7 @@ def collect(history, cfg, product, from_ms, to_ms, *, flat_rate=0.15, seed=20261
             trades.append(open_trade := {"trade_no": trader.position.trade_no, "rows": [], "entry_ms": t_ms, "side": action})
     rows_flat = []
     for t_ms, reasons, state, mirror in flat_found:
-        op = ex._operation(cfg, t_ms, readings, closes, cost, weak)
+        op = operation(cfg, t_ms, readings, closes, cost, weak)
         if op is None:
             continue
         rows_flat.append({"kind": "flat", "product": product, "t_ms": t_ms, "month": _month(t_ms), "state_text": state,
@@ -158,6 +161,19 @@ def collect(history, cfg, product, from_ms, to_ms, *, flat_rate=0.15, seed=20261
                           "formula": formula_flat(op["maestro"], op["portero_si"])})
     rows_pos = [r for r in rows_pos if r.get("final_bp") is not None]    # a trade still open at the end has no result
     return {"flat": rows_flat, "position": rows_pos}
+
+
+def operation(cfg, t_ms, readings, closes, cost, weak):
+    """Lo que dijeron las fórmulas en la mirada y el resultado de la operación (sale cuando el maestro se da vuelta; sin límite de
+    tiempo) en cada lado. ``None`` si alguno de los lados todavía no salió."""
+    r = readings.get(t_ms)
+    if r is None:
+        return None
+    sides = {name: ex._v8_exit(cfg, t_ms, side, readings, closes, cost, weak) for name, side in (("largo", 1), ("corto", -1))}
+    if None in sides.values():
+        return None
+    return {"maestro": r["veredicto"], "puntaje": r["puntaje"], "portero_si": bool(r["portero_si"]), "portero_p": r["portero_p"],
+            "volatilidad": r["volatilidad"], **sides}
 
 
 def _position_row(trader, t_ms, reasons, r, net_now_bp, trade):
@@ -234,6 +250,15 @@ def chat_examples(cfg, row, mirror=False):
 EMBARGO_MS = 48 * HOUR_MS        # la etiqueta mira hasta 48 h adelante: las filas de entrenamiento no pueden llegar a la validación
 
 
+def info_of(row, mirror=False):
+    """Lo que vale cada respuesta a un ejemplo (para medir en la validación el NETO de seguir una respuesta, no solo si acertó la letra).
+    En el espejo el mercado está dado vuelta: lo que dejaba el largo lo deja el corto."""
+    if row["kind"] == "flat":
+        largo, corto = (row["corto_bp"], row["largo_bp"]) if mirror else (row["largo_bp"], row["corto_bp"])
+        return {"kind": "flat", "label": MIRROR_LABEL[row["label"]] if mirror else row["label"], "largo_bp": largo, "corto_bp": corto}
+    return {"kind": "position", "label": row["label"], "net_now_bp": row["net_now_bp"], "final_bp": row["final_bp"]}
+
+
 def split_valid(rows, months):
     """Los últimos ``months`` meses van a validación. Las filas de entrenamiento que caen en las 48 h anteriores se descartan
     (embargo): su etiqueta mira hasta 48 h adelante y se superpondría con lo que se mide."""
@@ -264,11 +289,14 @@ def build_dataset(cfg, flat, position, out_dir, *, per_class=400, seed=20261027,
         share = 1.0 if name == "train" else 0.2
         f = balance(f, "label", max(1, int(per_class * share)), seed)
         p = balance_position(p, max(1, int(per_class * share)), seed + 1)
-        examples = [e for row in f for mirror in (False, True) for e in chat_examples(cfg, row, mirror)]
-        examples += [e for row in p for e in chat_examples(cfg, row)]
-        random.Random(seed + 2).shuffle(examples)
+        pairs = [(e, info_of(row, mirror)) for row in f for mirror in (False, True) for e in chat_examples(cfg, row, mirror)]
+        pairs += [(e, info_of(row, False)) for row in p for e in chat_examples(cfg, row)]
+        random.Random(seed + 2).shuffle(pairs)
+        examples = [e for e, _ in pairs]
         sets[name] = (examples, f, p)
         write_jsonl(os.path.join(out_dir, name + ".jsonl"), examples)
+        if name == "valid":                                  # what each validation example is worth, line by line (the net of following an answer)
+            write_jsonl(os.path.join(out_dir, "valid-info.jsonl"), [i for _, i in pairs])
     meta = {"schema": DATASET_SCHEMA, "config_hash": qt.config_hash(cfg), "prompt_version": cfg["prompt"]["version"],
             "train": [TRAIN_FROM, TRAIN_TO], "valid_months": VALID_MONTHS, "per_class": per_class, "seed": seed,
             **{name: {"ejemplos": len(v[0]), "sin_posicion": dict(collections.Counter(r["label"] for r in v[1])),
@@ -353,12 +381,11 @@ def resolve_live(db, closes_of, cfg, now_ms):
     """Pone la etiqueta a las miradas guardadas cuyo resultado ya se conoce y no la tienen (tabla ``examples``).
 
     ``db``: conexión a la base en vivo (escritura); ``closes_of(product, from_ms, to_ms) -> {t_ms: cierre}`` (velas de 5 min por su
-    hora de cierre). Sin posición: pasan 48 h desde la mirada (o se cumple antes la salida de la versión 8: el maestro se da vuelta);
-    se calcula el neto de entrar largo y corto. Con posición: la operación a la que pertenece ya cerró (``trades``)."""
+    hora de cierre). Sin posición: el neto de entrar largo y corto con la salida de la fórmula (el maestro se da vuelta; sin límite de tiempo) se conoce
+    cuando las dos salidas ya ocurrieron; se calcula el neto de entrar largo y corto. Con posición: la operación a la que pertenece ya cerró (``trades``)."""
     weak = corta.formulas(cfg)[0]["umbrales"]["flojo"]
-    hold = cfg["guardrails"]["max_hold_min"] * MINUTE_MS
-    step = cfg["wake"]["position_every_min"] * MINUTE_MS
     done = 0
+    closes_all = {}
     for product in cfg["products"]:
         cost = float(round_trip_cost_bps(product))
         scores = _scores_by_time(db, product)
@@ -375,19 +402,14 @@ def resolve_live(db, closes_of, cfg, now_ms):
                 label = position_label(net_now, trade[4])
                 detail = {"net_now_bp": net_now, "final_bp": trade[4]}
             else:
-                if now_ms < t_ms + hold + 5 * MINUTE_MS:
-                    continue
-                closes = closes_of(product, t_ms - qt.BAR_MS, t_ms + hold + 10 * MINUTE_MS)
+                if closes_all.get(product) is None:                 # one read of the candles per product and run
+                    closes_all[product] = closes_of(product, min(r[1] for r in pending) - qt.BAR_MS, now_ms)
+                closes = closes_all[product]
+                readings = {at: {"puntaje": score} for at, score in scores.items()}
                 nets = {}
                 for name, side in (("largo", 1), ("corto", -1)):
-                    exit_ms = t_ms + hold
-                    for k in range(1, hold // step + 1):
-                        at = t_ms + k * step
-                        if at in scores and side * scores[at] <= -weak:
-                            exit_ms = at
-                            break
-                    c0, c1 = closes.get(t_ms), closes.get(exit_ms)
-                    nets[name] = None if c0 is None or c1 is None else side * (c1 / c0 - 1) * 1e4 - cost
+                    out = ex._v8_exit(cfg, t_ms, side, readings, closes, cost, weak)    # None until the maestro turned against that side
+                    nets[name] = None if out is None else out["neto_bp"]
                 if None in nets.values():
                     continue
                 label = flat_label(nets["largo"], nets["corto"])

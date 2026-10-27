@@ -1,7 +1,7 @@
 {
   "schema": "balancita-qwen-trader.v1",
   "version": "live",
-  "note": "Qwen en vivo, VERSIÓN 9 (27-oct-2026, pedido de Fran: «que Qwen no decida, pero esté junto al maestro y el portero; tiene que entrenarse con cada decisión»). Decide la FÓRMULA (decide_by: formula): entra cuando el maestro está FUERTE y el portero dice que conviene, del lado del maestro; sale cuando el maestro se da vuelta en contra (al menos flojo) o a las 48 h; sin stop; cada 15 min; una posición por producto (medido en analisis/qwen-v8/informe.md: práctica +54 pb/op en 82 operaciones, 2025 +45, 2024 −31). Qwen mira la MISMA ficha corta de la versión 8 (maestro, portero, volatilidad, posición) y da su OPINIÓN (entrar / esperar / salir y su motivo) en cada mirada: se guarda junto a la decisión de la fórmula (model_action, probabilidades, reason; formula_action y formula_json son lo que decidió la fórmula) y NO abre ni cierra nada. Si el modelo no contesta, la fórmula decide igual y la opinión queda vacía (opinion_error). En vivo no se usa la prueba del espejo (la opinión no decide); la Prueba rápida sigue con ella. Cada mirada es un ejemplo para aprender: la tabla examples de la base en vivo guarda, cuando se conoce, qué habría sido lo mejor (futures_qwen_aprende: neto tras costos de entrar largo / corto o de esperar; de cerrar o de mantener). El adaptador LoRA nuevo se arma y se mide aparte (ops/qwen-lora/aprende.sh) y no cambia esta config. La ficha, las dos fórmulas (corta.maestro_hash, corta.portero_hash), los guardrails y los productos son los de la versión 8; cambia el prompt (versión 8) y decide_by: el config_hash cambia, la base de la versión 8 se archiva sola como live-<hash>.sqlite y los resultados de la 9 se miran aparte (revisión a las 30 operaciones). Las versiones 7 (config/qwen-live-v7.json) y anteriores quedan intactas.",
+  "note": "Qwen en vivo, VERSIÓN 9 (27-oct-2026, pedido de Fran: «que Qwen no decida, pero esté junto al maestro y el portero; tiene que entrenarse con cada decisión»). Decide la FÓRMULA (decide_by: formula): entra cuando el maestro está FUERTE y el portero dice que conviene, del lado del maestro; sale cuando el maestro se da vuelta en contra (al menos flojo) sin stop y SIN límite de tiempo (Fran, 27-oct: una operación puede durar 2 h o 13 h, la salida se decide en cada mirada de 15 min); cada 15 min; una posición por producto (la medición de analisis/qwen-v8/informe.md tenía tope de 48 h; sin tope hay que medirlo: analisis/qwen-aprende). Qwen mira la MISMA ficha corta de la versión 8 (maestro, portero, volatilidad, posición) y da su OPINIÓN (entrar / esperar / salir y su motivo) en cada mirada: se guarda junto a la decisión de la fórmula (model_action, probabilidades, reason; formula_action y formula_json son lo que decidió la fórmula) y NO abre ni cierra nada. Si el modelo no contesta, la fórmula decide igual y la opinión queda vacía (opinion_error). En vivo no se usa la prueba del espejo (la opinión no decide); la Prueba rápida sigue con ella. Cada mirada es un ejemplo para aprender: la tabla examples de la base en vivo guarda, cuando se conoce, qué habría sido lo mejor (futures_qwen_aprende: neto tras costos de entrar largo / corto o de esperar; de cerrar o de mantener). El adaptador LoRA nuevo se arma y se mide aparte (ops/qwen-lora/aprende.sh) y no cambia esta config. La ficha, las dos fórmulas (corta.maestro_hash, corta.portero_hash), los guardrails y los productos son los de la versión 8; cambia el prompt (versión 8) y decide_by: el config_hash cambia, la base de la versión 8 se archiva sola como live-<hash>.sqlite y los resultados de la 9 se miran aparte (revisión a las 30 operaciones). Las versiones 7 (config/qwen-live-v7.json) y anteriores quedan intactas.",
   "products": [
     "PF_XBTUSD",
     "PF_ETHUSD"
@@ -66,7 +66,7 @@
         "id": "trader_flat",
         "version": 8,
         "type": "choice",
-        "instruction": "No tenés ninguna posición. Con la ficha de abajo, ¿qué harías ahora? Vos NO operás: decide la fórmula (el maestro y el portero) y tu opinión se guarda al lado para aprender de ella; opiná con tu propio criterio. Entrar y salir cuesta ~{cost} % del tamaño: solo vale la pena entrar si esperás un movimiento claramente mayor. Si entrás, la salida se decide cada 15 min; a las 48 h se cierra sola. Si no ves una ventaja clara, esperá.",
+        "instruction": "No tenés ninguna posición. Con la ficha de abajo, ¿qué harías ahora? Vos NO operás: decide la fórmula (el maestro y el portero) y tu opinión se guarda al lado para aprender de ella; opiná con tu propio criterio. Entrar y salir cuesta ~{cost} % del tamaño: solo vale la pena entrar si esperás un movimiento claramente mayor. Si entrás, la salida se decide cada 15 min, sin límite de tiempo. Si no ves una ventaja clara, esperá.",
         "options": [
           {
             "id": "LARGO",
@@ -86,7 +86,7 @@
         "id": "trader_position",
         "version": 8,
         "type": "choice",
-        "instruction": "Tenés una posición abierta. Con la ficha de abajo, ¿qué harías ahora: mantenerla o cerrarla? Vos NO operás: decide la fórmula y tu opinión se guarda al lado para aprender de ella. Cerrar solo agrega el costo de salida (~{exit_cost} % del tamaño, ya descontado del resultado que se muestra); el de entrada ya está pagado. No hay stop: se cierra sola a las 48 h. La regla que mejor funcionó en el pasado es salir cuando el maestro se da vuelta en contra de la posición.",
+        "instruction": "Tenés una posición abierta. Con la ficha de abajo, ¿qué harías ahora: mantenerla o cerrarla? Vos NO operás: decide la fórmula y tu opinión se guarda al lado para aprender de ella. Cerrar solo agrega el costo de salida (~{exit_cost} % del tamaño, ya descontado del resultado que se muestra); el de entrada ya está pagado. No hay stop ni límite de tiempo: la fórmula la cierra cuando el maestro se da vuelta. La regla que mejor funcionó en el pasado es salir cuando el maestro se da vuelta en contra de la posición.",
         "options": [
           {
             "id": "MANTENER",
@@ -142,7 +142,7 @@
     "stop_sigma_24h": null,
     "min_stop_pct": 0.005,
     "max_stop_pct": 0.03,
-    "max_hold_min": 2880,
+    "max_hold_min": null,
     "cooldown_min": 15
   },
   "entry_threshold": 0.5,

@@ -88,7 +88,7 @@ def formula_action(r, side):
     """Lo que deciden las fórmulas (versión 9). ``r``: ``readings``. ``side``: 1 / -1 si hay posición abierta (largo / corto),
     ``None`` si no. Sin posición: ``LARGO`` / ``CORTO`` cuando el maestro dice FUERTE y el portero dice que conviene entrar (del lado
     del maestro); si no, ``ESPERAR``. Con posición: ``CERRAR`` cuando el maestro se da vuelta en contra, al menos flojo; si no,
-    ``MANTENER`` (el cierre a las 48 h es una regla fija del operador, no de las fórmulas). Devuelve ``(acción, motivo)``."""
+    ``MANTENER``. Sin límite de tiempo: una operación dura lo que dure el maestro. Devuelve ``(acción, motivo)``."""
     v = r["veredicto"]
     if side is None:
         if abs(v) == 2 and r["portero_si"]:
@@ -165,9 +165,10 @@ def rules_line(trader):
     guard, wake = trader.cfg["guardrails"], trader.cfg["wake"]
     stop = ("sin stop automático" if guard.get("stop_sigma_24h") is None else
             "stop automático a {} x la volatilidad diaria".format(qt.es(guard["stop_sigma_24h"], 1)))
-    return ("Reglas fijas que no podés cambiar: {}; cierre obligatorio a las {} h; espera de {} min después de cerrar; tamaño fijo "
+    limit = "cierre obligatorio a las {} h".format(guard["max_hold_min"] // 60) if guard.get("max_hold_min") else "sin límite de tiempo"
+    return ("Reglas fijas que no podés cambiar: {}; {}; espera de {} min después de cerrar; tamaño fijo "
             "de {} USD; una sola posición; sin límite de operaciones por día. Solo te consultamos cada {} min.".format(
-                stop, guard["max_hold_min"] // 60, guard["cooldown_min"], format(trader.notional.normalize(), "f"),
+                stop, limit, guard["cooldown_min"], format(trader.notional.normalize(), "f"),
                 wake["position_every_min"]))
 
 

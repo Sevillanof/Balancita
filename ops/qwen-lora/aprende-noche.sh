@@ -8,8 +8,9 @@
 #   0. Prueba de humo: 10 pasos, una medición de 6 ejemplos y la conversión a GGUF. Si algo falla, CORTA antes de gastar la noche.
 #   1. Qwen sin entrenar: validación y práctica (la referencia).
 #   2. Entrena de a 500 pasos (hasta TOTAL); después de cada tramo mide en la VALIDACIÓN del entrenamiento (nunca en la práctica) el
-#      acierto, el acierto por clase y la costumbre. Corta cuando dos tramos seguidos no mejoran el acierto balanceado; guarda cada
-#      checkpoint (paso-N/) y recuerda el mejor entre los que no son una costumbre (ninguna opción más del 70 % de las respuestas).
+#      NETO por mirada de seguir su respuesta (entrar del lado que dice; cerrar o no), además del acierto y la costumbre. El criterio de
+#      Fran es quedar POSITIVO en neto tras costos, no acertar: corta cuando dos tramos seguidos no mejoran ese neto (0,5 pb); guarda
+#      cada checkpoint (paso-N/) y recuerda el mejor entre los que no son una costumbre (ninguna opción más del 70 % de las respuestas).
 #   3. El mejor, UNA vez en la práctica (opinión contra fórmula sola, por mes, espejo), y su GGUF ($DATA/qwen-aprende.gguf, sin cargar).
 #   4. informe.md: PASA / NO pasa con reglas fijas (futures_qwen_aprende.verdict).
 # Variables: TOTAL (4000 pasos), CHUNK (500), VALID_N (150 ejemplos), PRACTICA_N (300 miradas sin posición y 300 con posición), BALANCITA_DATA.
@@ -58,7 +59,7 @@ say "1. Qwen sin entrenar"
 "$PY" "$ROOT/ops/qwen-lora/aprende_eval.py" --mode practica --model "$MODEL" --data "$A" --max "$PRACTICA_N" --out "$OUT/base-practica.json" | tail -n 1
 
 # ---- 2. entrenar de a tramos
-done_steps=0; stale=0; prev=0; best_step=0; best_score=-1
+done_steps=0; stale=0; prev=-1000000; best_step=0; best_score=-1000000
 : > "$OUT/historia.jsonl"
 while [ "$done_steps" -lt "$TOTAL" ]; do
   resume=()
@@ -71,14 +72,14 @@ while [ "$done_steps" -lt "$TOTAL" ]; do
   cp "$AD/adapters.safetensors" "$AD/adapter_config.json" "$AD/paso-$done_steps/"
   "$PY" "$ROOT/ops/qwen-lora/aprende_eval.py" --mode valid --model "$MODEL" --data "$A" --adapter "$AD/paso-$done_steps" \
     --max "$VALID_N" --out "$AD/paso-$done_steps/valid.json" | tail -n 1
-  read -r bal habit <<< "$("$PY" -c "import json,sys; d=json.load(open(sys.argv[1])); print(d['acierto_balanceado'] or 0, d['costumbre_parte'] or 1)" "$AD/paso-$done_steps/valid.json")"
+  read -r bal habit <<< "$("$PY" -c "import json,sys; d=json.load(open(sys.argv[1])); print(d['neto_por_mirada_bp'] or 0, d['costumbre_parte'] or 1)" "$AD/paso-$done_steps/valid.json")"
   "$PY" -c "import json,sys; d=json.load(open(sys.argv[1])); d['paso']=int(sys.argv[2]); print(json.dumps(d, ensure_ascii=False))" "$AD/paso-$done_steps/valid.json" "$done_steps" >> "$OUT/historia.jsonl"
   # el mejor: más acierto balanceado entre los que no son una costumbre
   if [ "$("$PY" -c "import sys; b,h,s=map(float,sys.argv[1:]); print(int(h<=0.7 and b>s))" "$bal" "$habit" "$best_score")" = 1 ]; then best_score=$bal; best_step=$done_steps; fi
-  if [ "$("$PY" -c "import sys; print(int(float(sys.argv[1])>float(sys.argv[2])+0.005))" "$bal" "$prev")" = 1 ]; then stale=0; else stale=$((stale + 1)); fi
+  if [ "$("$PY" -c "import sys; print(int(float(sys.argv[1])>float(sys.argv[2])+0.5))" "$bal" "$prev")" = 1 ]; then stale=0; else stale=$((stale + 1)); fi
   prev=$bal
-  say "paso $done_steps: acierto balanceado $bal, parte de la opción más repetida $habit, sin mejora $stale, mejor hasta ahora: paso $best_step ($best_score)"
-  if [ "$stale" -ge 2 ]; then say "dos tramos seguidos sin mejora: corto el entrenamiento en $done_steps pasos"; break; fi
+  say "paso $done_steps: neto por mirada $bal pb, parte de la opción más repetida $habit, sin mejora $stale, mejor hasta ahora: paso $best_step ($best_score)"
+  if [ "$stale" -ge 2 ]; then say "dos tramos seguidos sin mejorar el neto: corto el entrenamiento en $done_steps pasos"; break; fi
 done
 
 # ---- 3. el mejor, una vez en la práctica
