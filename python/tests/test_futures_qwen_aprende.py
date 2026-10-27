@@ -16,6 +16,8 @@ from unittest import mock
 from test_futures_qwen_live import Policy, make
 
 CFG = qt.load_config(qt.CONFIG_PATH_LIVE)
+CFG["products"] = ["PF_XBTUSD", "PF_ETHUSD"]            # live runs ETH only; these tests cover two products
+CFG["exam"]["products"] = ["PF_XBTUSD", "PF_ETHUSD"]
 MIN = qt.MINUTE_MS
 
 
