@@ -57,7 +57,7 @@ def exam_start_ms(cfg):
     return max(qt.date_ms(practice["from"]), qt.date_ms(exam["from"]) if exam.get("from") else 0)
 
 
-def make_photos(history, cfg, product, holdout_ms, texts=True):
+def make_photos(history, cfg, product, holdout_ms, texts=True, market=None):
     """Every moment the trader would have asked Qwen while flat, with its STATE, the mirrored STATE and the price moves (bp)
     over each horizon. Only candles before the holdout are read, and a moment whose horizon would reach it is dropped.
 
@@ -65,7 +65,8 @@ def make_photos(history, cfg, product, holdout_ms, texts=True):
     every photo carries ``operacion``: the maestro and the portero at that moment and, for each side, the result of the
     version 8 operation (``_operation``).
 
-    ``texts=False`` (the formula-only test, no Qwen): the photos carry no STATE text nor sheet numbers, only the operation."""
+    ``texts=False`` (the formula-only test, no Qwen): the photos carry no STATE text nor sheet numbers, only the operation.
+    ``market`` (a list): receives the hourly closes ``[t_ms, close]`` of the exam range, to compare with what really happened."""
     practice, exam = cfg["practice"], cfg["exam"]
     start = exam_start_ms(cfg)
     horizons = [m * MINUTE_MS for m in exam["horizons_min"]]
@@ -86,6 +87,8 @@ def make_photos(history, cfg, product, holdout_ms, texts=True):
         trader.feed(bar, trade=False)
         t_ms = int(bar["bucket_start"]) + BAR_MS
         closes[t_ms] = float(bar["close"])
+        if market is not None and t_ms >= start and t_ms % qt.HOUR_MS == 0:
+            market.append([t_ms, closes[t_ms]])
         if len(trader.c) < qt.MIN_BARS:
             continue
         reasons = trader.wake_reasons(t_ms)
@@ -686,7 +689,8 @@ def _trade_list(items):
     for r, s in sorted(items, key=lambda it: it[0]["t_ms"]):
         o = _op_side(r, s)
         out.append({"producto": r["product"], "lado": s, "entrada_ms": r["t_ms"], "salida_ms": o["salida_ms"],
-                    "neto_bp": round(o["neto_bp"], 2), "motivo": o["motivo"]})
+                    "neto_bp": round(o["neto_bp"], 2), "motivo": o["motivo"], "maestro": r["operacion"]["maestro"],
+                    "portero": bool(r["operacion"]["portero_si"])})
     return out
 
 
@@ -733,13 +737,16 @@ def run_formula(history, cfg, holdout_ms, state_path, variant, *, log=print):
              "phase": "fotos", "updated_ms": started, "summary": None, "error": None, "variant": variant["id"]}
     _write_state(state_path, state)
     try:
-        photos = []
+        photos, market = [], {}
         for product in products:
             log("fórmula: leyendo las velas de {} (sin modelo)…".format(product))
-            photos += make_photos(history, cfg, product, holdout_ms, texts=False)
+            market[product] = []
+            photos += make_photos(history, cfg, product, holdout_ms, texts=False, market=market[product])
             state.update(answered=state["answered"] + 1, updated_ms=int(time.time() * 1000))
             _write_state(state_path, state)
         op = analyse_formula(photos, cfg)
+        if op is not None:
+            op["mercado"] = market                       # what the price really did: hourly closes by product
         h = cfg["exam_lean"]["decide_horizon_min"]
         state.update(state="done", summary=None if op is None else {
             "photos": op["fotos"], "horizon_min": h, "spearman": None, "spearman_ci": [None, None], "extremes_net_bp": None,

@@ -313,6 +313,7 @@ class OperationNumbersTests(unittest.TestCase):
         self.assertEqual([t["neto_bp"] for t in op["curvas"]["qwen"]], [30.0, -40.0, 50.0])
         self.assertEqual([t["lado"] for t in op["curvas"]["qwen"]], [1, -1, -1])
         self.assertEqual(op["curvas"]["qwen"][2]["motivo"], "tiempo")
+        self.assertEqual((op["curvas"]["qwen"][0]["maestro"], op["curvas"]["qwen"][0]["portero"]), (2, True))
         self.assertEqual(len(op["curvas"]["formula"]), 3)
         self.assertEqual(op["nocional_usd"], float(self.cfg["notional_usd"]))
 
@@ -395,4 +396,7 @@ class FormulaOnlyTests(unittest.TestCase):
         op = saved["summary"]["formula"]
         self.assertGreater(op["fotos"], 0)
         self.assertEqual(op["formula"]["n"], len(op["curvas"]["formula"]))
+        market = op["mercado"]["PF_XBTUSD"]
+        self.assertTrue(market)
+        self.assertTrue(all(t % qt.HOUR_MS == 0 and c > 0 for t, c in market))
         self.assertTrue(all(not p for p in [saved["summary"]["spearman"]]))

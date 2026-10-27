@@ -1,8 +1,18 @@
+import { useState } from 'react'
 import { signedAmount } from '../domain/strategy-format.ts'
 import { amount } from '../../../shared/finance/format.ts'
 
 /** One closed operation, whatever produced it (a gate run, the quick test, the formula test). */
 export type VisualTrade = {
+  /** Set when the screen has its own chart to jump to (`onPick`). */
+  id?: string
+  product?: string
+  side?: 1 | -1
+  /** The maestro at the entry (−2…+2) and the portero, when the rule has them. */
+  maestro?: number
+  portero?: boolean
+  /** `vuelta` (the maestro turned), `tiempo` (the safety limit) or free text. */
+  exit?: string
   label: string
   entryMs: number
   exitMs: number
@@ -14,6 +24,21 @@ export type VisualSeries = {
   id: string
   label: string
   trades: VisualTrade[]
+}
+
+/** The price itself over the period: hourly closes `[ms, price]`, drawn as buy and hold with the same notional. */
+export type MarketLine = {
+  id: string
+  label: string
+  points: Array<[number, number]>
+}
+
+/** Return in bp of holding from the first point, by time. */
+const marketCurve = (line: MarketLine): Array<[number, number]> => {
+  const first = line.points[0]?.[1]
+  return first
+    ? line.points.map(([t, price]) => [t, (price / first - 1) * 1e4])
+    : []
 }
 
 const COLORS = [
@@ -63,14 +88,17 @@ const PAD = { left: 8, right: 8, top: 10, bottom: 18 }
 
 function BalanceCurve({
   series,
+  market,
   notional,
 }: {
   series: VisualSeries[]
+  market: MarketLine[]
   notional: number
 }) {
   const lines = series.map((item) => curve(item.trades))
-  const points = lines.flat()
-  if (points.length === 0) return null
+  const held = market.map(marketCurve)
+  const points = [...lines.flat(), ...held.flat()]
+  if (lines.flat().length === 0) return null
   const times = points.map((p) => p[0])
   const lo = Math.min(...times)
   const hi = Math.max(...times)
@@ -99,6 +127,27 @@ function BalanceCurve({
         className="stroke-line-strong"
         strokeDasharray="3 3"
       />
+      {held.map((line, index) => {
+        if (line.length === 0) return null
+        const path = line
+          .map(
+            ([t, v], i) =>
+              `${i ? 'L' : 'M'}${x(t).toFixed(1)} ${y(v).toFixed(1)}`,
+          )
+          .join(' ')
+        return (
+          <path
+            key={market[index]!.id}
+            d={path}
+            fill="none"
+            className="stroke-warn"
+            strokeWidth={1}
+            opacity={0.8}
+          >
+            <title>{market[index]!.label}</title>
+          </path>
+        )
+      })}
       {lines.map((line, index) => {
         if (line.length === 0) return null
         const path = [[lo, 0] as [number, number], ...line]
@@ -166,9 +215,13 @@ function tradeTitle(trade: VisualTrade, notional: number) {
 function TradeBars({
   trades,
   notional,
+  picked,
+  onPick,
 }: {
   trades: VisualTrade[]
   notional: number
+  picked: VisualTrade | null
+  onPick: (trade: VisualTrade) => void
 }) {
   const sorted = [...trades].sort((a, b) => a.entryMs - b.entryMs)
   if (sorted.length === 0) return null
@@ -193,13 +246,135 @@ function TradeBars({
             y={trade.bp >= 0 ? half - h : half}
             width={width}
             height={h}
-            className={trade.bp >= 0 ? 'fill-long' : 'fill-short'}
+            role="button"
+            tabIndex={0}
+            aria-label={tradeTitle(trade, notional)}
+            aria-pressed={picked === trade}
+            onClick={() => onPick(trade)}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter' || event.key === ' ') {
+                event.preventDefault()
+                onPick(trade)
+              }
+            }}
+            className={`cursor-pointer ${trade.bp >= 0 ? 'fill-long' : 'fill-short'} ${picked === trade ? 'stroke-ink' : ''}`}
           >
             <title>{tradeTitle(trade, notional)}</title>
           </rect>
         )
       })}
     </svg>
+  )
+}
+
+const arrows = (maestro: number | undefined) =>
+  maestro == null
+    ? ''
+    : `${maestro > 0 ? '▲' : '▼'}${Math.abs(maestro) >= 2 ? (maestro > 0 ? '▲' : '▼') : ''}`
+
+const exitBadge = (trade: VisualTrade) =>
+  trade.exit === 'tiempo'
+    ? '⏱ tope'
+    : trade.exit === 'vuelta'
+      ? '↩ maestro'
+      : (trade.exit ?? '×')
+
+/** One operation as it was: the price around it, the stretch held shaded green or red, and an entry and an exit mark with why. */
+function TradeFocus({
+  trade,
+  points,
+  notional,
+}: {
+  trade: VisualTrade
+  points: Array<[number, number]>
+  notional: number
+}) {
+  const span = trade.exitMs - trade.entryMs
+  const pad = Math.max(6 * 3600000, span * 0.4)
+  const lo = trade.entryMs - pad
+  const hi = trade.exitMs + pad
+  const near = points.filter(([t]) => t >= lo && t <= hi)
+  if (near.length < 2)
+    return (
+      <p className="m-0 text-note text-ink-2">
+        Sin precios guardados para dibujar esta operación.
+      </p>
+    )
+  const priceAt = (ms: number) =>
+    near.reduce((best, p) =>
+      Math.abs(p[0] - ms) < Math.abs(best[0] - ms) ? p : best,
+    )[1]
+  const values = near.map((p) => p[1])
+  const vLo = Math.min(...values)
+  const vHi = Math.max(...values)
+  const top = 22
+  const bottom = 14
+  const x = (t: number) => 8 + ((t - lo) / (hi - lo)) * (W - 16)
+  const y = (v: number) =>
+    top + (vHi === vLo ? 0.5 : (vHi - v) / (vHi - vLo)) * (170 - top - bottom)
+  const path = near
+    .map(([t, v], i) => `${i ? 'L' : 'M'}${x(t).toFixed(1)} ${y(v).toFixed(1)}`)
+    .join(' ')
+  const win = trade.bp >= 0
+  const ex = x(trade.entryMs)
+  const xx = x(trade.exitMs)
+  const long = (trade.side ?? 1) > 0
+  return (
+    <div className="grid gap-1" data-testid="trade-focus">
+      <svg
+        viewBox={`0 0 ${W} 170`}
+        role="img"
+        aria-label={`Operación del ${WHEN.format(trade.entryMs)}`}
+        className="w-full"
+      >
+        <rect
+          x={ex}
+          y={top - 4}
+          width={Math.max(2, xx - ex)}
+          height={170 - top - bottom + 8}
+          className={win ? 'fill-long' : 'fill-short'}
+          opacity={0.18}
+        />
+        <path d={path} fill="none" className="stroke-ink" strokeWidth={1.5} />
+        <g className={long ? 'fill-long' : 'fill-short'}>
+          <path
+            d={
+              long
+                ? `M${ex} ${y(priceAt(trade.entryMs)) - 3} l-6 10 h12 z`
+                : `M${ex} ${y(priceAt(trade.entryMs)) + 3} l-6 -10 h12 z`
+            }
+          />
+        </g>
+        <text x={ex} y={12} textAnchor="middle" className="fill-ink text-hint">
+          {`${long ? 'LARGO' : 'CORTO'} ${arrows(trade.maestro)}${trade.portero == null ? '' : trade.portero ? ' ✓' : ' ✗'}`}
+        </text>
+        <circle
+          cx={xx}
+          cy={y(priceAt(trade.exitMs))}
+          r={4.5}
+          className={win ? 'fill-long' : 'fill-short'}
+        />
+        <text
+          x={xx}
+          y={12}
+          textAnchor={xx > W - 90 ? 'end' : 'middle'}
+          className="fill-ink text-hint"
+        >
+          {`${exitBadge(trade)} ${moneyText(trade.bp, notional)}`}
+        </text>
+        <text x={8} y={166} className="fill-ink-2 text-hint">
+          {WHEN.format(lo)}
+        </text>
+        <text
+          x={W - 8}
+          y={166}
+          textAnchor="end"
+          className="fill-ink-2 text-hint"
+        >
+          {WHEN.format(hi)}
+        </text>
+      </svg>
+    </div>
   )
 }
 
@@ -254,13 +429,19 @@ function TotalsBars({
  */
 export default function ResultsVisual({
   series,
+  market = [],
   notionalUsd,
   note,
+  onPick,
 }: {
   series: VisualSeries[]
+  market?: MarketLine[]
   notionalUsd: number
   note?: string
+  /** The screen has its own chart: a click on a bar goes there instead of opening the price below. */
+  onPick?: (trade: VisualTrade) => void
 }) {
+  const [picked, setPicked] = useState<VisualTrade | null>(null)
   const main = series[0]
   if (!main) return null
   const net = total(main.trades)
@@ -292,12 +473,22 @@ export default function ResultsVisual({
       </div>
       {n > 0 && (
         <>
-          <BalanceCurve series={series} notional={notionalUsd} />
-          {series.length > 1 && (
+          <BalanceCurve
+            series={series}
+            market={market}
+            notional={notionalUsd}
+          />
+          {(series.length > 1 || market.length > 0) && (
             <ul
               className="m-0 flex list-none flex-wrap gap-x-4 gap-y-1 p-0 text-note text-ink-2"
               aria-label="Leyenda de la curva"
             >
+              {market.map((line) => (
+                <li key={line.id} className="text-warn">
+                  <b aria-hidden="true">━</b>{' '}
+                  <span className="text-ink-2">{line.label}</span>
+                </li>
+              ))}
               {series.map((item, index) => (
                 <li key={item.id} className={COLORS[index % COLORS.length]}>
                   <b aria-hidden="true">{index === 0 ? '━' : '┅'}</b>{' '}
@@ -306,7 +497,25 @@ export default function ResultsVisual({
               ))}
             </ul>
           )}
-          <TradeBars trades={main.trades} notional={notionalUsd} />
+          <TradeBars
+            trades={main.trades}
+            notional={notionalUsd}
+            picked={picked}
+            onPick={(trade) => {
+              if (onPick) onPick(trade)
+              else setPicked((now) => (now === trade ? null : trade))
+            }}
+          />
+          {picked && !onPick && (
+            <TradeFocus
+              trade={picked}
+              points={
+                (market.find((line) => line.id === picked.product) ?? market[0])
+                  ?.points ?? []
+              }
+              notional={notionalUsd}
+            />
+          )}
           {series.length > 1 && (
             <TotalsBars series={series} notional={notionalUsd} />
           )}

@@ -1100,6 +1100,10 @@ export default function StrategyRunView({
               id: 'run',
               label: `Esta prueba · ${data.product}`,
               trades: data.trades.map((trade) => ({
+                id: trade.trade_id,
+                product: trade.product_id,
+                side: trade.side === 'LONG' ? (1 as const) : (-1 as const),
+                exit: trade.exit_reason ?? trade.reason_code ?? undefined,
                 label: `${trade.product_id.replace(/^PF_|USD$/g, '')} ${trade.side === 'LONG' ? 'largo' : 'corto'}`,
                 entryMs: trade.entry_time_ms,
                 exitMs: trade.exit_time_ms,
@@ -1108,11 +1112,35 @@ export default function StrategyRunView({
               })),
             },
           ]}
+          onPick={(picked) => {
+            const trade = data.trades.find((t) => t.trade_id === picked.id)
+            if (!trade) return
+            void select(trade)
+            document
+              .getElementById('run-candles')
+              ?.scrollIntoView?.({ behavior: 'smooth', block: 'center' })
+          }}
+          market={
+            data.view === 'full' && data.candles
+              ? [
+                  {
+                    id: 'mercado',
+                    label: `Mercado: ${data.product.replace(/^PF_|USD$/g, '')} comprando y manteniendo`,
+                    points: data.candles.candles.map(
+                      (candle): [number, number] => [
+                        candle.time_ms,
+                        Number(candle.close),
+                      ],
+                    ),
+                  },
+                ]
+              : []
+          }
           notionalUsd={Number(data.trades[0]?.notional_usd) || 0}
           note="Neto después de costos de cada operación de la prueba. Pasá el cursor por una marca o una barra para ver entrada, salida y motivo."
         />
       )}
-      <div className={RUN.chartCard}>
+      <div className={RUN.chartCard} id="run-candles">
         {overview && !unknownToGate && (
           <div className={RUN.tabsWrap}>
             <div className={RUN.tabs} role="group" aria-label="Tramos probados">
@@ -1449,6 +1477,11 @@ function QuickComparison({ variants }: { variants: QuickVariant[] }) {
 
 const MAIN_TRADES = (items: QuickTrade[] | undefined): VisualTrade[] =>
   (items ?? []).map((trade) => ({
+    product: trade.producto,
+    side: trade.lado,
+    maestro: trade.maestro,
+    portero: trade.portero,
+    exit: trade.motivo === 'tiempo' ? 'tiempo' : 'vuelta',
     label: `${trade.producto.replace(/^PF_|USD$/g, '')} ${trade.lado > 0 ? 'largo' : 'corto'}`,
     entryMs: trade.entrada_ms,
     exitMs: trade.salida_ms,
@@ -1482,6 +1515,13 @@ function FormulaResult({ formula }: { formula: QuickFormula }) {
       </p>
       <ResultsVisual
         series={series}
+        market={Object.entries(formula.mercado ?? {}).map(
+          ([product, points]) => ({
+            id: product,
+            label: `Mercado: ${product.replace(/^PF_|USD$/g, '')} comprando y manteniendo`,
+            points,
+          }),
+        )}
         notionalUsd={formula.nocional_usd}
         note={`Cada operación mueve ${amount(formula.nocional_usd, 0)} USD. Neto después de costos. Una posición por producto; sale cuando el maestro se da vuelta${formula.max_horas ? ` o a las ${amount(formula.max_horas, 0)} h` : ''}. Pasá el cursor por una marca o una barra para ver entrada, salida y motivo.`}
       />
