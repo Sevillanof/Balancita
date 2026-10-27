@@ -1,11 +1,23 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { groupDecisions, type DecisionRow } from './terminal-decisions.ts'
+import { DecisionChips, DecisionHead } from './DecisionGlyphs.tsx'
 import {
   DECISION_TONES,
   TERMINAL_FRAME,
 } from '../shared/design-system/terminal-styles.ts'
 
 type Filter = 'all' | 'signals'
+
+/** What a run of quiet looks is called: the old rows keep «WAIT». */
+function quietLabel(rows: DecisionRow[]): string {
+  const kinds = new Set(rows.map((r) => r.view?.kind))
+  if (kinds.has(undefined)) return 'WAIT'
+  return kinds.size === 1 && kinds.has('hold')
+    ? 'Mantiene'
+    : kinds.size === 1
+      ? 'Espera'
+      : 'Sin cambios'
+}
 
 /** Fixed-height decisions list with its own scroll, plus the selected strip. */
 export default function TerminalDecisions({
@@ -53,7 +65,9 @@ export default function TerminalDecisions({
       box.scrollTop += rowRect.bottom - boxRect.bottom
   }, [selectedId])
   const visible =
-    filter === 'signals' ? rows.filter((r) => r.action !== 'WAIT') : rows
+    filter === 'signals'
+      ? rows.filter((r) => (r.view ? r.view.relevant : r.action !== 'WAIT'))
+      : rows
   const items = groupDecisions(visible)
   return (
     <section
@@ -100,7 +114,7 @@ export default function TerminalDecisions({
         <ul
           ref={list}
           aria-label="Lista de decisiones"
-          className="m-0 min-h-30 shrink grow basis-0 list-none overflow-y-auto overscroll-contain p-0 observer-history:max-h-65"
+          className={`m-0 min-h-30 shrink grow ${embedded ? 'h-100 shrink-0 grow-0' : 'basis-0'} list-none overflow-y-auto overscroll-contain p-0 observer-history:max-h-120`}
         >
           {items.length === 0 && (
             <li className="border-t border-t-solid border-t-line py-1.5">
@@ -113,8 +127,8 @@ export default function TerminalDecisions({
                 key={item.rows[0]!.id}
                 className="border-t border-t-solid border-t-line py-1.5 text-wait-run opacity-60"
               >
-                WAIT ×{item.rows.length} · {item.rows.at(-1)!.time}–
-                {item.rows[0]!.time}
+                {quietLabel(item.rows)} ×{item.rows.length} ·{' '}
+                {item.rows.at(-1)!.time}–{item.rows[0]!.time}
               </li>
             ) : (
               <li
@@ -128,21 +142,35 @@ export default function TerminalDecisions({
                   aria-label={`Seleccionar análisis ${item.row.id}`}
                   onClick={() => onSelect(item.row.id)}
                 >
-                  <strong
-                    className={DECISION_TONES[item.row.action]}
-                    data-action={item.row.action}
-                  >
-                    {item.row.action}
-                  </strong>
-                  <span>{item.row.strategy}</span>
-                  <time>{item.row.time}</time>
-                  <small className="col-span-full line-clamp-2 text-ink-2">
-                    {item.row.reason}
-                  </small>
-                  {item.row.detail && (
-                    <small className="col-span-full line-clamp-2 text-ink-2">
-                      {item.row.detail}
-                    </small>
+                  {item.row.view ? (
+                    <>
+                      <span className="col-span-2 flex flex-wrap items-center justify-between gap-2">
+                        <DecisionHead view={item.row.view} />
+                        <time className="text-ink-2">{item.row.time}</time>
+                      </span>
+                      <span className="col-span-full">
+                        <DecisionChips view={item.row.view} />
+                      </span>
+                    </>
+                  ) : (
+                    <>
+                      <strong
+                        className={DECISION_TONES[item.row.action]}
+                        data-action={item.row.action}
+                      >
+                        {item.row.action}
+                      </strong>
+                      <span>{item.row.strategy}</span>
+                      <time>{item.row.time}</time>
+                      <small className="col-span-full line-clamp-2 text-ink-2">
+                        {item.row.reason}
+                      </small>
+                      {item.row.detail && (
+                        <small className="col-span-full line-clamp-2 text-ink-2">
+                          {item.row.detail}
+                        </small>
+                      )}
+                    </>
                   )}
                 </button>
               </li>

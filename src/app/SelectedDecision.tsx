@@ -1,3 +1,5 @@
+import { DecisionChips, DecisionHead } from './DecisionGlyphs.tsx'
+import { decisionView } from './terminal-decision-view.ts'
 import { record } from '../shared/wire/decode.ts'
 import {
   DECISION_TONES,
@@ -26,19 +28,41 @@ export default function SelectedDecision({
 }) {
   const selector = record(analysis.selector)
   const proposals = Array.isArray(analysis.proposals) ? analysis.proposals : []
+  const visual =
+    typeof analysis.formula_action === 'string' && analysis.formula_action
   return (
     <div aria-label="Decisión seleccionada">
-      <p>
-        <strong
-          className={DECISION_TONES[analysisAction(analysis)]}
-          data-action={analysisAction(analysis)}
-        >
-          {analysisAction(analysis)}
-        </strong>{' '}
-        · {strategyLabel(selector.strategy_id ?? analysis.selected_strategy_id)}
-      </p>
-      <p>{reason}</p>
-      {typeof analysis.qwen_probabilities === 'string' &&
+      {visual ? (
+        <div className="grid gap-1.5">
+          <p className="m-0 flex flex-wrap items-center justify-between gap-2">
+            <DecisionHead view={decisionView(analysis)} />
+            <small>{time}</small>
+          </p>
+          <DecisionChips view={decisionView(analysis)} />
+          <details>
+            <summary>Por qué</summary>
+            <p>{reason}</p>
+          </details>
+        </div>
+      ) : (
+        <>
+          <p>
+            <strong
+              className={DECISION_TONES[analysisAction(analysis)]}
+              data-action={analysisAction(analysis)}
+            >
+              {analysisAction(analysis)}
+            </strong>{' '}
+            ·{' '}
+            {strategyLabel(
+              selector.strategy_id ?? analysis.selected_strategy_id,
+            )}
+          </p>
+          <p>{reason}</p>
+        </>
+      )}
+      {!visual &&
+        typeof analysis.qwen_probabilities === 'string' &&
         analysis.qwen_probabilities.length > 0 && (
           <p>
             <small data-testid="qwen-probabilities">
@@ -51,9 +75,11 @@ export default function SelectedDecision({
           <small>{note}</small>
         </p>
       ))}
-      <p>
-        <small>{time}</small>
-      </p>
+      {!visual && (
+        <p>
+          <small>{time}</small>
+        </p>
+      )}
       <details>
         <summary>Propuestas, condiciones e ID</summary>
         <p>

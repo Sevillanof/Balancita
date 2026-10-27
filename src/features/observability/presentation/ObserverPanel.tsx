@@ -322,6 +322,7 @@ export default function ObserverPanel({
   connectedAtMs,
   clock,
   localNowMs,
+  glance,
   children,
 }: {
   product: string | null
@@ -336,6 +337,8 @@ export default function ObserverPanel({
   clock: GatewayClock | null
   /** This browser's clock, ticking: the staleness of every evidence. */
   localNowMs: number
+  /** The at-a-glance strip (position, last look); shown first, outside the folded detail. */
+  glance?: ReactNode
   /** The decisions history the Terminal already renders. */
   children?: ReactNode
 }) {
@@ -374,6 +377,7 @@ export default function ObserverPanel({
           ))}
         </div>
       </div>
+      {glance}
       <Now
         report={current}
         health={health}
@@ -397,9 +401,7 @@ export default function ObserverPanel({
           />
         )}
         {current ? (
-          <>
-            <Results report={current} />
-          </>
+          <Results report={current} />
         ) : (
           error === null && <DataState kind="loading" />
         )}

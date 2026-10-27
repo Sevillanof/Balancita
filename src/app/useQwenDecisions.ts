@@ -69,6 +69,13 @@ export function qwenAnalyses(payload: unknown): Record<string, unknown>[] {
       confidence: row.confidence,
       qwen_why: waitReason(row),
       qwen_probabilities: probabilitiesText(row.probabilities),
+      // Version 9: what the formulas decided and Qwen's opinion next to it.
+      formula_action: row.formula_action,
+      formula: row.formula,
+      model_action: row.model_action,
+      p_action: row.p_action,
+      opinion_agrees: row.opinion_agrees,
+      opinion_error: row.opinion_error,
     }))
   return [...decided, ...skipped].sort(
     (a, b) => Number(a.decision_time_ms) - Number(b.decision_time_ms),

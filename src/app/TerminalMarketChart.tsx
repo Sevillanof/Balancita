@@ -9,6 +9,7 @@ import type { TerminalBootstrap } from '../features/connected-trading/infrastruc
 import { strategyCode } from '../features/trading-view/domain/terminal-chart-model.ts'
 import { record } from '../shared/wire/decode.ts'
 import { candleForDecision, markerGap } from './terminal-markers.ts'
+import { decisionView } from './terminal-decision-view.ts'
 import { analysisAction } from './terminal-labels.ts'
 import { QWEN_STRATEGY_ID } from './useQwenDecisions.ts'
 
@@ -111,6 +112,59 @@ export default function TerminalMarketChart({
                 : action === 'SHORT'
                   ? 'short'
                   : undefined
+            // Version 9 (formulas decide, Qwen opines): few words, and a mark
+            // for each thing worth seeing. Quiet holds paint nothing.
+            if (typeof analysis.formula_action === 'string') {
+              const view = decisionView(analysis)
+              const out: ApprovedTerminalMarker[] = []
+              if (view.kind === 'exit')
+                out.push({
+                  id,
+                  time: renderTime,
+                  type: 'exit',
+                  label: 'Sale',
+                  detail: 'Sale: el maestro se dio vuelta en contra',
+                })
+              else if (
+                view.kind === 'enter-long' ||
+                view.kind === 'enter-short'
+              )
+                out.push({
+                  id,
+                  time: renderTime,
+                  type: 'proposal',
+                  direction: view.kind === 'enter-long' ? 'long' : 'short',
+                  label: view.label,
+                  detail: `${view.label}: maestro fuerte y portero a favor`,
+                })
+              else if (view.kind === 'blocked')
+                out.push({
+                  id,
+                  time: renderTime,
+                  type: 'discard',
+                  label: 'Portero ✕',
+                  detail:
+                    'El maestro vio señal, pero el portero frenó la entrada',
+                })
+              else if (view.kind === 'wait')
+                out.push({
+                  id,
+                  time: renderTime,
+                  type: 'wait',
+                  label: 'W',
+                  detail: 'Espera',
+                })
+              if (view.opinion?.state === 'differs')
+                out.push({
+                  id: `${id}#q`,
+                  memberIds: [id],
+                  time: renderTime,
+                  type: 'discard',
+                  label: 'Qwen ≠',
+                  detail: `Qwen opina ${view.opinion.label}, distinto de la fórmula`,
+                })
+              return out
+            }
             // Qwen closing its own position: a close mark, not a wait.
             if (action === 'CLOSE') {
               const closing: ApprovedTerminalMarker = {
