@@ -19,6 +19,20 @@ Fran (27-oct 13:38): «Me gusta, armémoslo así». En vez de entrenar al adapta
 - El adaptador v2 (7.600 pasos) no se aplica en vivo: la ficha corta es otro texto. `LLAMA_LORA` puede quedar en `.env.local`;
   llama-server lo carga con escala 0 y nadie lo pide.
 
+## Destilación: Qwen aprende a LEER la ficha (28-oct-2026)
+
+Fran: «que esta vez pueda aprender algo». Ningún modelo (ni uno clásico con los mismos números) le gana a la fórmula en los meses que
+no vio, así que la etiqueta es la **decisión de la fórmula en vigor** (LARGO / CORTO / ESPERAR sin posición, CERRAR / MANTENER con
+posición), que se deduce del texto de la ficha. El control de que no repite una costumbre es el **espejo**. Diseño y criterios:
+`analisis/qwen-entrenamiento-historico/informe.md` (sección 5). Código: `futures_qwen_destila` (`facts`, `ajustar`, `armar`, `informe`),
+`ops/qwen-lora/destila_eval.py`, `destila_noche.py` y `destila-noche.sh` (un solo comando: piloto de 250 pasos que corta solo si el
+espejo no pasa de 50 %, y si pasa sigue hasta 2.000 pasos o 2 h 30; deja el adaptador sin activar en vivo).
+
+Dataset (solo ETH, tope 36 h, fórmulas de cada trimestre ajustadas con BTC+ETH hasta 48 h antes, sin mirar atrás): entrenamiento
+2023-01 → 2025-07, validación 2025-08/09 (embargo 36 h), práctica 2025-10-16 → 2026-04-18 con el par en vivo. Cupo del 15 % por
+trimestre. Cada ficha sin posición se juzga como si no hubiera posición (hay muchas más miradas con entrada que operaciones). Criterios
+fijos: PASA con acuerdo ≥ 85 %, espejo ≥ 90 %, ninguna respuesta > 70 %. Nada se activa en vivo sin otro Sí de Fran.
+
 ## Qué aprende
 
 **El veredicto del maestro de operación** (dataset v3, Fran 27-oct: «quiero que Qwen aprenda cuándo entrar y cuándo salir, que
