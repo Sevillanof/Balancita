@@ -165,8 +165,8 @@ class ReportTests(unittest.TestCase):
 class ExitTests(unittest.TestCase):
     def test_without_a_time_limit_the_trade_lasts_until_the_maestro_turns_and_never_turning_is_not_measurable(self):
         from balancita_engine import futures_qwen_trader_exam as ex
-        cfg = dict(CFG)
-        self.assertIsNone(cfg["guardrails"]["max_hold_min"])
+        self.assertEqual(CFG["guardrails"]["max_hold_min"], 2160)           # the live safety net: 36 h
+        cfg = dict(CFG, guardrails=dict(CFG["guardrails"], max_hold_min=None))
         t0 = 1000 * 15 * MIN
         scores = [0.5] * 600 + [-0.5] * 5                                   # up for 150 hours, then it turns (a long leaves)
         readings = {t0 + k * 15 * MIN: {"puntaje": s} for k, s in enumerate(scores)}
@@ -175,9 +175,9 @@ class ExitTests(unittest.TestCase):
         self.assertEqual((out["motivo"], out["horas"]), ("vuelta", 150.0))
         self.assertAlmostEqual(out["neto_bp"], 300.0 - 10.0, places=6)
         self.assertIsNone(ex._v8_exit(cfg, t0 + 601 * 15 * MIN, -1, readings, closes, 10.0, 0.11))    # the maestro never turned afterwards
-        with_limit = dict(cfg, guardrails=dict(cfg["guardrails"], max_hold_min=2880))
-        out = ex._v8_exit(with_limit, t0, 1, readings, closes, 10.0, 0.11)                             # the old v8 rule still works
-        self.assertEqual((out["motivo"], out["horas"]), ("tiempo", 48.0))
+        with_limit = dict(cfg, guardrails=dict(cfg["guardrails"], max_hold_min=2160))
+        out = ex._v8_exit(with_limit, t0, 1, readings, closes, 10.0, 0.11)                             # the 36 h safety net
+        self.assertEqual((out["motivo"], out["horas"]), ("tiempo", 36.0))
 
 
 class PositionBalanceTests(unittest.TestCase):

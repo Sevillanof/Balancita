@@ -39,7 +39,7 @@ class SheetTests(unittest.TestCase):
             self.assertIn("CONVIENE ENTRAR", text)                    # «CONVIENE ENTRAR» or «NO CONVIENE ENTRAR»
             self.assertRegex(text, r"Volatilidad: (ALTA|NORMAL|BAJA)")
             self.assertRegex(text, r"Maestro[^\n]*: (SUBE FUERTE|SUBE FLOJO|NADA CLARO|BAJA FLOJO|BAJA FUERTE) \(puntaje")
-            self.assertIn("sin stop automático; sin límite de tiempo", text)
+            self.assertIn("sin stop automático; cierre obligatorio a las 36 h", text)
             self.assertIn("Costo de entrar y salir", text)
             self.assertNotIn("F1 ", text)
             self.assertNotIn("Ficha de 8", text)
@@ -86,11 +86,11 @@ class SheetTests(unittest.TestCase):
             self.assertRegex(text, r"4\. Posición: LARGO abierta hace \d+ min|4\. Posición: LARGO abierta hace \d+ h")
             self.assertIn("Resultado si cerrás ahora, ya con todos los costos:", text)
             self.assertRegex(text, r"El maestro ahora (va a favor de la posición|va EN CONTRA de la posición \((flojo|fuerte)\)|no dice nada claro)\.")
-            self.assertNotIn("Cierre obligatorio", text)                 # version 9: no time limit
+            self.assertIn("Cierre obligatorio dentro de", text)         # version 9: 36 h safety net
             self.assertIn("Portero (solo cuenta para entrar)", text)
         trades = env.rows("SELECT * FROM trades WHERE status='open'")
         self.assertEqual(len(trades), 2)
-        self.assertTrue(all(t["stop_px"] is None and t["max_hold_ms"] is None for t in trades))
+        self.assertTrue(all(t["stop_px"] is None and t["max_hold_ms"] == 2160 * MIN for t in trades))
 
 
 class IncompleteDataTests(unittest.TestCase):
