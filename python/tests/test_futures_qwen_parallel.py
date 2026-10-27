@@ -19,6 +19,7 @@ from balancita_engine import futures_qwen_trader_exam as ex
 from test_futures_qwen_exam import cfg3
 from test_futures_qwen_factors import LINE_OK, ChatProvider, completion
 from test_futures_qwen_trader import HOLDOUT, MemHistory
+from legacy_variants import restore_variants, use_legacy_variants
 
 
 def values_of(text):
@@ -29,6 +30,14 @@ def values_of(text):
 
 def script(body):
     return completion(values_of(body["messages"][-1]["content"]))
+
+
+def setUpModule():
+    use_legacy_variants()
+
+
+def tearDownModule():
+    restore_variants()
 
 
 class OverlapProvider(ChatProvider):

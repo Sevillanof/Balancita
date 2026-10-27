@@ -1,0 +1,159 @@
+{
+  "schema": "balancita-qwen-quick-variants.v1",
+  "note": "Variantes candidatas de Qwen para la Prueba rápida (/Estrategias > Qwen en vivo). Cada una es una versión aparte: su propia base y su propio estado, sin heredar resultados. Las fotos son las mismas para todas (misma semilla), así que los números se pueden comparar. Qwen en vivo NO cambia con esto: solo cambia lo que se le pregunta a la prueba. La variante «actual» corre la configuración de Qwen en vivo tal cual (base «live», con sus propias fotos); las demás se aplican sobre la v3 y comparten sus fotos. 'prompt' reemplaza partes de qwen-trader-v3.json (system y/o la pregunta 'flat'); 'kind' factors (ficha) además pone el estado en 8 renglones y hace la pregunta por factores con gradiente (ver futures_qwen_factors.py); Por pedido de Fran (25-oct) no hay variantes de modelo: se usa el que ya tiene Qwen en vivo. (El código admite 'model', pero no se usa.)",
+  "variants": [
+    {
+      "id": "actual",
+      "label": "Actual (Qwen en vivo)",
+      "kind": "control",
+      "base": "live",
+      "note": "Lo que pregunta Qwen en vivo hoy (config/qwen-live.json): la ficha de 8 factores con la pregunta por factores, real y espejo, con otros activos y posicionamiento. Es la misma pregunta que contesta el Examen de 2000 fotos (`exam --version live`). Sus fotos se arman con las reglas de despertar de Qwen en vivo (una cada 15 minutos), así que no son las mismas que las de las otras variantes, que usan las de la v3: la comparación con ellas es orientativa."
+    },
+    {
+      "id": "p1-direccion",
+      "label": "Pregunta directa: ¿sube o baja a 4 h?",
+      "kind": "prompt",
+      "prompt_version": 4.1,
+      "note": "Sin ESPERAR ni aviso de costos: solo dirección a 4 h, que es lo que mide el Examen.",
+      "prompt": {
+        "flat": {
+          "id": "trader_flat_direccion",
+          "version": 4.1,
+          "type": "choice",
+          "instruction": "Con el estado de abajo, ¿dentro de 4 horas es más probable que el precio esté más alto o más bajo que ahora? Elegí siempre una de las dos, aunque la diferencia sea chica.",
+          "options": [
+            { "id": "LARGO", "description": "más alto dentro de 4 horas" },
+            { "id": "CORTO", "description": "más bajo dentro de 4 horas" }
+          ]
+        }
+      }
+    },
+    {
+      "id": "p2-horizonte",
+      "label": "Con horizonte de 4 h y ESPERAR",
+      "kind": "prompt",
+      "prompt_version": 4.2,
+      "note": "Mantiene ESPERAR y el costo, pero dice el plazo: la posición se cierra a las 4 horas, no antes.",
+      "prompt": {
+        "flat": {
+          "id": "trader_flat_horizonte",
+          "version": 4.2,
+          "type": "choice",
+          "instruction": "No tenés ninguna posición. Si abrís una ahora, se cierra sola a las 4 horas (no podés cerrarla antes). Entrar y salir cuesta ~{cost} % del tamaño. Con el estado de abajo, ¿qué hacés? Abrí solo si esperás que el precio dentro de 4 horas se mueva claramente a tu favor; si no, esperá.",
+          "options": [
+            {
+              "id": "LARGO",
+              "description": "abrir una posición larga (apostás a que dentro de 4 horas está más alto)"
+            },
+            {
+              "id": "CORTO",
+              "description": "abrir una posición corta (apostás a que dentro de 4 horas está más bajo)"
+            },
+            { "id": "ESPERAR", "description": "no operar ahora" }
+          ]
+        }
+      }
+    },
+    {
+      "id": "p3-reversion",
+      "label": "Con pistas de reversión",
+      "kind": "prompt",
+      "prompt_version": 4.3,
+      "note": "Dirección a 4 h con una regla empírica de mercado en el sistema: tras movimientos fuertes y volumen alto el precio suele devolver parte; con tendencia suave suele seguir. Si Qwen la aplica al revés, la correlación sale negativa y se ve.",
+      "prompt": {
+        "system": "Sos un analista cuantitativo de futuros perpetuos de criptomonedas (papel, sin dinero real). Regla empírica: a 4 horas, después de un movimiento brusco con volumen muy alto y precio pegado al máximo o mínimo de 24 horas, el precio suele devolver parte del movimiento; con una tendencia suave y sostenida, suele seguir. Respondé con exactamente una letra de opción y nada más.",
+        "flat": {
+          "id": "trader_flat_reversion",
+          "version": 4.3,
+          "type": "choice",
+          "instruction": "Con el estado de abajo y la regla empírica, ¿dentro de 4 horas es más probable que el precio esté más alto o más bajo que ahora? Elegí siempre una de las dos.",
+          "options": [
+            { "id": "LARGO", "description": "más alto dentro de 4 horas" },
+            { "id": "CORTO", "description": "más bajo dentro de 4 horas" }
+          ]
+        }
+      }
+    },
+    {
+      "id": "e123-contexto",
+      "label": "Dirección pura + contexto (otros activos, hora, volatilidad)",
+      "kind": "state",
+      "prompt_version": 5.1,
+      "note": "La pregunta de p1-direccion con tres datos extra en el estado: retornos de ETH y SOL y fuerza relativa de BTC, hora y día (sesión), y forma del rango de 24 h. Mismas fotos que p1-direccion, así que se compara directo.",
+      "prompt": {
+        "flat": {
+          "id": "trader_flat_direccion",
+          "version": 4.1,
+          "type": "choice",
+          "instruction": "Con el estado de abajo, ¿dentro de 4 horas es más probable que el precio esté más alto o más bajo que ahora? Elegí siempre una de las dos, aunque la diferencia sea chica.",
+          "options": [
+            { "id": "LARGO", "description": "más alto dentro de 4 horas" },
+            { "id": "CORTO", "description": "más bajo dentro de 4 horas" }
+          ]
+        }
+      },
+      "state_extras": ["otros_activos", "hora", "volatilidad"],
+      "state_context": ["PF_ETHUSD", "PF_SOLUSD"]
+    },
+    {
+      "id": "ficha",
+      "label": "Ficha de 8 factores con gradiente",
+      "kind": "factors",
+      "prompt_version": 6.2,
+      "note": "El estado se reordena en una ficha de 8 renglones numerados (tendencia, impulso, rango, área de valor, volumen y volatilidad, posicionamiento y prima, otros activos, momento) y Qwen da UN gradiente de -2 a +2 por renglón en una sola línea con formato fijo. La suma de los 6 votantes (F1, F2, F3, F4, F6 y F7; F5 y F8 no votan) sobre 12 es la inclinación; el espejo se hace renglón por renglón y dice cuáles vota Qwen y cuáles lee (la tabla «Lectura por renglón» separa «no vota», «lee», «sesgado», «no lee» y «a medias»). La pregunta ya no trae una línea de ejemplo con valores (versión 6: Qwen la copiaba en 127 de 150 fotos); la gramática fija el formato. 2 llamadas por foto (real y espejo). Mismas fotos que las demás variantes. El renglón F6 lee la base del colector de posicionamiento en solo lectura; si no está, dice n/d.",
+      "prompt": {
+        "system": "Sos un operador de futuros perpetuos en papel (sin dinero real). Respondé con exactamente una línea con el formato que se pide y nada más."
+      },
+      "factors": {
+        "question": "Mirá los factores F1 a F8 en ese orden. Para cada uno decí hacia dónde empuja el precio en las próximas 4 horas: -2 baja fuerte, -1 baja, 0 no empuja, +1 sube, +2 sube fuerte. Todo renglón con datos tiene que votar según sus números; 0 es solo para un renglón que dice n/d o cuyos números están en el medio. F5 y F8 no votan: ponele 0. Respondé con una sola línea con los ocho valores en orden, cada uno con su signo, sin ejemplos ni explicaciones."
+      },
+      "state_ficha": true,
+      "state_context": ["PF_ETHUSD", "PF_SOLUSD"]
+    },
+    {
+      "id": "ficha-prefijo",
+      "label": "Ficha de 8 factores, texto fijo primero",
+      "kind": "factors",
+      "prompt_version": 6.4,
+      "note": "La misma ficha, los mismos hechos y cifras, el mismo espejo y el mismo F8, pero con todo el texto fijo (leyenda de F1 a F8, costos y reglas) al principio y los datos de la foto al final. Así llama-server reutiliza el prefijo en memoria de una foto a la siguiente y trabaja menos la GPU. Mide si el orden cambia lo que Qwen lee.",
+      "prompt": {
+        "system": "Sos un operador de futuros perpetuos en papel (sin dinero real). Respondé con exactamente una línea con el formato que se pide y nada más."
+      },
+      "factors": {
+        "question": "Mirá los factores F1 a F8 en ese orden. Para cada uno decí hacia dónde empuja el precio en las próximas 4 horas: -2 baja fuerte, -1 baja, 0 no empuja, +1 sube, +2 sube fuerte. Todo renglón con datos tiene que votar según sus números; 0 es solo para un renglón que dice n/d o cuyos números están en el medio. F5 y F8 no votan: ponele 0. Respondé con una sola línea con los ocho valores en orden, cada uno con su signo, sin ejemplos ni explicaciones."
+      },
+      "state_ficha": true,
+      "state_context": ["PF_ETHUSD", "PF_SOLUSD"],
+      "state_ficha_layout": "prefijo"
+    },
+    {
+      "id": "ficha-pista",
+      "label": "Ficha de 8 factores con pista de reversión",
+      "kind": "factors",
+      "prompt_version": 6.3,
+      "note": "La misma ficha y la misma pregunta por factores, con la pista de reversión de «Con pistas de reversión» en el sistema. Comparada con «Ficha de 8 factores con gradiente» mide si la pista cambia lo que Qwen lee.",
+      "prompt": {
+        "system": "Sos un analista cuantitativo de futuros perpetuos de criptomonedas (papel, sin dinero real). Regla empírica: a 4 horas, después de un movimiento brusco con volumen muy alto y precio pegado al máximo o mínimo de 24 horas, el precio suele devolver parte del movimiento; con una tendencia suave y sostenida, suele seguir. Respondé con exactamente una línea con el formato que se pide y nada más."
+      },
+      "factors": {
+        "question": "Mirá los factores F1 a F8 en ese orden. Para cada uno decí hacia dónde empuja el precio en las próximas 4 horas: -2 baja fuerte, -1 baja, 0 no empuja, +1 sube, +2 sube fuerte. Todo renglón con datos tiene que votar según sus números; 0 es solo para un renglón que dice n/d o cuyos números están en el medio. F5 y F8 no votan: ponele 0. Respondé con una sola línea con los ocho valores en orden, cada uno con su signo, sin ejemplos ni explicaciones."
+      },
+      "state_ficha": true,
+      "state_context": ["PF_ETHUSD", "PF_SOLUSD"]
+    },
+    {
+      "id": "memoria",
+      "label": "Actual + memoria de casos",
+      "kind": "memory",
+      "base": "live",
+      "prompt_version": 6.1,
+      "memory": {
+        "k": 8,
+        "horizon_min": 240,
+        "min_cases": 5,
+        "library_step_h": 1
+      },
+      "note": "Lo mismo que Qwen en vivo (la ficha de 8 factores, real y espejo) más un renglón al final: cómo terminaron las 8 situaciones más parecidas del pasado a 4 h (cuántas subieron, cuántas bajaron, movimiento mediano). Los casos salen de las fotos del mismo examen, solo los que ya estaban resueltos en el momento de la foto (estrictamente anteriores, con el plazo cumplido) y separados por al menos 4 h entre sí. El espejo ve los mismos casos con el resultado dado vuelta. Qwen en vivo NO cambia con esto."
+    }
+  ]
+}
