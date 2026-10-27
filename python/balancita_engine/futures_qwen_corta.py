@@ -84,6 +84,29 @@ def readings(trader, t_ms, f=None):
             "sigma24": trader._sigma5() * math.sqrt(qt.H24), "range24": f["range24"], "range7": f["range7"]}
 
 
+def formula_action(r, side):
+    """Lo que deciden las fórmulas (versión 9). ``r``: ``readings``. ``side``: 1 / -1 si hay posición abierta (largo / corto),
+    ``None`` si no. Sin posición: ``LARGO`` / ``CORTO`` cuando el maestro dice FUERTE y el portero dice que conviene entrar (del lado
+    del maestro); si no, ``ESPERAR``. Con posición: ``CERRAR`` cuando el maestro se da vuelta en contra, al menos flojo; si no,
+    ``MANTENER`` (el cierre a las 48 h es una regla fija del operador, no de las fórmulas). Devuelve ``(acción, motivo)``."""
+    v = r["veredicto"]
+    if side is None:
+        if abs(v) == 2 and r["portero_si"]:
+            return ("LARGO" if v > 0 else "CORTO"), "maestro fuerte y portero a favor"
+        if abs(v) < 2:
+            return "ESPERAR", "el maestro no está fuerte"
+        return "ESPERAR", "el portero dice que no conviene"
+    if side * v <= -1:
+        return "CERRAR", "el maestro se dio vuelta en contra"
+    return "MANTENER", "el maestro no se dio vuelta"
+
+
+def formula_json(r, why):
+    """Lo que las fórmulas vieron y por qué decidieron, para guardarlo junto a la decisión (y al ejemplo de entrenamiento)."""
+    return {"maestro": r["veredicto"], "puntaje": round(r["puntaje"], 6), "portero_si": bool(r["portero_si"]),
+            "portero_p": round(r["portero_p"], 6), "volatilidad": r["volatilidad"], "motivo": why}
+
+
 def lines(trader, t_ms, sg, reasons):
     """Los renglones de la ficha corta (orientación real con ``sg`` = 1, espejo con -1), sin la cola de reglas y posición."""
     teacher, keeper = formulas(trader.cfg)

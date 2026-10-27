@@ -243,3 +243,42 @@ describe('the reading of each line of the sheet', () => {
     ).not.toContain('F1')
   })
 })
+
+describe('waitReason with the formulas deciding (version 9)', () => {
+  const base = {
+    chosen: 'LARGO',
+    formula_action: 'LARGO',
+    formula: { motivo: 'maestro fuerte y portero a favor' },
+  }
+  it('says who decided and what Qwen thinks next to it', () => {
+    expect(
+      waitReason({
+        ...base,
+        model_action: 'LARGO',
+        p_action: 0.71,
+        opinion_agrees: 1,
+      }),
+    ).toBe(
+      'Decidió la fórmula: entrar largo (maestro fuerte y portero a favor). Qwen opina: entrar largo (71 %). Coincide con la fórmula.',
+    )
+    expect(
+      waitReason({
+        chosen: 'ESPERAR',
+        formula_action: 'ESPERAR',
+        formula: { motivo: 'el maestro no está fuerte' },
+        model_action: 'CORTO',
+        p_action: 0.5,
+        opinion_agrees: 0,
+      }),
+    ).toContain('No coincide con la fórmula.')
+  })
+  it('says there is no opinion when the model did not answer', () => {
+    expect(
+      waitReason({
+        ...base,
+        model_action: null,
+        opinion_error: 'modelo_caido',
+      }),
+    ).toContain('Qwen no dio opinión esta vez (modelo caido).')
+  })
+})

@@ -195,7 +195,11 @@ CREATE TABLE IF NOT EXISTS decisions(
   state_text TEXT, state_hash TEXT, latency_ms INTEGER, threshold REAL, prompt_version TEXT, prompt_hash TEXT, model TEXT,
   config_hash TEXT, position_json TEXT, net_bp_now REAL, trade_no INTEGER,
   lean REAL, lean_m REAL, lean_num REAL, score REAL, best_score REAL, look_n INTEGER, mirror_ok INTEGER, factors_json TEXT,
+  formula_action TEXT, formula_json TEXT, opinion_agrees INTEGER, opinion_error TEXT,
   PRIMARY KEY(product, bucket_ms));
+CREATE TABLE IF NOT EXISTS examples(
+  product TEXT NOT NULL, bucket_ms INTEGER NOT NULL, t_ms INTEGER NOT NULL, kind TEXT NOT NULL, label TEXT NOT NULL,
+  label_json TEXT NOT NULL, resolved_ms INTEGER NOT NULL, PRIMARY KEY(product, bucket_ms));
 CREATE TABLE IF NOT EXISTS skipped(
   product TEXT NOT NULL, bucket_ms INTEGER NOT NULL, t_ms INTEGER NOT NULL, at_ms INTEGER NOT NULL, reason TEXT NOT NULL,
   detail TEXT, wake_json TEXT, PRIMARY KEY(product, bucket_ms));
@@ -216,7 +220,8 @@ CREATE TABLE IF NOT EXISTS trader_state(
 
 _ADDED_COLUMNS = {
     "decisions": (("lean", "REAL"), ("lean_m", "REAL"), ("lean_num", "REAL"), ("score", "REAL"), ("best_score", "REAL"),
-                  ("look_n", "INTEGER"), ("mirror_ok", "INTEGER"), ("factors_json", "TEXT")),
+                  ("look_n", "INTEGER"), ("mirror_ok", "INTEGER"), ("factors_json", "TEXT"),
+                  ("formula_action", "TEXT"), ("formula_json", "TEXT"), ("opinion_agrees", "INTEGER"), ("opinion_error", "TEXT")),
     "trader_state": (("window_json", "TEXT"),),
 }
 
@@ -334,8 +339,9 @@ class LiveStore:
             "INSERT OR IGNORE INTO decisions(product, bucket_ms, t_ms, decided_at_ms, kind, action, model_action, p_action, "
             "confidence, probs_json, orders_json, override, reason, reason_json, mirror_action, mirror_p, wake_json, state_text, "
             "state_hash, latency_ms, threshold, prompt_version, prompt_hash, model, config_hash, position_json, net_bp_now, "
-            "trade_no, lean, lean_m, lean_num, score, best_score, look_n, mirror_ok, factors_json) "
-            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "trade_no, lean, lean_m, lean_num, score, best_score, look_n, mirror_ok, factors_json, formula_action, formula_json, "
+            "opinion_agrees, opinion_error) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (product, event["t_ms"] - BUCKET_MS, event["t_ms"], now_ms, event["kind"], event["action"],
              event.get("model_action"), event.get("p_action"), answer.get("confidence"),
              json.dumps(answer.get("probabilities")), json.dumps(orders), event.get("override"), event.get("reason"),
@@ -345,7 +351,9 @@ class LiveStore:
              json.dumps(event.get("position")), event.get("net_bp_now"), event.get("trade_no"), event.get("lean"),
              event.get("lean_m"), event.get("lean_num"), event.get("score"), event.get("best_score"), event.get("look_n"),
              None if event.get("mirror_ok") is None else int(event["mirror_ok"]),
-             None if not event.get("factors") else json.dumps(event["factors"])))
+             None if not event.get("factors") else json.dumps(event["factors"]), event.get("formula_action"),
+             None if not event.get("formula") else json.dumps(event["formula"]),
+             None if event.get("opinion_agrees") is None else int(event["opinion_agrees"]), event.get("opinion_error")))
 
     def put_skipped(self, product, t_ms, kind, detail, wake, now_ms):
         self.db.execute("INSERT OR IGNORE INTO skipped VALUES(?,?,?,?,?,?,?)",
@@ -826,28 +834,41 @@ class LiveOperator:
                     self.log("{} {}: despertar omitido ({}); no se reintenta.".format(
                         _hhmm(event["t_ms"]), product, SKIP_TEXT.get(event["kind"], event["kind"])))
                 elif kind == "decision":
-                    if event.get("answer") is None:               # DecisionError: the model gave nothing usable
+                    if event.get("answer") is None and not event.get("formula_action"):   # DecisionError: nothing usable
                         self.store.put_skipped(product, event["t_ms"], "sin_respuesta", SKIP_TEXT["sin_respuesta"],
                                                event["wake"], now)
                         self.log("{} {}: despertar omitido ({}); no se reintenta.".format(
                             _hhmm(event["t_ms"]), product, SKIP_TEXT["sin_respuesta"]))
                         continue
                     self.store.put_decision(product, event, meta, now)
-                    self.log("{} {}: {}{} (p {:.2f}, confianza {:.2f}){}".format(
-                        _hhmm(event["t_ms"]), product, event["action"],
-                        "" if event["action"] == event.get("model_action") or not event.get("model_action")
-                        else " [el modelo dijo {}]".format(event["model_action"]),
-                        event.get("p_action") or 0.0, event["answer"]["confidence"],
-                        " — entró en la mejor ocasión de la ventana (puntaje {:.3f}, chequeo {})".format(
-                            event["score"], event["look_n"]) if event.get("forced")
-                        else " — mirando la mejor ocasión (chequeo {}: puntaje {:.3f}, mejor {:.3f}, espejo {})".format(
-                            event["look_n"], event["score"], event["best_score"], "coincide" if event["mirror_ok"] else "no coincide")
-                        if event.get("override") == "ventana_mirando"
-                        else "" if not event.get("override") else " — sin operar: " + str(event["override"])))
+                    self.log(self._decision_line(product, event))
             position = trader.position
             if position is not None:
                 self._write_open(product, trader, position, t_ms, now)
             self.store.save_state(product, trader, t_ms - BAR_MS, now)
+
+    @staticmethod
+    def _decision_line(product, event):
+        """One log line per decision. Version 9 (the formulas decide): the formula's action, why, and what Qwen thinks."""
+        head = "{} {}".format(_hhmm(event["t_ms"]), product)
+        if event.get("formula_action"):
+            opinion = event.get("model_action")
+            return "{}: {} (fórmulas: {}) — Qwen opina {}{}".format(
+                head, event["action"], event["formula"]["motivo"],
+                "nada (" + str(event.get("opinion_error")) + ")" if opinion is None else
+                "{} (p {:.2f})".format(opinion, event.get("p_action") or 0.0),
+                "" if opinion is None else " y coincide" if event.get("opinion_agrees") else " y no coincide")
+        return "{}: {}{} (p {:.2f}, confianza {:.2f}){}".format(
+            head, event["action"],
+            "" if event["action"] == event.get("model_action") or not event.get("model_action")
+            else " [el modelo dijo {}]".format(event["model_action"]),
+            event.get("p_action") or 0.0, event["answer"]["confidence"],
+            " — entró en la mejor ocasión de la ventana (puntaje {:.3f}, chequeo {})".format(
+                event["score"], event["look_n"]) if event.get("forced")
+            else " — mirando la mejor ocasión (chequeo {}: puntaje {:.3f}, mejor {:.3f}, espejo {})".format(
+                event["look_n"], event["score"], event["best_score"], "coincide" if event["mirror_ok"] else "no coincide")
+            if event.get("override") == "ventana_mirando"
+            else "" if not event.get("override") else " — sin operar: " + str(event["override"]))
 
     def _write_open(self, product, trader, position, t_ms, now):
         mark = qt.settle(product, position, trader.c[-1], "strategy_exit", t_ms, trader.funding, self.notional)

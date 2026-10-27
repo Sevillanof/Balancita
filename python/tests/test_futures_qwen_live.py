@@ -81,8 +81,10 @@ class Env:
     """A live operator on a temporary database, a fake public feed and a clock that only moves when told."""
 
     def __init__(self, test, cfg=None, policy=None, sigma=0.0002, db=None, funding=(), mirror=False, now=START,
-                 provider=None, clock=None):
+                 provider=None, clock=None, formula=False):
         self.cfg = copy.deepcopy(cfg or LIVE_CFG)
+        if not formula:
+            self.cfg.pop("decide_by", None)                  # version 9 decides by formula: most tests exercise the model deciding
         if cfg is None:
             self.cfg["live"]["force_window_h"] = 0           # the window is opt-in in tests: the rest exercises the normal flat question
         self.cfg["mirror"] = mirror

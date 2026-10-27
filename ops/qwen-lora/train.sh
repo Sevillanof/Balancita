@@ -10,6 +10,11 @@
 #   ops/qwen-lora/train.sh convert    adaptador mlx -> qwen-lora.gguf (el que carga llama-server con LLAMA_LORA)
 #   ops/qwen-lora/train.sh eval [PASOS]        mide checkpoints (coma: base,500,1000; por defecto todos los guardados) sobre 25 pares
 #                                             real/espejo de valid.jsonl: acuerdo con el maestro, si el espejo da vuelta, pérdida (~3 min c/u)
+#   ops/qwen-lora/train.sh aprende-train N [TRAMO]  versión 9 («Que Qwen aprenda junto al maestro»): entrena la OPINIÓN con el dataset de
+#                                             $DATA/aprende (futures_qwen_aprende dataset) de a tramos y, después de cada uno, mide la opinión
+#                                             sobre 150 miradas de la práctica (aprende_eval.py: acierto, neto por entrada contra la fórmula,
+#                                             espejo que da vuelta); CORTA cuando dos tramos seguidos no mejoran el acierto. Adaptadores en
+#                                             $DATA/adapters-aprende/paso-N/ (no toca el adaptador de Qwen en vivo)
 #   ops/qwen-lora/train.sh train-measured N [TRAMO]  entrena de a tramos (500 pasos) y mide después de cada uno; CORTA solo cuando
 #                                             dos mediciones seguidas no mejoran ni la pérdida (2 %), ni el «espejo da vuelta», ni el acuerdo
 set -euo pipefail
@@ -93,6 +98,32 @@ case "${1:-help}" in
       prev_loss=$loss; prev_flip=$flip; prev_agree=$agree
       echo "[train-measured] $done_steps pasos: pérdida $loss, espejo da vuelta $flip, acuerdo con el maestro $agree, sin mejora $stale" | tee -a "$log"
       if [ "$stale" -ge 2 ]; then echo "[train-measured] dos mediciones seguidas sin mejora: corto en $done_steps pasos" | tee -a "$log"; break; fi
+    done
+    ;;
+  aprende-train)
+    need_model
+    A=$DATA/aprende; AD=$DATA/adapters-aprende; mkdir -p "$AD"
+    [ -f "$A/train.jsonl" ] || { echo "falta $A/train.jsonl (python -m balancita_engine.futures_qwen_aprende dataset --out $A)"; exit 1; }
+    [ -f "$A/practica.jsonl" ] || { echo "falta $A/practica.jsonl"; exit 1; }
+    total=${2:?pasos totales, p. ej. 2000}; chunk=${3:-500}; log=$DATA/aprende-train.log
+    done_steps=0; prev=0; stale=0
+    while [ "$done_steps" -lt "$total" ]; do
+      resume=()
+      [ -f "$AD/adapters.safetensors" ] && resume=(--resume-adapter-file "$AD/adapters.safetensors")
+      "$VENV/bin/mlx_lm.lora" -c "$ROOT/ops/qwen-lora/lora.yaml" --model "$MODEL" --data "$A" --adapter-path "$AD" \
+        "${resume[@]}" --iters "$chunk" --save-every "$chunk" --steps-per-eval "$chunk" 2>&1 | tee -a "$log"
+      done_steps=$((done_steps + chunk))
+      mkdir -p "$AD/paso-$done_steps"
+      cp "$AD/adapters.safetensors" "$AD/adapter_config.json" "$AD/paso-$done_steps/"
+      line=$(PYTHONPATH="$ROOT/python" "$VENV/bin/python" "$ROOT/ops/qwen-lora/aprende_eval.py" --model "$MODEL" --data "$A" \
+        --adapter "$AD/paso-$done_steps" --max "${MAX:-150}" --out "$AD/paso-$done_steps/medicion.json" | tail -n 1)
+      echo "$line" | tee -a "$log"
+      acc=$(printf '%s' "$line" | "$VENV/bin/python" -c 'import json,sys; d=json.load(sys.stdin); print(d["acierto_sin_posicion"] or 0)')
+      better=$("$VENV/bin/python" -c "import sys; print(int(float(sys.argv[1]) > float(sys.argv[2]) + 0.005))" "$acc" "$prev")
+      if [ "$better" = 1 ]; then stale=0; else stale=$((stale + 1)); fi
+      prev=$acc
+      echo "[aprende-train] $done_steps pasos: acierto sin posición $acc, sin mejora $stale" | tee -a "$log"
+      if [ "$stale" -ge 2 ]; then echo "[aprende-train] dos tramos sin mejora: corto en $done_steps pasos" | tee -a "$log"; break; fi
     done
     ;;
   convert)

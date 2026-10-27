@@ -148,7 +148,7 @@ class IdentityTests(unittest.TestCase):
         v7 = qt.load_config(qt.CONFIG_PATH_LIVE_V7)
         self.assertNotEqual(qt.config_hash(LIVE_CFG), qt.config_hash(v7))
         self.assertNotEqual(live.identity_of(LIVE_CFG), live.identity_of(v7))
-        self.assertEqual((LIVE_CFG["prompt"]["version"], v7["prompt"]["version"]), (7, 6))
+        self.assertEqual((LIVE_CFG["prompt"]["version"], v7["prompt"]["version"]), (8, 6))
         self.assertTrue(v7["state_ficha"] and v7["factors"]["question"] and v7["lora"]["request"])
         self.assertEqual(v7["guardrails"]["max_hold_min"], 240)
         self.assertNotIn("state_corta", v7)

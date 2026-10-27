@@ -106,7 +106,33 @@ export function waitReason(row: Record<string, unknown>): string | null {
   return text && lines ? `${text} ${lines}` : text
 }
 
+const OPINION_WORDS: Record<string, string> = {
+  LARGO: 'entrar largo',
+  CORTO: 'entrar corto',
+  ESPERAR: 'esperar',
+  MANTENER: 'mantener',
+  CERRAR: 'cerrar',
+}
+
+/** Version 9: the formulas decide and Qwen only gives an opinion next to them; both are said, with who did what. */
+function formulaReason(row: Record<string, unknown>): string {
+  const action = String(row.formula_action)
+  const why = record(row.formula).motivo
+  const head = `Decidió la fórmula: ${OPINION_WORDS[action] ?? action}${typeof why === 'string' ? ` (${why})` : ''}.`
+  const opinion = typeof row.model_action === 'string' ? row.model_action : null
+  if (!opinion)
+    return `${head} Qwen no dio opinión esta vez${typeof row.opinion_error === 'string' ? ` (${row.opinion_error.replaceAll('_', ' ')})` : ''}.`
+  const p = percent(row.p_action)
+  const agree =
+    row.opinion_agrees === 1
+      ? 'Coincide con la fórmula.'
+      : 'No coincide con la fórmula.'
+  return `${head} Qwen opina: ${OPINION_WORDS[opinion] ?? opinion}${p ? ` (${p})` : ''}. ${agree}`
+}
+
 function baseReason(row: Record<string, unknown>): string | null {
+  if (typeof row.formula_action === 'string' && row.formula_action)
+    return formulaReason(row)
   const chosen = row.chosen
   const override = typeof row.override === 'string' ? row.override : null
   const wanted = side(row.model_action)
