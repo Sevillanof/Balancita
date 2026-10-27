@@ -373,3 +373,61 @@ describe('createQwenDecisions: trades', () => {
     expect(result.status).toBe('off')
   })
 })
+
+describe('createQwenDecisions: account balance', () => {
+  const trade = (
+    product: string,
+    no: number,
+    status: string,
+    exit: number | null,
+    net: string | null,
+    netNow: string | null = null,
+  ) => ({
+    product,
+    trade_no: no,
+    status,
+    side: no % 2 ? 'LONG' : 'SHORT',
+    entry_ms: no,
+    exit_ms: exit,
+    net_usd: net,
+    net_now_usd: netNow,
+    funding_status: 'complete',
+  })
+
+  it('walks the closed nets in exit order and adds what the open one would net', () => {
+    const path = seed(
+      [],
+      [
+        trade('PF_XBTUSD', 1, 'closed', 300, '-2'),
+        trade('PF_ETHUSD', 1, 'closed', 100, '5'),
+        trade('PF_XBTUSD', 2, 'open', null, null, '1.5'),
+      ],
+    )
+    const result = createQwenDecisions({
+      liveDbPath: path,
+      startUsd: 1000,
+    }).account()
+    if (result.status !== 'ok') throw new Error('expected ok')
+    expect(result.steps.map((s) => [s.exit_ms, s.balance_usd])).toEqual([
+      [100, 1005],
+      [300, 1003],
+    ])
+    expect(result.realized_usd).toBe(3)
+    expect(result.open_usd).toBe(1.5)
+    expect(result.balance_usd).toBe(1004.5)
+    expect(result.open_count).toBe(1)
+  })
+
+  it('starts at the capital with no operations and says off without a base', () => {
+    const result = createQwenDecisions({ liveDbPath: seed([]) }).account()
+    expect(result).toMatchObject({
+      status: 'ok',
+      balance_usd: 1000,
+      steps: [],
+    })
+    expect(qwenDecisionsOff('x').account()).toEqual({
+      status: 'off',
+      reason: 'x',
+    })
+  })
+})

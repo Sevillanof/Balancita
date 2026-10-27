@@ -11,6 +11,7 @@ import { withDb, num, rowOf, type Row } from './observability-health.ts'
 const PRODUCT = /^PF_[A-Z0-9]{2,16}$/
 const DEFAULT_LIMIT = 100
 const MAX_LIMIT = 500
+const DEFAULT_START_USD = 1000
 const SKIPPED_LIMIT = 20
 const ACTIONS: Record<string, QwenAction> = {
   LARGO: 'LONG',
@@ -140,15 +141,43 @@ export type QwenTradesResponse =
   | { readonly status: 'ok'; readonly trades: readonly QwenTrade[] }
   | { readonly status: 'off' | 'error'; readonly reason: string }
 
+/** One closed operation as the account sees it: the net it moved and the balance right after. */
+export interface QwenAccountStep {
+  readonly product: string
+  readonly trade_no: number
+  readonly side: 'LONG' | 'SHORT'
+  readonly exit_ms: number
+  readonly net_usd: number
+  readonly balance_usd: number
+}
+
+export type QwenAccountResponse =
+  | {
+      readonly status: 'ok'
+      /** Simulated starting capital (setting, not read from the base). */
+      readonly start_usd: number
+      /** start + closed nets + what the open positions would net now. */
+      readonly balance_usd: number
+      readonly realized_usd: number
+      readonly open_usd: number
+      readonly open_count: number
+      /** True when some operation still lacks its published funding. */
+      readonly funding_incomplete: boolean
+      readonly steps: readonly QwenAccountStep[]
+    }
+  | { readonly status: 'off'; readonly reason: string }
+
 export interface QwenDecisions {
   report(product: string, limit?: number): QwenDecisionsResponse
   trades(product: string, limit?: number): QwenTradesResponse
+  account(): QwenAccountResponse
 }
 
 export function qwenDecisionsOff(reason: string): QwenDecisions {
   return {
     report: () => ({ status: 'off', reason }),
     trades: () => ({ status: 'off', reason }),
+    account: () => ({ status: 'off', reason }),
   }
 }
 
@@ -261,6 +290,13 @@ function text(value: unknown): string | null {
   return value === null || value === undefined ? null : String(value)
 }
 
+/** A decimal stored as TEXT (or a number) read as a number; null when absent or not finite. */
+function amount(value: unknown): number | null {
+  if (value === null || value === undefined || value === '') return null
+  const parsed = Number(value)
+  return Number.isFinite(parsed) ? parsed : null
+}
+
 function optionalColumns(db: DatabaseSync): string {
   const present = new Set(
     db
@@ -275,7 +311,10 @@ function optionalColumns(db: DatabaseSync): string {
 
 export function createQwenDecisions(options: {
   readonly liveDbPath: string | undefined
+  /** Simulated starting capital of the account (default 1000 USD). */
+  readonly startUsd?: number
 }): QwenDecisions {
+  const startUsd = options.startUsd ?? DEFAULT_START_USD
   const invalid = (
     product: string,
     limit: number,
@@ -416,6 +455,59 @@ export function createQwenDecisions(options: {
         })
       }
       return { status: 'ok', trades }
+    },
+    account() {
+      const opened = withDb(options.liveDbPath, (db) =>
+        db
+          .prepare(
+            `SELECT * FROM trades ORDER BY (status='open') ASC, exit_ms ASC, trade_no ASC`,
+          )
+          .all()
+          .map((row) => rowOf(row)),
+      )
+      if (opened.state !== 'read')
+        return { status: 'off', reason: opened.detail }
+      const steps: QwenAccountStep[] = []
+      let balance = startUsd
+      let realized = 0
+      let openUsd = 0
+      let openCount = 0
+      let incomplete = false
+      for (const row of opened.value as Row[]) {
+        const side =
+          row.side === 'LONG' || row.side === 'SHORT' ? row.side : null
+        const tradeNo = num(row.trade_no)
+        if (side === null || tradeNo === null) continue
+        if (row.funding_status !== 'complete') incomplete = true
+        if (row.status === 'open') {
+          openUsd += amount(row.net_now_usd) ?? 0
+          openCount += 1
+          continue
+        }
+        const net = amount(row.net_usd)
+        const exit = num(row.exit_ms)
+        if (net === null || exit === null) continue
+        realized += net
+        balance += net
+        steps.push({
+          product: String(row.product),
+          trade_no: tradeNo,
+          side,
+          exit_ms: exit,
+          net_usd: net,
+          balance_usd: balance,
+        })
+      }
+      return {
+        status: 'ok',
+        start_usd: startUsd,
+        balance_usd: balance + openUsd,
+        realized_usd: realized,
+        open_usd: openUsd,
+        open_count: openCount,
+        funding_incomplete: incomplete,
+        steps,
+      }
     },
   }
 }
