@@ -114,7 +114,7 @@ export default function TerminalDecisions({
         <ul
           ref={list}
           aria-label="Lista de decisiones"
-          className={`m-0 min-h-30 shrink grow ${embedded ? 'basis-auto' : 'basis-0'} list-none overflow-y-auto overscroll-contain p-0 observer-history:max-h-120`}
+          className={`m-0 min-h-30 shrink grow ${embedded ? 'h-100 shrink-0 grow-0' : 'basis-0'} list-none overflow-y-auto overscroll-contain p-0 observer-history:max-h-120`}
         >
           {items.length === 0 && (
             <li className="border-t border-t-solid border-t-line py-1.5">

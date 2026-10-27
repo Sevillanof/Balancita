@@ -378,21 +378,16 @@ export default function ObserverPanel({
         </div>
       </div>
       {glance}
-      <details className="flex-none border-b border-b-solid border-b-line">
-        <summary className="px-3 py-1.5 text-hint text-ink-2">
-          Estado del motor y fuentes
-        </summary>
-        <Now
-          report={current}
-          health={health}
-          product={product}
-          latest={latest}
-          connected={connected}
-          connectedAtMs={connectedAtMs}
-          clock={clock}
-          localNowMs={localNowMs}
-        />
-      </details>
+      <Now
+        report={current}
+        health={health}
+        product={product}
+        latest={latest}
+        connected={connected}
+        connectedAtMs={connectedAtMs}
+        clock={clock}
+        localNowMs={localNowMs}
+      />
       <div className={OBS.observerBody}>
         {error !== null && (
           <DataState
@@ -405,6 +400,11 @@ export default function ObserverPanel({
             }
           />
         )}
+        {current ? (
+          <Results report={current} />
+        ) : (
+          error === null && <DataState kind="loading" />
+        )}
         <section
           className={`${OBS.card} group/observer-history`}
           aria-label="Historial"
@@ -413,12 +413,7 @@ export default function ObserverPanel({
           {children}
         </section>
         <details className={OBS.panelDetails}>
-          <summary>Resultados y límites de esta lectura</summary>
-          {current ? (
-            <Results report={current} />
-          ) : (
-            error === null && <DataState kind="loading" />
-          )}
+          <summary>Limitaciones de esta lectura</summary>
           <ul>
             <li>
               Una ventana sin propuestas ni operaciones no es un error: las
