@@ -917,7 +917,7 @@ class Trader:
         self.position = None
         self.cooldown_until = t_ms + self.cfg["guardrails"]["cooldown_min"] * MINUTE_MS
         events = []
-        if closed_by != "qwen":
+        if closed_by not in ("qwen", "formula"):
             events.append({"type": "guardrail", "kind": "guardrail", "t_ms": t_ms, "guardrail": closed_by, "action": "CERRAR",
                            "trade_no": trade["trade_no"], "position": position.snapshot(), "net_bp_now": done["net_bp"]})
         events.append({"type": "trade", "trade": trade})
@@ -1041,6 +1041,48 @@ class Trader:
         event["trade_no"] = self.position.trade_no
         return [event]
 
+    def _decide_formula(self, t_ms, reasons, event, state, question):
+        """Version 9: the FORMULAS decide (maestro and portero, ``futures_qwen_corta.formula_action``) and Qwen gives an opinion
+        next to them with the same sheet: it is asked the same question and what it says is kept in the decision (``model_action``,
+        probabilities, ``reason``) but never opens or closes anything. A model that is down or slow, or an unusable answer, leaves
+        the opinion empty; the formula still decides (a wake that is too old or already decided is still skipped by the gate)."""
+        from . import futures_qwen_corta as corta
+        in_position = self.position is not None
+        readings = corta.readings(self, t_ms)
+        action, why = corta.formula_action(readings, None if not in_position else (1 if self.position.side == "LONG" else -1))
+        event.update(formula_action=action, formula=corta.formula_json(readings, why), action=action, override=None)
+        try:
+            answer = self.decider.ask(self.key, t_ms, "action", question, state)
+        except DecisionError:
+            event["opinion_error"] = "sin_respuesta"
+            answer = None
+        except WakeSkipped as skip:
+            if skip.kind not in ("modelo_caido", "modelo_lento"):
+                raise
+            event["opinion_error"] = skip.kind
+            answer = None
+        if answer is not None:
+            opinion = answer["chosen"]
+            event.update(answer=answer, model_action=opinion, p_action=answer["probabilities"][opinion],
+                         opinion_agrees=opinion == action)
+            if opinion != action or opinion in ("LARGO", "CORTO", "CERRAR"):
+                try:
+                    asked = self.decider.ask(self.key, t_ms, "reason", dict(
+                        self.questions["reason"], instruction=self.questions["reason"]["instruction"].replace("{action}", opinion)),
+                        state, single=self.cfg["prompt"].get("reason_orders") != "both")
+                    event.update(reason_answer=asked, reason=asked["chosen"])
+                except (DecisionError, WakeSkipped) as error:
+                    if isinstance(error, WakeSkipped) and error.kind not in ("modelo_caido", "modelo_lento"):
+                        raise
+                    event["opinion_error"] = "motivo_sin_respuesta"
+        if action in ("LARGO", "CORTO"):
+            self._open(t_ms, "LONG" if action == "LARGO" else "SHORT", readings["portero_p"], "formula")
+            event["trade_no"] = self.position.trade_no
+            return [event]
+        if action == "CERRAR":
+            return [event] + self._close(t_ms, self.c[-1], "strategy_exit", "formula", "maestro_vuelta")
+        return [event]
+
     def _decide(self, t_ms, reasons):
         self.last_call_ms = t_ms
         in_position = self.position is not None
@@ -1062,6 +1104,8 @@ class Trader:
                  "p_action": None, "mirror_action": None, "mirror_p": None,
                  "action": "MANTENER" if in_position else "ESPERAR", "override": None,
                  "reason": None, "reason_answer": None, "trade_no": self.position.trade_no if in_position else None}
+        if self.cfg.get("decide_by") == "formula":
+            return self._decide_formula(t_ms, reasons, event, state, question)
         if not in_position and self._force_due(t_ms):
             return self._decide_window(t_ms, reasons, event)
         try:

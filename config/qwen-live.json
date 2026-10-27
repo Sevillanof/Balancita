@@ -1,7 +1,7 @@
 {
   "schema": "balancita-qwen-trader.v1",
   "version": "live",
-  "note": "Qwen operador EN VIVO (paper, sin claves ni órdenes reales). Versión 8 (27-oct-2026, decisión de Fran: «me gusta, armémoslo así»): la FICHA CORTA. Qwen ya no lee los ocho renglones de números: dos fórmulas fijas en CPU los leen por él y le dicen el resultado en una línea cada una, y él supervisa y decide entrar y salir. 1) El maestro de dirección (config/qwen-lora-maestro.json, futures_qwen_maestro: logística sin intercepto sobre 15 números direccionales de la ficha, plazo 12 h): sube/baja, fuerte/flojo/nada, con su puntaje. 2) El portero (config/qwen-portero.json, futures_qwen_portero: logística con intercepto sobre los mismos números orientados hacia el lado del maestro, los tamaños y la claridad; etiqueta = la operación del maestro ganó tras costos con la salida de esta versión): conviene entrar / no conviene, con su probabilidad. 3) El régimen de volatilidad (rango de 24 h contra el promedio de 7 días). 4) La posición abierta: lado, horas, resultado con todos los costos, qué dice el maestro ahora y cuánto falta para el cierre obligatorio. Los dos archivos de fórmulas son identidad: corta.maestro_hash y corta.portero_hash tienen que coincidir con ellos. Datos viejos o incompletos no se le muestran: si faltan los otros activos, el área de valor o la volatilidad de la semana, el despertar se anota como omitido (datos_incompletos) y no se pregunta. Preguntas de letras: sin posición LARGO / CORTO / ESPERAR con la prueba del espejo (en el espejo se da vuelta solo el maestro); con posición MANTENER / CERRAR. Sin ventana de oportunidad (live.force_window_h 0), sin pregunta por factores y SIN adaptador LoRA (la ficha es otra; el adaptador aprendió la ficha de 8 factores). Guardrails: SIN stop (medido: los stops convierten ruido en pérdidas), cierre obligatorio a las 48 h (la salida es cuando el maestro se da vuelta, decidida por Qwen; a las 48 h se cierra sola), espera de 15 min. Cada 15 minutos, con o sin posición, nunca en otro momento. Cambia el config_hash: la base de la versión 7 se archiva sola como live-<hash>.sqlite y arranca una nueva; los resultados de la v8 se miran aparte, revisión a las 30 operaciones. La versión 7 (ficha de 8 factores, pregunta por factores, adaptador LoRA v2 que aprendió una costumbre) queda congelada en config/qwen-live-v7.json para el examen y las herramientas del LoRA. Las configs 1, 2, 2.1 y 3 quedan intactas. Examen y Prueba rápida: fotos desde exam.from (2025-10-01, después del ajuste de las dos fórmulas) de los dos productos en vivo, con la operación de la v8 medida por foto (exam_operacion).",
+  "note": "Qwen en vivo, VERSIÓN 9 (27-oct-2026, pedido de Fran: «que Qwen no decida, pero esté junto al maestro y el portero; tiene que entrenarse con cada decisión»). Decide la FÓRMULA (decide_by: formula): entra cuando el maestro está FUERTE y el portero dice que conviene, del lado del maestro; sale cuando el maestro se da vuelta en contra (al menos flojo) sin stop y SIN límite de tiempo (Fran, 27-oct: una operación puede durar 2 h o 13 h, la salida se decide en cada mirada de 15 min); cada 15 min; una posición por producto (la medición de analisis/qwen-v8/informe.md tenía tope de 48 h; sin tope hay que medirlo: analisis/qwen-aprende). Qwen mira la MISMA ficha corta de la versión 8 (maestro, portero, volatilidad, posición) y da su OPINIÓN (entrar / esperar / salir y su motivo) en cada mirada: se guarda junto a la decisión de la fórmula (model_action, probabilidades, reason; formula_action y formula_json son lo que decidió la fórmula) y NO abre ni cierra nada. Si el modelo no contesta, la fórmula decide igual y la opinión queda vacía (opinion_error). En vivo no se usa la prueba del espejo (la opinión no decide); la Prueba rápida sigue con ella. Cada mirada es un ejemplo para aprender: la tabla examples de la base en vivo guarda, cuando se conoce, qué habría sido lo mejor (futures_qwen_aprende: neto tras costos de entrar largo / corto o de esperar; de cerrar o de mantener). El adaptador LoRA nuevo se arma y se mide aparte (ops/qwen-lora/aprende.sh) y no cambia esta config. La ficha, las dos fórmulas (corta.maestro_hash, corta.portero_hash), los guardrails y los productos son los de la versión 8; cambia el prompt (versión 8) y decide_by: el config_hash cambia, la base de la versión 8 se archiva sola como live-<hash>.sqlite y los resultados de la 9 se miran aparte (revisión a las 30 operaciones). Las versiones 7 (config/qwen-live-v7.json) y anteriores quedan intactas.",
   "products": [
     "PF_XBTUSD",
     "PF_ETHUSD"
@@ -11,7 +11,7 @@
   "timeframe_min": 5,
   "prompt": {
     "name": "qwen-trader",
-    "version": 7,
+    "version": 8,
     "system": "Sos un operador de futuros perpetuos en papel (sin dinero real). Respondé con exactamente una línea con el formato que se pide y nada más.",
     "answer_line": "Respondé con una sola letra ({letters}):",
     "prefill": null,
@@ -64,9 +64,9 @@
     "questions": {
       "flat": {
         "id": "trader_flat",
-        "version": 7,
+        "version": 8,
         "type": "choice",
-        "instruction": "No tenés ninguna posición. Con la ficha de abajo, ¿entrás ahora? El maestro te dice la dirección y su claridad y el portero si conviene tomarla ahora; vos supervisás y decidís. Entrar y salir cuesta ~{cost} % del tamaño: solo vale la pena operar si esperás un movimiento claramente mayor. Si entrás, vas a tener que decidir también cuándo salir (cada 15 min te volvemos a preguntar); a las 48 h se cierra sola. Si no ves una ventaja clara, esperá.",
+        "instruction": "No tenés ninguna posición. Con la ficha de abajo, ¿qué harías ahora? Vos NO operás: decide la fórmula (el maestro y el portero) y tu opinión se guarda al lado para aprender de ella; opiná con tu propio criterio. Entrar y salir cuesta ~{cost} % del tamaño: solo vale la pena entrar si esperás un movimiento claramente mayor. Si entrás, la salida se decide cada 15 min, sin límite de tiempo. Si no ves una ventaja clara, esperá.",
         "options": [
           {
             "id": "LARGO",
@@ -84,9 +84,9 @@
       },
       "position": {
         "id": "trader_position",
-        "version": 7,
+        "version": 8,
         "type": "choice",
-        "instruction": "Tenés una posición abierta. Con la ficha de abajo, ¿la mantenés o la cerrás ahora? Cerrar solo agrega el costo de salida (~{exit_cost} % del tamaño, ya descontado del resultado que se muestra); el de entrada ya está pagado. No hay stop: si no la cerrás vos, se cierra sola a las 48 h. La regla que mejor funcionó en el pasado es salir cuando el maestro se da vuelta en contra de la posición.",
+        "instruction": "Tenés una posición abierta. Con la ficha de abajo, ¿qué harías ahora: mantenerla o cerrarla? Vos NO operás: decide la fórmula y tu opinión se guarda al lado para aprender de ella. Cerrar solo agrega el costo de salida (~{exit_cost} % del tamaño, ya descontado del resultado que se muestra); el de entrada ya está pagado. No hay stop ni límite de tiempo: la fórmula la cierra cuando el maestro se da vuelta. La regla que mejor funcionó en el pasado es salir cuando el maestro se da vuelta en contra de la posición.",
         "options": [
           {
             "id": "MANTENER",
@@ -100,9 +100,9 @@
       },
       "reason": {
         "id": "trader_reason",
-        "version": 7,
+        "version": 8,
         "type": "choice",
-        "instruction": "Elegiste {action}. ¿Cuál es el motivo principal de esa decisión?",
+        "instruction": "Opinaste {action}. ¿Cuál es el motivo principal?",
         "options": [
           {
             "id": "movimiento_exagerado",
@@ -142,7 +142,7 @@
     "stop_sigma_24h": null,
     "min_stop_pct": 0.005,
     "max_stop_pct": 0.03,
-    "max_hold_min": 2880,
+    "max_hold_min": null,
     "cooldown_min": 15
   },
   "entry_threshold": 0.5,
@@ -269,5 +269,6 @@
     "maestro_hash": "3e1f64d478a5",
     "portero": "qwen-portero.json",
     "portero_hash": "49ca5db3aea7"
-  }
+  },
+  "decide_by": "formula"
 }

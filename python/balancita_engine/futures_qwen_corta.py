@@ -1,7 +1,7 @@
 """La FICHA CORTA de Qwen en vivo (versión 8): cuatro renglones y las reglas, nada más.
 
 Qwen ya no lee los ocho renglones de números de la ficha (``futures_qwen_ficha``): dos fórmulas fijas en CPU los leen por él y
-le dicen el resultado en una línea cada una, y él supervisa y decide entrar y salir.
+le dicen el resultado en una línea cada una (más el producto y la hora UTC como contexto), y él supervisa y decide entrar y salir.
 
     1. El MAESTRO (``futures_qwen_maestro``): dirección y claridad a 12 h (sube/baja, fuerte/flojo/nada), con su puntaje.
     2. El PORTERO (``futures_qwen_portero``): si conviene tomar esa señal ahora (probabilidad de ganar tras costos).
@@ -84,6 +84,29 @@ def readings(trader, t_ms, f=None):
             "sigma24": trader._sigma5() * math.sqrt(qt.H24), "range24": f["range24"], "range7": f["range7"]}
 
 
+def formula_action(r, side):
+    """Lo que deciden las fórmulas (versión 9). ``r``: ``readings``. ``side``: 1 / -1 si hay posición abierta (largo / corto),
+    ``None`` si no. Sin posición: ``LARGO`` / ``CORTO`` cuando el maestro dice FUERTE y el portero dice que conviene entrar (del lado
+    del maestro); si no, ``ESPERAR``. Con posición: ``CERRAR`` cuando el maestro se da vuelta en contra, al menos flojo; si no,
+    ``MANTENER``. Sin límite de tiempo: una operación dura lo que dure el maestro. Devuelve ``(acción, motivo)``."""
+    v = r["veredicto"]
+    if side is None:
+        if abs(v) == 2 and r["portero_si"]:
+            return ("LARGO" if v > 0 else "CORTO"), "maestro fuerte y portero a favor"
+        if abs(v) < 2:
+            return "ESPERAR", "el maestro no está fuerte"
+        return "ESPERAR", "el portero dice que no conviene"
+    if side * v <= -1:
+        return "CERRAR", "el maestro se dio vuelta en contra"
+    return "MANTENER", "el maestro no se dio vuelta"
+
+
+def formula_json(r, why):
+    """Lo que las fórmulas vieron y por qué decidieron, para guardarlo junto a la decisión (y al ejemplo de entrenamiento)."""
+    return {"maestro": r["veredicto"], "puntaje": round(r["puntaje"], 6), "portero_si": bool(r["portero_si"]),
+            "portero_p": round(r["portero_p"], 6), "volatilidad": r["volatilidad"], "motivo": why}
+
+
 def lines(trader, t_ms, sg, reasons):
     """Los renglones de la ficha corta (orientación real con ``sg`` = 1, espejo con -1), sin la cola de reglas y posición."""
     teacher, keeper = formulas(trader.cfg)
@@ -104,8 +127,21 @@ def lines(trader, t_ms, sg, reasons):
                "esperable en 24 h +-{} %).".format(r["volatilidad"], qt.es(r["range24"] * 100, 2), qt.es(r["range7"] * 100, 2),
                                                  qt.es(r["sigma24"] * 100, 2)))
     out.append(_position_line(trader, t_ms, r["veredicto"]))
+    out.append(_context_line(trader, t_ms))
     out.append("Costo de entrar y salir: ~{} % del tamaño.".format(qt.es(float(qt.round_trip_cost_bps(trader.product)) / 100.0, 2)))
     return out
+
+
+SESSIONS = ((6, "madrugada"), (13, "mañana de Europa"), (21, "sesión de EE. UU."), (24, "noche"))
+
+
+def _context_line(trader, t_ms):
+    """Producto y hora UTC (hechos, sin decir qué conviene): cuándo y en qué activo se mira."""
+    hour = (t_ms // qt.HOUR_MS) % 24
+    minute = (t_ms // qt.MINUTE_MS) % 60
+    session = next(name for end, name in SESSIONS if hour < end)
+    asset = {"PF_XBTUSD": "BTC", "PF_ETHUSD": "ETH"}.get(trader.product, trader.product)
+    return "Contexto: {}, {:02d}:{:02d} UTC ({}).".format(asset, hour, minute, session)
 
 
 def _position_line(trader, t_ms, verdict_now):
@@ -129,9 +165,10 @@ def rules_line(trader):
     guard, wake = trader.cfg["guardrails"], trader.cfg["wake"]
     stop = ("sin stop automático" if guard.get("stop_sigma_24h") is None else
             "stop automático a {} x la volatilidad diaria".format(qt.es(guard["stop_sigma_24h"], 1)))
-    return ("Reglas fijas que no podés cambiar: {}; cierre obligatorio a las {} h; espera de {} min después de cerrar; tamaño fijo "
+    limit = "cierre obligatorio a las {} h".format(guard["max_hold_min"] // 60) if guard.get("max_hold_min") else "sin límite de tiempo"
+    return ("Reglas fijas que no podés cambiar: {}; {}; espera de {} min después de cerrar; tamaño fijo "
             "de {} USD; una sola posición; sin límite de operaciones por día. Solo te consultamos cada {} min.".format(
-                stop, guard["max_hold_min"] // 60, guard["cooldown_min"], format(trader.notional.normalize(), "f"),
+                stop, limit, guard["cooldown_min"], format(trader.notional.normalize(), "f"),
                 wake["position_every_min"]))
 
 

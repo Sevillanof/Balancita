@@ -68,6 +68,14 @@ export interface QwenDecision {
    * sin factores.
    */
   readonly factors: QwenFactors | null
+  /** Version 9: what the FORMULAS decided (the executed action is `chosen`; `model_action` is Qwen's opinion next to it); null before. */
+  readonly formula_action: string | null
+  /** What the formulas saw and why they decided: maestro, puntaje, portero, volatilidad, motivo. */
+  readonly formula: Record<string, unknown> | null
+  /** 1 if Qwen's opinion matched the formula's action, 0 if not; null without opinion or before version 9. */
+  readonly opinion_agrees: number | null
+  /** Why there is no opinion (modelo_caido, modelo_lento, sin_respuesta); null otherwise. */
+  readonly opinion_error: string | null
 }
 
 export interface QwenFactors {
@@ -184,6 +192,20 @@ function probabilitiesOf(value: unknown): Record<string, number> | null {
   }
 }
 
+function objectOf(value: unknown): Record<string, unknown> | null {
+  if (typeof value !== 'string') return null
+  try {
+    const parsed: unknown = JSON.parse(value)
+    return typeof parsed === 'object' &&
+      parsed !== null &&
+      !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : null
+  } catch {
+    return null
+  }
+}
+
 /** Columns added after the first version of the base: absent ones read as NULL. */
 const OPTIONAL_DECISION_COLUMNS = [
   'kind',
@@ -202,6 +224,10 @@ const OPTIONAL_DECISION_COLUMNS = [
   'look_n',
   'mirror_ok',
   'factors_json',
+  'formula_action',
+  'formula_json',
+  'opinion_agrees',
+  'opinion_error',
 ] as const
 
 function readMeta(db: DatabaseSync): Record<string, unknown> {
@@ -317,6 +343,10 @@ export function createQwenDecisions(options: {
           look_n: num(row.look_n),
           mirror_ok: num(row.mirror_ok),
           factors: factorsOf(row.factors_json),
+          formula_action: text(row.formula_action),
+          formula: objectOf(row.formula_json),
+          opinion_agrees: num(row.opinion_agrees),
+          opinion_error: text(row.opinion_error),
         })
       }
       const skipped: QwenSkipped[] = []

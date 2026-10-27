@@ -124,18 +124,24 @@ def make_photos(history, cfg, product, holdout_ms):
 
 
 def _v8_exit(cfg, t_ms, side, readings, closes, cost, weak):
-    """The version 8 operation opened at ``t_ms`` on ``side`` (+1 long, -1 short): out at the first later wake where the
-    maestro says at least flojo against it, or at ``guardrails.max_hold_min``. ``None`` without a candle at the exit."""
+    """The version 8 / 9 operation opened at ``t_ms`` on ``side`` (+1 long, -1 short): out at the first later wake where the
+    maestro says at least flojo against it, or at ``guardrails.max_hold_min`` when there is a time limit. Without one
+    (``max_hold_min`` null, version 9) the operation lasts as long as the maestro does not turn: ``None`` when it never turns
+    within the data (nothing to measure yet). ``None`` also without a candle at the exit."""
     hold, step = cfg["guardrails"]["max_hold_min"], cfg["wake"]["position_every_min"]
-    exit_ms, why = t_ms + hold * MINUTE_MS, OP_WHY_TIME
-    for k in range(1, hold // step + 1):
-        at = t_ms + k * step * MINUTE_MS
+    step_ms = step * MINUTE_MS
+    last = max(readings) if readings else t_ms
+    limit = t_ms + hold * MINUTE_MS if hold else last
+    exit_ms, why = (t_ms + hold * MINUTE_MS, OP_WHY_TIME) if hold else (None, OP_WHY_FLIP)
+    at = t_ms + step_ms
+    while at <= limit:
         r = readings.get(at)
-        if r is None:
-            continue                                     # a skipped wake (incomplete data): the position goes on
-        if side * r["puntaje"] <= -weak:
+        if r is not None and side * r["puntaje"] <= -weak:      # a skipped wake (incomplete data): the position goes on
             exit_ms, why = at, OP_WHY_FLIP
             break
+        at += step_ms
+    if exit_ms is None:
+        return None
     c0, c1 = closes.get(t_ms), closes.get(exit_ms)
     if c0 is None or c1 is None:
         return None
@@ -648,9 +654,10 @@ def analyse_operation(rows, cfg):
     qwen["con_maestro"] = mean([1.0 if r["operacion"]["maestro"] * s > 0 else 0.0 for r, s in entries])
     qwen["con_portero"] = mean([1.0 if r["operacion"]["portero_si"] else 0.0 for r, _ in entries])
     qwen["vs_azar_pct"] = _op_random_percentile(entries, draws, seed, qwen["neto_bp"])
-    out = {"fotos": len(rows), "max_horas": cfg["guardrails"]["max_hold_min"] / 60.0,
-           "salida": "cuando el maestro se da vuelta (al menos flojo en contra) o a las {} h, sin stop".format(
-               qt.es(cfg["guardrails"]["max_hold_min"] / 60.0, 0)),
+    out = {"fotos": len(rows), "max_horas": (cfg["guardrails"]["max_hold_min"] or 0) / 60.0,
+           "salida": ("cuando el maestro se da vuelta (al menos flojo en contra) o a las {} h, sin stop".format(
+               qt.es(cfg["guardrails"]["max_hold_min"] / 60.0, 0)) if cfg["guardrails"]["max_hold_min"] else
+               "cuando el maestro se da vuelta (al menos flojo en contra), sin stop y sin límite de tiempo"),
            "qwen": qwen, "qwen_todas": _op_stats(said, draws, seed), "formula": _op_stats(formula, draws, seed),
            "maestro_fuerte": _op_stats(strong, draws, seed),
            "siempre_largo": _op_stats([(r, 1) for r, _ in entries], draws, seed),
