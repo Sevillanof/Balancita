@@ -22,6 +22,7 @@ import { useTerminalStream } from './useTerminalStream.ts'
 import { projectTerminalQuote } from './terminal-market.ts'
 import AppStatusChips from './AppStatusChips.tsx'
 import TerminalDecisions from './TerminalDecisions.tsx'
+import { decisionView } from './terminal-decision-view.ts'
 import type { DecisionRow } from './terminal-decisions.ts'
 import SelectedDecision from './SelectedDecision.tsx'
 import { markerGap, markerGapNote } from './terminal-markers.ts'
@@ -32,6 +33,7 @@ import {
   qwenNotice,
   useQwenDecisions,
 } from './useQwenDecisions.ts'
+import QwenGlance from './QwenGlance.tsx'
 import QwenTradesPanel from './QwenTradesPanel.tsx'
 import {
   analysesNotice,
@@ -122,7 +124,9 @@ export default function FuturesTerminal({
   const selectedId = String(selectedAnalysis?.analysis_id ?? '')
   // An id that is not one of this product's analyses never becomes the
   // selection (a stale or foreign marker/row id would blank the detail).
-  const selectAnalysis = (id: string) => {
+  const selectAnalysis = (markerId: string) => {
+    // The «Qwen no coincide» mark sits beside its decision's mark: same decision.
+    const id = markerId.replace(/#q$/, '')
     if (analyses.some((analysis) => record(analysis).analysis_id === id))
       setSelectedAnalysisId(id)
   }
@@ -166,6 +170,11 @@ export default function FuturesTerminal({
     .map((item, index) => {
       const analysis = record(item)
       const selector = record(analysis.selector)
+      const view =
+        typeof analysis.formula_action === 'string' ||
+        analysis.qwen_skipped === true
+          ? decisionView(analysis)
+          : null
       return {
         id: String(analysis.analysis_id ?? index),
         action: analysisAction(analysis),
@@ -178,7 +187,13 @@ export default function FuturesTerminal({
         analysis.qwen_probabilities
           ? { detail: analysis.qwen_probabilities }
           : {}),
-        ...(typeof analysis.qwen_why === 'string' && analysis.qwen_why
+        ...(view ? { view } : {}),
+        // Quiet waits and holds fold into one «×N» line; the rest stay apart.
+        ...((
+          view
+            ? view.relevant
+            : typeof analysis.qwen_why === 'string' && analysis.qwen_why
+        )
           ? { explained: true }
           : {}),
       }
@@ -473,6 +488,17 @@ export default function FuturesTerminal({
                   connectedAtMs={connectedAtMs}
                   clock={serverClock}
                   localNowMs={displayClock}
+                  glance={
+                    liveGateway ? (
+                      <QwenGlance
+                        product={product}
+                        latest={
+                          analyses.length > 0 ? record(analyses.at(-1)) : null
+                        }
+                        nowMs={displayClock}
+                      />
+                    ) : undefined
+                  }
                 >
                   <TerminalDecisions
                     embedded={liveGateway}

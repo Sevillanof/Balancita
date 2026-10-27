@@ -855,6 +855,10 @@ export default function TerminalChartPanel({
               <b style={{ color: colors.info }}>●</b> salida (stop, objetivo,
               tiempo)
             </span>
+            <span data-testid="legend-qwen">
+              <b style={{ color: colors.amber }}>■</b> Portero ✕ = el portero
+              frenó la entrada · Qwen ≠ = Qwen opina distinto
+            </span>
           </>
         ) : (
           <>

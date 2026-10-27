@@ -322,6 +322,7 @@ export default function ObserverPanel({
   connectedAtMs,
   clock,
   localNowMs,
+  glance,
   children,
 }: {
   product: string | null
@@ -336,6 +337,8 @@ export default function ObserverPanel({
   clock: GatewayClock | null
   /** This browser's clock, ticking: the staleness of every evidence. */
   localNowMs: number
+  /** The at-a-glance strip (position, last look); shown first, outside the folded detail. */
+  glance?: ReactNode
   /** The decisions history the Terminal already renders. */
   children?: ReactNode
 }) {
@@ -374,16 +377,22 @@ export default function ObserverPanel({
           ))}
         </div>
       </div>
-      <Now
-        report={current}
-        health={health}
-        product={product}
-        latest={latest}
-        connected={connected}
-        connectedAtMs={connectedAtMs}
-        clock={clock}
-        localNowMs={localNowMs}
-      />
+      {glance}
+      <details className="flex-none border-b border-b-solid border-b-line">
+        <summary className="px-3 py-1.5 text-hint text-ink-2">
+          Estado del motor y fuentes
+        </summary>
+        <Now
+          report={current}
+          health={health}
+          product={product}
+          latest={latest}
+          connected={connected}
+          connectedAtMs={connectedAtMs}
+          clock={clock}
+          localNowMs={localNowMs}
+        />
+      </details>
       <div className={OBS.observerBody}>
         {error !== null && (
           <DataState
@@ -396,13 +405,6 @@ export default function ObserverPanel({
             }
           />
         )}
-        {current ? (
-          <>
-            <Results report={current} />
-          </>
-        ) : (
-          error === null && <DataState kind="loading" />
-        )}
         <section
           className={`${OBS.card} group/observer-history`}
           aria-label="Historial"
@@ -411,7 +413,12 @@ export default function ObserverPanel({
           {children}
         </section>
         <details className={OBS.panelDetails}>
-          <summary>Limitaciones de esta lectura</summary>
+          <summary>Resultados y límites de esta lectura</summary>
+          {current ? (
+            <Results report={current} />
+          ) : (
+            error === null && <DataState kind="loading" />
+          )}
           <ul>
             <li>
               Una ventana sin propuestas ni operaciones no es un error: las

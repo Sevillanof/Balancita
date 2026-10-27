@@ -1,3 +1,5 @@
+import type { DecisionView } from './terminal-decision-view.ts'
+
 export type DecisionRow = {
   id: string
   action: string
@@ -8,6 +10,8 @@ export type DecisionRow = {
   detail?: string
   /** A wait with its own reason (Qwen's): never collapsed into «WAIT ×N». */
   explained?: boolean
+  /** Pictures-first reading (version 9): when present the list paints it instead of the text lines. */
+  view?: DecisionView
 }
 
 export type DecisionItem =
