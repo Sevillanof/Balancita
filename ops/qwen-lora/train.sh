@@ -8,6 +8,10 @@
 #   ops/qwen-lora/train.sh train [N]  el entrenamiento (reanudable: si hay adaptador guardado, sigue desde ahí); N pasos en vez
 #                                     de los del yaml, p. ej. `train 7600` para hacer la mitad una noche y la otra mitad la siguiente
 #   ops/qwen-lora/train.sh convert    adaptador mlx -> qwen-lora.gguf (el que carga llama-server con LLAMA_LORA)
+#   ops/qwen-lora/train.sh eval [PASOS]        mide checkpoints (coma: base,500,1000; por defecto todos los guardados) sobre 25 pares
+#                                             real/espejo de valid.jsonl: acierto de signo, si el espejo da vuelta, pérdida (~3 min c/u)
+#   ops/qwen-lora/train.sh train-measured N [TRAMO]  entrena de a tramos (500 pasos) y mide después de cada uno; CORTA solo cuando
+#                                             dos mediciones seguidas no mejoran ni la pérdida (2 %) ni el «espejo da vuelta»
 set -euo pipefail
 ROOT=${0:A:h:h:h}
 DATA=${BALANCITA_DATA:-$HOME/balancita-data.noindex}/qwen-lora
@@ -55,12 +59,48 @@ case "${1:-help}" in
     [ -n "${2:-}" ] && iters=(--iters "$2") && echo "$2 pasos (el yaml trae la pasada completa)"
     "$VENV/bin/mlx_lm.lora" -c "$ROOT/ops/qwen-lora/lora.yaml" --model "$MODEL" --data "$DATASET" --adapter-path "$ADAPTERS" "${resume[@]}" "${iters[@]}"
     ;;
+  eval)
+    need_model
+    steps=${2:-}
+    if [ -z "$steps" ]; then
+      steps=$(ls "$ADAPTERS" 2>/dev/null | sed -n 's/^0*\([0-9][0-9]*\)_adapters\.safetensors$/\1/p' | sort -n | paste -sd, -)
+      [ -n "$steps" ] || { echo "no hay checkpoints en $ADAPTERS"; exit 1; }
+    fi
+    "$VENV/bin/python" "$ROOT/ops/qwen-lora/ckpt_eval.py" --model "$MODEL" --data "$DATASET" --adapters "$ADAPTERS" \
+      --out "$DATA/ckpt-eval" --pairs "${PAIRS:-25}" --steps "$steps" | tee -a "$DATA/ckpt-eval.log"
+    ;;
+  train-measured)
+    need_model
+    [ -f "$DATASET/train.jsonl" ] || { echo "falta $DATASET/train.jsonl"; exit 1; }
+    total=${2:?pasos totales, p. ej. 3000}; chunk=${3:-500}; log=$DATA/train-measured.log
+    done_steps=0; prev_loss=; prev_flip=; stale=0
+    [ -f "$ADAPTERS/adapters.safetensors" ] && echo "retoma desde $ADAPTERS/adapters.safetensors (los pasos se cuentan desde aquí)"
+    while [ "$done_steps" -lt "$total" ]; do
+      resume=()
+      [ -f "$ADAPTERS/adapters.safetensors" ] && resume=(--resume-adapter-file "$ADAPTERS/adapters.safetensors")
+      "$VENV/bin/mlx_lm.lora" -c "$ROOT/ops/qwen-lora/lora.yaml" --model "$MODEL" --data "$DATASET" --adapter-path "$ADAPTERS" \
+        "${resume[@]}" --iters "$chunk" --save-every "$chunk" --steps-per-eval "$chunk" 2>&1 | tee -a "$log"
+      done_steps=$((done_steps + chunk))
+      cp "$ADAPTERS/adapters.safetensors" "$ADAPTERS/paso-$done_steps.safetensors"
+      line=$("$VENV/bin/python" "$ROOT/ops/qwen-lora/ckpt_eval.py" --model "$MODEL" --data "$DATASET" --adapters "$ADAPTERS" \
+        --out "$DATA/ckpt-eval" --pairs "${PAIRS:-25}" --file "$ADAPTERS/paso-$done_steps.safetensors" | tail -n 1)
+      echo "$line" | tee -a "$log"
+      read -r loss flip <<< "$(printf '%s' "$line" | "$VENV/bin/python" -c 'import json,sys; d=json.load(sys.stdin); print(d["perdida_respuesta"], d["espejo_da_vuelta"])')"
+      if [ -n "$prev_loss" ]; then
+        better=$("$VENV/bin/python" -c "import sys; l,pl,f,pf=map(float,sys.argv[1:]); print(int(l < pl*0.98 or f > pf))" "$loss" "$prev_loss" "$flip" "$prev_flip")
+        if [ "$better" = 1 ]; then stale=0; else stale=$((stale + 1)); fi
+      fi
+      prev_loss=$loss; prev_flip=$flip
+      echo "[train-measured] $done_steps pasos: pérdida $loss, espejo da vuelta $flip, sin mejora $stale" | tee -a "$log"
+      if [ "$stale" -ge 2 ]; then echo "[train-measured] dos mediciones seguidas sin mejora: corto en $done_steps pasos" | tee -a "$log"; break; fi
+    done
+    ;;
   convert)
     [ -f "$ADAPTERS/adapters.safetensors" ] || { echo "falta $ADAPTERS/adapters.safetensors: entrená primero"; exit 1; }
     PYTHONPATH="$ROOT/python" "$VENV/bin/python" -m balancita_engine.futures_qwen_lora_adapter "$ADAPTERS" "$DATA/qwen-lora.gguf"
     echo "Ahora: LLAMA_LORA=$DATA/qwen-lora.gguf en .env.local y reiniciar pnpm dev; después ops/qwen-lora/check_adapter.py"
     ;;
   *)
-    sed -n '2,11p' "$0"
+    sed -n '2,15p' "$0"
     ;;
 esac

@@ -46,6 +46,12 @@ el LoRA se entrena igual por decisión de Fran.
    `train.sh train 7600` (~7 h; la segunda noche el mismo comando retoma el adaptador guardado). Hiperparámetros en
    `ops/qwen-lora/lora.yaml`: rango 8 en las 7 proyecciones de las últimas 16 capas, lote 1, una pasada, solo la línea de
    respuesta entra en la pérdida (`mask_prompt`).
+   Mejor `train.sh train-measured N` (ver «Medir mientras entrena»): entrena de a 500 pasos y mide después de cada tramo.
+4b. `train.sh eval [PASOS]`: mide los checkpoints guardados (o los que se nombren: `base,500,1000`) sobre 25 pares real/espejo de
+   `valid.jsonl`, sin llama-server (`ops/qwen-lora/ckpt_eval.py`, ~3 min por checkpoint). Imprime, por checkpoint, qué valor
+   contesta en F1, el acierto de signo contra la etiqueta, en qué fracción de pares el espejo da vuelta el lado, en cuántos contesta
+   idéntico al espejo y la pérdida media por token de la respuesta. Un adaptador que lee la ficha da vuelta el lado en casi todos
+   los pares; uno que aprendió una costumbre contesta idéntico.
 5. `train.sh convert`: el adaptador de mlx-lm pasa al GGUF que llama-server carga (`futures_qwen_lora_adapter.py`).
 6. `.env.local`: `LLAMA_LORA=~/balancita-data.noindex/qwen-lora/qwen-lora.gguf` y reiniciar `pnpm dev`. llama-server arranca con
    `--lora-scaled <gguf>:0` (un solo argumento `ARCHIVO:ESCALA`; la forma vieja de dos argumentos tira llama-server con
@@ -66,6 +72,21 @@ el LoRA se entrena igual por decisión de Fran.
    4 h de la opción que eligió Qwen con entrar a mercado y con la mejor opción (oráculo), y cuántas veces eligió la mejor.
 9. Solo si PASA, Fran decide si Qwen en vivo usa el adaptador (eso sería otro cambio: hoy el proceso en vivo nunca lo pide; usar
    la entrada elegida en paper sería otro más: hoy el operador solo entra a mercado).
+
+## Medir mientras entrena (lo que faltó la noche del 26 al 27 de octubre)
+
+La primera mitad (7.600 pasos, etiqueta = signo del movimiento a 4 h en los seis renglones votantes, ±2 si el movimiento fue
+grande) aprendió una costumbre: a los 500 pasos ya contestaba un valor fijo en todas las fichas (+2 en 43 de 50), el espejo salía
+idéntico en el 88 % de los pares y la pérdida por token de la respuesta era 0,044; a los 7.600 pasos contestaba −1 en 50 de 50,
+el espejo idéntico en el 100 % y la pérdida 0,0435. El acierto de signo fue 48-50 % en todos los checkpoints. Causa: con una
+ficha que anticipa ~52 %, leer los números ahorra 0,12 % del error del signo; el formato se aprende en los primeros 500 pasos y
+después no hay nada más que bajar (informes en analisis/qwen-lora/informe-causa-costumbre-27oct.md). Por eso:
+
+- `train.sh train-measured N [TRAMO]` entrena de a tramos de 500 pasos (`--resume-adapter-file`, copia `paso-<N>.safetensors`),
+  mide cada tramo con `ckpt_eval.py` y corta cuando dos mediciones seguidas no mejoran ni la pérdida (2 %) ni el «espejo da vuelta».
+  Todo queda en `$DATA/train-measured.log`. Con la etiqueta de hoy habría cortado a los 1.500 pasos (1,5 h en vez de 7).
+- Antes de poner un adaptador en llama-server: espejo da vuelta ≥ 90 % de los pares y acierto de signo por encima de la etiqueta
+  que se le enseñó; si no, no lee la ficha y el examen no va a decir nada.
 
 ## Memoria y tiempo en la Mac (24 GB)
 
