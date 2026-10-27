@@ -96,6 +96,9 @@ export type QuickTrade = {
   salida_ms: number
   neto_bp: number
   motivo: string
+  /** The maestro at the entry (−2…+2) and whether the portero agreed. */
+  maestro?: number
+  portero?: boolean
 }
 
 /** The formula alone (no Qwen) over every wake of the exam range, one position per product, as it operates live. */
@@ -106,6 +109,8 @@ export type QuickFormula = {
   max_horas: number
   nocional_usd: number
   productos: string[]
+  /** Hourly closes `[t_ms, close]` by product over the period: what the price really did. */
+  mercado?: Record<string, Array<[number, number]>>
   formula: QuickOperationStats
   maestro_fuerte: QuickOperationStats
   siempre_largo: QuickOperationStats
