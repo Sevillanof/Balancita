@@ -147,6 +147,8 @@ type Props = {
   kind?: string
   /** A variant was created and its test started: the page selects it and shows the note. */
   onVariantStarted?: (id: string, note: string) => void
+  /** The «Neto por operación» the panel shows (null: none), so the list beside it shows the same figure. */
+  onNet?: (id: string, meanBp: number) => void
   /** «Modificar» / «Crear»: lead to the laboratory's editor; absent = disabled. */
   onModify?: () => void
   onCreate?: () => void
@@ -168,6 +170,7 @@ export default function StrategyRunView({
   registry,
   kind,
   onVariantStarted,
+  onNet,
   onModify,
   onCreate,
 }: Props) {
@@ -632,6 +635,16 @@ export default function StrategyRunView({
     )?.summary?.formula ??
     (quickState?.state === 'done' ? quickState.summary?.formula : undefined) ??
     null
+  // While a test runs its own state has no result yet: the panel keeps the previous formula result instead of falling back
+  // to the old practice view (scope text, stage tabs and the candles of an older run).
+  const [keptFormula, setKeptFormula] = useState<QuickFormula | null>(null)
+  useEffect(() => {
+    if (formulaOf) setKeptFormula(formulaOf)
+  }, [formulaOf])
+  const busyQuick = hasQuick && (quickRunning || running != null || testing)
+  const formulaShown = formulaOf ?? (busyQuick ? keptFormula : null)
+  // Qwen en vivo only has the new panel: the old practice view is for the other strategies
+  const legacyView = !hasQuick
   useEffect(() => {
     if (!hasQuick) return
     let cancelled = false
@@ -822,12 +835,13 @@ export default function StrategyRunView({
     data !== null &&
     data.tradesDone &&
     data.trades.length > 0 &&
-    (data.candles?.candles.length ?? 0) > 1
-  const formulaModel = useFormulaModel(gatePanel ? null : formulaOf)
+    (data.candles?.candles.length ?? 0) > 1 &&
+    !busyQuick
+  const formulaModel = useFormulaModel(gatePanel ? null : formulaShown)
   const figs = formulaModel?.figures ?? null
   // The levels the shown test ran with (the formula test keeps them in its result, a run in its params)
   const usedLevels = formulaModel
-    ? (formulaOf?.exigencia ?? null)
+    ? (formulaShown?.exigencia ?? null)
     : (lastRun?.params?.exigencia ?? null)
   const weeklyNote = (trades: number, fromMs: number, toMs: number) => {
     const weeks = (toMs - fromMs) / (7 * 86_400_000)
@@ -841,6 +855,10 @@ export default function StrategyRunView({
           Date.parse(lastRun.params.to),
         )
       : ''
+  const shownNet = figs ? figs.meanBp : (summary?.mean_bp ?? null)
+  useEffect(() => {
+    if (shownNet != null) onNet?.(strategyId, shownNet)
+  }, [onNet, strategyId, shownNet])
   const kpiRow = figs ? (
     <div className={RUN.kpis} data-testid="run-kpis">
       <Kpi
@@ -925,12 +943,15 @@ export default function StrategyRunView({
             {titleOf(strategyName)} <small>v{version}</small>
           </p>
           <p className={RUN.hint}>
-            {formulaModel
-              ? `Solo la fórmula, sin Qwen · ${DAY_FORMAT.format(formulaModel.fromMs)} – ${DAY_FORMAT.format(formulaModel.toMs)} · ${amount(formulaModel.trades.length, 0)} operaciones`
-              : lastRun
-                ? `Prueba mostrada · ${runName(lastRun)}`
-                : 'Sin prueba terminada con operaciones guardadas'}
+            {formulaModel && busyQuick
+              ? `Resultado anterior${usedLevels ? ` (maestro ${usedLevels.maestro}, portero ${usedLevels.portero})` : ''} · probando maestro ${exigencia.maestro}, portero ${exigencia.portero}…`
+              : formulaModel
+                ? `Solo la fórmula, sin Qwen · ${DAY_FORMAT.format(formulaModel.fromMs)} – ${DAY_FORMAT.format(formulaModel.toMs)} · ${amount(formulaModel.trades.length, 0)} operaciones`
+                : lastRun
+                  ? `Prueba mostrada · ${runName(lastRun)}`
+                  : 'Sin prueba terminada con operaciones guardadas'}
             {usedLevels &&
+              !busyQuick &&
               ` · Exigencia: maestro ${usedLevels.maestro}, portero ${usedLevels.portero}${usedLevels.maestro === EXIGENCIA_PAPER && usedLevels.portero === EXIGENCIA_PAPER ? ' (como paper)' : ''}`}
             {running && ' · hay una prueba en curso'}
           </p>
@@ -1211,52 +1232,62 @@ export default function StrategyRunView({
         </p>
       )}
 
-      {gatePanel ? (
-        <RunVerdict
-          trades={data.trades}
-          product={data.product}
-          closes={(data.full.candles?.candles ?? []).map((c) =>
-            Number(c.close),
-          )}
-        />
-      ) : formulaModel ? (
-        <RunVerdict
-          trades={formulaModel.trades}
-          product={formulaModel.product}
-          closes={formulaModel.closes}
-        />
-      ) : null}
-      {kpiRow}
-      {gatePanel ? (
-        <MarketTradesChart
-          product={data.product}
-          candles={data.candles?.candles ?? []}
-          view={data.view}
-          trades={data.trades}
-          selected={selected}
-          onSelect={(trade) => void select(trade)}
-          onShowAll={showAll}
-        />
-      ) : formulaModel ? (
-        <MarketTradesChart
-          product={formulaModel.product}
-          candles={formulaModel.candles}
-          view={formulaModel.selected ? 'zoom' : 'full'}
-          trades={formulaModel.trades}
-          selected={formulaModel.selected}
-          onSelect={formulaModel.select}
-          onShowAll={formulaModel.showAll}
-        />
-      ) : (
-        hasQuick &&
-        data === null &&
-        state.kind !== 'loading' && (
-          <p className={RUN.empty} data-testid="run-empty-panel">
-            Todavía no hay resultados con precios y operaciones. Tocá «Probar» y
-            elegí «Solo la fórmula» para ver cómo le habría ido en el pasado.
-          </p>
-        )
-      )}
+      <div
+        className={
+          busyQuick && formulaShown
+            ? 'grid min-w-0 gap-3 opacity-60'
+            : 'contents'
+        }
+        data-testid="run-results"
+        data-previous={busyQuick && formulaShown ? 'true' : undefined}
+      >
+        {gatePanel ? (
+          <RunVerdict
+            trades={data.trades}
+            product={data.product}
+            closes={(data.full.candles?.candles ?? []).map((c) =>
+              Number(c.close),
+            )}
+          />
+        ) : formulaModel ? (
+          <RunVerdict
+            trades={formulaModel.trades}
+            product={formulaModel.product}
+            closes={formulaModel.closes}
+          />
+        ) : null}
+        {kpiRow}
+        {gatePanel ? (
+          <MarketTradesChart
+            product={data.product}
+            candles={data.candles?.candles ?? []}
+            view={data.view}
+            trades={data.trades}
+            selected={selected}
+            onSelect={(trade) => void select(trade)}
+            onShowAll={showAll}
+          />
+        ) : formulaModel ? (
+          <MarketTradesChart
+            product={formulaModel.product}
+            candles={formulaModel.candles}
+            view={formulaModel.selected ? 'zoom' : 'full'}
+            trades={formulaModel.trades}
+            selected={formulaModel.selected}
+            onSelect={formulaModel.select}
+            onShowAll={formulaModel.showAll}
+          />
+        ) : (
+          hasQuick &&
+          (busyQuick || (data === null && state.kind !== 'loading')) && (
+            <p className={RUN.empty} data-testid="run-empty-panel">
+              {busyQuick
+                ? 'Probando… el resultado con precios y operaciones aparece acá cuando termina.'
+                : 'Todavía no hay resultados con precios y operaciones. Tocá «Probar» y elegí «Solo la fórmula» para ver cómo le habría ido en el pasado.'}
+            </p>
+          )
+        )}
+      </div>
       {shown && (
         <VectorbtReportPanel
           key={shown.id}
@@ -1279,7 +1310,7 @@ export default function StrategyRunView({
         <summary className="cursor-pointer text-note text-ink-2">
           Ver velas y detalle de las operaciones
         </summary>
-        {scopeRun && !formulaModel && (
+        {scopeRun && !formulaModel && legacyView && (
           <ul className={RUN.scope} data-testid="run-evaluation-scope">
             {runScopeLines(scopeRun).map((line) => (
               <li key={line.key} data-tone={line.tone ?? undefined}>
@@ -1288,7 +1319,7 @@ export default function StrategyRunView({
             ))}
           </ul>
         )}
-        {overview && !unknownToGate && !formulaModel && (
+        {overview && !unknownToGate && !formulaModel && legacyView && (
           <div className={RUN.tabsWrap}>
             <div className={RUN.tabs} role="group" aria-label="Tramos probados">
               {fallbackRun && (
@@ -1336,7 +1367,7 @@ export default function StrategyRunView({
               <QuickComparison variants={quickVariants} />
             </div>
           )}
-        {!formulaModel && (
+        {!formulaModel && legacyView && (
           <div className={RUN.chartCard} id="run-candles">
             <div className={RUN.chartHead}>
               <h4>
@@ -1573,6 +1604,13 @@ function QuickProgress({ state }: { state: QuickState }) {
   const text = asking
     ? `Prueba rápida · ${answered} de ${total} fotos · ${Math.round(percent)} %${left ? ` · faltan unos ${left}` : ''}`
     : 'Prueba rápida · preparando las fotos del pasado…'
+  // Preparing the photos has no measurable progress: say so instead of drawing an empty bar
+  if (!asking)
+    return (
+      <p className={RUN.progressText} role="status">
+        <span>{text}</span>
+      </p>
+    )
   return (
     <RunProgress
       label="Progreso de la prueba rápida"

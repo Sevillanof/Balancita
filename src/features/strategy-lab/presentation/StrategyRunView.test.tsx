@@ -214,6 +214,21 @@ const renderView = (
   )
 
 describe('StrategyRunView actions', () => {
+  it('reports the net per operation the panel shows, for the list beside it', async () => {
+    const onNet = vi.fn()
+    render(
+      <StrategyRunView
+        strategyId="c30"
+        strategyName="C30"
+        version={1}
+        gate={gateWith(overview([stageRun(7, 0)]))}
+        visual={visualWith()}
+        onNet={onNet}
+      />,
+    )
+    await waitFor(() => expect(onNet).toHaveBeenCalledWith('c30', -4.2))
+  })
+
   it('Modificar and Crear call their handlers; they are disabled without one', async () => {
     const user = userEvent.setup()
     const onModify = vi.fn()
@@ -453,6 +468,66 @@ describe('StrategyRunView actions', () => {
       maestro: 8,
       portero: 2,
     })
+  })
+
+  it('Qwen en vivo never falls back to the old practice view while a test runs', async () => {
+    const quick = {
+      status: vi.fn(async () => ({
+        state: 'running',
+        snapshots: 300,
+        note: 'n',
+        phase: 'preguntando',
+        answered: 5,
+        total: 300,
+        updated_ms: Date.now(),
+      })),
+      start: vi.fn(),
+    } as unknown as import('../infrastructure/quick-api.ts').QuickApi
+    render(
+      <StrategyRunView
+        strategyId="qwen-live"
+        strategyName="Qwen en vivo"
+        version={1}
+        kind="qwen_live"
+        gate={gateWith(overview([stageRun(7, 0)]))}
+        visual={visualWith()}
+        quick={quick}
+      />,
+    )
+    expect(await screen.findByTestId('run-empty-panel')).toHaveTextContent(
+      'Probando',
+    )
+    expect(screen.queryByTestId('run-evaluation-scope')).toBeNull()
+    expect(screen.queryByRole('group', { name: 'Tramos probados' })).toBeNull()
+    expect(screen.queryByText(/Velas de la prueba/)).toBeNull()
+  })
+
+  it('while the photos are prepared there is no empty progress bar', async () => {
+    const quick = {
+      status: vi.fn(async () => ({
+        state: 'running',
+        snapshots: 300,
+        note: 'n',
+        phase: 'fotos',
+        updated_ms: Date.now(),
+      })),
+      start: vi.fn(),
+    } as unknown as import('../infrastructure/quick-api.ts').QuickApi
+    render(
+      <StrategyRunView
+        strategyId="qwen-live"
+        strategyName="Qwen en vivo"
+        version={1}
+        kind="qwen_live"
+        gate={gateWith(overview([]))}
+        visual={visualWith()}
+        quick={quick}
+      />,
+    )
+    expect(
+      await screen.findByText(/preparando las fotos del pasado/),
+    ).toBeInTheDocument()
+    expect(screen.queryByRole('progressbar')).toBeNull()
   })
 
   it('the quick test lets you pick a variant and compares the finished ones', async () => {
