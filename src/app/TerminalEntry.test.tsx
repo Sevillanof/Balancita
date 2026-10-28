@@ -1,6 +1,9 @@
 import { cleanup, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import TerminalEntry, { TERMINAL_RETRY_MS } from './TerminalEntry.tsx'
+import TerminalEntry, {
+  TERMINAL_RETRY_MS,
+  TERMINAL_SLOW_MS,
+} from './TerminalEntry.tsx'
 
 const lifecycle = vi.hoisted(() => ({ mounts: 0, unmounts: 0 }))
 
@@ -90,6 +93,33 @@ describe('TerminalEntry', () => {
     expect(screen.queryByTestId('futures-terminal')).toBeNull()
   })
 
+  it('shows a spinner with text while loading, and says when it is slow', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => new Promise(() => undefined)),
+    )
+    render(<TerminalEntry />)
+    const status = screen.getByRole('status')
+    expect(status).toHaveTextContent('Cargando la Terminal')
+    expect(status.querySelector('.animate-spin')).not.toBeNull()
+    expect(status).not.toHaveTextContent('tardando más de lo normal')
+    expect(
+      await screen.findByText(
+        /tardando más de lo normal/,
+        {},
+        { timeout: TERMINAL_SLOW_MS + 2_000 },
+      ),
+    ).toBeTruthy()
+  })
+
+  it('names the cause of the failure', async () => {
+    stubFetch(() => ({ status: 503 }))
+    render(<TerminalEntry />)
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Motivo: El servidor está arrancando o sobrecargado (error 503)',
+    )
+  })
+
   it('treats a network error as unavailable', async () => {
     vi.stubGlobal(
       'fetch',
@@ -98,7 +128,9 @@ describe('TerminalEntry', () => {
       }),
     )
     render(<TerminalEntry />)
-    expect(await screen.findByRole('alert')).toHaveTextContent('Real')
+    const alert = await screen.findByRole('alert')
+    expect(alert).toHaveTextContent('Real')
+    expect(alert).toHaveTextContent('No se pudo alcanzar el servidor')
   })
 
   it('retries by itself and recovers when the gateway answers again', async () => {
