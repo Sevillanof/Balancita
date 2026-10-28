@@ -755,7 +755,7 @@ def scheme_trades(history, cfg, product, start_ms, end_ms, holdout_ms, funding=N
         o = _op_side(r, s)
         if o["salida_ms"] > end_ms:
             continue                                     # still open at the end of the window: not counted
-        paid, covered = line.accrue(r["t_ms"], o["salida_ms"], 100.0, s > 0) if line is not None else (0.0, 0)
+        paid, covered = line.accrue(r["t_ms"], o["salida_ms"], qt.D(100), s > 0) if line is not None else (0.0, 0)
         held = o["salida_ms"] - r["t_ms"]
         out.append({"side": "LONG" if s > 0 else "SHORT", "entry_time_ms": r["t_ms"], "exit_time_ms": o["salida_ms"],
                     "net_bp": o["neto_bp"] - float(paid) / 100.0 * 1e4, "entry_price": str(o["entrada_px"]),

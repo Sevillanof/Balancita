@@ -408,6 +408,18 @@ class SchemeReplayTests(unittest.TestCase):
         self.cfg["products"] = ["PF_XBTUSD"]
         self.start = qt.date_ms(self.cfg["practice"]["from"])
 
+    def test_funding_rows_as_the_gate_hands_them_over_are_charged_without_mixing_decimal_and_float(self):
+        from decimal import Decimal
+        from unittest import mock
+        photos = [op_row(self.start + qt.DAY_MS, "ESPERAR", None, 2, True, 30.0, -50.0)]
+        hourly = [(self.start + h * qt.HOUR_MS, Decimal("0.0001")) for h in range(0, 24 * 5)]     # Decimal rates, as read from the gate
+        with mock.patch.object(ex, "make_photos", return_value=photos):
+            got = ex.scheme_trades(MemHistory(), self.cfg, "PF_XBTUSD", self.start, self.start + 30 * qt.DAY_MS, HOLDOUT, hourly)
+        self.assertEqual(len(got), 1)
+        self.assertEqual(got[0]["funding_status"], "complete")
+        self.assertGreater(got[0]["funding_usd"], 0)                 # a long pays the positive funding
+        self.assertAlmostEqual(got[0]["net_bp"], 30.0 - got[0]["funding_usd"] / 100.0 * 1e4)
+
     def run_with(self, photos, **kwargs):
         from unittest import mock
         history = MemHistory()
