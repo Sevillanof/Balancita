@@ -795,7 +795,35 @@ export default function StrategyRunView({
     data.trades.length > 0 &&
     (data.candles?.candles.length ?? 0) > 1
   const formulaModel = useFormulaModel(gatePanel ? null : formulaOf)
-  const kpiRow = (
+  const figs = formulaModel?.figures ?? null
+  const kpiRow = figs ? (
+    <div className={RUN.kpis} data-testid="run-kpis">
+      <Kpi
+        label="Operaciones cerradas"
+        value={amount(figs.trades, 0)}
+        note="Solo la fórmula, sin Qwen"
+        tone={null}
+      />
+      <Kpi
+        label="Neto por operación"
+        value={bp(figs.meanBp)}
+        note="Después de costos"
+        tone={figs.meanBp < 0 ? 'bad' : null}
+      />
+      <Kpi
+        label="Períodos positivos"
+        value={`${figs.positivePeriods} / ${figs.periods}`}
+        note="Tramos iguales del período"
+        tone={null}
+      />
+      <Kpi
+        label="Frente al azar"
+        value={`${amount(figs.percentile, 0)} %`}
+        note="1.000 sorteos con los lados al revés"
+        tone={null}
+      />
+    </div>
+  ) : (
     <div className={RUN.kpis} data-testid="run-kpis">
       <Kpi
         label="Operaciones cerradas"
@@ -852,9 +880,11 @@ export default function StrategyRunView({
             {titleOf(strategyName)} <small>v{version}</small>
           </p>
           <p className={RUN.hint}>
-            {lastRun
-              ? `Prueba mostrada · ${runName(lastRun)}`
-              : 'Sin prueba terminada con operaciones guardadas'}
+            {formulaModel
+              ? `Solo la fórmula, sin Qwen · ${DAY_FORMAT.format(formulaModel.fromMs)} – ${DAY_FORMAT.format(formulaModel.toMs)} · ${amount(formulaModel.trades.length, 0)} operaciones`
+              : lastRun
+                ? `Prueba mostrada · ${runName(lastRun)}`
+                : 'Sin prueba terminada con operaciones guardadas'}
             {running && ' · hay una prueba en curso'}
           </p>
         </div>
@@ -1188,7 +1218,7 @@ export default function StrategyRunView({
         <summary className="cursor-pointer text-note text-ink-2">
           Ver velas y detalle de las operaciones
         </summary>
-        {scopeRun && (
+        {scopeRun && !formulaModel && (
           <ul className={RUN.scope} data-testid="run-evaluation-scope">
             {runScopeLines(scopeRun).map((line) => (
               <li key={line.key} data-tone={line.tone ?? undefined}>
@@ -1197,7 +1227,7 @@ export default function StrategyRunView({
             ))}
           </ul>
         )}
-        {overview && !unknownToGate && (
+        {overview && !unknownToGate && !formulaModel && (
           <div className={RUN.tabsWrap}>
             <div className={RUN.tabs} role="group" aria-label="Tramos probados">
               {fallbackRun && (
@@ -1245,179 +1275,181 @@ export default function StrategyRunView({
               <QuickComparison variants={quickVariants} />
             </div>
           )}
-        <div className={RUN.chartCard} id="run-candles">
-          <div className={RUN.chartHead}>
-            <h4>
-              {data
-                ? `${data.product} · Velas de la prueba`
-                : 'Velas de la prueba'}
-            </h4>
-            <span className={RUN.chartTags}>LONG / SHORT / Salidas</span>
-          </div>
-          {data?.candles && (
-            <div className={RUN.scope}>
-              <p className={RUN.hint} data-testid="run-scope">
-                {data.view === 'full'
-                  ? fullViewText(
-                      data.candles.resolution,
-                      data.summary.range_start_ms,
-                      data.summary.range_end_ms,
-                    )
-                  : `Velas de ${resolutionText(data.candles.resolution)} · zoom a la operación${selected ? ` del ${dayLabel(selected.entry_time_ms)}` : ''}`}
-              </p>
-              {data.view === 'zoom' && (
-                <button type="button" className={RUN.tab} onClick={showAll}>
-                  Ver todo el tramo
-                </button>
-              )}
+        {!formulaModel && (
+          <div className={RUN.chartCard} id="run-candles">
+            <div className={RUN.chartHead}>
+              <h4>
+                {data
+                  ? `${data.product} · Velas de la prueba`
+                  : 'Velas de la prueba'}
+              </h4>
+              <span className={RUN.chartTags}>LONG / SHORT / Salidas</span>
             </div>
-          )}
-          {data?.view === 'full' && markers.some((m) => isGroupId(m.id)) && (
-            <p className={RUN.hint} data-testid="run-groups-hint">
-              Las marcas con «+N» agrupan varias operaciones: al hacer clic en
-              una se abre la primera de su grupo.
-            </p>
-          )}
-
-          {unknownToGate && (
-            <p className={RUN.empty} data-testid="run-empty">
-              Esta estrategia no tiene pruebas guardadas.
-            </p>
-          )}
-          {state.kind === 'loading' && overviewError === null && (
-            <p className={RUN.empty}>Cargando la última prueba…</p>
-          )}
-          {state.kind === 'empty' && (
-            <p className={RUN.empty} data-testid="run-empty">
-              {state.reason === 'no-runs'
-                ? 'Todavía no hay pruebas terminadas de esta estrategia.'
-                : state.reason === 'run-not-saved'
-                  ? 'Esa prueba no guardó sus operaciones: no hay gráfico de ella.'
-                  : 'Las pruebas anteriores no guardaron sus operaciones: no hay gráfico de ellas.'}
-            </p>
-          )}
-          {state.kind === 'error' && (
-            <p role="alert" className={RUN.empty}>
-              {state.code === 'exam_not_unlocked'
-                ? 'El examen todavía no terminó: sus velas y operaciones se muestran recién después.'
-                : state.text}
-            </p>
-          )}
-
-          {data && (
-            <>
-              {data.candlesError ? (
-                <p className={RUN.empty} data-testid="run-no-candles">
-                  Sin datos de velas para esta ventana: {data.candlesError}
-                </p>
-              ) : (
-                <div className={RUN.chart}>
-                  <ApprovedTerminalChart
-                    key={`${data.summary.run_id}:${data.product}:${data.view}`}
-                    candles={chartCandles}
-                    markers={markers}
-                    selectedId={
-                      focused ?? (selected ? markerIds(selected).entry : '')
-                    }
-                    intervalSeconds={resolutionSeconds(
-                      data.candles?.resolution ?? '1m',
-                    )}
-                    currency="USD"
-                    instrument={data.product}
-                    priceLines={priceLinesOf(selected)}
-                    showVolume
-                    onSelect={(_time, markerId) => {
-                      if (isDiscardId(markerId)) {
-                        setFocusId(markerId ?? null)
-                        return
-                      }
-                      setFocusId(null)
-                      // A group of entries or exits opens its first operation.
-                      const group = isGroupId(markerId)
-                        ? markers.find((marker) => marker.id === markerId)
-                        : undefined
-                      const id = tradeOfMarker(
-                        group ? group.memberIds?.[0] : markerId,
+            {data?.candles && (
+              <div className={RUN.scope}>
+                <p className={RUN.hint} data-testid="run-scope">
+                  {data.view === 'full'
+                    ? fullViewText(
+                        data.candles.resolution,
+                        data.summary.range_start_ms,
+                        data.summary.range_end_ms,
                       )
-                      const trade = data.trades.find((t) => t.trade_id === id)
-                      if (trade) void select(trade)
-                    }}
-                    ariaLabel={`Velas de ${data.product} de la prueba con sus entradas y salidas`}
-                  />
-                </div>
-              )}
-              {data.candles && data.candles.missing_minutes > 0 && (
-                <p className={RUN.hint} data-testid="run-gaps">
-                  Faltan {data.candles.missing_minutes} velas de 1 minuto que
-                  Kraken no publicó en esta ventana; no se rellenaron.
+                    : `Velas de ${resolutionText(data.candles.resolution)} · zoom a la operación${selected ? ` del ${dayLabel(selected.entry_time_ms)}` : ''}`}
                 </p>
-              )}
-              {!data.tradesDone && (
-                <p className={RUN.hint} data-testid="run-trades-loading">
-                  Cargando las operaciones del tramo: {data.trades.length} de{' '}
-                  {data.total}…
-                </p>
-              )}
-              {data.tradesError && (
-                <p className={RUN.hint} data-testid="run-trades-error">
-                  No se pudieron cargar todas las operaciones (se ven{' '}
-                  {data.trades.length} de {data.total}): {data.tradesError}
-                </p>
-              )}
-              {fullView &&
-                traced &&
-                (traced.ignored_position_open ?? 0) > 0 && (
-                  <p className={RUN.hint} data-testid="run-ignored">
-                    {traced.ignored_position_open === 1
-                      ? '1 señal ignorada porque ya había una posición abierta'
-                      : `${amount(traced.ignored_position_open ?? 0, 0)} señales ignoradas porque ya había una posición abierta`}{' '}
-                    (no se dibujan).
+                {data.view === 'zoom' && (
+                  <button type="button" className={RUN.tab} onClick={showAll}>
+                    Ver todo el tramo
+                  </button>
+                )}
+              </div>
+            )}
+            {data?.view === 'full' && markers.some((m) => isGroupId(m.id)) && (
+              <p className={RUN.hint} data-testid="run-groups-hint">
+                Las marcas con «+N» agrupan varias operaciones: al hacer clic en
+                una se abre la primera de su grupo.
+              </p>
+            )}
+
+            {unknownToGate && (
+              <p className={RUN.empty} data-testid="run-empty">
+                Esta estrategia no tiene pruebas guardadas.
+              </p>
+            )}
+            {state.kind === 'loading' && overviewError === null && (
+              <p className={RUN.empty}>Cargando la última prueba…</p>
+            )}
+            {state.kind === 'empty' && (
+              <p className={RUN.empty} data-testid="run-empty">
+                {state.reason === 'no-runs'
+                  ? 'Todavía no hay pruebas terminadas de esta estrategia.'
+                  : state.reason === 'run-not-saved'
+                    ? 'Esa prueba no guardó sus operaciones: no hay gráfico de ella.'
+                    : 'Las pruebas anteriores no guardaron sus operaciones: no hay gráfico de ellas.'}
+              </p>
+            )}
+            {state.kind === 'error' && (
+              <p role="alert" className={RUN.empty}>
+                {state.code === 'exam_not_unlocked'
+                  ? 'El examen todavía no terminó: sus velas y operaciones se muestran recién después.'
+                  : state.text}
+              </p>
+            )}
+
+            {data && (
+              <>
+                {data.candlesError ? (
+                  <p className={RUN.empty} data-testid="run-no-candles">
+                    Sin datos de velas para esta ventana: {data.candlesError}
+                  </p>
+                ) : (
+                  <div className={RUN.chart}>
+                    <ApprovedTerminalChart
+                      key={`${data.summary.run_id}:${data.product}:${data.view}`}
+                      candles={chartCandles}
+                      markers={markers}
+                      selectedId={
+                        focused ?? (selected ? markerIds(selected).entry : '')
+                      }
+                      intervalSeconds={resolutionSeconds(
+                        data.candles?.resolution ?? '1m',
+                      )}
+                      currency="USD"
+                      instrument={data.product}
+                      priceLines={priceLinesOf(selected)}
+                      showVolume
+                      onSelect={(_time, markerId) => {
+                        if (isDiscardId(markerId)) {
+                          setFocusId(markerId ?? null)
+                          return
+                        }
+                        setFocusId(null)
+                        // A group of entries or exits opens its first operation.
+                        const group = isGroupId(markerId)
+                          ? markers.find((marker) => marker.id === markerId)
+                          : undefined
+                        const id = tradeOfMarker(
+                          group ? group.memberIds?.[0] : markerId,
+                        )
+                        const trade = data.trades.find((t) => t.trade_id === id)
+                        if (trade) void select(trade)
+                      }}
+                      ariaLabel={`Velas de ${data.product} de la prueba con sus entradas y salidas`}
+                    />
+                  </div>
+                )}
+                {data.candles && data.candles.missing_minutes > 0 && (
+                  <p className={RUN.hint} data-testid="run-gaps">
+                    Faltan {data.candles.missing_minutes} velas de 1 minuto que
+                    Kraken no publicó en esta ventana; no se rellenaron.
                   </p>
                 )}
-              {decided?.error && (
-                <p className={RUN.hint} data-testid="run-decisions-error">
-                  No se pudo leer el detalle de decisiones: {decided.error}
-                </p>
-              )}
-              {(!hasTrace || decided?.value?.captured === false) && (
-                <p className={RUN.hint} data-testid="run-no-decisions">
-                  Esta prueba se guardó sin el detalle de decisiones; las
-                  entradas y salidas sí se ven.
-                </p>
-              )}
-              {traced?.truncated && (
-                <p className={RUN.hint} data-testid="run-decisions-cut">
-                  Hay más descartes en esta ventana de los que se muestran (los
-                  primeros {traced.signals.length}).
-                </p>
-              )}
-              {data.total === 0 && (
-                <p className={RUN.hint} data-testid="run-no-trades">
-                  La estrategia no abrió posiciones en este producto durante la
-                  prueba.
-                </p>
-              )}
-              <ul className={RUN.legend} aria-label="Leyenda">
-                <li>
-                  <b className={RUN.long}>L</b> Entrada LONG
-                </li>
-                <li>
-                  <b className={RUN.short}>S</b> Entrada SHORT
-                </li>
-                <li>
-                  <b>×</b> Salida (motivo en el detalle)
-                </li>
-                <li>
-                  <b>◦</b> Descarte
-                </li>
-                <li className={RUN.legendNote}>
-                  {data.summary.label} · eje del gráfico en UTC, tablas en hora
-                  de Madrid
-                </li>
-              </ul>
-            </>
-          )}
-        </div>
+                {!data.tradesDone && (
+                  <p className={RUN.hint} data-testid="run-trades-loading">
+                    Cargando las operaciones del tramo: {data.trades.length} de{' '}
+                    {data.total}…
+                  </p>
+                )}
+                {data.tradesError && (
+                  <p className={RUN.hint} data-testid="run-trades-error">
+                    No se pudieron cargar todas las operaciones (se ven{' '}
+                    {data.trades.length} de {data.total}): {data.tradesError}
+                  </p>
+                )}
+                {fullView &&
+                  traced &&
+                  (traced.ignored_position_open ?? 0) > 0 && (
+                    <p className={RUN.hint} data-testid="run-ignored">
+                      {traced.ignored_position_open === 1
+                        ? '1 señal ignorada porque ya había una posición abierta'
+                        : `${amount(traced.ignored_position_open ?? 0, 0)} señales ignoradas porque ya había una posición abierta`}{' '}
+                      (no se dibujan).
+                    </p>
+                  )}
+                {decided?.error && (
+                  <p className={RUN.hint} data-testid="run-decisions-error">
+                    No se pudo leer el detalle de decisiones: {decided.error}
+                  </p>
+                )}
+                {(!hasTrace || decided?.value?.captured === false) && (
+                  <p className={RUN.hint} data-testid="run-no-decisions">
+                    Esta prueba se guardó sin el detalle de decisiones; las
+                    entradas y salidas sí se ven.
+                  </p>
+                )}
+                {traced?.truncated && (
+                  <p className={RUN.hint} data-testid="run-decisions-cut">
+                    Hay más descartes en esta ventana de los que se muestran
+                    (los primeros {traced.signals.length}).
+                  </p>
+                )}
+                {data.total === 0 && (
+                  <p className={RUN.hint} data-testid="run-no-trades">
+                    La estrategia no abrió posiciones en este producto durante
+                    la prueba.
+                  </p>
+                )}
+                <ul className={RUN.legend} aria-label="Leyenda">
+                  <li>
+                    <b className={RUN.long}>L</b> Entrada LONG
+                  </li>
+                  <li>
+                    <b className={RUN.short}>S</b> Entrada SHORT
+                  </li>
+                  <li>
+                    <b>×</b> Salida (motivo en el detalle)
+                  </li>
+                  <li>
+                    <b>◦</b> Descarte
+                  </li>
+                  <li className={RUN.legendNote}>
+                    {data.summary.label} · eje del gráfico en UTC, tablas en
+                    hora de Madrid
+                  </li>
+                </ul>
+              </>
+            )}
+          </div>
+        )}
       </details>
       {vbtModal && vbtState && (
         <VectorbtModal
@@ -1570,7 +1602,7 @@ function FormulaResult({ formula }: { formula: QuickFormula }) {
         {DAY_FORMAT.format(formula.hasta_ms)} · {amount(formula.fotos, 0)}{' '}
         miradas
       </p>
-      <details>
+      <details open>
         <summary className="cursor-pointer text-note text-ink-2">
           Ver el detalle en números
         </summary>

@@ -982,6 +982,13 @@ describe('StrategyRunView panel of the formula test (Qwen en vivo)', () => {
     expect(verdict).toHaveTextContent('+0,65 USD')
     expect(verdict).toHaveTextContent('Gana tras costos')
     expect(verdict).toHaveTextContent('3 operaciones')
+    const figures = screen.getByTestId('run-kpis')
+    expect(within(figures).getByText('3')).toBeInTheDocument()
+    expect(within(figures).getByText('+21,7 pb')).toBeInTheDocument()
+    expect(within(figures).queryByText('—')).toBeNull()
+    expect(screen.queryByText(/Sin prueba terminada/)).toBeNull()
+    expect(screen.queryByText(/Prueba anterior/)).toBeNull()
+    expect(screen.queryByText(/tramos probados/)).toBeNull()
     const chart = await screen.findByTestId('market-chart')
     expect(
       within(chart).getAllByRole('button', { name: /^Operación/ }),
