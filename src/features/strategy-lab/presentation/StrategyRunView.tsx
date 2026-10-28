@@ -2,6 +2,10 @@ import { VBT } from './vectorbt-styles.ts'
 import { RUN } from './run-view-styles.ts'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import ResultsVisual, { type VisualTrade } from './ResultsVisual.tsx'
+import ExigenciaControl, {
+  EXIGENCIA_PAPER,
+  EXIGENCIA_PAPER_LEVELS,
+} from './ExigenciaControl.tsx'
 import ApprovedTerminalChart from '../../trading-view/presentation/ApprovedTerminalChart.tsx'
 import { amount } from '../../../shared/finance/format.ts'
 import { signedAmount } from '../domain/strategy-format.ts'
@@ -577,6 +581,7 @@ export default function StrategyRunView({
         const started = await gate.start(strategyId, {
           from: stage.from,
           to: stage.to,
+          ...(kind === 'qwen_live' ? { exigencia } : {}),
         })
         let latest = await gate.overview(strategyId)
         while (latest.running != null) {
@@ -608,9 +613,16 @@ export default function StrategyRunView({
   const examStage = overview?.stages?.exam ?? null
   // --- Prueba rápida (Qwen en vivo): una muestra de fotos, orientativa ---
   const hasQuick = kind === 'qwen_live'
+  // How demanding the maestro and the portero are in the next test (only Qwen en vivo's tests; paper keeps 5 and 5)
+  const [exigencia, setExigencia] = useState(EXIGENCIA_PAPER_LEVELS)
   const [quickState, setQuickState] = useState<QuickState | null>(null)
   const [quickError, setQuickError] = useState<string | null>(null)
-  const quickRunning = quickState?.state === 'running'
+  // Just launched: the process has not rewritten its state file yet, so the server still shows the previous result (or none)
+  const [launching, setLaunching] = useState<{
+    prev: number | null
+    at: number
+  } | null>(null)
+  const quickRunning = quickState?.state === 'running' || launching != null
   const quickVariants = quickState?.variants ?? []
   const [detailsOpen, setDetailsOpen] = useState(false)
   // The test of the formula alone has no run: its operations and hourly prices come in its saved result.
@@ -627,7 +639,15 @@ export default function StrategyRunView({
       quick
         .status(strategyId)
         .then((next) => {
-          if (!cancelled) setQuickState({ ...next, fetched_ms: Date.now() })
+          if (cancelled) return
+          const stale =
+            launching != null &&
+            next.state !== 'running' &&
+            (next.started_ms ?? null) === launching.prev &&
+            Date.now() - launching.at < 45_000
+          if (stale) return
+          setLaunching(null)
+          setQuickState({ ...next, fetched_ms: Date.now() })
         })
         .catch(() => undefined)
     void look()
@@ -636,15 +656,24 @@ export default function StrategyRunView({
       cancelled = true
       if (timer) clearInterval(timer)
     }
-  }, [hasQuick, quick, strategyId, quickRunning])
+  }, [hasQuick, quick, strategyId, quickRunning, launching])
   const startQuick = async (quickVariant: string) => {
     setQuickError(null)
     try {
-      await quick.start(strategyId, quickVariant)
-      setQuickState({
-        ...(await quick.status(strategyId)),
-        fetched_ms: Date.now(),
-      })
+      await quick.start(
+        strategyId,
+        quickVariant,
+        hasQuick ? exigencia : undefined,
+      )
+      const next = await quick.status(strategyId)
+      if (
+        next.state === 'running' ||
+        next.started_ms !== quickState?.started_ms
+      ) {
+        setQuickState({ ...next, fetched_ms: Date.now() })
+      } else {
+        setLaunching({ prev: quickState?.started_ms ?? null, at: Date.now() })
+      }
     } catch (error) {
       // already running (a second click, or another window): show its progress instead of an error
       const current = await quick.status(strategyId).catch(() => null)
@@ -796,12 +825,28 @@ export default function StrategyRunView({
     (data.candles?.candles.length ?? 0) > 1
   const formulaModel = useFormulaModel(gatePanel ? null : formulaOf)
   const figs = formulaModel?.figures ?? null
+  // The levels the shown test ran with (the formula test keeps them in its result, a run in its params)
+  const usedLevels = formulaModel
+    ? (formulaOf?.exigencia ?? null)
+    : (lastRun?.params?.exigencia ?? null)
+  const weeklyNote = (trades: number, fromMs: number, toMs: number) => {
+    const weeks = (toMs - fromMs) / (7 * 86_400_000)
+    return weeks >= 1 ? ` · ${amount(trades / weeks, 1)} por semana` : ''
+  }
+  const runWeekly =
+    lastRun?.params?.from && lastRun.params.to
+      ? weeklyNote(
+          summary?.trades ?? 0,
+          Date.parse(lastRun.params.from),
+          Date.parse(lastRun.params.to),
+        )
+      : ''
   const kpiRow = figs ? (
     <div className={RUN.kpis} data-testid="run-kpis">
       <Kpi
         label="Operaciones cerradas"
         value={amount(figs.trades, 0)}
-        note="Solo la fórmula, sin Qwen"
+        note={`Solo la fórmula, sin Qwen${weeklyNote(figs.trades, formulaModel!.fromMs, formulaModel!.toMs)}`}
         tone={null}
       />
       <Kpi
@@ -830,7 +875,7 @@ export default function StrategyRunView({
         value={summary ? amount(summary.trades, 0) : '—'}
         note={
           summary
-            ? `${summary.trades >= summary.min_trades ? '✓' : '✗'} Mínimo: ${summary.min_trades}`
+            ? `${summary.trades >= summary.min_trades ? '✓' : '✗'} Mínimo: ${summary.min_trades}${runWeekly}`
             : ''
         }
         tone={summary && summary.trades < summary.min_trades ? 'bad' : null}
@@ -885,6 +930,8 @@ export default function StrategyRunView({
               : lastRun
                 ? `Prueba mostrada · ${runName(lastRun)}`
                 : 'Sin prueba terminada con operaciones guardadas'}
+            {usedLevels &&
+              ` · Exigencia: maestro ${usedLevels.maestro}, portero ${usedLevels.portero}${usedLevels.maestro === EXIGENCIA_PAPER && usedLevels.portero === EXIGENCIA_PAPER ? ' (como paper)' : ''}`}
             {running && ' · hay una prueba en curso'}
           </p>
         </div>
@@ -1001,6 +1048,13 @@ export default function StrategyRunView({
           </div>
         </div>
       </header>
+      {hasQuick && (
+        <ExigenciaControl
+          value={exigencia}
+          onChange={setExigencia}
+          disabled={testing || quickRunning}
+        />
+      )}
       {hasQuick &&
         (quickState?.state === 'running' ||
           quickState?.state === 'failed' ||
@@ -1758,6 +1812,8 @@ function QuickOperationTable({ op }: { op: QuickOperation }) {
       <p>
         <strong>Como opera la versión 8</strong> · cada entrada se cierra{' '}
         {op.salida}. Neto después de costos.
+        {op.exigencia &&
+          ` Exigencia: maestro ${op.exigencia.maestro}, portero ${op.exigencia.portero}.`}
       </p>
       {q.n === 0 ? (
         <p>
@@ -1794,6 +1850,7 @@ function QuickOperationTable({ op }: { op: QuickOperation }) {
             <tr>
               <th scope="col">Qué</th>
               <th scope="col">Operaciones</th>
+              <th scope="col">Por semana</th>
               <th scope="col">Neto por operación</th>
               <th scope="col">Ganadoras</th>
               <th scope="col">Por vuelta / por tiempo</th>
@@ -1804,6 +1861,11 @@ function QuickOperationTable({ op }: { op: QuickOperation }) {
               <tr key={label}>
                 <th scope="row">{label}</th>
                 <td>{stats.n}</td>
+                <td>
+                  {stats.por_semana == null
+                    ? 'sin dato'
+                    : amount(stats.por_semana, 1)}
+                </td>
                 <td>{bp(stats.neto_bp)}</td>
                 <td>{percentText(stats.ganadoras)}</td>
                 <td>

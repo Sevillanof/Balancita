@@ -21,6 +21,7 @@ import random
 import time
 
 from . import futures_qwen_corta as corta
+from . import futures_qwen_exigencia as exigencia
 from . import futures_qwen_factors as fq
 from . import futures_qwen_ficha as fficha
 from . import futures_qwen_maestro as maestro
@@ -633,6 +634,20 @@ def _op_stats(items, draws, seed):
             "horas": mean([_op_side(r, s)["horas"] for r, s in items])}
 
 
+def _per_week(stats, rows):
+    """Adds ``por_semana`` (operations per week over the span of the photos) to the stats of one way of operating."""
+    ms = [r["t_ms"] for r in rows]
+    weeks = (max(ms) - min(ms)) / (7 * DAY_MS) if ms else 0
+    stats["por_semana"] = stats["n"] / weeks if weeks >= 1 else None
+    return stats
+
+
+def exigencia_used(cfg):
+    """The levels this test ran with, the thresholds they mean and the paper mark (always shown with the result)."""
+    teacher, keeper = corta.formulas(dict(cfg, exigencia=None))
+    return exigencia.describe(teacher, keeper, exigencia.levels(**(cfg.get("exigencia") or {})))
+
+
 def _op_random_percentile(items, draws, seed, observed):
     """As ``random_percentile``, with the result of the version 8 operation: one coin per day flips all its sides or none."""
     if not items or observed is None:
@@ -661,7 +676,7 @@ def analyse_operation(rows, cfg):
     maestro_side = lambda r: 1 if r["operacion"]["maestro"] > 0 else -1
     strong = [(r, maestro_side(r)) for r in rows if abs(r["operacion"]["maestro"]) == 2]
     formula = [(r, s) for r, s in strong if r["operacion"]["portero_si"]]
-    qwen = _op_stats(entries, draws, seed)
+    qwen = _per_week(_op_stats(entries, draws, seed), rows)
     qwen["con_maestro"] = mean([1.0 if r["operacion"]["maestro"] * s > 0 else 0.0 for r, s in entries])
     qwen["con_portero"] = mean([1.0 if r["operacion"]["portero_si"] else 0.0 for r, _ in entries])
     qwen["vs_azar_pct"] = _op_random_percentile(entries, draws, seed, qwen["neto_bp"])
@@ -669,10 +684,12 @@ def analyse_operation(rows, cfg):
            "salida": ("cuando el maestro se da vuelta (al menos flojo en contra) o a las {} h, sin stop".format(
                qt.es(cfg["guardrails"]["max_hold_min"] / 60.0, 0)) if cfg["guardrails"]["max_hold_min"] else
                "cuando el maestro se da vuelta (al menos flojo en contra), sin stop y sin límite de tiempo"),
-           "qwen": qwen, "qwen_todas": _op_stats(said, draws, seed), "formula": _op_stats(formula, draws, seed),
-           "maestro_fuerte": _op_stats(strong, draws, seed),
-           "siempre_largo": _op_stats([(r, 1) for r, _ in entries], draws, seed),
-           "siempre_corto": _op_stats([(r, -1) for r, _ in entries], draws, seed),
+           "exigencia": exigencia_used(cfg),
+           "qwen": qwen, "qwen_todas": _per_week(_op_stats(said, draws, seed), rows),
+           "formula": _per_week(_op_stats(formula, draws, seed), rows),
+           "maestro_fuerte": _per_week(_op_stats(strong, draws, seed), rows),
+           "siempre_largo": _per_week(_op_stats([(r, 1) for r, _ in entries], draws, seed), rows),
+           "siempre_corto": _per_week(_op_stats([(r, -1) for r, _ in entries], draws, seed), rows),
            "espejo_bloqueo": sum(1 for r in rows if classify(r, threshold) == "espejo"),
            "espera": sum(1 for r in rows if r["real_action"] == "ESPERAR"),
            "nocional_usd": float(cfg.get("notional_usd") or 0),
@@ -724,10 +741,11 @@ def analyse_formula(photos, cfg):
     hold = cfg["guardrails"]["max_hold_min"]
     return {"fotos": len(rows), "desde_ms": min(r["t_ms"] for r in rows), "hasta_ms": max(r["t_ms"] for r in rows),
             "max_horas": (hold or 0) / 60.0, "nocional_usd": float(cfg.get("notional_usd") or 0),
-            "productos": sorted({r["product"] for r in rows}),
-            "formula": _op_stats(formula, draws, seed), "maestro_fuerte": _op_stats(maestro, draws, seed),
-            "siempre_largo": _op_stats([(r, 1) for r, _ in formula], draws, seed),
-            "siempre_corto": _op_stats([(r, -1) for r, _ in formula], draws, seed),
+            "productos": sorted({r["product"] for r in rows}), "exigencia": exigencia_used(cfg),
+            "formula": _per_week(_op_stats(formula, draws, seed), rows),
+            "maestro_fuerte": _per_week(_op_stats(maestro, draws, seed), rows),
+            "siempre_largo": _per_week(_op_stats([(r, 1) for r, _ in formula], draws, seed), rows),
+            "siempre_corto": _per_week(_op_stats([(r, -1) for r, _ in formula], draws, seed), rows),
             "curvas": {"formula": _trade_list(formula), "maestro_fuerte": _trade_list(maestro),
                        "siempre_largo": _trade_list([(r, 1) for r, _ in formula]),
                        "siempre_corto": _trade_list([(r, -1) for r, _ in formula])}}

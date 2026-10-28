@@ -1851,6 +1851,9 @@ def main(argv=None):
                                   "las otras variantes se aplican sobre la v3")
             if variant is not None and variant.get("model") is None and variant["kind"] != "formula":
                 cfg = variants.apply_variant(cfg, variant)       # its own questions / state: hashed in the identity
+            if args.quick is not None:                          # los niveles de exigencia llegan por entorno (solo pruebas)
+                from .futures_qwen_exigencia import apply_env
+                cfg = apply_env(cfg)
             if args.positioning_db:
                 cfg = dict(cfg, positioning_db=os.path.abspath(args.positioning_db))
             history = History(args.cache_dir, holdout_ms, offline=args.offline)

@@ -21,6 +21,7 @@ import time
 
 from .futures_products import load_pinned_products
 from .futures_spec_strategy import load_specs, spec_hash
+from . import futures_qwen_exigencia as exigencia
 from . import strategy_gate_models
 from . import strategy_evaluation_policy as evaluation_policy
 from . import strategy_gate_accounting as accounting
@@ -161,7 +162,7 @@ class GateApi:
         if not isinstance(body, dict):
             raise GateApiError("invalid_body", "El pedido debe ser un objeto.")
         self._mode(body.get("evaluation_mode", evaluation_policy.BASELINE_MODE))
-        extra = set(body) - {"from", "to", "products", "exam", "evaluation_mode"}
+        extra = set(body) - {"from", "to", "products", "exam", "evaluation_mode", "exigencia"}
         if extra:
             raise GateApiError("invalid_body", "Campos no admitidos: {}.".format(", ".join(sorted(extra))))
         exam = body.get("exam", False)
@@ -221,8 +222,24 @@ class GateApi:
                 "supported_modes": [evaluation_policy.BASELINE_MODE],
                 "evaluation_policy": evaluation_policy.metadata(recorded_model=recorded_model)}
 
+    @staticmethod
+    def exigencia_env(body, strategy_id):
+        """Levels 0-10 of the maestro and the portero for this test only (Qwen en vivo's replay); ``{}`` when not asked."""
+        asked = body.get("exigencia")
+        if asked is None:
+            return {}
+        if strategy_id != strategy_gate_models.QWEN_LIVE_ID:
+            raise GateApiError("invalid_exigencia", "La exigencia solo existe para Qwen en vivo.")
+        if not isinstance(asked, dict) or set(asked) - {"maestro", "portero"}:
+            raise GateApiError("invalid_exigencia", "La exigencia lleva 'maestro' y 'portero', de 0 a 10.")
+        try:
+            return exigencia.env_for(asked.get("maestro"), asked.get("portero"))
+        except ValueError as error:
+            raise GateApiError("invalid_exigencia", str(error)) from error
+
     def launch(self, strategy_id, body):
         start, end, products, exam = self._validate(body, strategy_id)
+        levels_env = self.exigencia_env(body, strategy_id)
         preflight = self.preflight(strategy_id, body.get("evaluation_mode", evaluation_policy.BASELINE_MODE))
         scope = preflight["evaluation_policy"]
         args = [self.python, "-m", "balancita_engine.strategy_gate", "--data-dir", self.data_dir, "evaluate",
@@ -244,6 +261,8 @@ class GateApi:
         if exam:
             args.append("--exam")
         env = dict(os.environ)
+        env.pop(exigencia.ENV_MAESTRO, None), env.pop(exigencia.ENV_PORTERO, None)
+        env.update(levels_env)
         env["PYTHONPATH"] = os.pathsep.join(p for p in (os.path.join(ROOT, "python"), env.get("PYTHONPATH")) if p)
         with self._launch_lock:
             running = self._running()

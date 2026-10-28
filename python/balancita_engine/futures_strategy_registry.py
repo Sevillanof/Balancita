@@ -1074,7 +1074,8 @@ def make_handler(service):
             if method == "GET":
                 return quick.status(parts[1], parse_qs(urlparse(self.path).query).get("variant", [None])[-1])
             if method == "POST":
-                return quick.launch(parts[1], (self._body() or {}).get("variant"))
+                body = self._body() or {}
+                return quick.launch(parts[1], body.get("variant"), body.get("exigencia"))
             return None
 
         def _handle(self, method):

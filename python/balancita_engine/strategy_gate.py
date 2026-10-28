@@ -69,6 +69,7 @@ from .futures_simulator import DEFAULT_PERIODS, Book, frames, merge_periods
 from .gate_trace import TRACE_FILE, TRACE_SCHEMA, TracedBook, encode, trace_lines
 from .futures_spec_strategy import DEFAULT_SPEC_DIR, declared_indicators, load_specs, spec_hash, validate_spec
 from .futures_strategy_reliability import TRIAL_SHARPE_SD, deflated_probability
+from . import futures_qwen_exigencia
 from . import strategy_gate_models as strategy_models
 from . import strategy_purge
 from . import strategy_evaluation_policy as evaluation_policy
@@ -1289,6 +1290,8 @@ def evaluate(strategy_id, *, kind="practice", from_date=None, to_date=None, prod
                   "evaluation_policy": scope, "provenance": identity, "audit": provenance.audit(identity)}
         if contaminated:
             params["contaminated"] = True
+        if strategy_id == strategy_models.QWEN_LIVE_ID and kind == "practice":
+            params["exigencia"] = futures_qwen_exigencia.from_env()      # los niveles 0-10 de esta prueba (5 y 5 = paper)
         with db:
             cur = db.execute(
                 "INSERT INTO runs(strategy_id,family,version_key,code_hash,params,kind,status,progress,phase,started_at,"

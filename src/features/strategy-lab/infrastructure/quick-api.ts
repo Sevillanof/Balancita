@@ -45,9 +45,30 @@ export type QuickFicha = {
   comparison: QuickComparisonRow[]
 }
 
+/**
+ * The levels (0–10) a test ran with and what they mean: the maestro's «fuerte» score and the portero's probability, with the
+ * ones paper operates (level `actual`, 5) so the screen can mark them.
+ */
+export type Exigencia = {
+  maestro: number
+  portero: number
+  actual: number
+  maestro_fuerte: number
+  maestro_fuerte_paper: number
+  /** Share (0–1) of the signals that count as strong at this level. */
+  maestro_partes_fuertes: number
+  portero_umbral: number
+  portero_umbral_paper: number
+}
+
+/** The two levels the user picks before a test. */
+export type ExigenciaLevels = { maestro: number; portero: number }
+
 /** One row of the operation table (version 8): operations closed by the fixed exit rule, net after costs. */
 export type QuickOperationStats = {
   n: number
+  /** Operations per week over the span of the photos (absent in older results). */
+  por_semana?: number | null
   neto_bp: number | null
   ganadoras: number | null
   ic: [number | null, number | null]
@@ -62,6 +83,7 @@ export type QuickOperationStats = {
  * maestro turns against it or at the time limit, against the formulas alone on the same photos.
  */
 export type QuickOperation = {
+  exigencia?: Exigencia | null
   fotos: number
   max_horas: number
   salida: string
@@ -103,6 +125,7 @@ export type QuickTrade = {
 
 /** The formula alone (no Qwen) over every wake of the exam range, one position per product, as it operates live. */
 export type QuickFormula = {
+  exigencia?: Exigencia | null
   fotos: number
   desde_ms: number
   hasta_ms: number
@@ -179,7 +202,11 @@ export type QuickState = {
 
 export type QuickApi = {
   status: (strategyId: string) => Promise<QuickState>
-  start: (strategyId: string, variant?: string) => Promise<void>
+  start: (
+    strategyId: string,
+    variant?: string,
+    exigencia?: ExigenciaLevels,
+  ) => Promise<void>
 }
 
 async function failure(response: Response): Promise<Error> {
@@ -201,11 +228,14 @@ export const quickApi: QuickApi = {
     if (!response.ok) throw await failure(response)
     return (await response.json()) as QuickState
   },
-  async start(strategyId, variant) {
+  async start(strategyId, variant, exigencia) {
     const response = await fetch(url(strategyId), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(variant ? { variant } : {}),
+      body: JSON.stringify({
+        ...(variant ? { variant } : {}),
+        ...(exigencia ? { exigencia } : {}),
+      }),
     })
     if (!response.ok) throw await failure(response)
   },
