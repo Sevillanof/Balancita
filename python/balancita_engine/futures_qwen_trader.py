@@ -1852,16 +1852,18 @@ def main(argv=None):
             if variant is not None and variant.get("model") is None and variant["kind"] != "formula":
                 cfg = variants.apply_variant(cfg, variant)       # its own questions / state: hashed in the identity
             if args.quick is not None:                          # los niveles de exigencia llegan por entorno (solo pruebas)
+                from .futures_qwen_analista import apply_env as analista_env
                 from .futures_qwen_exigencia import apply_env
-                cfg = apply_env(cfg)
+                cfg = analista_env(apply_env(cfg))
             if args.positioning_db:
                 cfg = dict(cfg, positioning_db=os.path.abspath(args.positioning_db))
+            from .futures_qwen_analista import extra_days as analista_days
             history = History(args.cache_dir, holdout_ms, offline=args.offline)
             if not history.offline:
                 for product in dict.fromkeys(list(cfg["exam"]["products"]) + list(cfg.get("state_context") or ())):
                     print("candles {}: {} a {}".format(product, cfg["practice"]["from"], stamp(holdout_ms)))
-                    history.prefetch(product, date_ms(cfg["practice"]["from"]) - cfg["practice"]["warmup_days"] * DAY_MS,
-                                     holdout_ms)
+                    history.prefetch(product, date_ms(cfg["practice"]["from"]) - (
+                        cfg["practice"]["warmup_days"] + analista_days(cfg)) * DAY_MS, holdout_ms)
             if args.sequential:
                 cfg = dict(cfg, runtime=dict(cfg.get("runtime") or {}, concurrent_orders=False))
             if args.quick is not None:

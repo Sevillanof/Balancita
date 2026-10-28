@@ -94,6 +94,8 @@ export function useFormulaModel(
               funding_status: 'unknown',
               notional_usd: String(formula.nocional_usd),
               signal_time_ms: null,
+              size_mult: trade.tamano ?? null,
+              with_movement: trade.movimiento ?? null,
             })),
     [formula, points, product],
   )

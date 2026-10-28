@@ -76,6 +76,8 @@ export type GateRun = {
     products?: string[]
     /** Qwen en vivo: the levels 0–10 of the maestro and the portero this test ran with. */
     exigencia?: { maestro: number; portero: number } | null
+    /** Qwen en vivo: the movement analyst's mode this test ran with (`apagado` = paper). */
+    analista?: 'apagado' | 'suave' | 'fuerte' | null
   } | null
   /** True when the run is of the strategy's current content (the server marks it). */
   same_version?: boolean
@@ -114,7 +116,11 @@ export type GateRequest = {
   products?: string[]
   exam?: boolean
   /** Qwen en vivo only: exigencia 0–10 of the maestro and the portero for this test (5 and 5 = what paper operates). */
-  exigencia?: { maestro: number; portero: number }
+  exigencia?: {
+    maestro: number
+    portero: number
+    analista?: 'apagado' | 'suave' | 'fuerte'
+  }
 }
 
 export type GateApi = {

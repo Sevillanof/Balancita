@@ -121,3 +121,98 @@ it('el veredicto dice si gana tras costos y lo compara con mantener', () => {
     screen.getByText(/mantener ETH daría \+10,00 USD/u),
   ).toBeInTheDocument()
 })
+
+it('sin analista de movimiento no dibuja leyenda ni marcas de movimiento', () => {
+  render(
+    <MarketTradesChart
+      product="PF_ETHUSD"
+      candles={candles}
+      view="full"
+      trades={trades}
+      selected={null}
+      onSelect={() => undefined}
+      onShowAll={() => undefined}
+    />,
+  )
+  expect(screen.queryByTestId('movement-legend')).toBeNull()
+  expect(document.querySelector('[data-movement]')).toBeNull()
+})
+
+it('con el analista marca cada operación «con movimiento» o «en calma» y el ancho es el tamaño', () => {
+  const rated = [
+    { ...trades[0]!, with_movement: false, size_mult: 0.75 },
+    { ...trades[1]!, with_movement: true, size_mult: 1.25 },
+  ]
+  render(
+    <MarketTradesChart
+      product="PF_ETHUSD"
+      candles={candles}
+      view="full"
+      trades={rated}
+      selected={null}
+      onSelect={() => undefined}
+      onShowAll={() => undefined}
+    />,
+  )
+  expect(screen.getByTestId('movement-legend')).toBeInTheDocument()
+  const calm = screen.getByRole('button', {
+    name: /Operación 1 .*en calma ×0,75/u,
+  })
+  const moving = screen.getByRole('button', {
+    name: /Operación 2 .*con movimiento ×1,25/u,
+  })
+  expect(calm).toHaveAttribute('data-movement', 'en-calma')
+  expect(calm).toHaveStyle({ width: '9px' })
+  expect(moving).toHaveAttribute('data-movement', 'con-movimiento')
+  expect(moving).toHaveStyle({ width: '15px' })
+})
+
+it('al elegir una operación del analista dice cómo entró', () => {
+  const picked = { ...trades[1]!, with_movement: true, size_mult: 1.5 }
+  render(
+    <MarketTradesChart
+      product="PF_ETHUSD"
+      candles={candles}
+      view="zoom"
+      trades={[trades[0]!, picked]}
+      selected={picked}
+      onSelect={() => undefined}
+      onShowAll={() => undefined}
+    />,
+  )
+  expect(screen.getByTestId('movement-note')).toHaveTextContent(
+    'entró con movimiento ×1,5',
+  )
+})
+
+it('«Se podía ganar» pesa por el tamaño del analista, igual que lo ganado', () => {
+  const base = { ...trades[0]!, net_bp: -40 }
+  const { rerender } = render(
+    <MarketTradesChart
+      product="PF_ETHUSD"
+      candles={candles}
+      view="zoom"
+      trades={[base]}
+      selected={base}
+      onSelect={() => undefined}
+      onShowAll={() => undefined}
+    />,
+  )
+  const plain = screen.getByText('Se podía ganar').parentElement!.textContent!
+  const sized = { ...base, with_movement: true, size_mult: 1.5 }
+  rerender(
+    <MarketTradesChart
+      product="PF_ETHUSD"
+      candles={candles}
+      view="zoom"
+      trades={[sized]}
+      selected={sized}
+      onSelect={() => undefined}
+      onShowAll={() => undefined}
+    />,
+  )
+  const weighted =
+    screen.getByText('Se podía ganar').parentElement!.textContent!
+  const pb = (text: string) => Number(/\+(\d+) pb/u.exec(text)![1])
+  expect(pb(weighted)).toBe(Math.round(pb(plain) * 1.5))
+})

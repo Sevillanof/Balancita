@@ -61,8 +61,24 @@ export type Exigencia = {
   portero_umbral_paper: number
 }
 
-/** The two levels the user picks before a test. */
-export type ExigenciaLevels = { maestro: number; portero: number }
+/** How the movement analyst sizes each trade: `apagado` = size 1 (paper), `suave` = ×1.25 / ×0.75, `fuerte` = ×1.5 / ×0.5. */
+export type AnalistaModo = 'apagado' | 'suave' | 'fuerte'
+
+/** What a test ran with for the movement analyst (the sizes it used with movement and in calm, and the one paper uses). */
+export type AnalistaUsado = {
+  modo: AnalistaModo
+  actual: AnalistaModo
+  tamano_con_movimiento: number
+  tamano_en_calma: number
+  regla: string
+}
+
+/** The two levels and the analyst's mode the user picks before a test. */
+export type ExigenciaLevels = {
+  maestro: number
+  portero: number
+  analista: AnalistaModo
+}
 
 /** One row of the operation table (version 8): operations closed by the fixed exit rule, net after costs. */
 export type QuickOperationStats = {
@@ -121,11 +137,20 @@ export type QuickTrade = {
   /** The maestro at the entry (−2…+2) and whether the portero agreed. */
   maestro?: number
   portero?: boolean
+  /** The movement analyst: the size the entry got (1 when off) and whether ETH was moving (`null`: not enough history). */
+  tamano?: number
+  movimiento?: boolean | null
 }
 
 /** The formula alone (no Qwen) over every wake of the exam range, one position per product, as it operates live. */
 export type QuickFormula = {
   exigencia?: Exigencia | null
+  analista?: AnalistaUsado | null
+  /** Entries with movement / in calm / without enough history: count and net bp at size 1 (before the analyst's weight). */
+  por_movimiento?: Record<
+    'con' | 'calma' | 'sin_dato',
+    { n: number; neto_propio_bp: number }
+  >
   fotos: number
   desde_ms: number
   hasta_ms: number

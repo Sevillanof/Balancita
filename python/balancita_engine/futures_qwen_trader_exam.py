@@ -20,6 +20,7 @@ import os
 import random
 import time
 
+from . import futures_qwen_analista as analista
 from . import futures_qwen_corta as corta
 from . import futures_qwen_exigencia as exigencia
 from . import futures_qwen_factors as fq
@@ -85,6 +86,10 @@ def make_photos(history, cfg, product, holdout_ms, texts=True, market=None, star
             continue
         trader.context[other] = {int(b["bucket_start"]) + BAR_MS: float(b["close"]) for b in history.bars(
             other, start - practice["warmup_days"] * DAY_MS, holdout_ms)}
+    movement = None
+    if analista.sizes_of(cfg):                                          # the analyst needs 90 days of candles before the warmup
+        warm_from = start - practice["warmup_days"] * DAY_MS
+        movement = analista.Movement(history.bars(product, warm_from - analista.extra_days(cfg) * DAY_MS, warm_from) + bars)
     closes, found, readings = {}, [], {}
     for bar in bars:
         trader.feed(bar, trade=False)
@@ -127,7 +132,7 @@ def make_photos(history, cfg, product, holdout_ms, texts=True, market=None, star
             operation = _operation(cfg, t_ms, readings, closes, cost, weak)
             if operation is None:
                 continue                                                # no candle at the exit: nothing to measure
-            photo["operacion"] = operation
+            photo["operacion"] = analista.sized(cfg, operation, movement, t_ms)
         out.append(photo)
     return out
 
@@ -684,7 +689,7 @@ def analyse_operation(rows, cfg):
            "salida": ("cuando el maestro se da vuelta (al menos flojo en contra) o a las {} h, sin stop".format(
                qt.es(cfg["guardrails"]["max_hold_min"] / 60.0, 0)) if cfg["guardrails"]["max_hold_min"] else
                "cuando el maestro se da vuelta (al menos flojo en contra), sin stop y sin límite de tiempo"),
-           "exigencia": exigencia_used(cfg),
+           "exigencia": exigencia_used(cfg), "analista": analista.describe(cfg),
            "qwen": qwen, "qwen_todas": _per_week(_op_stats(said, draws, seed), rows),
            "formula": _per_week(_op_stats(formula, draws, seed), rows),
            "maestro_fuerte": _per_week(_op_stats(strong, draws, seed), rows),
@@ -711,7 +716,8 @@ def _trade_list(items):
         o = _op_side(r, s)
         out.append({"producto": r["product"], "lado": s, "entrada_ms": r["t_ms"], "salida_ms": o["salida_ms"],
                     "neto_bp": round(o["neto_bp"], 2), "motivo": o["motivo"], "maestro": r["operacion"]["maestro"],
-                    "portero": bool(r["operacion"]["portero_si"])})
+                    "portero": bool(r["operacion"]["portero_si"]),
+                    "tamano": r["operacion"].get("tamano", 1.0), "movimiento": r["operacion"].get("movimiento")})
     return out
 
 
@@ -742,6 +748,7 @@ def analyse_formula(photos, cfg):
     return {"fotos": len(rows), "desde_ms": min(r["t_ms"] for r in rows), "hasta_ms": max(r["t_ms"] for r in rows),
             "max_horas": (hold or 0) / 60.0, "nocional_usd": float(cfg.get("notional_usd") or 0),
             "productos": sorted({r["product"] for r in rows}), "exigencia": exigencia_used(cfg),
+            "analista": analista.describe(cfg), "por_movimiento": analista.split(formula, _op_side) if analista.sizes_of(cfg) else None,
             "formula": _per_week(_op_stats(formula, draws, seed), rows),
             "maestro_fuerte": _per_week(_op_stats(maestro, draws, seed), rows),
             "siempre_largo": _per_week(_op_stats([(r, 1) for r, _ in formula], draws, seed), rows),
@@ -775,9 +782,11 @@ def scheme_trades(history, cfg, product, start_ms, end_ms, holdout_ms, funding=N
             continue                                     # still open at the end of the window: not counted
         paid, covered = line.accrue(r["t_ms"], o["salida_ms"], qt.D(100), s > 0) if line is not None else (0.0, 0)
         held = o["salida_ms"] - r["t_ms"]
+        size = r["operacion"].get("tamano", 1.0)         # the analyst's size: the net is already weighted, the funding too
         out.append({"side": "LONG" if s > 0 else "SHORT", "entry_time_ms": r["t_ms"], "exit_time_ms": o["salida_ms"],
-                    "net_bp": o["neto_bp"] - float(paid) / 100.0 * 1e4, "entry_price": str(o["entrada_px"]),
-                    "exit_price": str(o["salida_px"]), "funding_usd": float(paid),
+                    "net_bp": o["neto_bp"] - size * float(paid) / 100.0 * 1e4,
+                    "size_mult": size, "with_movement": r["operacion"].get("movimiento"), "entry_price": str(o["entrada_px"]),
+                    "exit_price": str(o["salida_px"]), "funding_usd": float(paid) * size,
                     "funding_status": "complete" if covered >= held else ("partial" if covered > 0 else "unknown"),
                     "exit_reason": o["motivo"], "source": "formula"})
     return out
