@@ -409,6 +409,7 @@ describe('StrategyRunView actions', () => {
     expect(quick.start).toHaveBeenCalledWith('qwen-live', 'actual', {
       maestro: 5,
       portero: 5,
+      analista: 'apagado',
     })
     expect(
       await screen.findByRole('progressbar', {
@@ -467,6 +468,42 @@ describe('StrategyRunView actions', () => {
     expect(quick.start).toHaveBeenCalledWith('qwen-live', 'actual', {
       maestro: 8,
       portero: 2,
+      analista: 'apagado',
+    })
+  })
+
+  it('the movement analyst starts off (as in paper) and its mode goes with the quick test', async () => {
+    const user = userEvent.setup()
+    const quick = {
+      status: vi.fn(async () => ({ state: 'none', snapshots: 300, note: 'n' })),
+      start: vi.fn(async () => undefined),
+    } as unknown as import('../infrastructure/quick-api.ts').QuickApi
+    render(
+      <StrategyRunView
+        strategyId="qwen-live"
+        strategyName="Qwen en vivo"
+        version={1}
+        kind="qwen_live"
+        gate={gateWith(overview([]))}
+        visual={visualWith()}
+        quick={quick}
+      />,
+    )
+    const group = await screen.findByRole('radiogroup', {
+      name: 'Analista de movimiento',
+    })
+    const radios = within(group).getAllByRole('radio') as HTMLInputElement[]
+    expect(radios.map((r) => [r.value, r.checked])).toEqual([
+      ['apagado', true],
+      ['suave', false],
+      ['fuerte', false],
+    ])
+    await user.click(within(group).getByLabelText('1,25 / 0,75'))
+    await user.click(await screen.findByRole('button', { name: /Con Qwen/ }))
+    expect(quick.start).toHaveBeenCalledWith('qwen-live', 'actual', {
+      maestro: 5,
+      portero: 5,
+      analista: 'suave',
     })
   })
 
@@ -593,6 +630,7 @@ describe('StrategyRunView actions', () => {
     expect(quick.start).toHaveBeenCalledWith('qwen-live', 'm1-qwen3-8b', {
       maestro: 5,
       portero: 5,
+      analista: 'apagado',
     })
   })
 
@@ -709,6 +747,7 @@ describe('StrategyRunView actions', () => {
     expect(quick.start).toHaveBeenCalledWith('qwen-live', 'ficha-pista', {
       maestro: 5,
       portero: 5,
+      analista: 'apagado',
     })
     const reads = await screen.findByRole('table', {
       name: 'Lectura por renglón',

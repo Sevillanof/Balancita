@@ -40,8 +40,20 @@ const priceOf = (value: string | null) => {
   return Number.isFinite(number) && number > 0 ? number : null
 }
 
+/** What the movement analyst said at the entry: `null` when it was off or had no history. */
+const movementOf = (trade: RunTrade): boolean | null =>
+  trade.with_movement ?? null
+
+/** `con movimiento ×1,25` / `en calma ×0,75`; empty when the analyst did not rate this entry. */
+function movementText(trade: RunTrade): string {
+  const moving = movementOf(trade)
+  if (moving === null) return ''
+  const size = trade.size_mult ?? 1
+  return `${moving ? 'con movimiento' : 'en calma'} ×${String(size).replace('.', ',')}`
+}
+
 const tradeLabel = (trade: RunTrade, index: number) =>
-  `Operación ${index + 1} · ${trade.side === 'LONG' ? 'largo' : 'corto'} · ${WHEN.format(trade.entry_time_ms)} · ${signedAmount(trade.net_bp, 1)} pb`
+  `Operación ${index + 1} · ${trade.side === 'LONG' ? 'largo' : 'corto'} · ${WHEN.format(trade.entry_time_ms)} · ${signedAmount(trade.net_bp, 1)} pb${movementText(trade) ? ` · ${movementText(trade)}` : ''}`
 
 type Props = {
   product: string
@@ -92,6 +104,8 @@ export default function MarketTradesChart({
     [candles, selected, zoom],
   )
   const notional = notionalOf(trades)
+  // The legend of «con movimiento» / «en calma» only shows when the analyst rated the entries of this test
+  const rated = trades.some((t) => movementOf(t) !== null)
   if (closes.length < 2)
     return (
       <p className="m-0 px-3 py-8 text-center text-body text-ink-2">
@@ -125,7 +139,14 @@ export default function MarketTradesChart({
     value: vHi - ((vHi - vLo) * k) / 4,
   }))
 
+  // What could have been earned is measured at size 1: it is weighted like the entry, so both bars compare the same bet
+  const sizeMult = selected?.size_mult ?? 1
   const win = selected ? selected.net_bp >= 0 : true
+  // The candles can be coarse (hourly closes): what could have been earned is never less than what was earned
+  const couldEarn = Math.max(
+    (potential?.best ?? 0) * sizeMult,
+    win ? (selected?.net_bp ?? 0) : 0,
+  )
   const long = selected?.side === 'LONG'
   const entryPrice = selected
     ? (priceOf(selected.entry_price) ?? priceAt(selected.entry_time_ms))
@@ -137,11 +158,14 @@ export default function MarketTradesChart({
   const exitPrice = selected
     ? (priceOf(selected.exit_price) ?? priceAt(selected.exit_time_ms))
     : 0
-  const best = Math.max(
-    Math.abs(selected?.net_bp ?? 0),
-    potential?.best ?? 0,
-    20,
-  )
+  // When the real exit was at least as good as any exit the candles show, the best exit is the real one
+  const bestAtMs =
+    potential && potential.bestAtMs !== null && selected
+      ? win && selected.net_bp >= potential.best * sizeMult
+        ? selected.exit_time_ms
+        : potential.bestAtMs
+      : null
+  const best = Math.max(Math.abs(selected?.net_bp ?? 0), couldEarn, 20)
   const bar = (label: string, bp: number, tone: string, fill: string) => (
     <div className="grid gap-1 text-note">
       <div className="flex justify-between gap-2 text-ink-2">
@@ -207,6 +231,12 @@ export default function MarketTradesChart({
         <span className="flex items-center gap-3 tracking-normal normal-case">
           <span className="text-long">━ Ganó</span>
           <span className="text-short">━ Perdió</span>
+          {rated && (
+            <span className="text-ink-2" data-testid="movement-legend">
+              <span className="text-ink">━ con movimiento</span> ·{' '}
+              <span className="text-ink">┅ en calma</span>
+            </span>
+          )}
           {zoom && (
             <button
               type="button"
@@ -258,6 +288,14 @@ export default function MarketTradesChart({
               d={path(trade.entry_time_ms, trade.exit_time_ms)}
               fill="none"
               strokeWidth={on ? 5 : zoom ? 2 : 2.6}
+              strokeDasharray={movementOf(trade) === false ? '5 4' : undefined}
+              data-movement={
+                movementOf(trade) === null
+                  ? undefined
+                  : movementOf(trade)
+                    ? 'con-movimiento'
+                    : 'en-calma'
+              }
               opacity={zoom && !on ? 0.35 : 0.85}
               className={`cursor-pointer ${trade.net_bp >= 0 ? 'stroke-long' : 'stroke-short'}`}
               onClick={() => onSelect(trade)}
@@ -279,13 +317,13 @@ export default function MarketTradesChart({
               className={win ? 'fill-long' : 'fill-short'}
               opacity={0.07}
             />
-            {potential && potential.bestAtMs !== null && (
+            {potential && bestAtMs !== null && (
               <>
                 <line
                   x1={x(selected.entry_time_ms)}
                   y1={y(entryPrice)}
-                  x2={x(potential.bestAtMs)}
-                  y2={y(priceAt(potential.bestAtMs))}
+                  x2={x(bestAtMs)}
+                  y2={y(priceAt(bestAtMs))}
                   className="stroke-info"
                   strokeWidth={3}
                   strokeDasharray="3 6"
@@ -293,17 +331,21 @@ export default function MarketTradesChart({
                   data-testid="potential-path"
                 />
                 <circle
-                  cx={x(potential.bestAtMs)}
-                  cy={y(priceAt(potential.bestAtMs))}
+                  cx={x(bestAtMs)}
+                  cy={y(priceAt(bestAtMs))}
                   r={7}
                   className="fill-info"
                 />
                 <text
-                  x={x(potential.bestAtMs)}
-                  y={
-                    y(priceAt(potential.bestAtMs)) +
-                    (potential.right === 1 ? -14 : 24)
-                  }
+                  x={x(bestAtMs)}
+                  y={(() => {
+                    // below the point for a short, above it for a long; never over the date axis
+                    const at = y(priceAt(bestAtMs!))
+                    const below = at + 24
+                    return potential.right === 1 || below > H - 24
+                      ? at - 14
+                      : below
+                  })()}
                   textAnchor="middle"
                   className="fill-info text-hint stroke-canvas"
                   strokeWidth={4}
@@ -395,7 +437,9 @@ export default function MarketTradesChart({
           <div className="flex justify-between gap-2 text-label tracking-section text-ink-2 uppercase">
             <span>Cada operación</span>
             <span className="tracking-normal normal-case">
-              tocá una para ver qué pasó
+              {rated
+                ? 'ancho = tamaño · raya sólida = con movimiento · raya cortada = en calma · tocá una para ver qué pasó'
+                : 'tocá una para ver qué pasó'}
             </span>
           </div>
           <div
@@ -403,19 +447,41 @@ export default function MarketTradesChart({
             role="group"
             aria-label="Cada operación"
           >
-            {sorted.map((trade, index) => (
-              <button
-                key={trade.trade_id}
-                type="button"
-                aria-label={tradeLabel(trade, index)}
-                aria-pressed={trade.trade_id === selected?.trade_id}
-                onClick={() => onSelect(trade)}
-                style={{
-                  height: 14 + Math.min(18, Math.abs(trade.net_bp) / 6),
-                }}
-                className={`w-3 cursor-pointer rounded-swatch border-none p-0 outline-offset-2 aria-pressed:outline-2 aria-pressed:outline-ink aria-pressed:outline-solid ${trade.net_bp >= 0 ? 'bg-long' : 'bg-short'}`}
-              />
-            ))}
+            {sorted.map((trade, index) => {
+              const moving = movementOf(trade)
+              return (
+                <span
+                  key={trade.trade_id}
+                  className="grid content-end justify-items-center gap-0.5"
+                >
+                  <button
+                    type="button"
+                    aria-label={tradeLabel(trade, index)}
+                    aria-pressed={trade.trade_id === selected?.trade_id}
+                    onClick={() => onSelect(trade)}
+                    data-movement={
+                      moving === null
+                        ? undefined
+                        : moving
+                          ? 'con-movimiento'
+                          : 'en-calma'
+                    }
+                    style={{
+                      height: 14 + Math.min(18, Math.abs(trade.net_bp) / 6),
+                      // the width is the size the analyst gave the entry (12 px = size 1)
+                      width: 12 * (trade.size_mult ?? 1),
+                    }}
+                    className={`cursor-pointer rounded-swatch border-none p-0 outline-offset-2 aria-pressed:outline-2 aria-pressed:outline-ink aria-pressed:outline-solid ${trade.net_bp >= 0 ? 'bg-long' : 'bg-short'}`}
+                  />
+                  {moving !== null && (
+                    <span
+                      aria-hidden="true"
+                      className={`block w-full border-0 border-t-2 ${moving ? 'border-solid border-ink' : 'border-dashed border-ink-3'}`}
+                    />
+                  )}
+                </span>
+              )
+            })}
           </div>
         </div>
       )}
@@ -428,6 +494,15 @@ export default function MarketTradesChart({
           <div className="flex flex-wrap items-baseline justify-between gap-2">
             <strong className="text-body text-ink">
               Operación {pickedIndex + 1} · {long ? 'LARGO' : 'CORTO'}
+              {movementText(selected) && (
+                <span
+                  className="font-normal text-ink-2"
+                  data-testid="movement-note"
+                >
+                  {' '}
+                  · entró {movementText(selected)}
+                </span>
+              )}
             </strong>
             <span
               className={`text-note font-semibold ${potential.right === (long ? 1 : -1) ? 'text-long' : 'text-warn'}`}
@@ -443,7 +518,7 @@ export default function MarketTradesChart({
                 win ? 'text-long' : 'text-short',
                 win ? 'bg-long' : 'bg-short',
               )}
-              {bar('Se podía ganar', potential.best, 'text-info', 'bg-info')}
+              {bar('Se podía ganar', couldEarn, 'text-info', 'bg-info')}
             </div>
             <div
               className="grid grid-cols-3 gap-2"

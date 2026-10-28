@@ -196,12 +196,14 @@ def scheme_replay(product_id, funding, start_ms, end_ms):
     from . import futures_qwen_trader as qt
     from . import futures_qwen_trader_exam as exam
     from . import futures_qwen_exigencia as exigencia
-    cfg = exigencia.apply_env(live.apply_overrides(qt.load_config(qt.CONFIG_PATH_LIVE)))   # niveles de la prueba (5 y 5: paper)
+    from . import futures_qwen_analista as analista
+    # niveles de la prueba (5 y 5: paper) y modo del analista de movimiento (apagado: paper)
+    cfg = analista.apply_env(exigencia.apply_env(live.apply_overrides(qt.load_config(qt.CONFIG_PATH_LIVE))))
     holdout_ms = qt.load_holdout_ms()
     if start_ms >= holdout_ms or product_id not in cfg["products"]:
         return []
     history = qt.History(qt.DEFAULT_CACHE, holdout_ms)
-    first = qt.date_ms(cfg["practice"]["from"]) - cfg["practice"]["warmup_days"] * qt.DAY_MS
+    first = qt.date_ms(cfg["practice"]["from"]) - (cfg["practice"]["warmup_days"] + analista.extra_days(cfg)) * qt.DAY_MS
     for name in dict.fromkeys(list(cfg["products"]) + list(cfg.get("state_context") or ())):
         history.prefetch(name, first, holdout_ms, log=lambda *a: None)
     return exam.scheme_trades(history, cfg, product_id, start_ms, end_ms, holdout_ms, funding)
@@ -214,8 +216,12 @@ class QwenLiveTrades:
     def note(self):
         from . import futures_qwen_exigencia as exigencia
         got = exigencia.from_env()
-        return "{} Exigencia de esta prueba: maestro {} y portero {} (de 0 a 10; {} es lo que opera en paper).".format(
-            LIVE_NOTE, got["maestro"], got["portero"], exigencia.DEFAULT)
+        from . import futures_qwen_analista as analista
+        mode = analista.from_env()
+        return "{} Exigencia de esta prueba: maestro {} y portero {} (de 0 a 10; {} es lo que opera en paper).{}".format(
+            LIVE_NOTE, got["maestro"], got["portero"], exigencia.DEFAULT,
+            "" if mode == analista.DEFAULT else " Analista de movimiento: {} (tamaño {} con movimiento, {} en calma).".format(
+                mode, *analista.MODES[mode]))
 
     def __init__(self, live_db_path, exam_db_path, replay=None):
         self.live_db_path, self.exam_db_path = live_db_path, exam_db_path

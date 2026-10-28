@@ -89,6 +89,9 @@ export type RunTrade = {
   funding_status: string
   notional_usd: string | null
   signal_time_ms: number | null
+  /** Movement analyst (Qwen en vivo tests): the size the entry got and whether ETH was moving (`null`: no data). */
+  size_mult?: number | null
+  with_movement?: boolean | null
 }
 
 export type RunTrades = {

@@ -1,11 +1,9 @@
 import type { ExigenciaLevels } from '../infrastructure/quick-api.ts'
-
-/** The level paper operates with: the sliders start here, and it is marked on them. */
-export const EXIGENCIA_PAPER = 5
-export const EXIGENCIA_PAPER_LEVELS: ExigenciaLevels = {
-  maestro: EXIGENCIA_PAPER,
-  portero: EXIGENCIA_PAPER,
-}
+import {
+  ANALISTA_OPCIONES,
+  EXIGENCIA_PAPER,
+  EXIGENCIA_PAPER_LEVELS,
+} from './exigencia-levels.ts'
 
 /** Share of the signals the maestro calls strong at each level (mirrors `STRONG_SHARE` in futures_qwen_exigencia.py). */
 const MAESTRO_PARTES = [50, 40, 33, 28, 24, 20, 16, 12, 8, 5, 2]
@@ -42,8 +40,11 @@ export default function ExigenciaControl({ value, onChange, disabled }: Props) {
       detail: `dice que sí a ~${PORTERO_SI[value.portero]} % de las señales fuertes`,
     },
   ]
+  const analista = ANALISTA_OPCIONES.find((o) => o.modo === value.analista)!
   const changed =
-    value.maestro !== EXIGENCIA_PAPER || value.portero !== EXIGENCIA_PAPER
+    value.maestro !== EXIGENCIA_PAPER ||
+    value.portero !== EXIGENCIA_PAPER ||
+    value.analista !== EXIGENCIA_PAPER_LEVELS.analista
   return (
     <div
       role="group"
@@ -101,13 +102,52 @@ export default function ExigenciaControl({ value, onChange, disabled }: Props) {
           <span className="col-span-4 text-ink-2">{detail}</span>
         </label>
       ))}
+      <fieldset
+        data-testid="analista"
+        className="m-0 grid min-w-0 grid-cols-6 items-center gap-x-3 gap-y-0.5 border-0 border-t border-solid border-line p-0 pt-2 text-note text-ink"
+        disabled={disabled}
+      >
+        <legend className="sr-only">Analista de movimiento</legend>
+        <span aria-hidden="true">Analista de movimiento</span>
+        <span
+          role="radiogroup"
+          aria-label="Analista de movimiento"
+          className="col-span-5 flex flex-wrap gap-1.5"
+        >
+          {ANALISTA_OPCIONES.map((option) => (
+            <label
+              key={option.modo}
+              className={`cursor-pointer rounded-sm border border-solid px-2.5 py-1 ${value.analista === option.modo ? 'border-ink bg-row-selected font-semibold text-ink' : 'border-line-strong text-ink-2'}`}
+            >
+              <input
+                type="radio"
+                name="analista-movimiento"
+                value={option.modo}
+                checked={value.analista === option.modo}
+                onChange={() => onChange({ ...value, analista: option.modo })}
+                className="sr-only"
+              />
+              {option.label}
+              {option.modo === 'apagado' && (
+                <span className="font-normal"> · paper</span>
+              )}
+            </label>
+          ))}
+        </span>
+        <span />
+        <span className="col-span-5 text-ink-2">
+          {analista.detail}. «Con movimiento» = la volatilidad de las últimas 24
+          h está en o sobre su mediana de 90 días. No cambia qué operaciones se
+          hacen, solo cuánto pesa cada una.
+        </span>
+      </fieldset>
       {changed && (
         <button
           type="button"
           className="cursor-pointer justify-self-start rounded-sm border border-solid border-line bg-transparent px-3 py-1 text-hint leading-normal text-ink"
           onClick={() => onChange({ ...EXIGENCIA_PAPER_LEVELS })}
         >
-          Volver al nivel de paper (5 y 5)
+          Volver a lo de paper (5, 5 y analista apagado)
         </button>
       )}
     </div>

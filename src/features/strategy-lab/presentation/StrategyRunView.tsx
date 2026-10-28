@@ -2,10 +2,12 @@ import { VBT } from './vectorbt-styles.ts'
 import { RUN } from './run-view-styles.ts'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import ResultsVisual, { type VisualTrade } from './ResultsVisual.tsx'
-import ExigenciaControl, {
+import ExigenciaControl from './ExigenciaControl.tsx'
+import {
+  ANALISTA_OPCIONES,
   EXIGENCIA_PAPER,
   EXIGENCIA_PAPER_LEVELS,
-} from './ExigenciaControl.tsx'
+} from './exigencia-levels.ts'
 import ApprovedTerminalChart from '../../trading-view/presentation/ApprovedTerminalChart.tsx'
 import { amount } from '../../../shared/finance/format.ts'
 import { signedAmount } from '../domain/strategy-format.ts'
@@ -59,6 +61,7 @@ import {
 } from '../infrastructure/vectorbt-api.ts'
 import type { StrategyApi } from '../infrastructure/strategy-api.ts'
 import {
+  type AnalistaModo,
   quickApi,
   type QuickApi,
   type QuickFicha,
@@ -843,6 +846,26 @@ export default function StrategyRunView({
   const usedLevels = formulaModel
     ? (formulaShown?.exigencia ?? null)
     : (lastRun?.params?.exigencia ?? null)
+  // The movement analyst's mode the shown test ran with (the formula test keeps it in its result, a run in its params)
+  const usedAnalista: AnalistaModo | null = formulaModel
+    ? (formulaShown?.analista?.modo ?? null)
+    : (lastRun?.params?.analista ?? null)
+  const analistaText =
+    usedAnalista && usedAnalista !== 'apagado'
+      ? ` · Analista de movimiento: ${ANALISTA_OPCIONES.find((o) => o.modo === usedAnalista)?.label ?? usedAnalista}`
+      : ''
+  const porMovimiento = formulaModel ? formulaShown?.por_movimiento : null
+  // The controls show what the result on screen ran with; a new result moves them, the user's own changes do not
+  const shownKey = `${usedLevels?.maestro ?? ''}/${usedLevels?.portero ?? ''}/${usedAnalista ?? ''}`
+  useEffect(() => {
+    if (usedLevels && usedAnalista)
+      setExigencia({
+        maestro: usedLevels.maestro,
+        portero: usedLevels.portero,
+        analista: usedAnalista,
+      })
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed on the shown result's levels only
+  }, [shownKey])
   const weeklyNote = (trades: number, fromMs: number, toMs: number) => {
     const weeks = (toMs - fromMs) / (7 * 86_400_000)
     return weeks >= 1 ? ` · ${amount(trades / weeks, 1)} por semana` : ''
@@ -938,7 +961,7 @@ export default function StrategyRunView({
       data-testid="run-view"
     >
       <header className={RUN.head}>
-        <div>
+        <div className="min-w-0 flex-1">
           <p className={RUN.title}>
             {titleOf(strategyName)} <small>v{version}</small>
           </p>
@@ -953,6 +976,15 @@ export default function StrategyRunView({
             {usedLevels &&
               !busyQuick &&
               ` · Exigencia: maestro ${usedLevels.maestro}, portero ${usedLevels.portero}${usedLevels.maestro === EXIGENCIA_PAPER && usedLevels.portero === EXIGENCIA_PAPER ? ' (como paper)' : ''}`}
+            {!busyQuick && analistaText}
+            {!busyQuick &&
+              usedAnalista &&
+              usedAnalista !== 'apagado' &&
+              porMovimiento && (
+                <span data-testid="analista-resumen">
+                  {` · con movimiento ${amount(porMovimiento.con.n, 0)} op. (${bp(porMovimiento.con.neto_propio_bp)}) · en calma ${amount(porMovimiento.calma.n, 0)} op. (${bp(porMovimiento.calma.neto_propio_bp)}) a tamaño 1`}
+                </span>
+              )}
             {running && ' · hay una prueba en curso'}
           </p>
         </div>
