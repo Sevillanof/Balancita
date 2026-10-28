@@ -614,7 +614,7 @@ export default function StrategyRunView({
   const [quickError, setQuickError] = useState<string | null>(null)
   const quickRunning = quickState?.state === 'running'
   const quickVariants = quickState?.variants ?? []
-  const [quickVariant, setQuickVariant] = useState('actual')
+  const [detailsOpen, setDetailsOpen] = useState(false)
   useEffect(() => {
     if (!hasQuick) return
     let cancelled = false
@@ -632,7 +632,7 @@ export default function StrategyRunView({
       if (timer) clearInterval(timer)
     }
   }, [hasQuick, quick, strategyId, quickRunning])
-  const startQuick = async () => {
+  const startQuick = async (quickVariant: string) => {
     setQuickError(null)
     try {
       await quick.start(strategyId, quickVariant)
@@ -863,36 +863,43 @@ export default function StrategyRunView({
                     Examen
                   </button>
                 )}
-                {hasQuick && quickVariants.length > 1 && (
-                  <select
-                    aria-label="Variante de la prueba rápida"
-                    value={quickVariant}
-                    onChange={(event) => setQuickVariant(event.target.value)}
-                    disabled={quickRunning}
-                    title="Qué se prueba: las preguntas actuales, otras preguntas u otro modelo. Cada variante es una versión aparte."
-                  >
-                    {quickVariants.map((variant) => (
-                      <option key={variant.id} value={variant.id}>
-                        {variantLabel(variant)}
-                      </option>
+                {hasQuick &&
+                  [
+                    ...(quickVariants.length > 0
+                      ? quickVariants
+                      : [
+                          {
+                            id: 'actual',
+                            label: 'Actual',
+                            kind: 'control' as const,
+                          },
+                        ]),
+                  ]
+                    .sort(
+                      (a, b) =>
+                        Number(b.kind === 'formula') -
+                        Number(a.kind === 'formula'),
+                    )
+                    .map((variant) => (
+                      <button
+                        key={variant.id}
+                        type="button"
+                        onClick={() => {
+                          setDetailsOpen(true)
+                          void startQuick(variant.id)
+                        }}
+                        disabled={quickRunning}
+                        title={
+                          variant.kind === 'formula'
+                            ? 'Lee velas guardadas, tarda poco y no calienta la Mac.'
+                            : 'Le pregunta a Qwen sobre unas 150 fotos del pasado. Es orientativa: no es el Examen.'
+                        }
+                      >
+                        {variant.kind === 'formula'
+                          ? 'Solo la fórmula (rápida, por defecto)'
+                          : `Con Qwen · ${variantLabel(variant as QuickVariant)} (25-40 min, calienta la Mac)`}
+                      </button>
                     ))}
-                  </select>
-                )}
-                {hasQuick && (
-                  <button
-                    type="button"
-                    onClick={() => void startQuick()}
-                    disabled={quickRunning}
-                    title={
-                      quickVariants.find((v) => v.id === quickVariant)?.kind ===
-                      'formula'
-                        ? 'Prueba solo la fórmula (sin Qwen) sobre todo el período del examen: lee velas guardadas, tarda poco y no calienta la Mac.'
-                        : 'Pregunta a Qwen sobre unas 150 fotos del pasado para medir su opinión: tarda entre 25 y 40 minutos y calienta la Mac. Para probar el esquema completo sin Qwen, rápido, usá Testear. Es orientativa: no es el Examen.'
-                    }
-                  >
-                    {quickRunning ? 'Prueba rápida en curso…' : 'Prueba rápida'}
-                  </button>
-                )}
                 <button
                   type="button"
                   onClick={() => setVbtModal(true)}
@@ -909,9 +916,9 @@ export default function StrategyRunView({
         </div>
       </header>
       {hasQuick &&
-        (quickState?.state !== 'none' ||
-          quickError ||
-          quickVariants.some((variant) => variant.summary)) && (
+        (quickState?.state === 'running' ||
+          quickState?.state === 'failed' ||
+          quickError) && (
           <div className={RUN.quick} role="group" aria-label="Prueba rápida">
             {quickError && <p role="alert">{quickError}</p>}
             {quickState?.state === 'running' && (
@@ -922,8 +929,6 @@ export default function StrategyRunView({
                 Prueba rápida sin resultado: {quickState.error}
               </p>
             )}
-            {quickState?.state === 'done' && <QuickResult state={quickState} />}
-            <QuickComparison variants={quickVariants} />
           </div>
         )}
       {panelOpen && (
@@ -1186,10 +1191,22 @@ export default function StrategyRunView({
       <details
         className="rounded-lg border border-solid border-line bg-canvas px-3.5 py-2.5"
         data-testid="run-details"
+        open={detailsOpen}
+        onToggle={(event) => setDetailsOpen(event.currentTarget.open)}
       >
         <summary className="cursor-pointer text-note text-ink-2">
           Ver velas y detalle de las operaciones
         </summary>
+        {hasQuick &&
+          (quickState?.state === 'done' ||
+            quickVariants.some((variant) => variant.summary)) && (
+            <div className={RUN.quick} role="group" aria-label="Prueba rápida">
+              {quickState?.state === 'done' && (
+                <QuickResult state={quickState} />
+              )}
+              <QuickComparison variants={quickVariants} />
+            </div>
+          )}
         <div className={RUN.chartCard} id="run-candles">
           <div className={RUN.chartHead}>
             <h4>
