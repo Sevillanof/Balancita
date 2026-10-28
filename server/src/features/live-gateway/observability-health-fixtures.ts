@@ -472,3 +472,65 @@ export interface OfficialCandleSeed {
   readonly revisionKnownAt?: number
   readonly revisionClose?: string
 }
+
+/** Official candles at exact buckets (holes included); the schema comes from the real store. */
+export function seedOfficialCandles(
+  path: string,
+  rows: readonly OfficialCandleSeed[],
+): void {
+  new FuturesMarketStore(path).close()
+  const db = open(path)
+  db.exec('PRAGMA journal_mode=WAL; PRAGMA synchronous=OFF')
+  const response = db.prepare(
+    `INSERT OR IGNORE INTO paper_futures_official_candle_responses
+     (product_id,sha256,interval_ms,from_ms,to_ms,received_at,raw_response) VALUES(?,?,?,?,?,?,?)`,
+  )
+  const candle = db.prepare(
+    `INSERT INTO paper_futures_official_candles
+     (product_id,interval_ms,bucket_start,revision_hash,known_at,open_price,high_price,low_price,close_price,volume_btc,response_sha256)
+     VALUES(?,?,?,?,?,?,?,?,?,?,?)`,
+  )
+  db.exec('BEGIN')
+  for (const r of rows) {
+    const closeAt = r.bucket + r.intervalMs
+    const sha = `${r.product}-${r.intervalMs}-${r.bucket}`
+    response.run(
+      r.product,
+      sha,
+      r.intervalMs,
+      r.bucket,
+      closeAt,
+      closeAt + 3000,
+      '{}',
+    )
+    candle.run(
+      r.product,
+      r.intervalMs,
+      r.bucket,
+      `a${r.bucket}`,
+      closeAt + 3000,
+      r.open ?? '100.0',
+      r.high ?? '101.25',
+      r.low ?? '99.75',
+      r.close ?? '100.5',
+      '3.5',
+      sha,
+    )
+    if (r.revisionKnownAt !== undefined)
+      candle.run(
+        r.product,
+        r.intervalMs,
+        r.bucket,
+        `b${r.bucket}`,
+        r.revisionKnownAt,
+        '100.0',
+        '101.25',
+        '99.75',
+        r.revisionClose ?? '999',
+        '3.5',
+        sha,
+      )
+  }
+  db.exec('COMMIT')
+  db.close()
+}
