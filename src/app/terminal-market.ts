@@ -8,12 +8,15 @@ export function projectTerminalQuote(input: {
   market: RecordValue
   terminalMarket: RecordValue
   position: RecordValue | null
+  /** Base asset of the quoted product (default BTC). */
+  base?: string
 }): {
   price: string | null
   label: string
   eventTime: number | null
   receivedAt: number | null
 } {
+  const base = input.base ?? 'BTC'
   if (input.mode === 'paper_live') {
     const normalized = record(input.market.normalized)
     const isTrade = input.market.feed === 'trade'
@@ -23,12 +26,12 @@ export function projectTerminalQuote(input: {
     const tickerMark = isTicker ? decimal(normalized.mark) : null
     const price = tradePrice ?? tickerLast ?? tickerMark
     const label = tradePrice
-      ? 'Último trade público · USD/BTC'
+      ? `Último trade público · USD/${base}`
       : tickerLast
-        ? 'Último ticker público · USD/BTC'
+        ? `Último ticker público · USD/${base}`
         : tickerMark
-          ? 'Mark público · USD/BTC'
-          : 'Precio público no disponible · USD/BTC'
+          ? `Mark público · USD/${base}`
+          : `Precio público no disponible · USD/${base}`
     return {
       price,
       label,
@@ -45,8 +48,8 @@ export function projectTerminalQuote(input: {
   return {
     price: positionMark ?? candleClose,
     label: positionMark
-      ? 'Precio de marca · USD/BTC'
-      : 'Último cierre del fixture · USD/BTC',
+      ? `Precio de marca · USD/${base}`
+      : `Último cierre del fixture · USD/${base}`,
     eventTime: null,
     receivedAt: null,
   }

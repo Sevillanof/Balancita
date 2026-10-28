@@ -12,10 +12,10 @@ export function money(value: unknown, maximumFractionDigits = 2): string {
   return usdFromString(value, maximumFractionDigits) ?? 'No disponible'
 }
 
-export function quantity(value: unknown): string {
+export function quantity(value: unknown, base = 'BTC'): string {
   if (typeof value !== 'string' || !/^\d+(?:\.\d+)?$/.test(value))
     return 'No disponible'
-  return `${value} BTC`
+  return `${value} ${base}`
 }
 
 export function utcTime(value: unknown): string {

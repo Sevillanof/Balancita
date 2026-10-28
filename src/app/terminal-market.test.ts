@@ -2,6 +2,21 @@ import { describe, expect, it } from 'vitest'
 import { projectTerminalQuote } from './terminal-market.ts'
 
 describe('terminal market quote projection', () => {
+  it('labels the quote with the base of the shown product', () => {
+    expect(
+      projectTerminalQuote({
+        mode: 'paper_live',
+        market: {
+          feed: 'ticker',
+          normalized: { last: '3676.61' },
+        },
+        terminalMarket: {},
+        position: null,
+        base: 'ETH',
+      }).label,
+    ).toBe('Último ticker público · USD/ETH')
+  })
+
   it('uses the received public trade rather than a stale candle in PAPER_LIVE', () => {
     expect(
       projectTerminalQuote({
