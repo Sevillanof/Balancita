@@ -1,0 +1,587 @@
+{
+ "ids": {
+  "0188cc0f4c9e": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "exigencia": [
+     5,
+     5
+    ],
+    "productos": [
+     "PF_ETHUSD",
+     "PF_XBTUSD"
+    ],
+    "tamano": "suave",
+    "tope_min": 2160
+   }
+  },
+  "0621e122d2bd": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "exigencia": [
+     5,
+     5
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "tamano": "suave",
+    "tope_min": 2160
+   }
+  },
+  "1ec56270af5c": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "exigencia": [
+     3,
+     3
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "tamano": "suave",
+    "tope_min": null
+   }
+  },
+  "2bfa2a831b1c": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "exigencia": [
+     7,
+     7
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "tamano": "suave",
+    "tope_min": null
+   }
+  },
+  "2f14127985cf": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "exigencia": [
+     3,
+     3
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "tamano": "fuerte",
+    "tope_min": 2160
+   }
+  },
+  "3356615f1c14": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "exigencia": [
+     7,
+     7
+    ],
+    "productos": [
+     "PF_ETHUSD",
+     "PF_XBTUSD"
+    ],
+    "tamano": "apagado",
+    "tope_min": null
+   }
+  },
+  "3ba155e5a26d": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "exigencia": [
+     3,
+     3
+    ],
+    "productos": [
+     "PF_ETHUSD",
+     "PF_XBTUSD"
+    ],
+    "tamano": "apagado",
+    "tope_min": null
+   }
+  },
+  "3cf69e212424": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "elige": "con el pasado",
+    "minimo_operaciones": 30,
+    "rejilla": 36
+   }
+  },
+  "3d875cabb899": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "exigencia": [
+     7,
+     7
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "tamano": "apagado",
+    "tope_min": 2160
+   }
+  },
+  "3f7ccdee6390": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "exigencia": [
+     3,
+     3
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "tamano": "apagado",
+    "tope_min": 2160
+   }
+  },
+  "4515b0d600d4": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "exigencia": [
+     5,
+     5
+    ],
+    "productos": [
+     "PF_ETHUSD",
+     "PF_XBTUSD"
+    ],
+    "tamano": "suave",
+    "tope_min": null
+   }
+  },
+  "45716d629445": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "exigencia": [
+     5,
+     5
+    ],
+    "productos": [
+     "PF_ETHUSD",
+     "PF_XBTUSD"
+    ],
+    "tamano": "apagado",
+    "tope_min": null
+   }
+  },
+  "4b665f7cbd04": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "exigencia": [
+     5,
+     5
+    ],
+    "productos": [
+     "PF_ETHUSD",
+     "PF_XBTUSD"
+    ],
+    "tamano": "fuerte",
+    "tope_min": null
+   }
+  },
+  "4e778392099d": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "exigencia": [
+     7,
+     7
+    ],
+    "productos": [
+     "PF_ETHUSD",
+     "PF_XBTUSD"
+    ],
+    "tamano": "fuerte",
+    "tope_min": 2160
+   }
+  },
+  "542faf42ed47": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "exigencia": [
+     5,
+     5
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "tamano": "fuerte",
+    "tope_min": 2160
+   }
+  },
+  "5775ba10b21c": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "exigencia": [
+     3,
+     3
+    ],
+    "productos": [
+     "PF_ETHUSD",
+     "PF_XBTUSD"
+    ],
+    "tamano": "fuerte",
+    "tope_min": null
+   }
+  },
+  "5957c1151dac": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "exigencia": [
+     3,
+     3
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "tamano": "fuerte",
+    "tope_min": null
+   }
+  },
+  "5cb3944f0d2b": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "exigencia": [
+     7,
+     7
+    ],
+    "productos": [
+     "PF_ETHUSD",
+     "PF_XBTUSD"
+    ],
+    "tamano": "suave",
+    "tope_min": 2160
+   }
+  },
+  "6145f15119fd": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "exigencia": [
+     5,
+     5
+    ],
+    "productos": [
+     "PF_ETHUSD",
+     "PF_XBTUSD"
+    ],
+    "tamano": "fuerte",
+    "tope_min": 2160
+   }
+  },
+  "63523fef43ca": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "exigencia": [
+     5,
+     5
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "tamano": "apagado",
+    "tope_min": 2160
+   }
+  },
+  "6fb3a8527f27": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "exigencia": [
+     5,
+     5
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "tamano": "fuerte",
+    "tope_min": null
+   }
+  },
+  "86fc3652f289": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "exigencia": [
+     7,
+     7
+    ],
+    "productos": [
+     "PF_ETHUSD",
+     "PF_XBTUSD"
+    ],
+    "tamano": "suave",
+    "tope_min": null
+   }
+  },
+  "8985e619cfac": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "exigencia": [
+     7,
+     7
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "tamano": "fuerte",
+    "tope_min": 2160
+   }
+  },
+  "9729f17566ba": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "exigencia": [
+     3,
+     3
+    ],
+    "productos": [
+     "PF_ETHUSD",
+     "PF_XBTUSD"
+    ],
+    "tamano": "fuerte",
+    "tope_min": 2160
+   }
+  },
+  "9eb4a08ed1b6": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "exigencia": [
+     7,
+     7
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "tamano": "fuerte",
+    "tope_min": null
+   }
+  },
+  "a055eaa3b0b2": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "exigencia": [
+     5,
+     5
+    ],
+    "productos": [
+     "PF_XBTUSD"
+    ],
+    "tamano": "apagado",
+    "tope_min": 2160
+   }
+  },
+  "a2e3030e140b": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "exigencia": [
+     5,
+     5
+    ],
+    "productos": [
+     "PF_ETHUSD",
+     "PF_XBTUSD"
+    ],
+    "tamano": "apagado",
+    "tope_min": 2160
+   }
+  },
+  "a59aebf4cdec": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "exigencia": [
+     3,
+     3
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "tamano": "apagado",
+    "tope_min": null
+   }
+  },
+  "b079acd42014": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "exigencia": [
+     3,
+     3
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "tamano": "suave",
+    "tope_min": 2160
+   }
+  },
+  "c2e464a20235": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "exigencia": [
+     3,
+     3
+    ],
+    "productos": [
+     "PF_ETHUSD",
+     "PF_XBTUSD"
+    ],
+    "tamano": "apagado",
+    "tope_min": 2160
+   }
+  },
+  "ccc13609e948": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "exigencia": [
+     3,
+     3
+    ],
+    "productos": [
+     "PF_ETHUSD",
+     "PF_XBTUSD"
+    ],
+    "tamano": "suave",
+    "tope_min": 2160
+   }
+  },
+  "d6d8799002bd": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "exigencia": [
+     7,
+     7
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "tamano": "suave",
+    "tope_min": 2160
+   }
+  },
+  "dcc52ddf810c": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "exigencia": [
+     7,
+     7
+    ],
+    "productos": [
+     "PF_ETHUSD",
+     "PF_XBTUSD"
+    ],
+    "tamano": "fuerte",
+    "tope_min": null
+   }
+  },
+  "e1e93ea0a7d9": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "exigencia": [
+     3,
+     3
+    ],
+    "productos": [
+     "PF_ETHUSD",
+     "PF_XBTUSD"
+    ],
+    "tamano": "suave",
+    "tope_min": null
+   }
+  },
+  "e2da37e68d74": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "exigencia": [
+     7,
+     7
+    ],
+    "productos": [
+     "PF_ETHUSD",
+     "PF_XBTUSD"
+    ],
+    "tamano": "apagado",
+    "tope_min": 2160
+   }
+  },
+  "f543bf03eec9": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "exigencia": [
+     7,
+     7
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "tamano": "apagado",
+    "tope_min": null
+   }
+  },
+  "f697d53c2552": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "exigencia": [
+     5,
+     5
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "tamano": "apagado",
+    "tope_min": null
+   }
+  },
+  "ff7b99070fb2": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "exigencia": [
+     5,
+     5
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "tamano": "suave",
+    "tope_min": null
+   }
+  }
+ },
+ "previos": 1643
+}

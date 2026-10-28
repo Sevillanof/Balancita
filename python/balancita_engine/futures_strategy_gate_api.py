@@ -23,6 +23,7 @@ from .futures_products import load_pinned_products
 from .futures_spec_strategy import load_specs, spec_hash
 from . import futures_qwen_analista as analista
 from . import futures_qwen_exigencia as exigencia
+from . import futures_walkforward as walkforward
 from . import strategy_gate_models
 from . import strategy_evaluation_policy as evaluation_policy
 from . import strategy_gate_accounting as accounting
@@ -231,10 +232,11 @@ class GateApi:
             return {}
         if strategy_id != strategy_gate_models.QWEN_LIVE_ID:
             raise GateApiError("invalid_exigencia", "La exigencia solo existe para Qwen en vivo.")
-        if not isinstance(asked, dict) or set(asked) - {"maestro", "portero", "analista"}:
-            raise GateApiError("invalid_exigencia", "La exigencia lleva 'maestro' y 'portero' (de 0 a 10) y 'analista'.")
+        if not isinstance(asked, dict) or set(asked) - {"maestro", "portero", "analista", "medicion"}:
+            raise GateApiError("invalid_exigencia", "La exigencia lleva 'maestro' y 'portero' (de 0 a 10), 'analista' y 'medicion'.")
         try:
-            return dict(exigencia.env_for(asked.get("maestro"), asked.get("portero")), **analista.env_for(asked.get("analista")))
+            return dict(exigencia.env_for(asked.get("maestro"), asked.get("portero")), **analista.env_for(asked.get("analista")),
+                        **walkforward.env_for(asked.get("medicion")))
         except ValueError as error:
             raise GateApiError("invalid_exigencia", str(error)) from error
 
@@ -262,7 +264,7 @@ class GateApi:
         if exam:
             args.append("--exam")
         env = dict(os.environ)
-        env.pop(exigencia.ENV_MAESTRO, None), env.pop(exigencia.ENV_PORTERO, None), env.pop(analista.ENV, None)
+        env.pop(exigencia.ENV_MAESTRO, None), env.pop(exigencia.ENV_PORTERO, None), env.pop(analista.ENV, None), env.pop(walkforward.ENV, None)
         env.update(levels_env)
         env["PYTHONPATH"] = os.pathsep.join(p for p in (os.path.join(ROOT, "python"), env.get("PYTHONPATH")) if p)
         with self._launch_lock:

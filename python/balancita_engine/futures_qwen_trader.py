@@ -1855,6 +1855,9 @@ def main(argv=None):
                 from .futures_qwen_analista import apply_env as analista_env
                 from .futures_qwen_exigencia import apply_env
                 cfg = analista_env(apply_env(cfg))
+                from . import futures_walkforward as walkforward
+                if variant["kind"] == "formula" and walkforward.medicion_from_env() == "honesta":
+                    cfg = walkforward.with_pairs(cfg)           # each quarter with the formulas fitted only on what came before
             if args.positioning_db:
                 cfg = dict(cfg, positioning_db=os.path.abspath(args.positioning_db))
             from .futures_qwen_analista import extra_days as analista_days

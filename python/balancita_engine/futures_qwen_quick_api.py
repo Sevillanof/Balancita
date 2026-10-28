@@ -10,6 +10,7 @@ import threading
 
 from . import futures_qwen_analista as analista
 from . import futures_qwen_exigencia as exigencia
+from . import futures_walkforward as walkforward
 from . import futures_qwen_quick_variants as variants
 from . import futures_qwen_trader_exam as exam
 from . import strategy_gate_models as models
@@ -83,11 +84,11 @@ class QuickTestApi:
         self._check(strategy_id)
         chosen = self._variant(variant)
         asked = exigencia_levels or {}
-        if not isinstance(asked, dict) or set(asked) - {"maestro", "portero", "analista"}:
-            raise GateApiError("invalid_exigencia", "La exigencia lleva 'maestro' y 'portero' (de 0 a 10) y 'analista'.", 422)
+        if not isinstance(asked, dict) or set(asked) - {"maestro", "portero", "analista", "medicion"}:
+            raise GateApiError("invalid_exigencia", "La exigencia lleva 'maestro' y 'portero' (de 0 a 10), 'analista' y 'medicion'.", 422)
         try:
             levels_env = dict(exigencia.env_for(asked.get("maestro"), asked.get("portero")),
-                              **analista.env_for(asked.get("analista")))
+                              **analista.env_for(asked.get("analista")), **walkforward.env_for(asked.get("medicion")))
         except ValueError as error:
             raise GateApiError("invalid_exigencia", str(error), 422) from error
         with self._lock:

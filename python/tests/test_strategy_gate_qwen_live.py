@@ -9,6 +9,9 @@ from balancita_engine import futures_qwen_trader as qt
 from balancita_engine import futures_qwen_trader_exam as ex
 from balancita_engine import strategy_gate_models as models
 
+# the attempts log of the tests lives in a temporary file, never in the machine's own
+os.environ["BALANCITA_WF_INTENTOS"] = os.path.join(tempfile.mkdtemp(), "intentos.jsonl")
+
 HOUR = 3_600_000
 T0 = 1_760_000_000_000 // HOUR * HOUR          # well before the holdout cut
 LIVE_T0 = 1_792_000_000_000 // HOUR * HOUR     # after it

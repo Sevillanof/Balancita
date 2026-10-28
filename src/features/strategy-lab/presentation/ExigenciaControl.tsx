@@ -2,6 +2,7 @@ import type { ExigenciaLevels } from '../infrastructure/quick-api.ts'
 import {
   ANALISTA_OPCIONES,
   EXIGENCIA_PAPER,
+  MEDICIONES,
   EXIGENCIA_PAPER_LEVELS,
 } from './exigencia-levels.ts'
 
@@ -41,6 +42,7 @@ export default function ExigenciaControl({ value, onChange, disabled }: Props) {
     },
   ]
   const analista = ANALISTA_OPCIONES.find((o) => o.modo === value.analista)!
+  const medicion = value.medicion ?? 'honesta'
   const changed =
     value.maestro !== EXIGENCIA_PAPER ||
     value.portero !== EXIGENCIA_PAPER ||
@@ -141,11 +143,48 @@ export default function ExigenciaControl({ value, onChange, disabled }: Props) {
           hacen, solo cuánto pesa cada una.
         </span>
       </fieldset>
+      <fieldset
+        data-testid="medicion"
+        className="m-0 grid min-w-0 grid-cols-6 items-center gap-x-3 gap-y-0.5 border-0 border-t border-solid border-line p-0 pt-2 text-note text-ink"
+        disabled={disabled}
+      >
+        <legend className="sr-only">Cómo se mide</legend>
+        <span aria-hidden="true">Cómo se mide</span>
+        <span
+          role="radiogroup"
+          aria-label="Cómo se mide"
+          className="col-span-5 flex flex-wrap gap-1.5"
+        >
+          {MEDICIONES.map((option) => (
+            <label
+              key={option.modo}
+              className={`cursor-pointer rounded-sm border border-solid px-2.5 py-1 ${medicion === option.modo ? 'border-ink bg-row-selected font-semibold text-ink' : 'border-line-strong text-ink-2'}`}
+            >
+              <input
+                type="radio"
+                name="medicion"
+                value={option.modo}
+                checked={medicion === option.modo}
+                onChange={() => onChange({ ...value, medicion: option.modo })}
+                className="sr-only"
+              />
+              {option.label}
+              {option.modo === 'honesta' && (
+                <span className="font-normal"> · por defecto</span>
+              )}
+            </label>
+          ))}
+        </span>
+        <span />
+        <span className="col-span-5 text-ink-2">
+          {MEDICIONES.find((o) => o.modo === medicion)!.detail}
+        </span>
+      </fieldset>
       {changed && (
         <button
           type="button"
           className="cursor-pointer justify-self-start rounded-sm border border-solid border-line bg-transparent px-3 py-1 text-hint leading-normal text-ink"
-          onClick={() => onChange({ ...EXIGENCIA_PAPER_LEVELS })}
+          onClick={() => onChange({ ...EXIGENCIA_PAPER_LEVELS, medicion })}
         >
           Volver a lo de paper (5, 5 y analista apagado)
         </button>
