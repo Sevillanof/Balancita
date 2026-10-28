@@ -63,6 +63,8 @@ async function main(): Promise<void> {
     analytics: {
       metrics: ANALYTICS_METRICS,
       intervals: ANALYTICS_INTERVALS,
+      // ETH gets the same flow, open interest, liquidations and positioning as BTC.
+      alsoProducts: ['PF_ETHUSD'],
       allProductMetrics: ['orderbook'],
     },
     // After a stop the hole is fetched from the last stored bucket; this also repairs holes a
