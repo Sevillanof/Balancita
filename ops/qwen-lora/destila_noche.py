@@ -37,6 +37,8 @@ LOG = None
 SIGUE = bool(os.environ.get("DESTILA_SIGUE"))          # segunda etapa: retoma la noche que ya corre y la extiende hasta MAX_MIN_TOTAL
 MAX_MIN_TOTAL = float(os.environ.get("MAX_MIN_TOTAL", 420))
 PATIENCE = int(os.environ.get("PATIENCE", 3))
+TRIMESTRE = os.environ.get("DESTILA_TRIMESTRE")        # noche de un trimestre (destila-trimestre.sh): mide en ese trimestre, sin práctica ni holdout
+PARTIR_DE = os.environ.get("DESTILA_PARTIR_DE")        # carpeta del adaptador de la noche anterior (con adapters.safetensors): sigue desde ahí
 
 
 def say(text):
@@ -88,7 +90,7 @@ def main():
         fail("falta el modelo en {} (ops/qwen-lora/train.sh download)".format(MODEL))
     if not os.path.isfile(PY):
         fail("falta el venv en {} (ops/qwen-lora/train.sh setup)".format(VENV))
-    for name in ("train.jsonl", "valid.jsonl", "valid-info.jsonl", "practica.jsonl", "meta.json"):
+    for name in ("train.jsonl", "valid.jsonl", "valid-info.jsonl", "meta.json") + (() if TRIMESTRE else ("practica.jsonl",)):
         path = os.path.join(DATASET, name)
         if not (os.path.exists(path) and os.path.getsize(path)):
             fail("falta {} en {} (el dataset se arma en la nube y se copia aquí)".format(name, DATASET))
@@ -123,9 +125,18 @@ def run_night():
     subprocess.run(["rm", "-rf", humo])
     say("prueba de humo OK")
 
-    say("1. Qwen sin entrenar")
-    base = measure(None, os.path.join(OUT, "base-valid.json"), VALID_N)
-    say("sin entrenar: " + short(base))
+    if PARTIR_DE:
+        for name in ("adapters.safetensors", "adapter_config.json"):
+            if not os.path.isfile(os.path.join(PARTIR_DE, name)):
+                fail("falta {} en {} (el adaptador de la noche anterior)".format(name, PARTIR_DE))
+            subprocess.run(["cp", os.path.join(PARTIR_DE, name), AD], check=True)
+        say("1. punto de partida: el adaptador de la noche anterior ({}), medido en el trimestre nuevo".format(PARTIR_DE))
+        base = measure(PARTIR_DE, os.path.join(OUT, "base-valid.json"), VALID_N)
+        say("al partir: " + short(base))
+    else:
+        say("1. Qwen sin entrenar")
+        base = measure(None, os.path.join(OUT, "base-valid.json"), VALID_N)
+        say("sin entrenar: " + short(base))
 
     done, history = 0, []
     open(os.path.join(OUT, "historia.jsonl"), "w").close()
@@ -151,6 +162,9 @@ def run_night():
             handle.write(json.dumps(r, ensure_ascii=False) + "\n")
         say("paso {}: {}".format(done, short(r)))
         action, why = dst.decide(history)
+        if action == "piloto_falla" and PARTIR_DE:        # el piloto es de la primera noche; después solo se avisa (la noche previa ya lo pasó)
+            say("AVISO: " + why)
+            action = "sigue"
         if action == "piloto_falla":
             fail("PILOTO NO PASA: " + why, 3)
         if action != "sigue":
@@ -159,18 +173,20 @@ def run_night():
 
     best = dst.best_step(history)
     json.dump({"paso": best}, open(os.path.join(OUT, "best.json"), "w"))
-    say("3. el mejor es el paso {}: práctica ({} miradas de cada tipo)".format(best, PRACTICA_N))
-    run([PY, os.path.join(HERE, "aprende_eval.py"), "--mode", "practica", "--model", MODEL, "--data", DATASET, "--adapter", os.path.join(AD, "paso-{}".format(best)),
-         "--max", str(PRACTICA_N), "--out", os.path.join(OUT, "best-practica.json")], "la práctica")
-    gguf = os.path.join(DATA, "qwen-destila.gguf")
+    if TRIMESTRE:
+        say("3. el mejor es el paso {} (se mide en el trimestre {}, que no vio; sin práctica)".format(best, TRIMESTRE))
+    else:
+        say("3. el mejor es el paso {}: práctica ({} miradas de cada tipo)".format(best, PRACTICA_N))
+        run([PY, os.path.join(HERE, "aprende_eval.py"), "--mode", "practica", "--model", MODEL, "--data", DATASET, "--adapter", os.path.join(AD, "paso-{}".format(best)),
+             "--max", str(PRACTICA_N), "--out", os.path.join(OUT, "best-practica.json")], "la práctica")
+    gguf = os.path.join(DATA, "qwen-destila-{}.gguf".format(TRIMESTRE) if TRIMESTRE else "qwen-destila.gguf")
     done_gguf = subprocess.run([PY, "-m", "balancita_engine.futures_qwen_lora_adapter", os.path.join(AD, "paso-{}".format(best)), gguf],
                                env=dict(os.environ, PYTHONPATH=os.path.join(ROOT, "python")))
     say("GGUF del mejor: {} (NO está cargado en ningún lado)".format(gguf) if done_gguf.returncode == 0
         else "la conversión a GGUF falló (el adaptador sigue en {})".format(os.path.join(AD, "paso-{}".format(best))))
-    run([PY, "-m", "balancita_engine.futures_qwen_destila", "informe", "--dir", OUT, "--out", os.path.join(OUT, "informe.md")], "el informe")
+    run([PY, "-m", "balancita_engine.futures_qwen_destila", "informe", "--dir", OUT, "--out", os.path.join(OUT, "informe.md")]
+        + (["--valid", "el trimestre " + TRIMESTRE] if TRIMESTRE else []), "el informe")
     say("fin. Informe: {}".format(os.path.join(OUT, "informe.md")))
-
-
 
 
 def sigue():
