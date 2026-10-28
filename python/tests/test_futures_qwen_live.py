@@ -165,7 +165,7 @@ class VersionTests(unittest.TestCase):
                                              "max_hold_min": 2160, "cooldown_min": 15})
         self.assertTrue(cfg["mirror"])
         self.assertTrue(cfg["state_corta"])
-        self.assertNotIn("lora", cfg)                       # the adapter learnt the 8-factor sheet: not applied to the short one
+        self.assertEqual(qt.lora_of(cfg), [{"id": 0, "scale": 1.0}])      # the destillation adapter (28-oct): it only gives the opinion, the formulas decide
         self.assertNotIn("factors", cfg)
         self.assertEqual(cfg["live"]["force_window_h"], 0)  # no opportunity window: Qwen decides on the short sheet
 
