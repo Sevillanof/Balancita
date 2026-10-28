@@ -31,6 +31,24 @@
     "tope_min": 2160
    }
   },
+  "119002be26f1": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "analisis": "donde-perdimos",
+    "base": "congelado ETH 36h 5/5",
+    "corte": "tendencia 30 d"
+   }
+  },
+  "1237036304f4": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "analisis": "donde-perdimos",
+    "base": "congelado ETH 36h 5/5",
+    "corte": "duración"
+   }
+  },
   "1ec56270af5c": {
    "medicion": "honesta",
    "motor": 1,
@@ -90,6 +108,15 @@
     ],
     "tamano": "apagado",
     "tope_min": null
+   }
+  },
+  "34be01b7606f": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "analisis": "donde-perdimos",
+    "base": "congelado ETH 36h 5/5",
+    "corte": "tendencia 7 d"
    }
   },
   "3ba155e5a26d": {
@@ -195,6 +222,15 @@
     "tope_min": null
    }
   },
+  "4c9c31426fb1": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "analisis": "donde-perdimos",
+    "base": "congelado ETH 36h 5/5",
+    "corte": "mercado 30 d (baja/lateral/sube)"
+   }
+  },
   "4e778392099d": {
    "medicion": "honesta",
    "motor": 1,
@@ -224,6 +260,15 @@
     ],
     "tamano": "fuerte",
     "tope_min": 2160
+   }
+  },
+  "5726ec756f45": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "analisis": "donde-perdimos",
+    "base": "congelado ETH 36h 5/5",
+    "corte": "calma o movimiento (vol 24 h contra mediana 90 d)"
    }
   },
   "5775ba10b21c": {
@@ -458,6 +503,15 @@
     "tope_min": 2160
    }
   },
+  "ca6d70a53508": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "analisis": "donde-perdimos",
+    "base": "congelado ETH 36h 5/5",
+    "corte": "año"
+   }
+  },
   "ccc13609e948": {
    "medicion": "honesta",
    "motor": 1,
@@ -535,6 +589,33 @@
     ],
     "tamano": "apagado",
     "tope_min": 2160
+   }
+  },
+  "e5ba62a72bef": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "analisis": "donde-perdimos",
+    "base": "congelado ETH 36h 5/5",
+    "corte": "lado"
+   }
+  },
+  "e7529014563f": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "analisis": "donde-perdimos",
+    "base": "congelado ETH 36h 5/5",
+    "corte": "hora del día (4 tramos)"
+   }
+  },
+  "ec7c98754830": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "analisis": "donde-perdimos",
+    "base": "congelado ETH 36h 5/5",
+    "corte": "motivo de salida"
    }
   },
   "f543bf03eec9": {
