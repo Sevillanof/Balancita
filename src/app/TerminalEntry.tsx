@@ -58,6 +58,7 @@ function TerminalView() {
               aria-label="Producto"
               value={product ?? products[0]}
               onChange={(event) => {
+                if (event.target.value === (product ?? products[0])) return
                 setState({ kind: 'loading' })
                 setProduct(event.target.value)
               }}

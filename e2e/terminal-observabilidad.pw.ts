@@ -116,6 +116,8 @@ async function openTerminal(page: Page, health: unknown, activity: unknown) {
     )
   })
   await page.goto('/terminal')
+  // The Terminal opens on ETH; the examples below describe XBT.
+  await page.getByRole('combobox').first().selectOption('PF_XBTUSD')
   await expect(page.getByTestId('activity-panel')).toBeVisible()
 }
 
