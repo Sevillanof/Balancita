@@ -142,6 +142,11 @@ export default function MarketTradesChart({
   // What could have been earned is measured at size 1: it is weighted like the entry, so both bars compare the same bet
   const sizeMult = selected?.size_mult ?? 1
   const win = selected ? selected.net_bp >= 0 : true
+  // The candles can be coarse (hourly closes): what could have been earned is never less than what was earned
+  const couldEarn = Math.max(
+    (potential?.best ?? 0) * sizeMult,
+    win ? (selected?.net_bp ?? 0) : 0,
+  )
   const long = selected?.side === 'LONG'
   const entryPrice = selected
     ? (priceOf(selected.entry_price) ?? priceAt(selected.entry_time_ms))
@@ -153,11 +158,7 @@ export default function MarketTradesChart({
   const exitPrice = selected
     ? (priceOf(selected.exit_price) ?? priceAt(selected.exit_time_ms))
     : 0
-  const best = Math.max(
-    Math.abs(selected?.net_bp ?? 0),
-    (potential?.best ?? 0) * sizeMult,
-    20,
-  )
+  const best = Math.max(Math.abs(selected?.net_bp ?? 0), couldEarn, 20)
   const bar = (label: string, bp: number, tone: string, fill: string) => (
     <div className="grid gap-1 text-note">
       <div className="flex justify-between gap-2 text-ink-2">
@@ -330,10 +331,14 @@ export default function MarketTradesChart({
                 />
                 <text
                   x={x(potential.bestAtMs)}
-                  y={
-                    y(priceAt(potential.bestAtMs)) +
-                    (potential.right === 1 ? -14 : 24)
-                  }
+                  y={(() => {
+                    // below the point for a short, above it for a long; never over the date axis
+                    const at = y(priceAt(potential.bestAtMs!))
+                    const below = at + 24
+                    return potential.right === 1 || below > H - 24
+                      ? at - 14
+                      : below
+                  })()}
                   textAnchor="middle"
                   className="fill-info text-hint stroke-canvas"
                   strokeWidth={4}
@@ -506,12 +511,7 @@ export default function MarketTradesChart({
                 win ? 'text-long' : 'text-short',
                 win ? 'bg-long' : 'bg-short',
               )}
-              {bar(
-                'Se podía ganar',
-                potential.best * sizeMult,
-                'text-info',
-                'bg-info',
-              )}
+              {bar('Se podía ganar', couldEarn, 'text-info', 'bg-info')}
             </div>
             <div
               className="grid grid-cols-3 gap-2"

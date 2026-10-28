@@ -855,6 +855,17 @@ export default function StrategyRunView({
       ? ` · Analista de movimiento: ${ANALISTA_OPCIONES.find((o) => o.modo === usedAnalista)?.label ?? usedAnalista}`
       : ''
   const porMovimiento = formulaModel ? formulaShown?.por_movimiento : null
+  // The controls show what the result on screen ran with; a new result moves them, the user's own changes do not
+  const shownKey = `${usedLevels?.maestro ?? ''}/${usedLevels?.portero ?? ''}/${usedAnalista ?? ''}`
+  useEffect(() => {
+    if (usedLevels && usedAnalista)
+      setExigencia({
+        maestro: usedLevels.maestro,
+        portero: usedLevels.portero,
+        analista: usedAnalista,
+      })
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed on the shown result's levels only
+  }, [shownKey])
   const weeklyNote = (trades: number, fromMs: number, toMs: number) => {
     const weeks = (toMs - fromMs) / (7 * 86_400_000)
     return weeks >= 1 ? ` · ${amount(trades / weeks, 1)} por semana` : ''
@@ -950,7 +961,7 @@ export default function StrategyRunView({
       data-testid="run-view"
     >
       <header className={RUN.head}>
-        <div>
+        <div className="min-w-0 flex-1">
           <p className={RUN.title}>
             {titleOf(strategyName)} <small>v{version}</small>
           </p>

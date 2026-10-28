@@ -41,7 +41,7 @@ export const RUN = {
   table:
     'w-full border-collapse text-note! leading-browser run-caption:pb-1.5 run-caption:text-left run-caption:text-ink-2 run-cell:border-t run-cell:border-t-solid run-cell:border-t-line run-cell:px-2! run-cell:py-1! run-cell:text-left run-cell:leading-browser run-cell:whitespace-nowrap run-cell:text-ink run-th:font-medium run-th:text-ink-2 run-table-button:cursor-pointer run-table-button:border-none! run-table-button:border-current! run-table-button:bg-transparent! run-table-button:p-0! run-table-button:text-note! run-table-button:leading-browser! run-table-button:text-info!',
   num: 'text-right! tabular-nums',
-  side: 'grid justify-items-end gap-2 text-right',
+  side: 'grid shrink-0 justify-items-end gap-2 text-right',
   actions:
     'flex flex-wrap justify-end gap-1.5 run-button:cursor-pointer run-button:rounded-sm run-button:border run-button:border-solid run-button:border-line run-button:bg-transparent run-button:px-3 run-button:py-1 run-button:text-hint! run-button:leading-normal! run-button:text-ink run-button:disabled:cursor-default! run-button:disabled:opacity-50!',
   chartTags: 'text-hint leading-normal text-ink-2',

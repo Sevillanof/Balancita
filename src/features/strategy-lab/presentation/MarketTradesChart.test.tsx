@@ -216,3 +216,21 @@ it('«Se podía ganar» pesa por el tamaño del analista, igual que lo ganado', 
   const pb = (text: string) => Number(/\+(\d+) pb/u.exec(text)![1])
   expect(pb(weighted)).toBe(Math.round(pb(plain) * 1.5))
 })
+
+it('«Se podía ganar» nunca es menos que lo que se ganó (velas gruesas)', () => {
+  const won = { ...trades[1]!, net_bp: 900 }
+  render(
+    <MarketTradesChart
+      product="PF_ETHUSD"
+      candles={candles}
+      view="zoom"
+      trades={[won]}
+      selected={won}
+      onSelect={() => undefined}
+      onShowAll={() => undefined}
+    />,
+  )
+  expect(screen.getByText('Se podía ganar').parentElement).toHaveTextContent(
+    '+900 pb',
+  )
+})
