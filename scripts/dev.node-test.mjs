@@ -10,6 +10,7 @@ import {
   findQwenModel,
   llamaPort,
   loadDevEnv,
+  loraMismatchWarning,
   planStartup,
   resolveLlamaModel,
   resolveLlamaServer,
@@ -1479,5 +1480,56 @@ describe('supervisor of the Qwen live operator', () => {
       }).action,
       'down',
     )
+  })
+})
+
+describe('loraMismatchWarning', () => {
+  const data = { BALANCITA_DATA: '/data' }
+  const present = (path) => path === '/data/qwen-lora/qwen-destila.gguf'
+  it('is silent when the loaded adapter is the one the config asks for', () => {
+    assert.equal(
+      loraMismatchWarning({
+        expected: 'qwen-destila.gguf',
+        env: data,
+        exists: present,
+      }),
+      '',
+    )
+    assert.equal(
+      loraMismatchWarning({
+        expected: 'qwen-destila.gguf',
+        env: { ...data, LLAMA_LORA: '/x/qwen-destila.gguf' },
+        exists: () => false,
+      }),
+      '',
+    )
+  })
+  it('is silent when the config asks for no adapter', () => {
+    assert.equal(
+      loraMismatchWarning({
+        expected: undefined,
+        env: { LLAMA_LORA: '/x/old.gguf' },
+        exists: () => false,
+      }),
+      '',
+    )
+  })
+  it('warns when an old LLAMA_LORA wins over the expected adapter', () => {
+    const text = loraMismatchWarning({
+      expected: 'qwen-destila.gguf',
+      env: { ...data, LLAMA_LORA: '/data/qwen-lora/qwen-lora.gguf' },
+      exists: present,
+    })
+    assert.match(text, /ATENCIÓN/)
+    assert.match(text, /qwen-destila\.gguf/)
+    assert.match(text, /qwen-lora\.gguf/)
+  })
+  it('warns when there is nothing to load', () => {
+    const text = loraMismatchWarning({
+      expected: 'qwen-destila.gguf',
+      env: data,
+      exists: () => false,
+    })
+    assert.match(text, /no hay ninguno/)
   })
 })

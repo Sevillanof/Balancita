@@ -141,6 +141,27 @@ export function defaultLora({ env, exists = existsSync, home = homedir() }) {
   return exists(path) ? path : ''
 }
 
+/** The adapter file llama-server will load: `LLAMA_LORA` when set, else the destillation GGUF if it exists, else none. */
+export function effectiveLora({ env, exists = existsSync, home = homedir() }) {
+  return (env.LLAMA_LORA ?? '').trim() || defaultLora({ env, exists, home })
+}
+
+/**
+ * One loud line when the adapter llama-server loads is not the one the live config asks for (`lora.adapter` in
+ * config/qwen-live.json), or none is loaded: on 2026-10-28 an old `LLAMA_LORA` in `.env.local` won over the new GGUF and
+ * the live Qwen answered with the wrong adapter without a sign. Empty string when they match or the config asks for none.
+ */
+export function loraMismatchWarning({ expected, env, exists, home }) {
+  const want = (expected ?? '').trim()
+  if (!want) return ''
+  const path = effectiveLora({ env, exists, home })
+  const got = path.split(/[\\/]/).pop()
+  if (got === want) return ''
+  return path
+    ? `[dev] ATENCIÓN: Qwen en vivo pide el adaptador ${want} pero llama-server cargará ${got} (LLAMA_LORA=${path}). Quitá o corregí LLAMA_LORA en .env.local y reiniciá pnpm dev.`
+    : `[dev] ATENCIÓN: Qwen en vivo pide el adaptador ${want} pero no hay ninguno para cargar (falta ${DESTILA_GGUF} en la carpeta de datos y LLAMA_LORA está vacío): los pedidos con adaptador pueden fallar.`
+}
+
 export function loraFlags(value) {
   const path = (value ?? '').trim()
   return path ? ['--lora-scaled', `${path}:0`, '--lora-init-without-apply'] : []
@@ -839,11 +860,7 @@ export function devChildSpecs({
           // A LoRA adapter (GGUF) loaded but NOT applied: the live operator never
           // sends a `lora` field, so it runs at the start scale 0 and its answers do not change;
           // only a request that asks for it (`exam --lora`, see futures_qwen_lora.py) gets the adapter.
-          ...loraFlags(
-            (env.LLAMA_LORA ?? '').trim()
-              ? env.LLAMA_LORA
-              : defaultLora({ env, exists }),
-          ),
+          ...loraFlags(effectiveLora({ env, exists })),
           '--no-mmproj',
           '--no-webui',
         ],
