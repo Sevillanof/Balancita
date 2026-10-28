@@ -139,6 +139,8 @@ async function openTerminal(page: Page) {
   )
   await expect(page.getByTestId('observer-now')).toBeVisible()
   await expect(page.getByTestId('approved-chart-renderer')).toBeVisible()
+  // The chart of the switched product has painted its markers.
+  await markerPositions(page.getByTestId('approved-chart-renderer'))
 }
 
 test('the Terminal opens on ETH, the traded product', async ({ page }) => {
