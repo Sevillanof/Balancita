@@ -1,10 +1,7 @@
 import { VBT } from './vectorbt-styles.ts'
 import { RUN } from './run-view-styles.ts'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import ResultsVisual, {
-  type VisualSeries,
-  type VisualTrade,
-} from './ResultsVisual.tsx'
+import ResultsVisual, { type VisualTrade } from './ResultsVisual.tsx'
 import ApprovedTerminalChart from '../../trading-view/presentation/ApprovedTerminalChart.tsx'
 import { amount } from '../../../shared/finance/format.ts'
 import { signedAmount } from '../domain/strategy-format.ts'
@@ -73,6 +70,7 @@ import RunProgress from './RunProgress.tsx'
 import VectorbtModal from './VectorbtModal.tsx'
 import MarketTradesChart from './MarketTradesChart.tsx'
 import RunVerdict from './RunVerdict.tsx'
+import { useFormulaModel } from './formula-model.ts'
 import VectorbtProgress from './VectorbtProgress.tsx'
 import VectorbtReportPanel from './VectorbtReportPanel.tsx'
 import VectorbtVariantLink from './VectorbtVariantLink.tsx'
@@ -615,6 +613,13 @@ export default function StrategyRunView({
   const quickRunning = quickState?.state === 'running'
   const quickVariants = quickState?.variants ?? []
   const [detailsOpen, setDetailsOpen] = useState(false)
+  // The test of the formula alone has no run: its operations and hourly prices come in its saved result.
+  const formulaOf =
+    quickVariants.find(
+      (variant) => variant.kind === 'formula' && variant.summary?.formula,
+    )?.summary?.formula ??
+    (quickState?.state === 'done' ? quickState.summary?.formula : undefined) ??
+    null
   useEffect(() => {
     if (!hasQuick) return
     let cancelled = false
@@ -783,6 +788,57 @@ export default function StrategyRunView({
       .then(() => setCopied(true))
       .catch(() => setCopied(false))
   }
+
+  const gatePanel =
+    data !== null &&
+    data.tradesDone &&
+    data.trades.length > 0 &&
+    (data.candles?.candles.length ?? 0) > 1
+  const formulaModel = useFormulaModel(gatePanel ? null : formulaOf)
+  const kpiRow = (
+    <div className={RUN.kpis} data-testid="run-kpis">
+      <Kpi
+        label="Operaciones cerradas"
+        value={summary ? amount(summary.trades, 0) : '—'}
+        note={
+          summary
+            ? `${summary.trades >= summary.min_trades ? '✓' : '✗'} Mínimo: ${summary.min_trades}`
+            : ''
+        }
+        tone={summary && summary.trades < summary.min_trades ? 'bad' : null}
+      />
+      <Kpi
+        label="Neto por operación"
+        value={summary ? bp(summary.mean_bp) : '—'}
+        note={
+          summary
+            ? `Después de costes${summary.funding_share != null && summary.funding_share < 0.95 ? ' · funding incompleto' : ''}`
+            : ''
+        }
+        tone={summary && (summary.mean_bp ?? 0) < 0 ? 'bad' : null}
+      />
+      <Kpi
+        label="Períodos positivos"
+        value={summary ? `${summary.positive_folds} / ${summary.folds}` : '—'}
+        note={
+          summary
+            ? `Mínimo: ${Math.ceil(summary.min_positive_fold_share * summary.folds - 1e-9)} de ${summary.folds}`
+            : ''
+        }
+        tone={null}
+      />
+      <Kpi
+        label="Frente al azar"
+        value={
+          summary && summary.percentile != null
+            ? `${amount(summary.percentile, 0)} %`
+            : '—'
+        }
+        note={summary ? `Mínimo: percentil ${summary.min_percentile}` : ''}
+        tone={null}
+      />
+    </div>
+  )
 
   return (
     <section
@@ -1064,7 +1120,7 @@ export default function StrategyRunView({
         </p>
       )}
 
-      {data && data.tradesDone && data.trades.length > 0 && (
+      {gatePanel ? (
         <RunVerdict
           trades={data.trades}
           product={data.product}
@@ -1072,57 +1128,43 @@ export default function StrategyRunView({
             Number(c.close),
           )}
         />
-      )}
-      <div className={RUN.kpis} data-testid="run-kpis">
-        <Kpi
-          label="Operaciones cerradas"
-          value={summary ? amount(summary.trades, 0) : '—'}
-          note={
-            summary
-              ? `${summary.trades >= summary.min_trades ? '✓' : '✗'} Mínimo: ${summary.min_trades}`
-              : ''
-          }
-          tone={summary && summary.trades < summary.min_trades ? 'bad' : null}
+      ) : formulaModel ? (
+        <RunVerdict
+          trades={formulaModel.trades}
+          product={formulaModel.product}
+          closes={formulaModel.closes}
         />
-        <Kpi
-          label="Neto por operación"
-          value={summary ? bp(summary.mean_bp) : '—'}
-          note={
-            summary
-              ? `Después de costes${summary.funding_share != null && summary.funding_share < 0.95 ? ' · funding incompleto' : ''}`
-              : ''
-          }
-          tone={summary && (summary.mean_bp ?? 0) < 0 ? 'bad' : null}
+      ) : null}
+      {kpiRow}
+      {gatePanel ? (
+        <MarketTradesChart
+          product={data.product}
+          candles={data.candles?.candles ?? []}
+          view={data.view}
+          trades={data.trades}
+          selected={selected}
+          onSelect={(trade) => void select(trade)}
+          onShowAll={showAll}
         />
-        <Kpi
-          label="Períodos positivos"
-          value={summary ? `${summary.positive_folds} / ${summary.folds}` : '—'}
-          note={
-            summary
-              ? `Mínimo: ${Math.ceil(summary.min_positive_fold_share * summary.folds - 1e-9)} de ${summary.folds}`
-              : ''
-          }
-          tone={null}
+      ) : formulaModel ? (
+        <MarketTradesChart
+          product={formulaModel.product}
+          candles={formulaModel.candles}
+          view={formulaModel.selected ? 'zoom' : 'full'}
+          trades={formulaModel.trades}
+          selected={formulaModel.selected}
+          onSelect={formulaModel.select}
+          onShowAll={formulaModel.showAll}
         />
-        <Kpi
-          label="Frente al azar"
-          value={
-            summary && summary.percentile != null
-              ? `${amount(summary.percentile, 0)} %`
-              : '—'
-          }
-          note={summary ? `Mínimo: percentil ${summary.min_percentile}` : ''}
-          tone={null}
-        />
-      </div>
-      {scopeRun && (
-        <ul className={RUN.scope} data-testid="run-evaluation-scope">
-          {runScopeLines(scopeRun).map((line) => (
-            <li key={line.key} data-tone={line.tone ?? undefined}>
-              {line.text}
-            </li>
-          ))}
-        </ul>
+      ) : (
+        hasQuick &&
+        data === null &&
+        state.kind !== 'loading' && (
+          <p className={RUN.empty} data-testid="run-empty-panel">
+            Todavía no hay resultados con precios y operaciones. Tocá «Probar» y
+            elegí «Solo la fórmula» para ver cómo le habría ido en el pasado.
+          </p>
+        )
       )}
       {shown && (
         <VectorbtReportPanel
@@ -1137,7 +1179,24 @@ export default function StrategyRunView({
           problem={vbtProblem}
         />
       )}
-      <div className="grid gap-2.5" id="run-market">
+      <details
+        className="rounded-lg border border-solid border-line bg-canvas px-3.5 py-2.5"
+        data-testid="run-details"
+        open={detailsOpen}
+        onToggle={(event) => setDetailsOpen(event.currentTarget.open)}
+      >
+        <summary className="cursor-pointer text-note text-ink-2">
+          Ver velas y detalle de las operaciones
+        </summary>
+        {scopeRun && (
+          <ul className={RUN.scope} data-testid="run-evaluation-scope">
+            {runScopeLines(scopeRun).map((line) => (
+              <li key={line.key} data-tone={line.tone ?? undefined}>
+                {line.text}
+              </li>
+            ))}
+          </ul>
+        )}
         {overview && !unknownToGate && (
           <div className={RUN.tabsWrap}>
             <div className={RUN.tabs} role="group" aria-label="Tramos probados">
@@ -1176,27 +1235,6 @@ export default function StrategyRunView({
             </p>
           </div>
         )}
-        {data && data.trades.length > 0 && (
-          <MarketTradesChart
-            product={data.product}
-            candles={data.candles?.candles ?? []}
-            view={data.view}
-            trades={data.trades}
-            selected={selected}
-            onSelect={(trade) => void select(trade)}
-            onShowAll={showAll}
-          />
-        )}
-      </div>
-      <details
-        className="rounded-lg border border-solid border-line bg-canvas px-3.5 py-2.5"
-        data-testid="run-details"
-        open={detailsOpen}
-        onToggle={(event) => setDetailsOpen(event.currentTarget.open)}
-      >
-        <summary className="cursor-pointer text-note text-ink-2">
-          Ver velas y detalle de las operaciones
-        </summary>
         {hasQuick &&
           (quickState?.state === 'done' ||
             quickVariants.some((variant) => variant.summary)) && (
@@ -1523,16 +1561,6 @@ const MAIN_TRADES = (items: QuickTrade[] | undefined): VisualTrade[] =>
 
 /** The formula alone, no Qwen: everything as pictures; the table is under «Ver el detalle». */
 function FormulaResult({ formula }: { formula: QuickFormula }) {
-  const series: VisualSeries[] = [
-    ['formula', 'La fórmula (como opera en vivo)'],
-    ['maestro_fuerte', 'Maestro fuerte, sin portero'],
-    ['siempre_largo', 'Siempre largo (mismas entradas)'],
-    ['siempre_corto', 'Siempre corto (mismas entradas)'],
-  ].map(([id, label]) => ({
-    id: id!,
-    label: label!,
-    trades: MAIN_TRADES(formula.curvas[id as keyof QuickFormula['curvas']]),
-  }))
   return (
     <div className="grid gap-3" data-testid="formula-result">
       <p className="m-0 text-note text-ink-2">
@@ -1542,18 +1570,6 @@ function FormulaResult({ formula }: { formula: QuickFormula }) {
         {DAY_FORMAT.format(formula.hasta_ms)} · {amount(formula.fotos, 0)}{' '}
         miradas
       </p>
-      <ResultsVisual
-        series={series}
-        market={Object.entries(formula.mercado ?? {}).map(
-          ([product, points]) => ({
-            id: product,
-            label: `Mercado: ${product.replace(/^PF_|USD$/g, '')} comprando y manteniendo`,
-            points,
-          }),
-        )}
-        notionalUsd={formula.nocional_usd}
-        note={`Cada operación mueve ${amount(formula.nocional_usd, 0)} USD. Neto después de costos. Una posición por producto; sale cuando el maestro se da vuelta${formula.max_horas ? ` o a las ${amount(formula.max_horas, 0)} h` : ''}. Pasá el cursor por una marca o una barra para ver entrada, salida y motivo.`}
-      />
       <details>
         <summary className="cursor-pointer text-note text-ink-2">
           Ver el detalle en números
