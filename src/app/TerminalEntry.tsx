@@ -1,5 +1,6 @@
-import { useEffect, useState, type ReactNode } from 'react'
+import { useEffect, useState } from 'react'
 import FuturesTerminal from './FuturesTerminal.tsx'
+import { TerminalLoading, TerminalUnavailable } from './TerminalLoading.tsx'
 import {
   loadTerminalBootstrap,
   terminalApiBase,
@@ -30,15 +31,6 @@ function describeBootstrapFailure(error: unknown): string {
     : 'Error desconocido al pedir los datos al servidor.'
 }
 
-function Spinner() {
-  return (
-    <span
-      aria-hidden="true"
-      className="inline-block size-4 shrink-0 animate-spin rounded-full border-2 border-solid border-line border-t-info"
-    />
-  )
-}
-
 function TerminalView() {
   const [product, setProduct] = useState<string | undefined>(
     DEFAULT_TERMINAL_PRODUCT,
@@ -49,19 +41,16 @@ function TerminalView() {
         kind: 'ready'
         bootstrap: Awaited<ReturnType<typeof loadTerminalBootstrap>>
       }
-    | { kind: 'unavailable'; reason: string }
+    | { kind: 'unavailable'; reason: string; retryAtMs: number }
   >({ kind: 'loading' })
   const [attempt, setAttempt] = useState(0)
-  const [slow, setSlow] = useState(false)
   const apiBase = terminalApiBase()
   useEffect(() => {
     let active = true
     let retry: ReturnType<typeof setTimeout> | undefined
-    const slowTimer = setTimeout(() => setSlow(true), TERMINAL_SLOW_MS)
     void loadTerminalBootstrap(apiBase, product)
       .then((bootstrap) => {
         if (!active) return
-        setSlow(false)
         setState({ kind: 'ready', bootstrap })
       })
       .catch((error: unknown) => {
@@ -69,13 +58,13 @@ function TerminalView() {
         setState({
           kind: 'unavailable',
           reason: describeBootstrapFailure(error),
+          retryAtMs: Date.now() + TERMINAL_RETRY_MS,
         })
         retry = setTimeout(() => setAttempt((n) => n + 1), TERMINAL_RETRY_MS)
       })
     return () => {
       active = false
       clearTimeout(retry)
-      clearTimeout(slowTimer)
     }
   }, [apiBase, product, attempt])
   if (state.kind === 'ready') {
@@ -111,44 +100,20 @@ function TerminalView() {
   }
   if (state.kind === 'unavailable')
     return (
-      <SwitchBar>
-        <main role="alert" className="flex flex-col gap-2">
-          <h1>Terminal de futuros no disponible</h1>
-          <p>
-            No se pudo conectar con la fuente «Real (paper, Kraken público)». No
-            se cambió a otra fuente automáticamente.
-          </p>
-          <p>Motivo: {state.reason}</p>
-          <p className="flex items-center gap-2">
-            <Spinner />
-            Reintentando automáticamente…
-          </p>
-        </main>
-      </SwitchBar>
+      <TerminalUnavailable
+        product={product}
+        reason={state.reason}
+        retryAtMs={state.retryAtMs}
+        attempts={attempt + 1}
+        onRetry={() => setAttempt((n) => n + 1)}
+      />
     )
   return (
-    <SwitchBar>
-      <main role="status" aria-busy="true" className="flex items-center gap-2">
-        <Spinner />
-        <span>
-          Cargando la Terminal (Real, paper)…
-          {slow
-            ? ' Está tardando más de lo normal: el servidor puede estar arrancando o ocupado. Se sigue intentando.'
-            : ''}
-        </span>
-      </main>
-    </SwitchBar>
-  )
-}
-
-/** Dark frame for states where the terminal header is not rendered. */
-function SwitchBar({ children }: { children: ReactNode }) {
-  return (
-    <div className="min-h-svh bg-canvas font-sans text-body text-ink font-features-terminal">
-      <div className="flex justify-end border-b border-b-solid border-b-line px-7 py-2 source-phone:px-4">
-        {children}
-      </div>
-    </div>
+    <TerminalLoading
+      product={product}
+      timeoutMs={TERMINAL_BOOTSTRAP_TIMEOUT_MS}
+      slowMs={TERMINAL_SLOW_MS}
+    />
   )
 }
 
