@@ -1321,6 +1321,69 @@ describe('live capture process core', () => {
     store.close()
   })
 
+  it('captures the terminal series of the extra products once, orderbook included', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'balancita-capture-'))
+    dirs.push(dir)
+    const store = new FuturesMarketStore(join(dir, 'market.sqlite'))
+    const M = 60_000
+    const now = 1_791_356_400_000 + 10_000
+    const paths: string[] = []
+    const capture = createLiveCapture({
+      store,
+      clock: () => now,
+      makeSocket: () => fakeSocket().socket,
+      fetchCatalog: async () => catalog,
+      fundingFetch: async () => {
+        throw new Error('offline')
+      },
+      products: [
+        { productId: 'PF_XBTUSD', tickSize: '1' },
+        { productId: 'PF_ETHUSD', tickSize: '0.1' },
+      ],
+      officialCandlesFetch: async () =>
+        new Response(JSON.stringify({ candles: [], more_candles: false })),
+      officialPollMs: 60_000,
+      officialRequestGapMs: 0,
+      analytics: {
+        metrics: ['cvd', 'orderbook'],
+        intervals: [M],
+        alsoProducts: ['PF_ETHUSD'],
+        allProductMetrics: ['orderbook'],
+        lookbackMs: { 60_000: 2 * M },
+        pollMs: 60_000,
+        fetch: async (input) => {
+          const url = new URL(String(input))
+          paths.push(url.pathname.replace('/api/charts/v1/analytics/', ''))
+          const since = Number(url.searchParams.get('since')) * 1000
+          const timestamp = [(Math.ceil(since / M) * M) / 1000]
+          const data = url.pathname.endsWith('/orderbook')
+            ? { bid: { bestPrice: ['99'] }, ask: { bestPrice: ['100'] } }
+            : { buy_volume: ['1'], sell_volume: ['1'] }
+          return new Response(
+            JSON.stringify({
+              result: { timestamp, data, more: false },
+              errors: [],
+            }),
+          )
+        },
+      },
+      log: () => undefined,
+    })
+    await capture.start()
+    await until(() => paths.length >= 4)
+    await capture.stop()
+    expect(paths).toEqual([
+      'PF_XBTUSD/cvd',
+      'PF_XBTUSD/orderbook',
+      'PF_ETHUSD/cvd',
+      'PF_ETHUSD/orderbook',
+    ])
+    expect(
+      store.analyticsSince('PF_ETHUSD', 'cvd', M, 0, 10)[0]!.values,
+    ).toEqual({ buy_volume: '1', sell_volume: '1' })
+    store.close()
+  })
+
   it('polls the REST tickers of the non-BTC pinned products into the market store', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'balancita-capture-'))
     dirs.push(dir)

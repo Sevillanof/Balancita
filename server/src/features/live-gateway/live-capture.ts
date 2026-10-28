@@ -52,6 +52,18 @@ const ANALYTICS_LOOKBACK_MS: Readonly<Record<number, number>> = {
   60_000: 24 * 3_600_000,
   3_600_000: 60 * 24 * 3_600_000,
 }
+/** One request per product, metric and interval, whoever asked for it. */
+function uniqueSeries<
+  T extends { productId: string; metric: string; interval: number },
+>(series: readonly T[]): T[] {
+  const seen = new Set<string>()
+  return series.filter(({ productId, metric, interval }) => {
+    const key = `${productId}/${metric}/${interval}`
+    if (seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
+}
 /** Analytics buckets settle a few seconds after the minute: poll at :08. */
 const ANALYTICS_POLL_OFFSET_MS = 8_000
 /** At most this many `more` pages per series per poll (backfill catch-up). */
@@ -196,6 +208,12 @@ export interface LiveCaptureOptions {
     /** Series of the terminal product (PF_XBTUSD). */
     readonly metrics: readonly AnalyticsMetric[]
     readonly intervals: readonly number[]
+    /**
+     * Other pinned products that get the same `metrics` at the same
+     * `intervals` as the terminal product (e.g. PF_ETHUSD: flow, open
+     * interest, liquidations and positioning for its chart panels).
+     */
+    readonly alsoProducts?: readonly string[]
     /**
      * Series captured for every pinned product at 1m (e.g. `orderbook`: best
      * bid/ask, depth bands and slippage, for per-product trading costs).
@@ -574,13 +592,16 @@ export function createLiveCapture(options: LiveCaptureOptions) {
   // Terminal product: every metric at every interval; then the per-product
   // metrics (1m) of the other pinned products.
   const analyticsSeries = analytics
-    ? [
-        ...analytics.intervals.flatMap((interval) =>
-          analytics.metrics.map((metric) => ({
-            productId: FUTURES_PRODUCT,
-            metric,
-            interval,
-          })),
+    ? uniqueSeries([
+        ...[FUTURES_PRODUCT, ...(analytics.alsoProducts ?? [])].flatMap(
+          (productId) =>
+            analytics.intervals.flatMap((interval) =>
+              analytics.metrics.map((metric) => ({
+                productId,
+                metric,
+                interval,
+              })),
+            ),
         ),
         ...products
           .filter(({ productId }) => productId !== FUTURES_PRODUCT)
@@ -602,7 +623,7 @@ export function createLiveCapture(options: LiveCaptureOptions) {
             metric,
             interval: 60_000,
           })),
-      ]
+      ])
     : []
   const pollAnalytics = async (): Promise<void> => {
     if (!analytics) return
