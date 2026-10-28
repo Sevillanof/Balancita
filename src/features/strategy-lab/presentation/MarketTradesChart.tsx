@@ -158,6 +158,13 @@ export default function MarketTradesChart({
   const exitPrice = selected
     ? (priceOf(selected.exit_price) ?? priceAt(selected.exit_time_ms))
     : 0
+  // When the real exit was at least as good as any exit the candles show, the best exit is the real one
+  const bestAtMs =
+    potential && potential.bestAtMs !== null && selected
+      ? win && selected.net_bp >= potential.best * sizeMult
+        ? selected.exit_time_ms
+        : potential.bestAtMs
+      : null
   const best = Math.max(Math.abs(selected?.net_bp ?? 0), couldEarn, 20)
   const bar = (label: string, bp: number, tone: string, fill: string) => (
     <div className="grid gap-1 text-note">
@@ -310,13 +317,13 @@ export default function MarketTradesChart({
               className={win ? 'fill-long' : 'fill-short'}
               opacity={0.07}
             />
-            {potential && potential.bestAtMs !== null && (
+            {potential && bestAtMs !== null && (
               <>
                 <line
                   x1={x(selected.entry_time_ms)}
                   y1={y(entryPrice)}
-                  x2={x(potential.bestAtMs)}
-                  y2={y(priceAt(potential.bestAtMs))}
+                  x2={x(bestAtMs)}
+                  y2={y(priceAt(bestAtMs))}
                   className="stroke-info"
                   strokeWidth={3}
                   strokeDasharray="3 6"
@@ -324,16 +331,16 @@ export default function MarketTradesChart({
                   data-testid="potential-path"
                 />
                 <circle
-                  cx={x(potential.bestAtMs)}
-                  cy={y(priceAt(potential.bestAtMs))}
+                  cx={x(bestAtMs)}
+                  cy={y(priceAt(bestAtMs))}
                   r={7}
                   className="fill-info"
                 />
                 <text
-                  x={x(potential.bestAtMs)}
+                  x={x(bestAtMs)}
                   y={(() => {
                     // below the point for a short, above it for a long; never over the date axis
-                    const at = y(priceAt(potential.bestAtMs!))
+                    const at = y(priceAt(bestAtMs!))
                     const below = at + 24
                     return potential.right === 1 || below > H - 24
                       ? at - 14

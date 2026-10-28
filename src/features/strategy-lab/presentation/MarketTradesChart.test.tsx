@@ -234,3 +234,21 @@ it('«Se podía ganar» nunca es menos que lo que se ganó (velas gruesas)', () 
     '+900 pb',
   )
 })
+
+it('si lo ganado iguala lo que se podía ganar, la mejor salida cae en la salida real', () => {
+  const won = { ...trades[1]!, net_bp: 900 }
+  render(
+    <MarketTradesChart
+      product="PF_ETHUSD"
+      candles={candles}
+      view="zoom"
+      trades={[won]}
+      selected={won}
+      onSelect={() => undefined}
+      onShowAll={() => undefined}
+    />,
+  )
+  const path = screen.getByTestId('potential-path')
+  const exit = document.querySelector('circle.fill-long')!
+  expect(path.getAttribute('x2')).toBe(exit.getAttribute('cx'))
+})
