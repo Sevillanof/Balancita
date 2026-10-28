@@ -253,7 +253,7 @@ class QwenLiveTrades:
             long = side_of[row["snap_id"]] > 0
             move = row["moves"]["240"]
             end = entry + LIVE_HOLD_MS
-            paid, covered = line.accrue(entry, end, 100.0, long) if line is not None else (0.0, 0)
+            paid, covered = line.accrue(entry, end, qt.D(100), long) if line is not None else (0.0, 0)
             funding_bp = float(paid) / 100.0 * 10_000
             status = "complete" if covered >= LIVE_HOLD_MS else ("partial" if covered > 0 else "unknown")
             out.append({"side": "LONG" if long else "SHORT", "entry_time_ms": entry, "exit_time_ms": end,
