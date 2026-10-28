@@ -61,10 +61,10 @@ export default function ExigenciaControl({ value, onChange, disabled }: Props) {
       {rows.map(({ key, label, detail }) => (
         <label
           key={key}
-          className="grid grid-cols-[5rem_minmax(0,1fr)_2rem] items-center gap-x-3 gap-y-0.5 text-note text-ink"
+          className="grid grid-cols-6 items-center gap-x-3 gap-y-0.5 text-note text-ink"
         >
           <span>{label}</span>
-          <span className="grid min-w-0">
+          <span className="col-span-4 grid min-w-0">
             <input
               type="range"
               min={0}
@@ -98,7 +98,7 @@ export default function ExigenciaControl({ value, onChange, disabled }: Props) {
           </span>
           <strong className="text-right tabular-nums">{value[key]}</strong>
           <span />
-          <span className="col-span-2 text-ink-2">{detail}</span>
+          <span className="col-span-4 text-ink-2">{detail}</span>
         </label>
       ))}
       {changed && (
