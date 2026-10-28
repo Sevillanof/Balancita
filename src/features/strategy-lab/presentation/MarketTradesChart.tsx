@@ -130,6 +130,10 @@ export default function MarketTradesChart({
   const entryPrice = selected
     ? (priceOf(selected.entry_price) ?? priceAt(selected.entry_time_ms))
     : 0
+  // The price comes into the entry from above or below: the label goes on the other side of the line.
+  const priceBefore = selected
+    ? priceAt(lo + (selected.entry_time_ms - lo) * 0.85)
+    : 0
   const exitPrice = selected
     ? (priceOf(selected.exit_price) ?? priceAt(selected.exit_time_ms))
     : 0
@@ -325,7 +329,7 @@ export default function MarketTradesChart({
             />
             <text
               x={x(selected.entry_time_ms) - 10}
-              y={y(entryPrice) + (long ? 22 : -14)}
+              y={y(entryPrice) + (priceBefore > entryPrice ? 26 : -20)}
               textAnchor="end"
               className="fill-ink text-hint stroke-canvas"
               strokeWidth={4}

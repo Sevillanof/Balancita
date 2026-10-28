@@ -1620,22 +1620,42 @@ function FormulaResult({ formula }: { formula: QuickFormula }) {
             <tbody>
               {(
                 [
-                  ['La fórmula', formula.formula],
-                  ['Maestro fuerte, sin portero', formula.maestro_fuerte],
-                  ['Siempre largo', formula.siempre_largo],
-                  ['Siempre corto', formula.siempre_corto],
-                ] as [string, QuickOperationStats][]
-              ).map(([label, stats]) => (
-                <tr key={label}>
-                  <th scope="row">{label}</th>
-                  <td>{stats.n}</td>
-                  <td>{bp(stats.neto_bp)}</td>
-                  <td>{percentText(stats.ganadoras)}</td>
-                  <td>
-                    {stats.por_vuelta} / {stats.por_tiempo}
-                  </td>
-                </tr>
-              ))}
+                  ['La fórmula', 'formula'],
+                  ['Maestro fuerte, sin portero', 'maestro_fuerte'],
+                  ['Siempre largo', 'siempre_largo'],
+                  ['Siempre corto', 'siempre_corto'],
+                ] as [string, keyof QuickFormula['curvas']][]
+              ).map(([label, key]) => {
+                // Each row comes from its own operations, the ones of the product on screen.
+                const list = (formula.curvas[key] ?? []).filter(
+                  (t) =>
+                    !formula.productos[0] ||
+                    t.producto === formula.productos[0],
+                )
+                const n = list.length
+                return (
+                  <tr key={label}>
+                    <th scope="row">{label}</th>
+                    <td>{n}</td>
+                    <td>
+                      {n > 0
+                        ? bp(list.reduce((sum, t) => sum + t.neto_bp, 0) / n)
+                        : '—'}
+                    </td>
+                    <td>
+                      {n > 0
+                        ? percentText(
+                            list.filter((t) => t.neto_bp > 0).length / n,
+                          )
+                        : '—'}
+                    </td>
+                    <td>
+                      {list.filter((t) => t.motivo === 'vuelta').length} /{' '}
+                      {list.filter((t) => t.motivo === 'tiempo').length}
+                    </td>
+                  </tr>
+                )
+              })}
             </tbody>
           </table>
         </div>

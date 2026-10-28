@@ -989,6 +989,13 @@ describe('StrategyRunView panel of the formula test (Qwen en vivo)', () => {
     expect(screen.queryByText(/Sin prueba terminada/)).toBeNull()
     expect(screen.queryByText(/Prueba anterior/)).toBeNull()
     expect(screen.queryByText(/tramos probados/)).toBeNull()
+    // the table of numbers agrees with the figures above: same operations, same mean
+    const row = within(
+      screen.getByRole('table', { name: 'Detalle de la fórmula' }),
+    )
+      .getByRole('rowheader', { name: 'La fórmula' })
+      .closest('tr')!
+    expect(within(row).getByText('+21,7 pb')).toBeInTheDocument()
     const chart = await screen.findByTestId('market-chart')
     expect(
       within(chart).getAllByRole('button', { name: /^Operación/ }),
