@@ -129,6 +129,18 @@ export const DEFAULT_LLAMA_PORT = 8088
  * only delays that first application, as GET /lora-adapters showed on the Mac on 2026-10-27). A request that asks for
  * `lora: [{id: 0, scale: 1}]` (`exam --lora 0`, entry_eval.py) gets the adapter for that request only.
  */
+/**
+ * The adapter the live Qwen asks for (`lora.request` in config/qwen-live.json) when `.env.local` names none: the GGUF the
+ * destillation left in the data folder (Fran does not edit files). Only if the file exists; `LLAMA_LORA` always wins.
+ */
+export const DESTILA_GGUF = 'qwen-lora/qwen-destila.gguf'
+export function defaultLora({ env, exists = existsSync, home = homedir() }) {
+  const dir =
+    (env.BALANCITA_DATA ?? '').trim() || join(home, 'balancita-data.noindex')
+  const path = join(dir, DESTILA_GGUF)
+  return exists(path) ? path : ''
+}
+
 export function loraFlags(value) {
   const path = (value ?? '').trim()
   return path ? ['--lora-scaled', `${path}:0`, '--lora-init-without-apply'] : []
@@ -827,7 +839,11 @@ export function devChildSpecs({
           // A LoRA adapter (GGUF) loaded but NOT applied: the live operator never
           // sends a `lora` field, so it runs at the start scale 0 and its answers do not change;
           // only a request that asks for it (`exam --lora`, see futures_qwen_lora.py) gets the adapter.
-          ...loraFlags(env.LLAMA_LORA),
+          ...loraFlags(
+            (env.LLAMA_LORA ?? '').trim()
+              ? env.LLAMA_LORA
+              : defaultLora({ env, exists }),
+          ),
           '--no-mmproj',
           '--no-webui',
         ],

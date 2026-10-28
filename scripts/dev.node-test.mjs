@@ -767,6 +767,28 @@ describe('optional LLM decision children (llm and q)', () => {
     )
     assert.ok(!lora.includes('--lora'))
     assert.ok(lora.includes('--lora-init-without-apply'))
+    // Without LLAMA_LORA the destillation GGUF in the data folder is used when it exists (Fran does not edit .env.local).
+    const found = byName(
+      devChildSpecs({
+        ...base,
+        env: { ...env, BALANCITA_DATA: '/data' },
+        exists: (path) => path === '/data/qwen-lora/qwen-destila.gguf',
+        llm,
+      }),
+    ).llm.args
+    assert.equal(
+      found[found.indexOf('--lora-scaled') + 1],
+      '/data/qwen-lora/qwen-destila.gguf:0',
+    )
+    const pinned = byName(
+      devChildSpecs({
+        ...base,
+        env: { ...env, BALANCITA_DATA: '/data', LLAMA_LORA: '/x.gguf' },
+        exists: () => true,
+        llm,
+      }),
+    ).llm.args
+    assert.equal(pinned[pinned.indexOf('--lora-scaled') + 1], '/x.gguf:0')
     const hf = byName(
       devChildSpecs({ ...base, env: { LLAMA_HF: 'org/other:Q6_K' }, llm }),
     )

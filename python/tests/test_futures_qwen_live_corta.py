@@ -152,7 +152,7 @@ class IdentityTests(unittest.TestCase):
         self.assertTrue(v7["state_ficha"] and v7["factors"]["question"] and v7["lora"]["request"])
         self.assertEqual(v7["guardrails"]["max_hold_min"], 240)
         self.assertNotIn("state_corta", v7)
-        self.assertIsNone(qt.lora_of(LIVE_CFG))                             # no adapter in the live requests of v8
+        self.assertEqual(qt.lora_of(LIVE_CFG), [{"id": 0, "scale": 1.0}])    # the destillation adapter (28-oct): opinion only
         # changing a formula hash changes the identity (a new database)
         changed = copy.deepcopy(LIVE_CFG)
         changed["corta"]["portero_hash"] = "otro"

@@ -262,6 +262,14 @@
     "PF_SOLUSD"
   ],
   "state_corta": true,
+  "lora": {
+    "adapter": "qwen-destila.gguf",
+    "trained": "2026-10-28",
+    "steps": 250,
+    "dataset": "balancita-qwen-destila-dataset.v1",
+    "note": "Destilación: Qwen lee la ficha como la fórmula (acuerdo 92 %, espejo 100 %). Solo opina; decide la fórmula. Se carga con escala 0 (llama-server) y cada pedido de esta config lo pide con escala 1.",
+    "request": [{ "id": 0, "scale": 1.0 }]
+  },
   "corta": {
     "maestro": "qwen-lora-maestro.json",
     "maestro_hash": "3e1f64d478a5",
