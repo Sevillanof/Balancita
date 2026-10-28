@@ -73,11 +73,36 @@ export type AnalistaUsado = {
   regla: string
 }
 
-/** The two levels and the analyst's mode the user picks before a test. */
+/** How a test measures: `honesta` refits the formulas every quarter with only what came before; `vigente` uses the paper formulas (fitted up to 2025-09-30). */
+export type Medicion = 'honesta' | 'vigente'
+
+/** The honesty meter of a result (`futures_walkforward.meter`): a traffic light and the reason, with the four numbers behind it. */
+export type HonestyMeter = {
+  semaforo: 'verde' | 'amarillo' | 'rojo'
+  motivo: string
+  /** Variants tried in total (the ones before the audit plus the logged ones). */
+  intentos: number
+  /** Share of the result outside the fitting period of the formula that decided it. */
+  fuera_del_ajuste_pct: number | null
+  /** The practice window has already been used to choose rules: it is no fresh data. */
+  practica_usada: boolean
+  incluye_practica: boolean
+  practica: { desde: string; hasta: string }
+  holdout_intacto: boolean
+  holdout_desde: string
+  /** Probability that the result is not luck once the attempts are discounted (deflated Sharpe). */
+  prob_no_es_suerte: number | null
+  /** The same probability without discounting the attempts (what a single try would show). */
+  prob_sin_descontar_intentos?: number | null
+  medicion: Medicion
+}
+
+/** The two levels, the analyst's mode and the way of measuring the user picks before a test. */
 export type ExigenciaLevels = {
   maestro: number
   portero: number
   analista: AnalistaModo
+  medicion?: Medicion
 }
 
 /** One row of the operation table (version 8): operations closed by the fixed exit rule, net after costs. */
@@ -144,6 +169,8 @@ export type QuickTrade = {
 
 /** The formula alone (no Qwen) over every wake of the exam range, one position per product, as it operates live. */
 export type QuickFormula = {
+  /** The honesty meter of this test (absent in results made before it existed). */
+  honestidad?: HonestyMeter | null
   exigencia?: Exigencia | null
   analista?: AnalistaUsado | null
   /** Entries with movement / in calm / without enough history: count and net bp at size 1 (before the analyst's weight). */

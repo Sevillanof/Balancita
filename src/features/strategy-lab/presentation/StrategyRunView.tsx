@@ -3,6 +3,7 @@ import { RUN } from './run-view-styles.ts'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import ResultsVisual, { type VisualTrade } from './ResultsVisual.tsx'
 import ExigenciaControl from './ExigenciaControl.tsx'
+import HonestyMeter from './HonestyMeter.tsx'
 import {
   ANALISTA_OPCIONES,
   EXIGENCIA_PAPER,
@@ -14,6 +15,8 @@ import { signedAmount } from '../domain/strategy-format.ts'
 import {
   MARKET_STAGES,
   nextStage,
+  stageLabel,
+  stagesFor,
   stageTabs,
   untriedStages,
   type MarketStage,
@@ -349,7 +352,11 @@ export default function StrategyRunView({
 
   // One tab per market stage, each one a run. By default the chart follows the newest finished run;
   // a stage picked by hand stays. With no stage tried, the newest finished runs are shown as one tab.
-  const stageList = overview?.stages?.practice ?? MARKET_STAGES
+  const [exigencia, setExigencia] = useState(EXIGENCIA_PAPER_LEVELS)
+  const medicion = exigencia.medicion ?? 'honesta'
+  const stageList =
+    overview?.stages?.practice ??
+    (kind === 'qwen_live' ? stagesFor(medicion) : MARKET_STAGES)
   const tabs = useMemo(
     () => stageTabs(overview?.runs ?? [], stageList),
     [overview, stageList],
@@ -583,7 +590,11 @@ export default function StrategyRunView({
     try {
       for (const [index, stage] of stages.entries()) {
         if (stopSeries.current || !mounted.current) break
-        setSeries({ done: index, total: stages.length, label: stage.label })
+        setSeries({
+          done: index,
+          total: stages.length,
+          label: stageLabel(stage, medicion),
+        })
         const started = await gate.start(strategyId, {
           from: stage.from,
           to: stage.to,
@@ -620,7 +631,6 @@ export default function StrategyRunView({
   // --- Prueba rápida (Qwen en vivo): una muestra de fotos, orientativa ---
   const hasQuick = kind === 'qwen_live'
   // How demanding the maestro and the portero are in the next test (only Qwen en vivo's tests; paper keeps 5 and 5)
-  const [exigencia, setExigencia] = useState(EXIGENCIA_PAPER_LEVELS)
   const [quickState, setQuickState] = useState<QuickState | null>(null)
   const [quickError, setQuickError] = useState<string | null>(null)
   // Just launched: the process has not rewritten its state file yet, so the server still shows the previous result (or none)
@@ -646,6 +656,11 @@ export default function StrategyRunView({
   }, [formulaOf])
   const busyQuick = hasQuick && (quickRunning || running != null || testing)
   const formulaShown = formulaOf ?? (busyQuick ? keptFormula : null)
+  // The honesty meter of the result on screen: the formula test's own, else the one of the last practice run
+  const shownMeter =
+    formulaShown?.honestidad ??
+    (formulaShown == null ? lastRun?.params?.honestidad : null) ??
+    null
   // Qwen en vivo only has the new panel: the old practice view is for the other strategies
   const legacyView = !hasQuick
   useEffect(() => {
@@ -736,6 +751,9 @@ export default function StrategyRunView({
   }
   // Retired strategies of the old engine are not in the gate's registry.
   const unknownToGate = overviewError?.startsWith('No existe') ?? false
+  const usedMedicion = hasQuick
+    ? (shownMeter?.medicion ?? lastRun?.params?.medicion ?? null)
+    : null
 
   // --- Explorar con VectorBT ---
   // VectorBT only explores rules: Qwen and Kronos never ask for it.
@@ -976,6 +994,11 @@ export default function StrategyRunView({
             {usedLevels &&
               !busyQuick &&
               ` · Exigencia: maestro ${usedLevels.maestro}, portero ${usedLevels.portero}${usedLevels.maestro === EXIGENCIA_PAPER && usedLevels.portero === EXIGENCIA_PAPER ? ' (como paper)' : ''}`}
+            {!busyQuick && usedMedicion && (
+              <span data-testid="medicion-usada">
+                {` · Medición ${usedMedicion === 'honesta' ? 'honesta (fórmulas reajustadas cada trimestre)' : 'con la fórmula en vigor'}`}
+              </span>
+            )}
             {!busyQuick && analistaText}
             {!busyQuick &&
               usedAnalista &&
@@ -1108,6 +1131,15 @@ export default function StrategyRunView({
           disabled={testing || quickRunning}
         />
       )}
+      {hasQuick && (
+        <HonestyMeter
+          meter={shownMeter}
+          stale={busyQuick}
+          missing={
+            shownMeter == null && (formulaShown != null || lastRun != null)
+          }
+        />
+      )}
       {hasQuick && launching && quickState?.state !== 'running' && (
         <div className={RUN.quick} role="group" aria-label="Prueba rápida">
           <p>Prueba rápida · preparando las fotos del pasado…</p>
@@ -1143,7 +1175,7 @@ export default function StrategyRunView({
           </label>
           <p className={RUN.hint}>
             Cada una en una etapa distinta del mercado, una después de otra:{' '}
-            {plan.map((stage) => stage.label).join(' → ')}.{' '}
+            {plan.map((stage) => stageLabel(stage, medicion)).join(' → ')}.{' '}
             {repeatable
               ? 'Se pueden repetir cuantas veces quieras.'
               : `Quedan ${untried.length} etapas sin probar.`}

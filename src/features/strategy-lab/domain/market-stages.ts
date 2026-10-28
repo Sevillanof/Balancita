@@ -1,4 +1,5 @@
 import type { GateRun } from '../infrastructure/gate-api.ts'
+import type { Medicion } from '../infrastructure/quick-api.ts'
 
 /**
  * Stretches of the practice window (everything before the exam cut), each one
@@ -14,6 +15,37 @@ export const MARKET_STAGES: readonly MarketStage[] = [
   { label: 'oct–dic 2025', from: '2025-10-01', to: '2026-01-01' },
   { label: 'ene–abr 2026', from: '2026-01-01', to: '2026-04-19' },
 ]
+
+/**
+ * Stretches before the practice window that only the honest measurement can test: every quarter uses formulas refitted with
+ * what came before it, so a 2023 or 2024 stretch is out of sample. The paper formulas were fitted up to 2025-09-30, so there
+ * those stretches (and every 2025 one before October) would be tested inside their own fitting.
+ */
+export const HONEST_STAGES: readonly MarketStage[] = [
+  { label: 'jul–dic 2023', from: '2023-07-01', to: '2024-01-01' },
+  { label: 'ene–jun 2024', from: '2024-01-01', to: '2024-07-01' },
+  { label: 'jul–dic 2024', from: '2024-07-01', to: '2025-01-01' },
+]
+
+/** First day after the fitting of the paper formulas (`config/qwen-lora-*.json` were fitted up to 2025-09-30). */
+export const PAPER_FIT_END = '2025-10-01'
+
+export const stagesFor = (medicion: Medicion): readonly MarketStage[] =>
+  medicion === 'honesta' ? [...HONEST_STAGES, ...MARKET_STAGES] : MARKET_STAGES
+
+/** A stage measured with the paper formulas that ends before they stopped fitting: the formulas had seen it. */
+export const insideFit = (stage: MarketStage, medicion: Medicion): boolean =>
+  medicion === 'vigente' && stage.to <= PAPER_FIT_END
+
+/** The stage's name for the screen, with its mark when the measurement would be inside the fitting. */
+export const stageLabel = (stage: MarketStage, medicion: Medicion): string =>
+  insideFit(stage, medicion)
+    ? `${stage.label} (dentro del ajuste)`
+    : stage.label
+
+/** How a run measured; runs made before the honest mode existed used the paper formulas. */
+export const runMedicion = (run: GateRun): Medicion =>
+  run.params?.medicion ?? 'vigente'
 
 const day = (stamp: string | undefined) => (stamp ?? '').slice(0, 10)
 

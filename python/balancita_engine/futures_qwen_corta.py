@@ -31,9 +31,46 @@ WORDS = {2: "SUBE FUERTE", 1: "SUBE FLOJO", 0: "NADA CLARO", -1: "BAJA FLOJO", -
 _LOADED = {}
 
 
-def formulas(cfg):
-    """``(maestro, portero)`` de la config, cargados una vez por archivo y verificados contra los hashes declarados."""
-    spec = cfg.get("corta") or {}
+PARES_SCHEMA = "balancita-walkforward-pares.v1"
+_PARES = {}
+
+
+def _quarter_name(t_ms):
+    month = int(qt.stamp(t_ms)[5:7])
+    return "{}Q{}".format(qt.stamp(t_ms)[:4], (month - 1) // 3 + 1)
+
+
+def _pairs_table(path):
+    path = path if os.path.isabs(path) else os.path.join(qt.ROOT, "config", path)
+    cached = _PARES.get(path)
+    if cached is None:
+        import json
+        with open(path, encoding="utf-8") as handle:
+            table = json.load(handle)
+        if table.get("schema") != PARES_SCHEMA or not table.get("trimestres"):
+            raise qt.TraderError("{}: no es una tabla de fórmulas trimestrales".format(path))
+        cached = _PARES[path] = (os.path.dirname(path), table["trimestres"])
+    return cached
+
+
+def quarter_spec(spec, t_ms=None):
+    """``cfg["corta"]`` con las fórmulas del trimestre de ``t_ms`` cuando declara ``pares`` (modo honesto: cada trimestre usa el
+    par ajustado SOLO con lo anterior). Antes del primer trimestre vale el primero y después del último el último; sin ``t_ms``, el último."""
+    if not spec.get("pares"):
+        return spec
+    folder, table = _pairs_table(spec["pares"])
+    names = sorted(table)
+    name = names[-1] if t_ms is None else _quarter_name(t_ms)
+    name = name if name in table else (names[0] if t_ms is not None and name < names[0] else names[-1])
+    pair = table[name]
+    return dict(spec, maestro=os.path.join(folder, pair["maestro"]), maestro_hash=pair["maestro_hash"],
+                portero=os.path.join(folder, pair["portero"]), portero_hash=pair["portero_hash"])
+
+
+def formulas(cfg, t_ms=None):
+    """``(maestro, portero)`` de la config, cargados una vez por archivo y verificados contra los hashes declarados. Con
+    ``corta.pares`` (tabla de fórmulas trimestrales) elige el par del trimestre de ``t_ms``."""
+    spec = quarter_spec(cfg.get("corta") or {}, t_ms)
     for key in ("maestro", "maestro_hash", "portero", "portero_hash"):
         if not spec.get(key):
             raise qt.TraderError("la ficha corta necesita corta.{} en la config".format(key))
@@ -75,7 +112,7 @@ def check(trader, t_ms):
 def readings(trader, t_ms, f=None):
     """Los números de la foto: hechos aplanados, puntaje y veredicto del maestro, probabilidad y veredicto del portero, régimen.
     ``f``: los hechos de la ficha ya calculados (``ficha.facts``), para no repetirlos."""
-    teacher, keeper = formulas(trader.cfg)
+    teacher, keeper = formulas(trader.cfg, t_ms)
     f = ficha.facts(trader, t_ms) if f is None else f
     row = maestro.flat_facts(f)
     s = maestro.score(teacher, row)
@@ -83,7 +120,7 @@ def readings(trader, t_ms, f=None):
     yes, p = portero.verdict(keeper, row, s)
     ratio = f["range24"] / f["range7"] if f["range7"] > 0 else 1.0
     regime = "ALTA" if ratio >= VOL_HIGH else "BAJA" if ratio <= VOL_LOW else "NORMAL"
-    return {"hechos": row, "puntaje": s, "veredicto": v, "portero_p": p, "portero_si": yes, "vol_ratio": ratio, "volatilidad": regime,
+    return {"hechos": row, "puntaje": s, "flojo": teacher["umbrales"]["flojo"], "veredicto": v, "portero_p": p, "portero_si": yes, "vol_ratio": ratio, "volatilidad": regime,
             "sigma24": trader._sigma5() * math.sqrt(qt.H24), "range24": f["range24"], "range7": f["range7"]}
 
 

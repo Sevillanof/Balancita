@@ -1,6 +1,14 @@
 import { describe, expect, it } from 'vitest'
 import type { GateRun } from '../infrastructure/gate-api.ts'
-import { MARKET_STAGES, nextStage, stageTabs } from './market-stages.ts'
+import {
+  insideFit,
+  MARKET_STAGES,
+  nextStage,
+  runMedicion,
+  stageLabel,
+  stagesFor,
+  stageTabs,
+} from './market-stages.ts'
 
 const run = (over: Partial<GateRun>): GateRun => ({
   id: 1,
@@ -72,5 +80,34 @@ describe('stageTabs', () => {
       null,
       9,
     ])
+  })
+})
+
+describe('honest and paper measurement', () => {
+  it('adds the stretches before 2025 only to the honest measurement', () => {
+    expect(stagesFor('vigente')).toEqual([...MARKET_STAGES])
+    expect(stagesFor('honesta').length).toBeGreaterThan(MARKET_STAGES.length)
+    expect(stagesFor('honesta').slice(-MARKET_STAGES.length)).toEqual([
+      ...MARKET_STAGES,
+    ])
+    expect(stagesFor('honesta')[0].from).toBe('2023-07-01')
+  })
+  it('marks as inside the fitting the paper-formula stretches that end before October 2025', () => {
+    const [first, , third, fourth] = MARKET_STAGES
+    expect(insideFit(first, 'vigente')).toBe(true)
+    expect(insideFit(third, 'vigente')).toBe(true)
+    expect(insideFit(fourth, 'vigente')).toBe(false)
+    expect(stageLabel(first, 'vigente')).toBe(
+      'ene–mar 2025 (dentro del ajuste)',
+    )
+    expect(stageLabel(first, 'honesta')).toBe('ene–mar 2025')
+    for (const stage of stagesFor('honesta'))
+      expect(insideFit(stage, 'honesta')).toBe(false)
+  })
+  it('reads a run without a stored measurement as made with the paper formulas', () => {
+    expect(runMedicion(on(0))).toBe('vigente')
+    expect(
+      runMedicion(run({ params: { from: '2025-01-01', medicion: 'honesta' } })),
+    ).toBe('honesta')
   })
 })

@@ -1,0 +1,152 @@
+{
+ "ajuste_desde": "2022-04-01",
+ "motor": 1,
+ "productos_de_ajuste": [
+  "PF_XBTUSD",
+  "PF_ETHUSD"
+ ],
+ "retardo_h": 48,
+ "schema": "balancita-walkforward-pares.v1",
+ "trimestres": {
+  "2023Q1": {
+   "acierto_signo_ajuste": 0.5292,
+   "ajustado_hasta": "2022-12-30",
+   "fotos": 52416,
+   "maestro": "maestro-2023Q1.json",
+   "maestro_hash": "8f51a192d2bb",
+   "portero": "portero-2023Q1.json",
+   "portero_hash": "967b0eb8f184",
+   "umbral_portero": 0.675836
+  },
+  "2023Q2": {
+   "acierto_signo_ajuste": 0.5215,
+   "ajustado_hasta": "2023-03-30",
+   "fotos": 69696,
+   "maestro": "maestro-2023Q2.json",
+   "maestro_hash": "d58079bff7c8",
+   "portero": "portero-2023Q2.json",
+   "portero_hash": "a5083bcb67f8",
+   "umbral_portero": 0.645676
+  },
+  "2023Q3": {
+   "acierto_signo_ajuste": 0.5306,
+   "ajustado_hasta": "2023-06-29",
+   "fotos": 87168,
+   "maestro": "maestro-2023Q3.json",
+   "maestro_hash": "725a8c843f68",
+   "portero": "portero-2023Q3.json",
+   "portero_hash": "f3a2ca0f6c4f",
+   "umbral_portero": 0.680226
+  },
+  "2023Q4": {
+   "acierto_signo_ajuste": 0.5356,
+   "ajustado_hasta": "2023-09-29",
+   "fotos": 104832,
+   "maestro": "maestro-2023Q4.json",
+   "maestro_hash": "07bee1ce34fe",
+   "portero": "portero-2023Q4.json",
+   "portero_hash": "94b5acc45c63",
+   "umbral_portero": 0.72328
+  },
+  "2024Q1": {
+   "acierto_signo_ajuste": 0.5354,
+   "ajustado_hasta": "2023-12-30",
+   "fotos": 122496,
+   "maestro": "maestro-2024Q1.json",
+   "maestro_hash": "996102902729",
+   "portero": "portero-2024Q1.json",
+   "portero_hash": "dec6b15a9482",
+   "umbral_portero": 0.707192
+  },
+  "2024Q2": {
+   "acierto_signo_ajuste": 0.5359,
+   "ajustado_hasta": "2024-03-30",
+   "fotos": 139968,
+   "maestro": "maestro-2024Q2.json",
+   "maestro_hash": "6982f6d6d0b8",
+   "portero": "portero-2024Q2.json",
+   "portero_hash": "ba6bfd7f96b7",
+   "umbral_portero": 0.704025
+  },
+  "2024Q3": {
+   "acierto_signo_ajuste": 0.5392,
+   "ajustado_hasta": "2024-06-29",
+   "fotos": 157440,
+   "maestro": "maestro-2024Q3.json",
+   "maestro_hash": "b23dd3d940e5",
+   "portero": "portero-2024Q3.json",
+   "portero_hash": "8d2c5ba86c38",
+   "umbral_portero": 0.697597
+  },
+  "2024Q4": {
+   "acierto_signo_ajuste": 0.5353,
+   "ajustado_hasta": "2024-09-29",
+   "fotos": 175104,
+   "maestro": "maestro-2024Q4.json",
+   "maestro_hash": "254444464098",
+   "portero": "portero-2024Q4.json",
+   "portero_hash": "65b3a098132b",
+   "umbral_portero": 0.69136
+  },
+  "2025Q1": {
+   "acierto_signo_ajuste": 0.5318,
+   "ajustado_hasta": "2024-12-30",
+   "fotos": 192768,
+   "maestro": "maestro-2025Q1.json",
+   "maestro_hash": "43008c29cfe0",
+   "portero": "portero-2025Q1.json",
+   "portero_hash": "95a083c2b784",
+   "umbral_portero": 0.688784
+  },
+  "2025Q2": {
+   "acierto_signo_ajuste": 0.5345,
+   "ajustado_hasta": "2025-03-30",
+   "fotos": 210048,
+   "maestro": "maestro-2025Q2.json",
+   "maestro_hash": "eb81e45a4390",
+   "portero": "portero-2025Q2.json",
+   "portero_hash": "af0171311a0f",
+   "umbral_portero": 0.693597
+  },
+  "2025Q3": {
+   "acierto_signo_ajuste": 0.5347,
+   "ajustado_hasta": "2025-06-29",
+   "fotos": 227520,
+   "maestro": "maestro-2025Q3.json",
+   "maestro_hash": "a30382e672fd",
+   "portero": "portero-2025Q3.json",
+   "portero_hash": "d76f7c2cba6e",
+   "umbral_portero": 0.703199
+  },
+  "2025Q4": {
+   "acierto_signo_ajuste": 0.5328,
+   "ajustado_hasta": "2025-09-29",
+   "fotos": 245184,
+   "maestro": "maestro-2025Q4.json",
+   "maestro_hash": "6c05faea112a",
+   "portero": "portero-2025Q4.json",
+   "portero_hash": "cf904b7d5955",
+   "umbral_portero": 0.695764
+  },
+  "2026Q1": {
+   "acierto_signo_ajuste": 0.5337,
+   "ajustado_hasta": "2025-12-30",
+   "fotos": 262848,
+   "maestro": "maestro-2026Q1.json",
+   "maestro_hash": "0e29dbf40587",
+   "portero": "portero-2026Q1.json",
+   "portero_hash": "3dbf8638d232",
+   "umbral_portero": 0.700621
+  },
+  "2026Q2": {
+   "acierto_signo_ajuste": 0.5334,
+   "ajustado_hasta": "2026-03-30",
+   "fotos": 280128,
+   "maestro": "maestro-2026Q2.json",
+   "maestro_hash": "07ff04c3a51f",
+   "portero": "portero-2026Q2.json",
+   "portero_hash": "59ebe9ffa16e",
+   "umbral_portero": 0.696331
+  }
+ }
+}

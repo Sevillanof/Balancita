@@ -410,6 +410,7 @@ describe('StrategyRunView actions', () => {
       maestro: 5,
       portero: 5,
       analista: 'apagado',
+      medicion: 'honesta',
     })
     expect(
       await screen.findByRole('progressbar', {
@@ -469,6 +470,7 @@ describe('StrategyRunView actions', () => {
       maestro: 8,
       portero: 2,
       analista: 'apagado',
+      medicion: 'honesta',
     })
   })
 
@@ -504,6 +506,7 @@ describe('StrategyRunView actions', () => {
       maestro: 5,
       portero: 5,
       analista: 'suave',
+      medicion: 'honesta',
     })
   })
 
@@ -631,6 +634,7 @@ describe('StrategyRunView actions', () => {
       maestro: 5,
       portero: 5,
       analista: 'apagado',
+      medicion: 'honesta',
     })
   })
 
@@ -748,6 +752,7 @@ describe('StrategyRunView actions', () => {
       maestro: 5,
       portero: 5,
       analista: 'apagado',
+      medicion: 'honesta',
     })
     const reads = await screen.findByRole('table', {
       name: 'Lectura por renglón',

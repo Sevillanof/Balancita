@@ -1,4 +1,5 @@
 import { STRATEGIES_API_BASE } from './strategy-api.ts'
+import type { HonestyMeter } from './quick-api.ts'
 
 /**
  * Strategy gate through the registry S: launch a fixed test, follow its
@@ -78,6 +79,10 @@ export type GateRun = {
     exigencia?: { maestro: number; portero: number } | null
     /** Qwen en vivo: the movement analyst's mode this test ran with (`apagado` = paper). */
     analista?: 'apagado' | 'suave' | 'fuerte' | null
+    /** Qwen en vivo: how the test measured. Runs without it were made with the paper formulas (`vigente`). */
+    medicion?: 'honesta' | 'vigente' | null
+    /** Qwen en vivo: the honesty meter of this run. */
+    honestidad?: HonestyMeter | null
   } | null
   /** True when the run is of the strategy's current content (the server marks it). */
   same_version?: boolean
@@ -120,6 +125,7 @@ export type GateRequest = {
     maestro: number
     portero: number
     analista?: 'apagado' | 'suave' | 'fuerte'
+    medicion?: 'honesta' | 'vigente'
   }
 }
 

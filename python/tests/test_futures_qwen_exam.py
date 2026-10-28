@@ -13,6 +13,9 @@ from balancita_engine import futures_qwen_trader_exam as ex
 from test_futures_qwen_trader import (HOLDOUT, START_DAY, ClockedProvider, MemHistory, Script, always, feed_all, trader,
                                             walk, warm_bars)
 
+# the attempts log of the tests lives in a temporary file, never in the machine's own
+os.environ["BALANCITA_WF_INTENTOS"] = os.path.join(tempfile.mkdtemp(), "intentos.jsonl")
+
 CFG3 = qt.load_config(qt.CONFIG_PATH_V3)
 
 

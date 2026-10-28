@@ -150,7 +150,7 @@ def _v8_exit(cfg, t_ms, side, readings, closes, cost, weak):
     at = t_ms + step_ms
     while at <= limit:
         r = readings.get(at)
-        if r is not None and side * r["puntaje"] <= -weak:      # a skipped wake (incomplete data): the position goes on
+        if r is not None and side * r["puntaje"] <= -r.get("flojo", weak):      # a skipped wake (incomplete data): the position goes on
             exit_ms, why = at, OP_WHY_FLIP
             break
         at += step_ms
@@ -758,6 +758,14 @@ def analyse_formula(photos, cfg):
                        "siempre_corto": _trade_list([(r, -1) for r, _ in formula])}}
 
 
+def formula_entries(photos):
+    """The entries of the live scheme among these photos: strong maestro and the portero in favour, one position per product.
+    ``(photo, side)`` by time. The honest measurement engine (``futures_walkforward``) picks its entries with this same function."""
+    side = lambda r: 1 if r["operacion"]["maestro"] > 0 else -1
+    return _one_at_a_time([(r, side(r)) for r in photos if r.get("operacion") and abs(r["operacion"]["maestro"]) == 2
+                           and r["operacion"]["portero_si"]])
+
+
 def scheme_trades(history, cfg, product, start_ms, end_ms, holdout_ms, funding=None):
     """The live scheme replayed over old candles, without Qwen: every entry of the formulas (strong maestro and the portero in
     favour, one position per product), closed when the maestro turns or at the safety limit, as the live operator does. Trades as
@@ -771,9 +779,7 @@ def scheme_trades(history, cfg, product, start_ms, end_ms, holdout_ms, funding=N
     reach = min(holdout_ms, end_ms + (hold * MINUTE_MS if hold else 10 * DAY_MS) + DAY_MS)
     photos = [p for p in make_photos(history, cfg, product, reach, texts=False, start_ms=start_ms, moves=False)
               if p["t_ms"] < end_ms]
-    side = lambda r: 1 if r["operacion"]["maestro"] > 0 else -1
-    chosen = _one_at_a_time([(r, side(r)) for r in photos if r.get("operacion") and abs(r["operacion"]["maestro"]) == 2
-                             and r["operacion"]["portero_si"]])
+    chosen = formula_entries(photos)
     line = qt.FundingLine([(r[0], r[1]) for r in funding]) if funding else None
     out = []
     for r, s in chosen:
@@ -790,6 +796,15 @@ def scheme_trades(history, cfg, product, start_ms, end_ms, holdout_ms, funding=N
                     "funding_status": "complete" if covered >= held else ("partial" if covered > 0 else "unknown"),
                     "exit_reason": o["motivo"], "source": "formula"})
     return out
+
+
+def _honesty(cfg, op):
+    """The honesty meter of this test (``futures_walkforward.meter``): registers the attempt and judges the formula's operations."""
+    from . import futures_walkforward as walkforward
+    medicion = "honesta" if (cfg.get("corta") or {}).get("pares") else "vigente"
+    walkforward.register(walkforward.test_spec(cfg), medicion=medicion)
+    trades = [{"t_in": t["entrada_ms"], "t_out": t["salida_ms"], "net": t["neto_bp"]} for t in op["curvas"]["formula"]]
+    return walkforward.meter(trades, medicion=medicion, trial_count=walkforward.trials())
 
 
 def run_formula(history, cfg, holdout_ms, state_path, variant, *, log=print):
@@ -810,6 +825,7 @@ def run_formula(history, cfg, holdout_ms, state_path, variant, *, log=print):
         op = analyse_formula(photos, cfg)
         if op is not None:
             op["mercado"] = market                       # what the price really did: hourly closes by product
+            op["honestidad"] = _honesty(cfg, op)
         h = cfg["exam_lean"]["decide_horizon_min"]
         state.update(state="done", summary=None if op is None else {
             "photos": op["fotos"], "horizon_min": h, "spearman": None, "spearman_ci": [None, None], "extremes_net_bp": None,

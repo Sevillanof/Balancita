@@ -71,6 +71,9 @@ from .futures_spec_strategy import DEFAULT_SPEC_DIR, declared_indicators, load_s
 from .futures_strategy_reliability import TRIAL_SHARPE_SD, deflated_probability
 from . import futures_qwen_analista
 from . import futures_qwen_exigencia
+from . import futures_qwen_live
+from . import futures_qwen_trader
+from . import futures_walkforward
 from . import strategy_gate_models as strategy_models
 from . import strategy_purge
 from . import strategy_evaluation_policy as evaluation_policy
@@ -1294,6 +1297,9 @@ def evaluate(strategy_id, *, kind="practice", from_date=None, to_date=None, prod
         if strategy_id == strategy_models.QWEN_LIVE_ID and kind == "practice":
             params["exigencia"] = futures_qwen_exigencia.from_env()      # los niveles 0-10 de esta prueba (5 y 5 = paper)
             params["analista"] = futures_qwen_analista.from_env()        # modo del analista de movimiento (apagado = paper)
+            params["medicion"] = futures_walkforward.medicion_from_env()  # «honesta» (fórmulas reajustadas cada trimestre) o «vigente»
+            live_cfg = futures_qwen_live.apply_overrides(futures_qwen_trader.load_config(futures_qwen_trader.CONFIG_PATH_LIVE))
+            futures_walkforward.register(futures_walkforward.test_spec(live_cfg), medicion=params["medicion"])
         with db:
             cur = db.execute(
                 "INSERT INTO runs(strategy_id,family,version_key,code_hash,params,kind,status,progress,phase,started_at,"
@@ -1532,6 +1538,10 @@ def _execute(runner, db, spec, cfg, meta, product_list, provider, trade_source, 
     params = json.loads(db.execute("SELECT params FROM runs WHERE id=?", (run_id,)).fetchone()[0])
     params["accounting"] = result["accounting"]
     params["temporal"] = result["temporal"]
+    if meta["strategy_id"] == strategy_models.QWEN_LIVE_ID and kind == "practice":
+        params["honestidad"] = futures_walkforward.meter(
+            [{"t_in": t["entry_ms"], "t_out": t["exit_ms"], "net": t["net_bp"]} for t in trades],
+            medicion=params.get("medicion") or futures_walkforward.DEFAULT_MEDICION, trial_count=futures_walkforward.trials())
     params.update(provenance=result["provenance"], audit=result["audit"])
     with db:
         db.execute("UPDATE runs SET params=? WHERE id=?", (json.dumps(params, sort_keys=True), run_id))

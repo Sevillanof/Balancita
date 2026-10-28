@@ -12,6 +12,9 @@ from balancita_engine import futures_qwen_trader_exam as exam
 from balancita_engine import strategy_gate_models as models
 from balancita_engine.futures_strategy_gate_api import GateApi, GateApiError
 
+# the attempts log of the tests lives in a temporary file, never in the machine's own
+os.environ["BALANCITA_WF_INTENTOS"] = os.path.join(tempfile.mkdtemp(), "intentos.jsonl")
+
 CONFIG = os.path.join(os.path.dirname(__file__), "..", "..", "config")
 
 
@@ -81,7 +84,7 @@ class ExigenciaWiringTest(unittest.TestCase):
 
     def test_gate_levels_only_for_qwen_live(self):
         env = GateApi.exigencia_env({"exigencia": {"maestro": 3}}, models.QWEN_LIVE_ID)
-        self.assertEqual(env, {ex.ENV_MAESTRO: "3", ex.ENV_PORTERO: "5", "QWEN_ANALISTA": "apagado"})
+        self.assertEqual(env, {ex.ENV_MAESTRO: "3", ex.ENV_PORTERO: "5", "QWEN_ANALISTA": "apagado", "QWEN_MEDICION": "honesta"})
         self.assertEqual(GateApi.exigencia_env({}, models.QWEN_LIVE_ID), {})
         with self.assertRaises(GateApiError):
             GateApi.exigencia_env({"exigencia": {"maestro": 3}}, "c25-pullback-perp-v1")

@@ -198,7 +198,10 @@ def scheme_replay(product_id, funding, start_ms, end_ms):
     from . import futures_qwen_exigencia as exigencia
     from . import futures_qwen_analista as analista
     # niveles de la prueba (5 y 5: paper) y modo del analista de movimiento (apagado: paper)
+    from . import futures_walkforward as walkforward
     cfg = analista.apply_env(exigencia.apply_env(live.apply_overrides(qt.load_config(qt.CONFIG_PATH_LIVE))))
+    if walkforward.medicion_from_env() == "honesta":      # each quarter with the formulas fitted only on what came before it
+        cfg = walkforward.honest_cfg(cfg, products=cfg["products"], cap_min=cfg["guardrails"]["max_hold_min"])
     holdout_ms = qt.load_holdout_ms()
     if start_ms >= holdout_ms or product_id not in cfg["products"]:
         return []

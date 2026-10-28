@@ -1,0 +1,61 @@
+{
+ "ajuste": {
+  "acierto_signo": 0.5337,
+  "desde": "2022-04-01",
+  "flojo_share": 0.5,
+  "fotos": 262431,
+  "fuerte_share": 0.2,
+  "hasta": "2025-12-29",
+  "l2": 10.0,
+  "productos": [
+   "PF_ETHUSD",
+   "PF_XBTUSD"
+  ]
+ },
+ "coeficientes": {
+  "area_out": -0.004175,
+  "area_signed": 0.032275,
+  "move15_n": -0.014445,
+  "pos24": -0.099702,
+  "pos7": -0.026326,
+  "ret_1h": -0.013332,
+  "ret_24h": -0.112601,
+  "ret_4h": 0.004595,
+  "ret_7d": 0.039499,
+  "since_diff": -0.098925,
+  "strength": 0.014601,
+  "z_1h": 0.003729,
+  "z_24h": 0.131132,
+  "z_4h": 0.03098,
+  "z_7d": -0.028983
+ },
+ "nota": "Reajuste trimestral: solo fotos de BTC+ETH hasta 2025-12-30 (48 h antes de 2026Q1).",
+ "plazo_min": 720,
+ "regla_paper": {
+  "entra": "veredicto fuerte (±2)",
+  "sale": "veredicto al menos flojo del lado opuesto, o 48 h",
+  "stop": "ninguno"
+ },
+ "schema": "balancita-qwen-lora-maestro.v1",
+ "sd": {
+  "area_out": 3.60904622,
+  "area_signed": 0.37752776,
+  "move15_n": 1.00421201,
+  "pos24": 0.52097824,
+  "pos7": 0.54009209,
+  "ret_1h": 0.0064541,
+  "ret_24h": 0.03132927,
+  "ret_4h": 0.01278674,
+  "ret_7d": 0.08484895,
+  "since_diff": 13.47343221,
+  "strength": 0.95820128,
+  "z_1h": 0.97651806,
+  "z_24h": 0.87669324,
+  "z_4h": 0.94372056,
+  "z_7d": 1.02522221
+ },
+ "umbrales": {
+  "flojo": 0.11816,
+  "fuerte": 0.194766
+ }
+}
