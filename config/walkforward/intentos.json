@@ -31,6 +31,183 @@
     "tope_min": 2160
    }
   },
+  "0785956c0264": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "analista_salida": "pierde_a_las",
+    "base": {
+     "exigencia": [
+      5,
+      5
+     ],
+     "productos": [
+      "PF_ETHUSD"
+     ],
+     "tamano": "apagado",
+     "tope_min": 2160
+    },
+    "param": 24,
+    "tope_min": 2160
+   }
+  },
+  "07b4de3b7d3b": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "analista_salida": "trailing",
+    "base": {
+     "exigencia": [
+      5,
+      5
+     ],
+     "productos": [
+      "PF_ETHUSD"
+     ],
+     "tamano": "apagado",
+     "tope_min": 2160
+    },
+    "param": 200,
+    "tope_min": null
+   }
+  },
+  "08167d4fd0e8": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "analista_salida": "portero",
+    "base": {
+     "exigencia": [
+      5,
+      5
+     ],
+     "productos": [
+      "PF_ETHUSD"
+     ],
+     "tamano": "apagado",
+     "tope_min": 2160
+    },
+    "param": "elegido con el pasado",
+    "rejilla": [
+     0.1,
+     0.2,
+     0.3,
+     0.4,
+     0.5
+    ],
+    "tope_min": null
+   }
+  },
+  "089f03b04f8b": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "analista_salida": "trailing",
+    "base": {
+     "exigencia": [
+      5,
+      5
+     ],
+     "productos": [
+      "PF_ETHUSD"
+     ],
+     "tamano": "apagado",
+     "tope_min": 2160
+    },
+    "param": 300,
+    "tope_min": 2160
+   }
+  },
+  "0d8beb7d2366": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "analista_salida": "aprendido",
+    "base": {
+     "exigencia": [
+      5,
+      5
+     ],
+     "productos": [
+      "PF_ETHUSD"
+     ],
+     "tamano": "apagado",
+     "tope_min": 2160
+    },
+    "desde_h": 0.0,
+    "modelo": "hgb",
+    "rasgos": "B",
+    "tope_min": null,
+    "umbral": 0.4
+   }
+  },
+  "0df25f008b39": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "analista_salida": "breakeven",
+    "base": {
+     "exigencia": [
+      5,
+      5
+     ],
+     "productos": [
+      "PF_ETHUSD"
+     ],
+     "tamano": "apagado",
+     "tope_min": 2160
+    },
+    "param": "elegido con el pasado",
+    "rejilla": [
+     50,
+     100,
+     150,
+     200,
+     300
+    ],
+    "tope_min": 2160
+   }
+  },
+  "0ee048178a75": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "analista_salida": "trailing",
+    "base": {
+     "exigencia": [
+      5,
+      5
+     ],
+     "productos": [
+      "PF_ETHUSD"
+     ],
+     "tamano": "apagado",
+     "tope_min": 2160
+    },
+    "param": 100,
+    "tope_min": null
+   }
+  },
+  "102258c4ab70": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "analista_salida": "neutral",
+    "base": {
+     "exigencia": [
+      5,
+      5
+     ],
+     "productos": [
+      "PF_ETHUSD"
+     ],
+     "tamano": "apagado",
+     "tope_min": 2160
+    },
+    "param": 0.0,
+    "tope_min": null
+   }
+  },
   "119002be26f1": {
    "medicion": "honesta",
    "motor": 1,
@@ -49,6 +226,181 @@
     "corte": "duración"
    }
   },
+  "13645dcdfb47": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "analista_salida": "aprendido",
+    "base": {
+     "exigencia": [
+      5,
+      5
+     ],
+     "productos": [
+      "PF_ETHUSD"
+     ],
+     "tamano": "apagado",
+     "tope_min": 2160
+    },
+    "desde_h": 0.0,
+    "modelo": "hgb",
+    "rasgos": "B",
+    "tope_min": 2160,
+    "umbral": 0.5
+   }
+  },
+  "13c379c94e6a": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "analista_salida": "aprendido",
+    "base": {
+     "exigencia": [
+      5,
+      5
+     ],
+     "productos": [
+      "PF_ETHUSD"
+     ],
+     "tamano": "apagado",
+     "tope_min": 2160
+    },
+    "desde_h": 12.0,
+    "modelo": "hgb",
+    "rasgos": "B",
+    "tope_min": 2160,
+    "umbral": 0.4
+   }
+  },
+  "14a4e89a8000": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "analista_salida": "trailing",
+    "base": {
+     "exigencia": [
+      5,
+      5
+     ],
+     "productos": [
+      "PF_ETHUSD"
+     ],
+     "tamano": "apagado",
+     "tope_min": 2160
+    },
+    "param": 100,
+    "tope_min": 2160
+   }
+  },
+  "18a03fbca054": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "analista_salida": "breakeven",
+    "base": {
+     "exigencia": [
+      5,
+      5
+     ],
+     "productos": [
+      "PF_ETHUSD"
+     ],
+     "tamano": "apagado",
+     "tope_min": 2160
+    },
+    "param": 150,
+    "tope_min": 2160
+   }
+  },
+  "1bb24757f9fc": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "analista_salida": "caida_puntaje",
+    "base": {
+     "exigencia": [
+      5,
+      5
+     ],
+     "productos": [
+      "PF_ETHUSD"
+     ],
+     "tamano": "apagado",
+     "tope_min": 2160
+    },
+    "param": 2.0,
+    "tope_min": 2160
+   }
+  },
+  "1c231175acad": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "analista_salida": "aprendido",
+    "base": {
+     "exigencia": [
+      5,
+      5
+     ],
+     "productos": [
+      "PF_ETHUSD"
+     ],
+     "tamano": "apagado",
+     "tope_min": 2160
+    },
+    "desde_h": 12.0,
+    "modelo": "log",
+    "rasgos": "A",
+    "tope_min": null,
+    "umbral": "elegido con el pasado"
+   }
+  },
+  "1c7f0569f3e9": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "analista_salida": "quietud",
+    "base": {
+     "exigencia": [
+      5,
+      5
+     ],
+     "productos": [
+      "PF_ETHUSD"
+     ],
+     "tamano": "apagado",
+     "tope_min": 2160
+    },
+    "param": "elegido con el pasado",
+    "rejilla": [
+     6,
+     12,
+     18,
+     24
+    ],
+    "tope_min": 2160
+   }
+  },
+  "1e164bd4561c": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "analista_salida": "quietud",
+    "base": {
+     "exigencia": [
+      5,
+      5
+     ],
+     "productos": [
+      "PF_ETHUSD"
+     ],
+     "tamano": "apagado",
+     "tope_min": 2160
+    },
+    "param": 6,
+    "tope_min": 2160
+   }
+  },
   "1ec56270af5c": {
    "medicion": "honesta",
    "motor": 1,
@@ -61,6 +413,174 @@
      "PF_ETHUSD"
     ],
     "tamano": "suave",
+    "tope_min": null
+   }
+  },
+  "2077d5a5cfd8": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "analista_salida": "portero_lado",
+    "base": {
+     "exigencia": [
+      5,
+      5
+     ],
+     "productos": [
+      "PF_ETHUSD"
+     ],
+     "tamano": "apagado",
+     "tope_min": 2160
+    },
+    "param": 0.2,
+    "tope_min": 2160
+   }
+  },
+  "207f812fc5d2": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "analista_salida": "aprendido",
+    "base": {
+     "exigencia": [
+      5,
+      5
+     ],
+     "productos": [
+      "PF_ETHUSD"
+     ],
+     "tamano": "apagado",
+     "tope_min": 2160
+    },
+    "desde_h": 0.0,
+    "modelo": "log",
+    "rasgos": "B",
+    "tope_min": 2160,
+    "umbral": 0.3
+   }
+  },
+  "2362f772f6ae": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "analista_salida": "portero_lado",
+    "base": {
+     "exigencia": [
+      5,
+      5
+     ],
+     "productos": [
+      "PF_ETHUSD"
+     ],
+     "tamano": "apagado",
+     "tope_min": 2160
+    },
+    "param": 0.4,
+    "tope_min": null
+   }
+  },
+  "28cec0c40342": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "analista_salida": "readmision_36h",
+    "base": {
+     "exigencia": [
+      5,
+      5
+     ],
+     "productos": [
+      "PF_ETHUSD"
+     ],
+     "tamano": "apagado",
+     "tope_min": 2160
+    },
+    "limite_h": 168
+   }
+  },
+  "2a0c882587cd": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "analista_salida": "aprendido",
+    "base": {
+     "exigencia": [
+      5,
+      5
+     ],
+     "productos": [
+      "PF_ETHUSD"
+     ],
+     "tamano": "apagado",
+     "tope_min": 2160
+    },
+    "desde_h": 12.0,
+    "modelo": "hgb",
+    "rasgos": "B",
+    "tope_min": 2160,
+    "umbral": 0.5
+   }
+  },
+  "2a3e3987c526": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "analista_salida": "aprendido",
+    "base": {
+     "exigencia": [
+      5,
+      5
+     ],
+     "productos": [
+      "PF_ETHUSD"
+     ],
+     "tamano": "apagado",
+     "tope_min": 2160
+    },
+    "desde_h": 12.0,
+    "modelo": "log",
+    "rasgos": "B",
+    "tope_min": 2160,
+    "umbral": "elegido con el pasado"
+   }
+  },
+  "2a9da09760cb": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "analista_salida": "caida_puntaje",
+    "base": {
+     "exigencia": [
+      5,
+      5
+     ],
+     "productos": [
+      "PF_ETHUSD"
+     ],
+     "tamano": "apagado",
+     "tope_min": 2160
+    },
+    "param": 0.5,
+    "tope_min": 2160
+   }
+  },
+  "2b1040a96dca": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "analista_salida": "neutral",
+    "base": {
+     "exigencia": [
+      5,
+      5
+     ],
+     "productos": [
+      "PF_ETHUSD"
+     ],
+     "tamano": "apagado",
+     "tope_min": 2160
+    },
+    "param": 0.25,
     "tope_min": null
    }
   },
@@ -79,6 +599,55 @@
     "tope_min": null
    }
   },
+  "2deb6b3147eb": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "analista_salida": "aprendido",
+    "base": {
+     "exigencia": [
+      5,
+      5
+     ],
+     "productos": [
+      "PF_ETHUSD"
+     ],
+     "tamano": "apagado",
+     "tope_min": 2160
+    },
+    "desde_h": 0.0,
+    "modelo": "hgb",
+    "rasgos": "B",
+    "tope_min": 2160,
+    "umbral": 0.3
+   }
+  },
+  "2dfc4dc11c1a": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "analista_salida": "neutral",
+    "base": {
+     "exigencia": [
+      5,
+      5
+     ],
+     "productos": [
+      "PF_ETHUSD"
+     ],
+     "tamano": "apagado",
+     "tope_min": 2160
+    },
+    "param": "elegido con el pasado",
+    "rejilla": [
+     0.0,
+     0.25,
+     0.5,
+     -0.5
+    ],
+    "tope_min": 2160
+   }
+  },
   "2f14127985cf": {
    "medicion": "honesta",
    "motor": 1,
@@ -92,6 +661,29 @@
     ],
     "tamano": "fuerte",
     "tope_min": 2160
+   }
+  },
+  "30ecf8b4c3bb": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "analista_salida": "aprendido",
+    "base": {
+     "exigencia": [
+      5,
+      5
+     ],
+     "productos": [
+      "PF_ETHUSD"
+     ],
+     "tamano": "apagado",
+     "tope_min": 2160
+    },
+    "desde_h": 12.0,
+    "modelo": "log",
+    "rasgos": "A",
+    "tope_min": 2160,
+    "umbral": 0.4
    }
   },
   "3356615f1c14": {
@@ -110,6 +702,26 @@
     "tope_min": null
    }
   },
+  "34a258c87196": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "analista_salida": "portero",
+    "base": {
+     "exigencia": [
+      5,
+      5
+     ],
+     "productos": [
+      "PF_ETHUSD"
+     ],
+     "tamano": "apagado",
+     "tope_min": 2160
+    },
+    "param": 0.3,
+    "tope_min": null
+   }
+  },
   "34be01b7606f": {
    "medicion": "honesta",
    "motor": 1,
@@ -117,6 +729,145 @@
     "analisis": "donde-perdimos",
     "base": "congelado ETH 36h 5/5",
     "corte": "tendencia 7 d"
+   }
+  },
+  "34cea9eb9077": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "analista_salida": "aprendido",
+    "base": {
+     "exigencia": [
+      5,
+      5
+     ],
+     "productos": [
+      "PF_ETHUSD"
+     ],
+     "tamano": "apagado",
+     "tope_min": 2160
+    },
+    "desde_h": 0.0,
+    "modelo": "hgb",
+    "rasgos": "B",
+    "tope_min": null,
+    "umbral": 0.3
+   }
+  },
+  "35f64847d52a": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "analista_salida": "portero_lado",
+    "base": {
+     "exigencia": [
+      5,
+      5
+     ],
+     "productos": [
+      "PF_ETHUSD"
+     ],
+     "tamano": "apagado",
+     "tope_min": 2160
+    },
+    "param": 0.1,
+    "tope_min": 2160
+   }
+  },
+  "37b14a170ed7": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "analista_salida": "portero",
+    "base": {
+     "exigencia": [
+      5,
+      5
+     ],
+     "productos": [
+      "PF_ETHUSD"
+     ],
+     "tamano": "apagado",
+     "tope_min": 2160
+    },
+    "param": 0.5,
+    "tope_min": null
+   }
+  },
+  "3aa1a5139afc": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "analista_salida": "neutral",
+    "base": {
+     "exigencia": [
+      5,
+      5
+     ],
+     "productos": [
+      "PF_ETHUSD"
+     ],
+     "tamano": "apagado",
+     "tope_min": 2160
+    },
+    "param": "elegido con el pasado",
+    "rejilla": [
+     0.0,
+     0.25,
+     0.5,
+     -0.5
+    ],
+    "tope_min": null
+   }
+  },
+  "3acccd692931": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "analista_salida": "aprendido",
+    "base": {
+     "exigencia": [
+      5,
+      5
+     ],
+     "productos": [
+      "PF_ETHUSD"
+     ],
+     "tamano": "apagado",
+     "tope_min": 2160
+    },
+    "desde_h": 12.0,
+    "modelo": "hgb",
+    "rasgos": "B",
+    "tope_min": null,
+    "umbral": "elegido con el pasado"
+   }
+  },
+  "3b58c7a1e763": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "analista_salida": "portero",
+    "base": {
+     "exigencia": [
+      5,
+      5
+     ],
+     "productos": [
+      "PF_ETHUSD"
+     ],
+     "tamano": "apagado",
+     "tope_min": 2160
+    },
+    "param": "elegido con el pasado",
+    "rejilla": [
+     0.1,
+     0.2,
+     0.3,
+     0.4,
+     0.5
+    ],
+    "tope_min": 2160
    }
   },
   "3ba155e5a26d": {
@@ -132,6 +883,26 @@
      "PF_XBTUSD"
     ],
     "tamano": "apagado",
+    "tope_min": null
+   }
+  },
+  "3c6e9e6b563f": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "analista_salida": "portero",
+    "base": {
+     "exigencia": [
+      5,
+      5
+     ],
+     "productos": [
+      "PF_ETHUSD"
+     ],
+     "tamano": "apagado",
+     "tope_min": 2160
+    },
+    "param": 0.2,
     "tope_min": null
    }
   },
@@ -159,6 +930,26 @@
     "tope_min": 2160
    }
   },
+  "3df7d09c5813": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "analista_salida": "neutral",
+    "base": {
+     "exigencia": [
+      5,
+      5
+     ],
+     "productos": [
+      "PF_ETHUSD"
+     ],
+     "tamano": "apagado",
+     "tope_min": 2160
+    },
+    "param": -0.5,
+    "tope_min": 2160
+   }
+  },
   "3f7ccdee6390": {
    "medicion": "honesta",
    "motor": 1,
@@ -172,6 +963,54 @@
     ],
     "tamano": "apagado",
     "tope_min": 2160
+   }
+  },
+  "407e97f0ab7d": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "analista_salida": "pierde_a_las",
+    "base": {
+     "exigencia": [
+      5,
+      5
+     ],
+     "productos": [
+      "PF_ETHUSD"
+     ],
+     "tamano": "apagado",
+     "tope_min": 2160
+    },
+    "param": "elegido con el pasado",
+    "rejilla": [
+     12,
+     18,
+     24
+    ],
+    "tope_min": 2160
+   }
+  },
+  "4080c6639155": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "analista_salida": "aprendido",
+    "base": {
+     "exigencia": [
+      5,
+      5
+     ],
+     "productos": [
+      "PF_ETHUSD"
+     ],
+     "tamano": "apagado",
+     "tope_min": 2160
+    },
+    "desde_h": 12.0,
+    "modelo": "log",
+    "rasgos": "A",
+    "tope_min": null,
+    "umbral": 0.4
    }
   },
   "4515b0d600d4": {
@@ -206,6 +1045,72 @@
     "tope_min": null
    }
   },
+  "473ec5fb3bc3": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "analista_salida": "caida_puntaje",
+    "base": {
+     "exigencia": [
+      5,
+      5
+     ],
+     "productos": [
+      "PF_ETHUSD"
+     ],
+     "tamano": "apagado",
+     "tope_min": 2160
+    },
+    "param": "elegido con el pasado",
+    "rejilla": [
+     0.5,
+     1.0,
+     1.5,
+     2.0
+    ],
+    "tope_min": 2160
+   }
+  },
+  "4862de9e59ec": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "analista_salida": "portero_lado",
+    "base": {
+     "exigencia": [
+      5,
+      5
+     ],
+     "productos": [
+      "PF_ETHUSD"
+     ],
+     "tamano": "apagado",
+     "tope_min": 2160
+    },
+    "param": 0.3,
+    "tope_min": 2160
+   }
+  },
+  "49b404af8728": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "analista_salida": "portero_lado",
+    "base": {
+     "exigencia": [
+      5,
+      5
+     ],
+     "productos": [
+      "PF_ETHUSD"
+     ],
+     "tamano": "apagado",
+     "tope_min": 2160
+    },
+    "param": 0.5,
+    "tope_min": 2160
+   }
+  },
   "4b665f7cbd04": {
    "medicion": "honesta",
    "motor": 1,
@@ -231,6 +1136,59 @@
     "corte": "mercado 30 d (baja/lateral/sube)"
    }
   },
+  "4cdef0fab78b": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "analista_salida": "elegido entre todas las familias con el pasado",
+    "base": {
+     "exigencia": [
+      5,
+      5
+     ],
+     "productos": [
+      "PF_ETHUSD"
+     ],
+     "tamano": "apagado",
+     "tope_min": 2160
+    },
+    "familias": [
+     "aprendido",
+     "breakeven",
+     "caida_puntaje",
+     "neutral",
+     "pierde_a_las",
+     "portero",
+     "portero_lado",
+     "quietud",
+     "readmision_36h",
+     "trailing"
+    ]
+   }
+  },
+  "4d1f0c9283b0": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "analista_salida": "aprendido",
+    "base": {
+     "exigencia": [
+      5,
+      5
+     ],
+     "productos": [
+      "PF_ETHUSD"
+     ],
+     "tamano": "apagado",
+     "tope_min": 2160
+    },
+    "desde_h": 0.0,
+    "modelo": "hgb",
+    "rasgos": "B",
+    "tope_min": null,
+    "umbral": "elegido con el pasado"
+   }
+  },
   "4e778392099d": {
    "medicion": "honesta",
    "motor": 1,
@@ -247,6 +1205,71 @@
     "tope_min": 2160
    }
   },
+  "4ebded55fbe1": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "analista_salida": "aprendido",
+    "base": {
+     "exigencia": [
+      5,
+      5
+     ],
+     "productos": [
+      "PF_ETHUSD"
+     ],
+     "tamano": "apagado",
+     "tope_min": 2160
+    },
+    "desde_h": 0.0,
+    "modelo": "log",
+    "rasgos": "A",
+    "tope_min": null,
+    "umbral": "elegido con el pasado"
+   }
+  },
+  "4fe5cf9865ce": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "analista_salida": "aprendido",
+    "base": {
+     "exigencia": [
+      5,
+      5
+     ],
+     "productos": [
+      "PF_ETHUSD"
+     ],
+     "tamano": "apagado",
+     "tope_min": 2160
+    },
+    "desde_h": 0.0,
+    "modelo": "log",
+    "rasgos": "A",
+    "tope_min": null,
+    "umbral": 0.4
+   }
+  },
+  "52852737a9c6": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "analista_salida": "readmision_36h",
+    "base": {
+     "exigencia": [
+      5,
+      5
+     ],
+     "productos": [
+      "PF_ETHUSD"
+     ],
+     "tamano": "apagado",
+     "tope_min": 2160
+    },
+    "limite_h": 72
+   }
+  },
   "542faf42ed47": {
    "medicion": "honesta",
    "motor": 1,
@@ -259,6 +1282,46 @@
      "PF_ETHUSD"
     ],
     "tamano": "fuerte",
+    "tope_min": 2160
+   }
+  },
+  "5475c153816b": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "analista_salida": "trailing",
+    "base": {
+     "exigencia": [
+      5,
+      5
+     ],
+     "productos": [
+      "PF_ETHUSD"
+     ],
+     "tamano": "apagado",
+     "tope_min": 2160
+    },
+    "param": 400,
+    "tope_min": null
+   }
+  },
+  "556358b6e04e": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "analista_salida": "portero",
+    "base": {
+     "exigencia": [
+      5,
+      5
+     ],
+     "productos": [
+      "PF_ETHUSD"
+     ],
+     "tamano": "apagado",
+     "tope_min": 2160
+    },
+    "param": 0.2,
     "tope_min": 2160
    }
   },
@@ -285,6 +1348,26 @@
     ],
     "tamano": "fuerte",
     "tope_min": null
+   }
+  },
+  "57ee24e72d26": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "analista_salida": "trailing",
+    "base": {
+     "exigencia": [
+      5,
+      5
+     ],
+     "productos": [
+      "PF_ETHUSD"
+     ],
+     "tamano": "apagado",
+     "tope_min": 2160
+    },
+    "param": 150,
+    "tope_min": 2160
    }
   },
   "5957c1151dac": {
@@ -318,6 +1401,46 @@
     "tope_min": 2160
    }
   },
+  "5ed34c179203": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "analista_salida": "breakeven",
+    "base": {
+     "exigencia": [
+      5,
+      5
+     ],
+     "productos": [
+      "PF_ETHUSD"
+     ],
+     "tamano": "apagado",
+     "tope_min": 2160
+    },
+    "param": 300,
+    "tope_min": null
+   }
+  },
+  "60b82369497e": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "analista_salida": "pierde_a_las",
+    "base": {
+     "exigencia": [
+      5,
+      5
+     ],
+     "productos": [
+      "PF_ETHUSD"
+     ],
+     "tamano": "apagado",
+     "tope_min": 2160
+    },
+    "param": 24,
+    "tope_min": null
+   }
+  },
   "6145f15119fd": {
    "medicion": "honesta",
    "motor": 1,
@@ -349,6 +1472,251 @@
     "tope_min": 2160
    }
   },
+  "63e65f8368f2": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "analista_salida": "aprendido",
+    "base": {
+     "exigencia": [
+      5,
+      5
+     ],
+     "productos": [
+      "PF_ETHUSD"
+     ],
+     "tamano": "apagado",
+     "tope_min": 2160
+    },
+    "desde_h": 12.0,
+    "modelo": "log",
+    "rasgos": "B",
+    "tope_min": 2160,
+    "umbral": 0.5
+   }
+  },
+  "6409315240ba": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "analista_salida": "portero_lado",
+    "base": {
+     "exigencia": [
+      5,
+      5
+     ],
+     "productos": [
+      "PF_ETHUSD"
+     ],
+     "tamano": "apagado",
+     "tope_min": 2160
+    },
+    "param": 0.4,
+    "tope_min": 2160
+   }
+  },
+  "6436e2d6a77c": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "analista_salida": "portero",
+    "base": {
+     "exigencia": [
+      5,
+      5
+     ],
+     "productos": [
+      "PF_ETHUSD"
+     ],
+     "tamano": "apagado",
+     "tope_min": 2160
+    },
+    "param": 0.4,
+    "tope_min": 2160
+   }
+  },
+  "68bf1990423e": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "analista_salida": "aprendido",
+    "base": {
+     "exigencia": [
+      5,
+      5
+     ],
+     "productos": [
+      "PF_ETHUSD"
+     ],
+     "tamano": "apagado",
+     "tope_min": 2160
+    },
+    "desde_h": 0.0,
+    "modelo": "log",
+    "rasgos": "B",
+    "tope_min": null,
+    "umbral": "elegido con el pasado"
+   }
+  },
+  "69f18f174858": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "analista_salida": "aprendido",
+    "base": {
+     "exigencia": [
+      5,
+      5
+     ],
+     "productos": [
+      "PF_ETHUSD"
+     ],
+     "tamano": "apagado",
+     "tope_min": 2160
+    },
+    "desde_h": 12.0,
+    "modelo": "hgb",
+    "rasgos": "B",
+    "tope_min": null,
+    "umbral": 0.5
+   }
+  },
+  "6b13c51f4b0a": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "analista_salida": "quietud",
+    "base": {
+     "exigencia": [
+      5,
+      5
+     ],
+     "productos": [
+      "PF_ETHUSD"
+     ],
+     "tamano": "apagado",
+     "tope_min": 2160
+    },
+    "param": 12,
+    "tope_min": 2160
+   }
+  },
+  "6be787b0e5a1": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "analista_salida": "pierde_a_las",
+    "base": {
+     "exigencia": [
+      5,
+      5
+     ],
+     "productos": [
+      "PF_ETHUSD"
+     ],
+     "tamano": "apagado",
+     "tope_min": 2160
+    },
+    "param": 12,
+    "tope_min": 2160
+   }
+  },
+  "6cdcc0ee4b50": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "analista_salida": "breakeven",
+    "base": {
+     "exigencia": [
+      5,
+      5
+     ],
+     "productos": [
+      "PF_ETHUSD"
+     ],
+     "tamano": "apagado",
+     "tope_min": 2160
+    },
+    "param": "elegido con el pasado",
+    "rejilla": [
+     50,
+     100,
+     150,
+     200,
+     300
+    ],
+    "tope_min": null
+   }
+  },
+  "6e0bb3a5d119": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "analista_salida": "aprendido",
+    "base": {
+     "exigencia": [
+      5,
+      5
+     ],
+     "productos": [
+      "PF_ETHUSD"
+     ],
+     "tamano": "apagado",
+     "tope_min": 2160
+    },
+    "desde_h": 12.0,
+    "modelo": "log",
+    "rasgos": "B",
+    "tope_min": 2160,
+    "umbral": 0.4
+   }
+  },
+  "6e43e1f3822f": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "analista_salida": "aprendido",
+    "base": {
+     "exigencia": [
+      5,
+      5
+     ],
+     "productos": [
+      "PF_ETHUSD"
+     ],
+     "tamano": "apagado",
+     "tope_min": 2160
+    },
+    "desde_h": 0.0,
+    "modelo": "log",
+    "rasgos": "B",
+    "tope_min": null,
+    "umbral": 0.4
+   }
+  },
+  "6e4c34deb443": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "analista_salida": "aprendido",
+    "base": {
+     "exigencia": [
+      5,
+      5
+     ],
+     "productos": [
+      "PF_ETHUSD"
+     ],
+     "tamano": "apagado",
+     "tope_min": 2160
+    },
+    "desde_h": 0.0,
+    "modelo": "log",
+    "rasgos": "B",
+    "tope_min": 2160,
+    "umbral": 0.5
+   }
+  },
   "6fb3a8527f27": {
    "medicion": "honesta",
    "motor": 1,
@@ -362,6 +1730,264 @@
     ],
     "tamano": "fuerte",
     "tope_min": null
+   }
+  },
+  "7707a9101a05": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "analista_salida": "breakeven",
+    "base": {
+     "exigencia": [
+      5,
+      5
+     ],
+     "productos": [
+      "PF_ETHUSD"
+     ],
+     "tamano": "apagado",
+     "tope_min": 2160
+    },
+    "param": 100,
+    "tope_min": 2160
+   }
+  },
+  "77d1d20e0d35": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "analista_salida": "portero",
+    "base": {
+     "exigencia": [
+      5,
+      5
+     ],
+     "productos": [
+      "PF_ETHUSD"
+     ],
+     "tamano": "apagado",
+     "tope_min": 2160
+    },
+    "param": 0.1,
+    "tope_min": 2160
+   }
+  },
+  "79d17e9e9dee": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "analista_salida": "aprendido",
+    "base": {
+     "exigencia": [
+      5,
+      5
+     ],
+     "productos": [
+      "PF_ETHUSD"
+     ],
+     "tamano": "apagado",
+     "tope_min": 2160
+    },
+    "desde_h": 0.0,
+    "modelo": "log",
+    "rasgos": "B",
+    "tope_min": null,
+    "umbral": 0.5
+   }
+  },
+  "79d4f4f1e9cb": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "analista_salida": "quietud",
+    "base": {
+     "exigencia": [
+      5,
+      5
+     ],
+     "productos": [
+      "PF_ETHUSD"
+     ],
+     "tamano": "apagado",
+     "tope_min": 2160
+    },
+    "param": 18,
+    "tope_min": 2160
+   }
+  },
+  "7a826fd561c9": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "analista_salida": "aprendido",
+    "base": {
+     "exigencia": [
+      5,
+      5
+     ],
+     "productos": [
+      "PF_ETHUSD"
+     ],
+     "tamano": "apagado",
+     "tope_min": 2160
+    },
+    "desde_h": 0.0,
+    "modelo": "log",
+    "rasgos": "A",
+    "tope_min": 2160,
+    "umbral": 0.5
+   }
+  },
+  "7b3782ab19e1": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "analista_salida": "aprendido",
+    "base": {
+     "exigencia": [
+      5,
+      5
+     ],
+     "productos": [
+      "PF_ETHUSD"
+     ],
+     "tamano": "apagado",
+     "tope_min": 2160
+    },
+    "desde_h": 0.0,
+    "modelo": "log",
+    "rasgos": "B",
+    "tope_min": null,
+    "umbral": 0.3
+   }
+  },
+  "7c1c632decbe": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "analista_salida": "portero_lado",
+    "base": {
+     "exigencia": [
+      5,
+      5
+     ],
+     "productos": [
+      "PF_ETHUSD"
+     ],
+     "tamano": "apagado",
+     "tope_min": 2160
+    },
+    "param": 0.1,
+    "tope_min": null
+   }
+  },
+  "7f201191ef41": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "analista_salida": "aprendido",
+    "base": {
+     "exigencia": [
+      5,
+      5
+     ],
+     "productos": [
+      "PF_ETHUSD"
+     ],
+     "tamano": "apagado",
+     "tope_min": 2160
+    },
+    "desde_h": 12.0,
+    "modelo": "log",
+    "rasgos": "B",
+    "tope_min": null,
+    "umbral": 0.4
+   }
+  },
+  "81b8526939a9": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "analista_salida": "breakeven",
+    "base": {
+     "exigencia": [
+      5,
+      5
+     ],
+     "productos": [
+      "PF_ETHUSD"
+     ],
+     "tamano": "apagado",
+     "tope_min": 2160
+    },
+    "param": 300,
+    "tope_min": 2160
+   }
+  },
+  "822bf112676c": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "analista_salida": "aprendido",
+    "base": {
+     "exigencia": [
+      5,
+      5
+     ],
+     "productos": [
+      "PF_ETHUSD"
+     ],
+     "tamano": "apagado",
+     "tope_min": 2160
+    },
+    "desde_h": 0.0,
+    "modelo": "log",
+    "rasgos": "B",
+    "tope_min": 2160,
+    "umbral": "elegido con el pasado"
+   }
+  },
+  "84ba1cf62bf4": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "analista_salida": "aprendido",
+    "base": {
+     "exigencia": [
+      5,
+      5
+     ],
+     "productos": [
+      "PF_ETHUSD"
+     ],
+     "tamano": "apagado",
+     "tope_min": 2160
+    },
+    "desde_h": 12.0,
+    "modelo": "log",
+    "rasgos": "A",
+    "tope_min": 2160,
+    "umbral": 0.3
+   }
+  },
+  "859440d1d1f0": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "analista_salida": "pierde_a_las",
+    "base": {
+     "exigencia": [
+      5,
+      5
+     ],
+     "productos": [
+      "PF_ETHUSD"
+     ],
+     "tamano": "apagado",
+     "tope_min": 2160
+    },
+    "param": 18,
+    "tope_min": 2160
    }
   },
   "86fc3652f289": {
@@ -395,6 +2021,143 @@
     "tope_min": 2160
    }
   },
+  "905ffb9849ef": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "analista_salida": "neutral",
+    "base": {
+     "exigencia": [
+      5,
+      5
+     ],
+     "productos": [
+      "PF_ETHUSD"
+     ],
+     "tamano": "apagado",
+     "tope_min": 2160
+    },
+    "param": 0.5,
+    "tope_min": 2160
+   }
+  },
+  "91b1ea83589e": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "analista_salida": "trailing",
+    "base": {
+     "exigencia": [
+      5,
+      5
+     ],
+     "productos": [
+      "PF_ETHUSD"
+     ],
+     "tamano": "apagado",
+     "tope_min": 2160
+    },
+    "param": 300,
+    "tope_min": null
+   }
+  },
+  "92907be985ce": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "analista_salida": "portero",
+    "base": {
+     "exigencia": [
+      5,
+      5
+     ],
+     "productos": [
+      "PF_ETHUSD"
+     ],
+     "tamano": "apagado",
+     "tope_min": 2160
+    },
+    "param": 0.5,
+    "tope_min": 2160
+   }
+  },
+  "93c90ea341b2": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "analista_salida": "trailing",
+    "base": {
+     "exigencia": [
+      5,
+      5
+     ],
+     "productos": [
+      "PF_ETHUSD"
+     ],
+     "tamano": "apagado",
+     "tope_min": 2160
+    },
+    "param": "elegido con el pasado",
+    "rejilla": [
+     100,
+     150,
+     200,
+     300,
+     400
+    ],
+    "tope_min": null
+   }
+  },
+  "942322f41812": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "analista_salida": "aprendido",
+    "base": {
+     "exigencia": [
+      5,
+      5
+     ],
+     "productos": [
+      "PF_ETHUSD"
+     ],
+     "tamano": "apagado",
+     "tope_min": 2160
+    },
+    "desde_h": 0.0,
+    "modelo": "hgb",
+    "rasgos": "B",
+    "tope_min": null,
+    "umbral": 0.5
+   }
+  },
+  "9458ba6747b3": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "analista_salida": "trailing",
+    "base": {
+     "exigencia": [
+      5,
+      5
+     ],
+     "productos": [
+      "PF_ETHUSD"
+     ],
+     "tamano": "apagado",
+     "tope_min": 2160
+    },
+    "param": "elegido con el pasado",
+    "rejilla": [
+     100,
+     150,
+     200,
+     300,
+     400
+    ],
+    "tope_min": 2160
+   }
+  },
   "9729f17566ba": {
    "medicion": "honesta",
    "motor": 1,
@@ -409,6 +2172,75 @@
     ],
     "tamano": "fuerte",
     "tope_min": 2160
+   }
+  },
+  "97fcd801831a": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "analista_salida": "aprendido",
+    "base": {
+     "exigencia": [
+      5,
+      5
+     ],
+     "productos": [
+      "PF_ETHUSD"
+     ],
+     "tamano": "apagado",
+     "tope_min": 2160
+    },
+    "desde_h": 12.0,
+    "modelo": "log",
+    "rasgos": "A",
+    "tope_min": null,
+    "umbral": 0.3
+   }
+  },
+  "993c57063df1": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "analista_salida": "aprendido",
+    "base": {
+     "exigencia": [
+      5,
+      5
+     ],
+     "productos": [
+      "PF_ETHUSD"
+     ],
+     "tamano": "apagado",
+     "tope_min": 2160
+    },
+    "desde_h": 12.0,
+    "modelo": "log",
+    "rasgos": "B",
+    "tope_min": null,
+    "umbral": 0.3
+   }
+  },
+  "9a28a5c20d69": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "analista_salida": "aprendido",
+    "base": {
+     "exigencia": [
+      5,
+      5
+     ],
+     "productos": [
+      "PF_ETHUSD"
+     ],
+     "tamano": "apagado",
+     "tope_min": 2160
+    },
+    "desde_h": 0.0,
+    "modelo": "log",
+    "rasgos": "B",
+    "tope_min": 2160,
+    "umbral": 0.4
    }
   },
   "9eb4a08ed1b6": {
@@ -426,6 +2258,46 @@
     "tope_min": null
    }
   },
+  "9ee02d91d740": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "analista_salida": "trailing",
+    "base": {
+     "exigencia": [
+      5,
+      5
+     ],
+     "productos": [
+      "PF_ETHUSD"
+     ],
+     "tamano": "apagado",
+     "tope_min": 2160
+    },
+    "param": 200,
+    "tope_min": 2160
+   }
+  },
+  "9f0662653370": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "analista_salida": "quietud",
+    "base": {
+     "exigencia": [
+      5,
+      5
+     ],
+     "productos": [
+      "PF_ETHUSD"
+     ],
+     "tamano": "apagado",
+     "tope_min": 2160
+    },
+    "param": 24,
+    "tope_min": 2160
+   }
+  },
   "a055eaa3b0b2": {
    "medicion": "honesta",
    "motor": 1,
@@ -438,6 +2310,26 @@
      "PF_XBTUSD"
     ],
     "tamano": "apagado",
+    "tope_min": 2160
+   }
+  },
+  "a1c685c36dbd": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "analista_salida": "breakeven",
+    "base": {
+     "exigencia": [
+      5,
+      5
+     ],
+     "productos": [
+      "PF_ETHUSD"
+     ],
+     "tamano": "apagado",
+     "tope_min": 2160
+    },
+    "param": 50,
     "tope_min": 2160
    }
   },
@@ -472,6 +2364,89 @@
     "tope_min": null
    }
   },
+  "a78fcc1652b2": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "analista_salida": "neutral",
+    "base": {
+     "exigencia": [
+      5,
+      5
+     ],
+     "productos": [
+      "PF_ETHUSD"
+     ],
+     "tamano": "apagado",
+     "tope_min": 2160
+    },
+    "param": 0.25,
+    "tope_min": 2160
+   }
+  },
+  "ac5ff1f3b2a5": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "analista_salida": "breakeven",
+    "base": {
+     "exigencia": [
+      5,
+      5
+     ],
+     "productos": [
+      "PF_ETHUSD"
+     ],
+     "tamano": "apagado",
+     "tope_min": 2160
+    },
+    "param": 200,
+    "tope_min": 2160
+   }
+  },
+  "ad1ebb6cd186": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "analista_salida": "neutral",
+    "base": {
+     "exigencia": [
+      5,
+      5
+     ],
+     "productos": [
+      "PF_ETHUSD"
+     ],
+     "tamano": "apagado",
+     "tope_min": 2160
+    },
+    "param": 0.0,
+    "tope_min": 2160
+   }
+  },
+  "aefb2ee5e46d": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "analista_salida": "aprendido",
+    "base": {
+     "exigencia": [
+      5,
+      5
+     ],
+     "productos": [
+      "PF_ETHUSD"
+     ],
+     "tamano": "apagado",
+     "tope_min": 2160
+    },
+    "desde_h": 12.0,
+    "modelo": "log",
+    "rasgos": "A",
+    "tope_min": 2160,
+    "umbral": "elegido con el pasado"
+   }
+  },
   "b079acd42014": {
    "medicion": "honesta",
    "motor": 1,
@@ -485,6 +2460,178 @@
     ],
     "tamano": "suave",
     "tope_min": 2160
+   }
+  },
+  "b7689a6bbef3": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "analista_salida": "portero",
+    "base": {
+     "exigencia": [
+      5,
+      5
+     ],
+     "productos": [
+      "PF_ETHUSD"
+     ],
+     "tamano": "apagado",
+     "tope_min": 2160
+    },
+    "param": 0.4,
+    "tope_min": null
+   }
+  },
+  "b821c5cb2300": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "analista_salida": "breakeven",
+    "base": {
+     "exigencia": [
+      5,
+      5
+     ],
+     "productos": [
+      "PF_ETHUSD"
+     ],
+     "tamano": "apagado",
+     "tope_min": 2160
+    },
+    "param": 100,
+    "tope_min": null
+   }
+  },
+  "b932c8aa9a67": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "analista_salida": "aprendido",
+    "base": {
+     "exigencia": [
+      5,
+      5
+     ],
+     "productos": [
+      "PF_ETHUSD"
+     ],
+     "tamano": "apagado",
+     "tope_min": 2160
+    },
+    "desde_h": 12.0,
+    "modelo": "log",
+    "rasgos": "B",
+    "tope_min": null,
+    "umbral": "elegido con el pasado"
+   }
+  },
+  "ba1d99d706e6": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "analista_salida": "trailing",
+    "base": {
+     "exigencia": [
+      5,
+      5
+     ],
+     "productos": [
+      "PF_ETHUSD"
+     ],
+     "tamano": "apagado",
+     "tope_min": 2160
+    },
+    "param": 400,
+    "tope_min": 2160
+   }
+  },
+  "be6dbc8a7a73": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "analista_salida": "aprendido",
+    "base": {
+     "exigencia": [
+      5,
+      5
+     ],
+     "productos": [
+      "PF_ETHUSD"
+     ],
+     "tamano": "apagado",
+     "tope_min": 2160
+    },
+    "desde_h": 0.0,
+    "modelo": "log",
+    "rasgos": "A",
+    "tope_min": 2160,
+    "umbral": 0.3
+   }
+  },
+  "bfd2c38fa77f": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "analista_salida": "portero",
+    "base": {
+     "exigencia": [
+      5,
+      5
+     ],
+     "productos": [
+      "PF_ETHUSD"
+     ],
+     "tamano": "apagado",
+     "tope_min": 2160
+    },
+    "param": 0.1,
+    "tope_min": null
+   }
+  },
+  "bfe4faa4ee8b": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "analista_salida": "aprendido",
+    "base": {
+     "exigencia": [
+      5,
+      5
+     ],
+     "productos": [
+      "PF_ETHUSD"
+     ],
+     "tamano": "apagado",
+     "tope_min": 2160
+    },
+    "desde_h": 12.0,
+    "modelo": "log",
+    "rasgos": "A",
+    "tope_min": 2160,
+    "umbral": 0.5
+   }
+  },
+  "c2408e3ea009": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "analista_salida": "aprendido",
+    "base": {
+     "exigencia": [
+      5,
+      5
+     ],
+     "productos": [
+      "PF_ETHUSD"
+     ],
+     "tamano": "apagado",
+     "tope_min": 2160
+    },
+    "desde_h": 12.0,
+    "modelo": "log",
+    "rasgos": "B",
+    "tope_min": 2160,
+    "umbral": 0.3
    }
   },
   "c2e464a20235": {
@@ -501,6 +2648,72 @@
     ],
     "tamano": "apagado",
     "tope_min": 2160
+   }
+  },
+  "c4abe6f5dc95": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "analista_salida": "aprendido",
+    "base": {
+     "exigencia": [
+      5,
+      5
+     ],
+     "productos": [
+      "PF_ETHUSD"
+     ],
+     "tamano": "apagado",
+     "tope_min": 2160
+    },
+    "desde_h": 12.0,
+    "modelo": "hgb",
+    "rasgos": "B",
+    "tope_min": 2160,
+    "umbral": 0.3
+   }
+  },
+  "c63f685e002b": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "analista_salida": "breakeven",
+    "base": {
+     "exigencia": [
+      5,
+      5
+     ],
+     "productos": [
+      "PF_ETHUSD"
+     ],
+     "tamano": "apagado",
+     "tope_min": 2160
+    },
+    "param": 50,
+    "tope_min": null
+   }
+  },
+  "ca09f0cc8ab0": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "analista_salida": "aprendido",
+    "base": {
+     "exigencia": [
+      5,
+      5
+     ],
+     "productos": [
+      "PF_ETHUSD"
+     ],
+     "tamano": "apagado",
+     "tope_min": 2160
+    },
+    "desde_h": 0.0,
+    "modelo": "hgb",
+    "rasgos": "B",
+    "tope_min": 2160,
+    "umbral": "elegido con el pasado"
    }
   },
   "ca6d70a53508": {
@@ -528,6 +2741,112 @@
     "tope_min": 2160
    }
   },
+  "ccf30bb2ea93": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "analista_salida": "pierde_a_las",
+    "base": {
+     "exigencia": [
+      5,
+      5
+     ],
+     "productos": [
+      "PF_ETHUSD"
+     ],
+     "tamano": "apagado",
+     "tope_min": 2160
+    },
+    "param": 18,
+    "tope_min": null
+   }
+  },
+  "cd86b5626eb8": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "analista_salida": "aprendido",
+    "base": {
+     "exigencia": [
+      5,
+      5
+     ],
+     "productos": [
+      "PF_ETHUSD"
+     ],
+     "tamano": "apagado",
+     "tope_min": 2160
+    },
+    "desde_h": 0.0,
+    "modelo": "log",
+    "rasgos": "A",
+    "tope_min": 2160,
+    "umbral": 0.4
+   }
+  },
+  "cee7215c9347": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "analista_salida": "aprendido",
+    "base": {
+     "exigencia": [
+      5,
+      5
+     ],
+     "productos": [
+      "PF_ETHUSD"
+     ],
+     "tamano": "apagado",
+     "tope_min": 2160
+    },
+    "desde_h": 12.0,
+    "modelo": "hgb",
+    "rasgos": "B",
+    "tope_min": 2160,
+    "umbral": "elegido con el pasado"
+   }
+  },
+  "cf38a359adc6": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "analista_salida": "portero_lado",
+    "base": {
+     "exigencia": [
+      5,
+      5
+     ],
+     "productos": [
+      "PF_ETHUSD"
+     ],
+     "tamano": "apagado",
+     "tope_min": 2160
+    },
+    "param": 0.5,
+    "tope_min": null
+   }
+  },
+  "d48526d00ce0": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "analista_salida": "portero",
+    "base": {
+     "exigencia": [
+      5,
+      5
+     ],
+     "productos": [
+      "PF_ETHUSD"
+     ],
+     "tamano": "apagado",
+     "tope_min": 2160
+    },
+    "param": 0.3,
+    "tope_min": 2160
+   }
+  },
   "d6d8799002bd": {
    "medicion": "honesta",
    "motor": 1,
@@ -541,6 +2860,124 @@
     ],
     "tamano": "suave",
     "tope_min": 2160
+   }
+  },
+  "d742b0b286b1": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "analista_salida": "portero_lado",
+    "base": {
+     "exigencia": [
+      5,
+      5
+     ],
+     "productos": [
+      "PF_ETHUSD"
+     ],
+     "tamano": "apagado",
+     "tope_min": 2160
+    },
+    "param": "elegido con el pasado",
+    "rejilla": [
+     0.1,
+     0.2,
+     0.3,
+     0.4,
+     0.5
+    ],
+    "tope_min": 2160
+   }
+  },
+  "d7a65a5c5453": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "analista_salida": "aprendido",
+    "base": {
+     "exigencia": [
+      5,
+      5
+     ],
+     "productos": [
+      "PF_ETHUSD"
+     ],
+     "tamano": "apagado",
+     "tope_min": 2160
+    },
+    "desde_h": 12.0,
+    "modelo": "hgb",
+    "rasgos": "B",
+    "tope_min": null,
+    "umbral": 0.3
+   }
+  },
+  "da538f64158c": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "analista_salida": "pierde_a_las",
+    "base": {
+     "exigencia": [
+      5,
+      5
+     ],
+     "productos": [
+      "PF_ETHUSD"
+     ],
+     "tamano": "apagado",
+     "tope_min": 2160
+    },
+    "param": 12,
+    "tope_min": null
+   }
+  },
+  "db13f8eb6567": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "analista_salida": "pierde_a_las",
+    "base": {
+     "exigencia": [
+      5,
+      5
+     ],
+     "productos": [
+      "PF_ETHUSD"
+     ],
+     "tamano": "apagado",
+     "tope_min": 2160
+    },
+    "param": "elegido con el pasado",
+    "rejilla": [
+     12,
+     18,
+     24
+    ],
+    "tope_min": null
+   }
+  },
+  "dbcd6dab8a3a": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "analista_salida": "aprendido",
+    "base": {
+     "exigencia": [
+      5,
+      5
+     ],
+     "productos": [
+      "PF_ETHUSD"
+     ],
+     "tamano": "apagado",
+     "tope_min": 2160
+    },
+    "desde_h": 0.0,
+    "modelo": "log",
+    "rasgos": "A",
+    "tope_min": null,
+    "umbral": 0.3
    }
   },
   "dcc52ddf810c": {
@@ -559,6 +2996,29 @@
     "tope_min": null
    }
   },
+  "dd169494ab81": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "analista_salida": "aprendido",
+    "base": {
+     "exigencia": [
+      5,
+      5
+     ],
+     "productos": [
+      "PF_ETHUSD"
+     ],
+     "tamano": "apagado",
+     "tope_min": 2160
+    },
+    "desde_h": 12.0,
+    "modelo": "log",
+    "rasgos": "B",
+    "tope_min": null,
+    "umbral": 0.5
+   }
+  },
   "e1e93ea0a7d9": {
    "medicion": "honesta",
    "motor": 1,
@@ -572,6 +3032,46 @@
      "PF_XBTUSD"
     ],
     "tamano": "suave",
+    "tope_min": null
+   }
+  },
+  "e21e816d7694": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "analista_salida": "breakeven",
+    "base": {
+     "exigencia": [
+      5,
+      5
+     ],
+     "productos": [
+      "PF_ETHUSD"
+     ],
+     "tamano": "apagado",
+     "tope_min": 2160
+    },
+    "param": 150,
+    "tope_min": null
+   }
+  },
+  "e29ec75fbb37": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "analista_salida": "neutral",
+    "base": {
+     "exigencia": [
+      5,
+      5
+     ],
+     "productos": [
+      "PF_ETHUSD"
+     ],
+     "tamano": "apagado",
+     "tope_min": 2160
+    },
+    "param": -0.5,
     "tope_min": null
    }
   },
@@ -609,6 +3109,72 @@
     "corte": "hora del día (4 tramos)"
    }
   },
+  "e8319a0740a7": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "analista_salida": "caida_puntaje",
+    "base": {
+     "exigencia": [
+      5,
+      5
+     ],
+     "productos": [
+      "PF_ETHUSD"
+     ],
+     "tamano": "apagado",
+     "tope_min": 2160
+    },
+    "param": 1.5,
+    "tope_min": 2160
+   }
+  },
+  "e8d07065a03e": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "analista_salida": "aprendido",
+    "base": {
+     "exigencia": [
+      5,
+      5
+     ],
+     "productos": [
+      "PF_ETHUSD"
+     ],
+     "tamano": "apagado",
+     "tope_min": 2160
+    },
+    "desde_h": 12.0,
+    "modelo": "hgb",
+    "rasgos": "B",
+    "tope_min": null,
+    "umbral": 0.4
+   }
+  },
+  "ebe5d5742ff6": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "analista_salida": "aprendido",
+    "base": {
+     "exigencia": [
+      5,
+      5
+     ],
+     "productos": [
+      "PF_ETHUSD"
+     ],
+     "tamano": "apagado",
+     "tope_min": 2160
+    },
+    "desde_h": 12.0,
+    "modelo": "log",
+    "rasgos": "A",
+    "tope_min": null,
+    "umbral": 0.5
+   }
+  },
   "ec7c98754830": {
    "medicion": "honesta",
    "motor": 1,
@@ -616,6 +3182,106 @@
     "analisis": "donde-perdimos",
     "base": "congelado ETH 36h 5/5",
     "corte": "motivo de salida"
+   }
+  },
+  "ed9e1f2c82f5": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "analista_salida": "trailing",
+    "base": {
+     "exigencia": [
+      5,
+      5
+     ],
+     "productos": [
+      "PF_ETHUSD"
+     ],
+     "tamano": "apagado",
+     "tope_min": 2160
+    },
+    "param": 150,
+    "tope_min": null
+   }
+  },
+  "ee4d3ef433dd": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "analista_salida": "portero_lado",
+    "base": {
+     "exigencia": [
+      5,
+      5
+     ],
+     "productos": [
+      "PF_ETHUSD"
+     ],
+     "tamano": "apagado",
+     "tope_min": 2160
+    },
+    "param": 0.2,
+    "tope_min": null
+   }
+  },
+  "f237f9cb45bf": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "analista_salida": "portero_lado",
+    "base": {
+     "exigencia": [
+      5,
+      5
+     ],
+     "productos": [
+      "PF_ETHUSD"
+     ],
+     "tamano": "apagado",
+     "tope_min": 2160
+    },
+    "param": 0.3,
+    "tope_min": null
+   }
+  },
+  "f2d177c0c277": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "analista_salida": "breakeven",
+    "base": {
+     "exigencia": [
+      5,
+      5
+     ],
+     "productos": [
+      "PF_ETHUSD"
+     ],
+     "tamano": "apagado",
+     "tope_min": 2160
+    },
+    "param": 200,
+    "tope_min": null
+   }
+  },
+  "f50ab4c7af19": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "analista_salida": "neutral",
+    "base": {
+     "exigencia": [
+      5,
+      5
+     ],
+     "productos": [
+      "PF_ETHUSD"
+     ],
+     "tamano": "apagado",
+     "tope_min": 2160
+    },
+    "param": 0.5,
+    "tope_min": null
    }
   },
   "f543bf03eec9": {
@@ -633,6 +3299,56 @@
     "tope_min": null
    }
   },
+  "f68082dc011f": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "analista_salida": "aprendido",
+    "base": {
+     "exigencia": [
+      5,
+      5
+     ],
+     "productos": [
+      "PF_ETHUSD"
+     ],
+     "tamano": "apagado",
+     "tope_min": 2160
+    },
+    "desde_h": 0.0,
+    "modelo": "log",
+    "rasgos": "A",
+    "tope_min": 2160,
+    "umbral": "elegido con el pasado"
+   }
+  },
+  "f686ab72a4b8": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "analista_salida": "portero_lado",
+    "base": {
+     "exigencia": [
+      5,
+      5
+     ],
+     "productos": [
+      "PF_ETHUSD"
+     ],
+     "tamano": "apagado",
+     "tope_min": 2160
+    },
+    "param": "elegido con el pasado",
+    "rejilla": [
+     0.1,
+     0.2,
+     0.3,
+     0.4,
+     0.5
+    ],
+    "tope_min": null
+   }
+  },
   "f697d53c2552": {
    "medicion": "honesta",
    "motor": 1,
@@ -646,6 +3362,72 @@
     ],
     "tamano": "apagado",
     "tope_min": null
+   }
+  },
+  "f738a96ec054": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "analista_salida": "aprendido",
+    "base": {
+     "exigencia": [
+      5,
+      5
+     ],
+     "productos": [
+      "PF_ETHUSD"
+     ],
+     "tamano": "apagado",
+     "tope_min": 2160
+    },
+    "desde_h": 0.0,
+    "modelo": "hgb",
+    "rasgos": "B",
+    "tope_min": 2160,
+    "umbral": 0.4
+   }
+  },
+  "f8cb8cd90b63": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "analista_salida": "aprendido",
+    "base": {
+     "exigencia": [
+      5,
+      5
+     ],
+     "productos": [
+      "PF_ETHUSD"
+     ],
+     "tamano": "apagado",
+     "tope_min": 2160
+    },
+    "desde_h": 0.0,
+    "modelo": "log",
+    "rasgos": "A",
+    "tope_min": null,
+    "umbral": 0.5
+   }
+  },
+  "f9282bc96e33": {
+   "medicion": "honesta",
+   "motor": 1,
+   "variante": {
+    "analista_salida": "caida_puntaje",
+    "base": {
+     "exigencia": [
+      5,
+      5
+     ],
+     "productos": [
+      "PF_ETHUSD"
+     ],
+     "tamano": "apagado",
+     "tope_min": 2160
+    },
+    "param": 1.0,
+    "tope_min": 2160
    }
   },
   "ff7b99070fb2": {
