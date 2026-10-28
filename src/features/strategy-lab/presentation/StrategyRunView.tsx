@@ -632,6 +632,16 @@ export default function StrategyRunView({
     )?.summary?.formula ??
     (quickState?.state === 'done' ? quickState.summary?.formula : undefined) ??
     null
+  // While a test runs its own state has no result yet: the panel keeps the previous formula result instead of falling back
+  // to the old practice view (scope text, stage tabs and the candles of an older run).
+  const [keptFormula, setKeptFormula] = useState<QuickFormula | null>(null)
+  useEffect(() => {
+    if (formulaOf) setKeptFormula(formulaOf)
+  }, [formulaOf])
+  const busyQuick = hasQuick && (quickRunning || running != null || testing)
+  const formulaShown = formulaOf ?? (busyQuick ? keptFormula : null)
+  // Qwen en vivo only has the new panel: the old practice view is for the other strategies
+  const legacyView = !hasQuick
   useEffect(() => {
     if (!hasQuick) return
     let cancelled = false
@@ -822,12 +832,13 @@ export default function StrategyRunView({
     data !== null &&
     data.tradesDone &&
     data.trades.length > 0 &&
-    (data.candles?.candles.length ?? 0) > 1
-  const formulaModel = useFormulaModel(gatePanel ? null : formulaOf)
+    (data.candles?.candles.length ?? 0) > 1 &&
+    !busyQuick
+  const formulaModel = useFormulaModel(gatePanel ? null : formulaShown)
   const figs = formulaModel?.figures ?? null
   // The levels the shown test ran with (the formula test keeps them in its result, a run in its params)
   const usedLevels = formulaModel
-    ? (formulaOf?.exigencia ?? null)
+    ? (formulaShown?.exigencia ?? null)
     : (lastRun?.params?.exigencia ?? null)
   const weeklyNote = (trades: number, fromMs: number, toMs: number) => {
     const weeks = (toMs - fromMs) / (7 * 86_400_000)
@@ -1249,11 +1260,11 @@ export default function StrategyRunView({
         />
       ) : (
         hasQuick &&
-        data === null &&
-        state.kind !== 'loading' && (
+        (busyQuick || (data === null && state.kind !== 'loading')) && (
           <p className={RUN.empty} data-testid="run-empty-panel">
-            Todavía no hay resultados con precios y operaciones. Tocá «Probar» y
-            elegí «Solo la fórmula» para ver cómo le habría ido en el pasado.
+            {busyQuick
+              ? 'Probando… el resultado con precios y operaciones aparece acá cuando termina.'
+              : 'Todavía no hay resultados con precios y operaciones. Tocá «Probar» y elegí «Solo la fórmula» para ver cómo le habría ido en el pasado.'}
           </p>
         )
       )}
@@ -1279,7 +1290,7 @@ export default function StrategyRunView({
         <summary className="cursor-pointer text-note text-ink-2">
           Ver velas y detalle de las operaciones
         </summary>
-        {scopeRun && !formulaModel && (
+        {scopeRun && !formulaModel && legacyView && (
           <ul className={RUN.scope} data-testid="run-evaluation-scope">
             {runScopeLines(scopeRun).map((line) => (
               <li key={line.key} data-tone={line.tone ?? undefined}>
@@ -1288,7 +1299,7 @@ export default function StrategyRunView({
             ))}
           </ul>
         )}
-        {overview && !unknownToGate && !formulaModel && (
+        {overview && !unknownToGate && !formulaModel && legacyView && (
           <div className={RUN.tabsWrap}>
             <div className={RUN.tabs} role="group" aria-label="Tramos probados">
               {fallbackRun && (
@@ -1336,7 +1347,7 @@ export default function StrategyRunView({
               <QuickComparison variants={quickVariants} />
             </div>
           )}
-        {!formulaModel && (
+        {!formulaModel && legacyView && (
           <div className={RUN.chartCard} id="run-candles">
             <div className={RUN.chartHead}>
               <h4>

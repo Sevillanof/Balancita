@@ -455,6 +455,38 @@ describe('StrategyRunView actions', () => {
     })
   })
 
+  it('Qwen en vivo never falls back to the old practice view while a test runs', async () => {
+    const quick = {
+      status: vi.fn(async () => ({
+        state: 'running',
+        snapshots: 300,
+        note: 'n',
+        phase: 'preguntando',
+        answered: 5,
+        total: 300,
+        updated_ms: Date.now(),
+      })),
+      start: vi.fn(),
+    } as unknown as import('../infrastructure/quick-api.ts').QuickApi
+    render(
+      <StrategyRunView
+        strategyId="qwen-live"
+        strategyName="Qwen en vivo"
+        version={1}
+        kind="qwen_live"
+        gate={gateWith(overview([stageRun(7, 0)]))}
+        visual={visualWith()}
+        quick={quick}
+      />,
+    )
+    expect(await screen.findByTestId('run-empty-panel')).toHaveTextContent(
+      'Probando',
+    )
+    expect(screen.queryByTestId('run-evaluation-scope')).toBeNull()
+    expect(screen.queryByRole('group', { name: 'Tramos probados' })).toBeNull()
+    expect(screen.queryByText(/Velas de la prueba/)).toBeNull()
+  })
+
   it('the quick test lets you pick a variant and compares the finished ones', async () => {
     const user = userEvent.setup()
     const summary = (net: number) => ({
