@@ -29,7 +29,7 @@ describe('devChildSpecs', () => {
   })
   const byName = Object.fromEntries(specs.map((spec) => [spec.name, spec]))
 
-  it('starts vite, live capture, live gateway, verdict service, forecast scorer, strategy registry and news', () => {
+  it('starts vite, live capture, live gateway, verdict service, forward, carry and strategy registry', () => {
     assert.deepEqual(
       specs.map((spec) => spec.name),
       [
@@ -38,11 +38,9 @@ describe('devChildSpecs', () => {
         'positioning',
         'live',
         'verdict',
-        'scores',
         'forward',
         'carry',
         'strategies',
-        'news',
       ],
     )
   })
@@ -124,24 +122,6 @@ describe('devChildSpecs', () => {
       byName.capture.env.FUTURES_MARKET_DB_PATH,
       '--verdicts-db',
       './data/dev-live/futures-verdicts.sqlite',
-    ])
-    assert.equal(env.PYTHONPATH, '/repo/python')
-    assert.equal(env.KEEP, 'yes')
-  })
-
-  it('runs the Python forecast scorer over the market and verdicts databases into its own scores database', () => {
-    const { command, args, cwd, env } = byName.scores
-    assert.equal(command, 'python3')
-    assert.equal(cwd, '/repo/server')
-    assert.deepEqual(args, [
-      '-m',
-      'balancita_engine.futures_forecast_scores',
-      '--market-db',
-      byName.capture.env.FUTURES_MARKET_DB_PATH,
-      '--verdicts-db',
-      './data/dev-live/futures-verdicts.sqlite',
-      '--scores-db',
-      './data/dev-live/futures-forecast-scores.sqlite',
     ])
     assert.equal(env.PYTHONPATH, '/repo/python')
     assert.equal(env.KEEP, 'yes')
@@ -322,14 +302,14 @@ describe('devChildSpecs with a resolved Python', () => {
   const base = { root, env: { KEEP: 'yes' }, allowedFlags: noFlags }
   const byName = (specs) => Object.fromEntries(specs.map((s) => [s.name, s]))
 
-  it('injects the command and its prefix args into verdict and scores', () => {
+  it('injects the command and its prefix args into verdict', () => {
     const specs = byName(
       devChildSpecs({
         ...base,
         python: { command: 'py', prefixArgs: ['-3'] },
       }),
     )
-    for (const name of ['verdict', 'scores']) {
+    for (const name of ['verdict']) {
       assert.equal(specs[name].command, 'py')
       assert.deepEqual(specs[name].args.slice(0, 3), [
         '-3',
@@ -341,7 +321,7 @@ describe('devChildSpecs with a resolved Python', () => {
     assert.equal(specs.live.env.BALANCITA_PYTHON_STATUS, 'available')
   })
 
-  it('without Python starts none of verdict and scores and tells the gateway', () => {
+  it('without Python starts none of verdict and tells the gateway', () => {
     const specs = devChildSpecs({ ...base, python: null })
     assert.deepEqual(
       specs.map((spec) => spec.name),
@@ -577,7 +557,6 @@ describe('optional LLM decision children (llm and q)', () => {
   it('starts llm and q after the other children when enabled', () => {
     const specs = devChildSpecs({ ...base, env: local, llm })
     assert.deepEqual(names(specs).slice(-3), ['llm', 'q', 'qwenlive'])
-    assert.ok(names(specs).indexOf('news') < names(specs).indexOf('llm'))
   })
 
   it('runs the Qwen live operator with the model, on its own database, and tells the gateway where it is', () => {
@@ -843,101 +822,6 @@ describe('optional LLM decision children (llm and q)', () => {
     assert.equal(llamaPort({}), 8088)
     assert.equal(llamaPort({ LLAMA_PORT: '9001' }), 9001)
     assert.equal(llamaPort({ LLAMA_PORT: 'abc' }), 8088)
-  })
-})
-
-describe('optional news child (n)', () => {
-  const base = {
-    root,
-    allowedFlags: noFlags,
-    python: { command: 'python3', prefixArgs: [] },
-  }
-  const llm = { command: 'llama-server' }
-  const local = { LLAMA_MODEL_PATH: '/models/q.gguf' }
-  const byName = (specs) => Object.fromEntries(specs.map((s) => [s.name, s]))
-  const names = (specs) => specs.map((s) => s.name)
-
-  it('runs Python process N into its own news database, ingest only, without a model', () => {
-    const { news } = byName(devChildSpecs({ ...base, env: { KEEP: 'yes' } }))
-    assert.equal(news.command, 'python3')
-    assert.equal(news.cwd, '/repo/server')
-    assert.deepEqual(news.args, [
-      '-m',
-      'balancita_engine.futures_news',
-      '--news-db',
-      './data/dev-live/futures-news.sqlite',
-    ])
-    assert.equal(news.env.PYTHONPATH, '/repo/python')
-    assert.equal(news.env.KEEP, 'yes')
-  })
-
-  it('uses the resolved Python command and its prefix args', () => {
-    const { news } = byName(
-      devChildSpecs({
-        ...base,
-        env: {},
-        python: { command: 'py', prefixArgs: ['-3'] },
-      }),
-    )
-    assert.equal(news.command, 'py')
-    assert.deepEqual(news.args.slice(0, 3), [
-      '-3',
-      '-m',
-      'balancita_engine.futures_news',
-    ])
-  })
-
-  it('does not start without Python and can be switched off with NEWS_ENABLED=0', () => {
-    assert.ok(
-      !names(devChildSpecs({ ...base, env: {}, python: null })).includes(
-        'news',
-      ),
-    )
-    assert.ok(
-      !names(devChildSpecs({ ...base, env: { NEWS_ENABLED: '0' } })).includes(
-        'news',
-      ),
-    )
-    assert.ok(
-      names(devChildSpecs({ ...base, env: { NEWS_ENABLED: '1' } })).includes(
-        'news',
-      ),
-    )
-  })
-
-  it('analyses with the local model only when the llm child is enabled, on the same port', () => {
-    const on = byName(
-      devChildSpecs({ ...base, env: { ...local, LLAMA_PORT: '9001' }, llm }),
-    )
-    assert.ok(on.news.args.includes('--analyze'))
-    assert.equal(on.news.env.LLAMA_PORT, '9001')
-    // no local model, no llama-server binary, or DECISIONS_ENABLED off: ingest only
-    for (const options of [
-      { env: {}, llm },
-      { env: local, llm: null },
-      { env: local, llm: undefined },
-    ])
-      assert.ok(
-        !byName(devChildSpecs({ ...base, ...options })).news.args.includes(
-          '--analyze',
-        ),
-      )
-    // llm absent because resolveLlamaServer found DECISIONS_ENABLED=0
-    assert.ok(
-      !byName(
-        devChildSpecs({ ...base, env: { ...local, DECISIONS_ENABLED: '0' } }),
-      ).news.args.includes('--analyze'),
-    )
-  })
-
-  it('keeps news independent of llm and q: it starts before them and a stopped model does not matter', () => {
-    const specs = devChildSpecs({ ...base, env: local, llm })
-    assert.deepEqual(names(specs).slice(-4), ['news', 'llm', 'q', 'qwenlive'])
-  })
-
-  it('never hands the news child a remote LLM setting', () => {
-    const { news } = byName(devChildSpecs({ ...base, env: local, llm }))
-    assert.ok(!news.args.some((a) => /http|gemini|api/i.test(a)))
   })
 })
 

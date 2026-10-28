@@ -52,11 +52,9 @@ describe('devChildName', () => {
     const py = (module) =>
       `/usr/bin/python3 -m balancita_engine.${module} --db x`
     assert.equal(devChildName(py('futures_forward')), 'forward')
-    assert.equal(devChildName(py('futures_news')), 'news')
     assert.equal(devChildName(py('futures_qwen_live')), 'qwenlive')
     assert.equal(devChildName(py('futures_qwen_exit')), 'qwenexit')
     assert.equal(devChildName(py('futures_verdicts')), 'verdict')
-    assert.equal(devChildName(py('futures_forecast_scores')), 'scores')
     assert.equal(devChildName(py('futures_carry')), 'carry')
     assert.equal(devChildName(py('futures_strategy_registry')), 'strategies')
     assert.equal(devChildName(py('futures_llm_decisions')), 'q')
@@ -187,19 +185,19 @@ describe('sweepStale: leftover dev children', () => {
     assert.match(result.stopped[0], /pid 50 \(forward, running 5h\)/)
   })
 
-  it('stops a news found by its cwd when the command has no root', async () => {
-    const news = {
+  it('stops a carry found by its cwd when the command has no root', async () => {
+    const carry = {
       pid: 60,
       pgid: 60,
-      command: 'python3 -m balancita_engine.futures_news --news-db ./data/n',
+      command: 'python3 -m balancita_engine.futures_carry --state ./data/c',
     }
     const probe = fakeProbe({
-      procs: { 60: { ...news, cwd: `${root}/server` } },
-      processes: [news],
+      procs: { 60: { ...carry, cwd: `${root}/server` } },
+      processes: [carry],
     })
     const result = await sweepStale({ ...base, probe })
     assert.deepEqual(probe.signals, [[60, 'SIGTERM', true]])
-    assert.match(result.stopped[0], /pid 60 \(news\)/)
+    assert.match(result.stopped[0], /pid 60 \(carry\)/)
   })
 
   it('leaves the forward of another checkout alone and does not mention it', async () => {
@@ -298,9 +296,9 @@ describe('config-mismatch rotation', () => {
     const { mismatchedDb, rotateDb } = await import('./dev-stale.mjs')
     assert.equal(
       mismatchedDb(
-        'ValueError: forecast scores DB was written with a different config; use a new DB',
+        'ValueError: verdicts DB was written with a different config; use a new DB',
       ),
-      'futures-forecast-scores',
+      'futures-verdicts',
     )
     assert.equal(mismatchedDb('some other error'), undefined)
     const moves = []

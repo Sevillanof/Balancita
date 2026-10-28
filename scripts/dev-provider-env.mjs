@@ -68,7 +68,7 @@ function probePython({ command, prefixArgs }, run) {
 }
 
 /**
- * Finds the Python for the verdict (C), paper (D) and scores (E) services, once, before
+ * Finds the Python for the verdict (C) service, once, before
  * spawning. `BALANCITA_PYTHON` (a single executable path or name) is honored
  * first and never falls back; otherwise `python3`, `python` and, on Windows,
  * `py -3`. Returns `{ command, prefixArgs, version }` or `{ message, failure }`, where
@@ -583,13 +583,6 @@ const POSITIONING_ARGS = [
  *   writer of the latter; its own `command` instead of node),
  * - paper: Python paper execution D (market + verdicts DBs read-only -> account
  *   DB, sole writer of the latter),
- * - scores: Python forecast scorer E (market + verdicts DBs read-only -> scores
- *   DB, sole writer of the latter),
- * - news (optional): Python news process N (public RSS -> news DB, sole writer
- *   of the latter; its own `command` instead of node). Ingest needs no model;
- *   it analyses with the local model (`--analyze`) only when llm is enabled,
- *   under the same DECISIONS_ENABLED and model rules. `NEWS_ENABLED=0` turns
- *   it off,
  * - llm (optional): `llama-server` on loopback, only with a resolved binary,
  * - q (optional): Python LLM decisions Q (market + verdicts DBs read-only ->
  *   decisions DB, sole writer of the latter), started together with llm.
@@ -600,7 +593,7 @@ export const QWEN_CHILDREN = ['verdict', 'llm', 'q', 'qwenexit', 'qwenlive']
 /**
  * `DEV_ONLY=vite,capture,live,forward,strategies` runs just those children (comma separated names of
  * `devChildSpecs`); unset or empty runs everything. Unknown names are ignored. Used to leave only the
- * forward measurement and the capture it reads running, without paper books or news. Qwen (see
+ * forward measurement and the capture it reads running, without the carry counter. Qwen (see
  * QWEN_CHILDREN) is never left out by it: only DECISIONS_ENABLED=0 (or a missing model) turns it off.
  */
 export function onlyChildSpecs(specs, env = {}) {
@@ -693,9 +686,7 @@ export function devChildSpecs({
   const verdictsDb = liveDb('futures-verdicts.sqlite')
   // D (the old paper engine) no longer runs: its account database stays readable as history.
   const accountDb = liveDb('futures-paper-account.sqlite')
-  const scoresDb = liveDb('futures-forecast-scores.sqlite')
   const decisionsDb = liveDb('futures-llm-decisions.sqlite')
-  const newsDb = liveDb('futures-news.sqlite')
   const strategiesDb = liveDb('futures-strategies.sqlite')
   // Forward paper measurement (C30): its DB and the summary Q and the registry read.
   const forwardDir = liveDb('forward')
@@ -794,37 +785,8 @@ export function devChildSpecs({
       },
     },
     ...(python?.command ? pythonChildren() : []),
-    ...(python?.command && (env.NEWS_ENABLED ?? '').trim() !== '0'
-      ? newsChildren()
-      : []),
     ...(python?.command && llm?.command ? llmChildren() : []),
   ]
-
-  function newsChildren() {
-    return [
-      {
-        name: 'news',
-        command: python.command,
-        cwd: serverCwd,
-        args: [
-          ...python.prefixArgs,
-          '-m',
-          'balancita_engine.futures_news',
-          '--news-db',
-          newsDb,
-          // The news is only ever sent to the local model, on the same port as q.
-          ...(llmOn ? ['--analyze'] : []),
-        ],
-        env: {
-          ...env,
-          ...(llmOn ? { LLAMA_PORT: String(llamaPort(env)) } : {}),
-          PYTHONPATH: [`${root}/python`, env.PYTHONPATH]
-            .filter(Boolean)
-            .join(delimiter),
-        },
-      },
-    ]
-  }
 
   function llmChildren() {
     const port = String(llamaPort(env))
@@ -957,28 +919,6 @@ export function devChildSpecs({
           marketDb,
           '--verdicts-db',
           verdictsDb,
-        ],
-        env: {
-          ...env,
-          PYTHONPATH: [`${root}/python`, env.PYTHONPATH]
-            .filter(Boolean)
-            .join(delimiter),
-        },
-      },
-      {
-        name: 'scores',
-        command: python.command,
-        cwd: serverCwd,
-        args: [
-          ...python.prefixArgs,
-          '-m',
-          'balancita_engine.futures_forecast_scores',
-          '--market-db',
-          marketDb,
-          '--verdicts-db',
-          verdictsDb,
-          '--scores-db',
-          scoresDb,
         ],
         env: {
           ...env,

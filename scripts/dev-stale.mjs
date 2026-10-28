@@ -13,7 +13,7 @@ import { join } from 'node:path'
 // checkout (command line or cwd under `root`) is a leftover of an earlier
 // `pnpm run dev` and is stopped; anything else is reported and left alone.
 // Last, every process of the system is looked at: the Python/Node children that
-// open no port and leave no lock (forward, news, qwenlive...) would otherwise
+// open no port and leave no lock (forward, carry, qwenlive...) would otherwise
 // survive an orchestrator that died without cleaning up and run twice.
 
 function run(command, args, maxBuffer) {
@@ -139,12 +139,10 @@ export function isOurs(info, root) {
 // relative paths it passes to node (cwd `server/`), so the checkout is
 // decided afterwards by command line or cwd.
 const PYTHON_MODULES = [
-  ['news', 'futures_news'],
   ['q', 'futures_llm_decisions'],
   ['qwenlive', 'futures_qwen_live'],
   ['qwenexit', 'futures_qwen_exit'],
   ['verdict', 'futures_verdicts'],
-  ['scores', 'futures_forecast_scores'],
   ['forward', 'futures_forward'],
   ['carry', 'futures_carry'],
   ['strategies', 'futures_strategy_registry'],
@@ -320,16 +318,11 @@ export function removeDevPid(liveDir) {
 // renamed (never deleted) so the service can start a fresh one.
 const MISMATCHED_DB = [
   [/verdicts DB was written with a different config/, 'futures-verdicts'],
-  [
-    /forecast scores DB was written with a different config/,
-    'futures-forecast-scores',
-  ],
   [/account DB was written with a different config/, 'futures-paper-account'],
   [
     /LLM decisions DB was written with a different config/,
     'futures-llm-decisions',
   ],
-  [/news DB was written with a different config/, 'futures-news'],
 ]
 
 /** Base file name (no extension) of the DB a log text says was refused. */
