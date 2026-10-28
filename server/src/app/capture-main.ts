@@ -1,6 +1,7 @@
 import { FuturesMarketStore } from '../features/kraken-futures/futures-market-store.ts'
 import { appendFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
+import { createDbHealth } from '../features/kraken-futures/db-health.ts'
 import { createRetentionRunner } from '../features/kraken-futures/retention-runner.ts'
 import { createLoopMonitor } from '../features/live-gateway/loop-monitor.ts'
 import { createLiveCapture } from '../features/live-gateway/live-capture.ts'
@@ -123,6 +124,22 @@ async function main(): Promise<void> {
   }
   const trimTimer = setInterval(trim, legacyRetention ? 120_000 : 15_000)
   trimTimer.unref()
+  // WAL folded back every 5 min, integrity check daily (own process); optional backups
+  // (FUTURES_DB_BACKUP_DAYS > 0 keeps the last FUTURES_DB_BACKUP_KEEP in FUTURES_DB_BACKUP_DIR).
+  const backupDays = envNumber('FUTURES_DB_BACKUP_DAYS', 0)
+  const dbHealth = createDbHealth({
+    store,
+    dbPath: config.futuresMarketDbPath,
+    log,
+    record: (entry) => appendJson('health.jsonl', entry),
+    backupMs: backupDays * 24 * HOUR,
+    backupDir:
+      process.env.FUTURES_DB_BACKUP_DIR ??
+      join(diagnosticsDir, 'market-backups'),
+    backupKeep: envNumber('FUTURES_DB_BACKUP_KEEP', 2),
+  })
+  dbHealth.start()
+  setTimeout(() => void dbHealth.integrityNow(), 10 * 60_000).unref()
   // Worst timer delay per minute: tells a blocked or sleeping process from a network problem.
   const loopMonitor = createLoopMonitor({
     file: join(diagnosticsDir, 'eventloop.jsonl'),
@@ -134,6 +151,7 @@ async function main(): Promise<void> {
     closing = true
     log(`received ${signal}, stopping`)
     retentionRunner.stop()
+    dbHealth.stop()
     loopMonitor.stop()
     void capture
       .stop()

@@ -546,6 +546,24 @@ export class FuturesMarketStore {
     return Number(row.synchronous)
   }
 
+  /**
+   * Folds the WAL back into the database file without blocking readers or the
+   * writer (`PASSIVE`): a long-lived reader can hold part of it back, so the
+   * result says how many WAL frames exist and how many were moved.
+   */
+  checkpoint(): { busy: boolean; walFrames: number; moved: number } {
+    const row = this.db.prepare('PRAGMA wal_checkpoint(PASSIVE)').get() as {
+      busy: number
+      log: number
+      checkpointed: number
+    }
+    return {
+      busy: row.busy !== 0,
+      walFrames: Number(row.log),
+      moved: Number(row.checkpointed),
+    }
+  }
+
   close(): void {
     this.statements.clear()
     this.db.close()
