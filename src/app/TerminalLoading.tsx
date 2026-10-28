@@ -15,25 +15,35 @@ function productLabel(product: string | undefined): string {
   return (product ?? 'PF_ETHUSD').replace(/^PF_/, '').replace(/USD$/, '')
 }
 
-/** Full-screen dark frame: the terminal is not rendered yet, so nothing else is on screen. */
-function Frame({ children }: { children: ReactNode }) {
+const SOURCE = 'Real\u00a0(paper,\u00a0Kraken\u00a0público)'
+
+/** Full-screen dark frame; the card and the logo sit in the same place in every state. */
+function Frame({
+  accent,
+  children,
+}: {
+  accent: 'info' | 'short'
+  children: ReactNode
+}) {
   return (
-    <div className="flex min-h-svh flex-col items-center justify-center gap-6 bg-canvas px-4 font-sans text-body text-ink font-features-terminal">
-      <p className="flex items-center gap-2 text-brand-mark font-semibold tracking-wide text-ink">
-        <span
-          aria-hidden="true"
-          className="size-2 animate-pulse rounded-full bg-long"
-        />
-        Balancita
-      </p>
-      <div className="flex w-full max-w-md flex-col items-center gap-5 rounded-md border border-solid border-line bg-surface-1 px-8 py-9 text-center">
+    <div className="flex min-h-svh items-center justify-center bg-canvas px-4 py-8 font-sans text-ink font-features-terminal">
+      <div
+        className={`flex h-180 w-full max-w-160 flex-col items-center gap-4 rounded-lg border border-solid bg-surface-1 px-8 py-10 text-center sm:px-16 ${accent === 'short' ? 'border-short' : 'border-line-focus'}`}
+      >
+        <p className="flex items-center gap-3 text-[22px] leading-8 font-semibold tracking-wide">
+          <span
+            aria-hidden="true"
+            className="size-3 animate-pulse rounded-full bg-long"
+          />
+          Balancita
+        </p>
         {children}
       </div>
     </div>
   )
 }
 
-/** Ring with the product inside: spinning arc while loading, solid red when failed. */
+/** Big ring: spinning arc with the product inside while loading, solid red "!" when failed. */
 function Ring({
   product,
   failed,
@@ -42,12 +52,14 @@ function Ring({
   failed: boolean
 }) {
   return (
-    <div className="relative grid size-24 place-items-center">
+    <div className="relative grid size-32 shrink-0 place-items-center">
       <span
         aria-hidden="true"
-        className={`absolute inset-0 rounded-full border-4 border-solid ${failed ? 'border-short' : 'animate-spin border-line border-t-info'}`}
+        className={`absolute inset-0 rounded-full border-[6px] border-solid ${failed ? 'border-short' : 'animate-spin border-line-strong border-t-info'}`}
       />
-      <span className="text-value font-semibold text-ink">
+      <span
+        className={`font-semibold ${failed ? 'text-[64px] leading-none text-short' : 'text-[30px] leading-none text-ink'}`}
+      >
         {failed ? '!' : productLabel(product)}
       </span>
     </div>
@@ -67,35 +79,37 @@ export function TerminalLoading({
   const seconds = Math.floor(elapsed / 1000)
   const share = Math.min(1, elapsed / timeoutMs)
   return (
-    <Frame>
+    <Frame accent="info">
       <main
         role="status"
         aria-busy="true"
-        className="flex w-full flex-col items-center gap-5"
+        className="flex w-full flex-1 flex-col items-center justify-center gap-5"
       >
         <Ring product={product} failed={false} />
-        <div className="flex flex-col gap-1">
-          <h1 className="text-value font-semibold">Cargando la Terminal</h1>
-          <p className="text-note text-ink-2">
-            Fuente: Real (paper, Kraken público) · {productLabel(product)}
+        <div className="flex flex-col gap-2">
+          <h1 className="text-[30px] leading-9 font-semibold text-balance">
+            Cargando la Terminal
+          </h1>
+          <p className="text-[17px] leading-7 text-ink">
+            Fuente: {SOURCE} · {productLabel(product)}
           </p>
         </div>
-        <div className="flex w-full flex-col gap-2">
+        <div className="flex w-full max-w-md flex-col gap-3">
           <div
             aria-hidden="true"
-            className="h-1 w-full overflow-hidden rounded-full bg-surface-2"
+            className="h-2 w-full overflow-hidden rounded-full bg-surface-2"
           >
             <div
               className="h-full rounded-full bg-info transition-[width] duration-300 ease-linear"
               style={{ width: `${Math.round(share * 100)}%` }}
             />
           </div>
-          <p className="text-hint text-ink-2">
-            Esperando respuesta del servidor · {seconds} s
+          <p className="text-[15px] leading-6 text-ink">
+            Esperando respuesta del servidor · {seconds}&nbsp;s
           </p>
         </div>
         {elapsed >= slowMs ? (
-          <p className="rounded-sm border border-solid border-warn px-3 py-2 text-note text-warn">
+          <p className="max-w-md rounded-md border border-solid border-warn px-4 py-3 text-[15px] leading-6 text-pretty text-warn">
             Está tardando más de lo normal: el servidor puede estar arrancando o
             muy ocupado. Se sigue intentando.
           </p>
@@ -125,33 +139,37 @@ export function TerminalUnavailable({
   }, [])
   const wait = Math.max(0, Math.ceil((retryAtMs - now) / 1000))
   return (
-    <Frame>
-      <main role="alert" className="flex w-full flex-col items-center gap-5">
+    <Frame accent="short">
+      <main
+        role="alert"
+        className="flex w-full flex-1 flex-col items-center justify-center gap-5"
+      >
         <Ring product={product} failed />
-        <div className="flex flex-col gap-1">
-          <h1 className="text-value font-semibold">
+        <div className="flex flex-col gap-2">
+          <h1 className="text-[30px] leading-9 font-semibold text-balance">
             Terminal de futuros no disponible
           </h1>
-          <p className="text-note text-ink-2">
-            No se pudo conectar con la fuente «Real (paper, Kraken público)». No
-            se cambió a otra fuente automáticamente.
+          <p className="text-[17px] leading-7 text-pretty text-ink">
+            No se pudo conectar con la fuente de datos.
+            <br />
+            Fuente: {SOURCE}
           </p>
         </div>
-        <p className="w-full rounded-sm border border-solid border-line bg-surface-2 px-3 py-2 text-left text-note text-ink">
+        <p className="w-full max-w-md rounded-md border border-solid border-line-strong bg-surface-2 px-4 py-3 text-[16px] leading-6 text-pretty text-ink">
           Motivo: {reason}
         </p>
-        <div className="flex flex-col items-center gap-2">
-          <p className="text-hint text-ink-2">
-            Reintentando automáticamente
-            {wait > 0 ? ` en ${wait} s` : ' ahora'} · intento {attempts}
-          </p>
+        <div className="flex flex-col items-center gap-4">
           <button
             type="button"
             onClick={onRetry}
-            className="min-h-8 rounded-sm border border-solid border-line-strong bg-surface-2 px-4 text-note text-ink hover:bg-surface-hover focus-visible:outline-2 focus-visible:outline-info focus-visible:outline-offset-2"
+            className="min-h-12 rounded-md border-0 bg-info px-10 text-[18px] font-semibold text-canvas hover:brightness-110 focus-visible:outline-2 focus-visible:outline-ink focus-visible:outline-offset-2"
           >
             Reintentar ahora
           </button>
+          <p className="text-[15px] leading-6 text-ink">
+            Reintento automático
+            {wait > 0 ? ` en ${wait}\u00a0s` : ' ahora'} · intento {attempts}
+          </p>
         </div>
       </main>
     </Frame>

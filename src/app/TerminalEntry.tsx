@@ -21,11 +21,13 @@ export const TERMINAL_SLOW_MS = 4_000
 function describeBootstrapFailure(error: unknown): string {
   const status = (error as { status?: unknown } | null)?.status
   if (typeof status === 'number')
-    return `El servidor respondió con el error ${status}. Mirá la terminal donde corre pnpm dev: ahí aparece el motivo.`
+    return status === 502 || status === 503 || status === 504
+      ? `El servidor está arrancando o sobrecargado (error ${status}). Suele resolverse solo en unos segundos.`
+      : `El servidor tuvo un problema interno (error ${status}).`
   if (error instanceof DOMException && error.name === 'AbortError')
-    return `El servidor no respondió en ${TERMINAL_BOOTSTRAP_TIMEOUT_MS / 1000} segundos. Puede estar arrancando o muy ocupado (por ejemplo, descargando datos). Se reintenta solo.`
+    return `El servidor tardó más de ${TERMINAL_BOOTSTRAP_TIMEOUT_MS / 1000} segundos en responder. Probablemente esté arrancando o muy ocupado.`
   if (error instanceof TypeError)
-    return 'No se pudo alcanzar el servidor. Verificá que pnpm run dev esté corriendo.'
+    return 'No se pudo alcanzar el servidor. Puede estar apagado o reiniciándose.'
   return error instanceof Error && error.message
     ? error.message
     : 'Error desconocido al pedir los datos al servidor.'

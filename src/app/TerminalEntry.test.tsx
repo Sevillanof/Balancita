@@ -116,7 +116,7 @@ describe('TerminalEntry', () => {
     stubFetch(() => ({ status: 503 }))
     render(<TerminalEntry />)
     expect(await screen.findByRole('alert')).toHaveTextContent(
-      'Motivo: El servidor respondió con el error 503',
+      'Motivo: El servidor está arrancando o sobrecargado (error 503)',
     )
   })
 
