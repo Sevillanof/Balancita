@@ -248,7 +248,7 @@ export default function StrategiesPage({
                     {standings.get(row.id)?.meanBp != null && (
                       <small
                         className="ml-auto text-label leading-normal text-ink-2 tabular-nums"
-                        title="Neto por operación del último test"
+                        title="Neto por operación de la última práctica del registro (Testear), no de la Prueba rápida"
                       >
                         {signedAmount(standings.get(row.id)?.meanBp ?? null, 1)}{' '}
                         pb

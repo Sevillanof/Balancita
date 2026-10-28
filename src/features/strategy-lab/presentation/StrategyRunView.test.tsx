@@ -487,6 +487,34 @@ describe('StrategyRunView actions', () => {
     expect(screen.queryByText(/Velas de la prueba/)).toBeNull()
   })
 
+  it('while the photos are prepared there is no empty progress bar', async () => {
+    const quick = {
+      status: vi.fn(async () => ({
+        state: 'running',
+        snapshots: 300,
+        note: 'n',
+        phase: 'fotos',
+        updated_ms: Date.now(),
+      })),
+      start: vi.fn(),
+    } as unknown as import('../infrastructure/quick-api.ts').QuickApi
+    render(
+      <StrategyRunView
+        strategyId="qwen-live"
+        strategyName="Qwen en vivo"
+        version={1}
+        kind="qwen_live"
+        gate={gateWith(overview([]))}
+        visual={visualWith()}
+        quick={quick}
+      />,
+    )
+    expect(
+      await screen.findByText(/preparando las fotos del pasado/),
+    ).toBeInTheDocument()
+    expect(screen.queryByRole('progressbar')).toBeNull()
+  })
+
   it('the quick test lets you pick a variant and compares the finished ones', async () => {
     const user = userEvent.setup()
     const summary = (net: number) => ({

@@ -936,12 +936,15 @@ export default function StrategyRunView({
             {titleOf(strategyName)} <small>v{version}</small>
           </p>
           <p className={RUN.hint}>
-            {formulaModel
-              ? `Solo la fórmula, sin Qwen · ${DAY_FORMAT.format(formulaModel.fromMs)} – ${DAY_FORMAT.format(formulaModel.toMs)} · ${amount(formulaModel.trades.length, 0)} operaciones`
-              : lastRun
-                ? `Prueba mostrada · ${runName(lastRun)}`
-                : 'Sin prueba terminada con operaciones guardadas'}
+            {formulaModel && busyQuick
+              ? `Resultado anterior${usedLevels ? ` (maestro ${usedLevels.maestro}, portero ${usedLevels.portero})` : ''} · probando maestro ${exigencia.maestro}, portero ${exigencia.portero}…`
+              : formulaModel
+                ? `Solo la fórmula, sin Qwen · ${DAY_FORMAT.format(formulaModel.fromMs)} – ${DAY_FORMAT.format(formulaModel.toMs)} · ${amount(formulaModel.trades.length, 0)} operaciones`
+                : lastRun
+                  ? `Prueba mostrada · ${runName(lastRun)}`
+                  : 'Sin prueba terminada con operaciones guardadas'}
             {usedLevels &&
+              !busyQuick &&
               ` · Exigencia: maestro ${usedLevels.maestro}, portero ${usedLevels.portero}${usedLevels.maestro === EXIGENCIA_PAPER && usedLevels.portero === EXIGENCIA_PAPER ? ' (como paper)' : ''}`}
             {running && ' · hay una prueba en curso'}
           </p>
@@ -1222,52 +1225,62 @@ export default function StrategyRunView({
         </p>
       )}
 
-      {gatePanel ? (
-        <RunVerdict
-          trades={data.trades}
-          product={data.product}
-          closes={(data.full.candles?.candles ?? []).map((c) =>
-            Number(c.close),
-          )}
-        />
-      ) : formulaModel ? (
-        <RunVerdict
-          trades={formulaModel.trades}
-          product={formulaModel.product}
-          closes={formulaModel.closes}
-        />
-      ) : null}
-      {kpiRow}
-      {gatePanel ? (
-        <MarketTradesChart
-          product={data.product}
-          candles={data.candles?.candles ?? []}
-          view={data.view}
-          trades={data.trades}
-          selected={selected}
-          onSelect={(trade) => void select(trade)}
-          onShowAll={showAll}
-        />
-      ) : formulaModel ? (
-        <MarketTradesChart
-          product={formulaModel.product}
-          candles={formulaModel.candles}
-          view={formulaModel.selected ? 'zoom' : 'full'}
-          trades={formulaModel.trades}
-          selected={formulaModel.selected}
-          onSelect={formulaModel.select}
-          onShowAll={formulaModel.showAll}
-        />
-      ) : (
-        hasQuick &&
-        (busyQuick || (data === null && state.kind !== 'loading')) && (
-          <p className={RUN.empty} data-testid="run-empty-panel">
-            {busyQuick
-              ? 'Probando… el resultado con precios y operaciones aparece acá cuando termina.'
-              : 'Todavía no hay resultados con precios y operaciones. Tocá «Probar» y elegí «Solo la fórmula» para ver cómo le habría ido en el pasado.'}
-          </p>
-        )
-      )}
+      <div
+        className={
+          busyQuick && formulaShown
+            ? 'grid min-w-0 gap-3 opacity-60'
+            : 'contents'
+        }
+        data-testid="run-results"
+        data-previous={busyQuick && formulaShown ? 'true' : undefined}
+      >
+        {gatePanel ? (
+          <RunVerdict
+            trades={data.trades}
+            product={data.product}
+            closes={(data.full.candles?.candles ?? []).map((c) =>
+              Number(c.close),
+            )}
+          />
+        ) : formulaModel ? (
+          <RunVerdict
+            trades={formulaModel.trades}
+            product={formulaModel.product}
+            closes={formulaModel.closes}
+          />
+        ) : null}
+        {kpiRow}
+        {gatePanel ? (
+          <MarketTradesChart
+            product={data.product}
+            candles={data.candles?.candles ?? []}
+            view={data.view}
+            trades={data.trades}
+            selected={selected}
+            onSelect={(trade) => void select(trade)}
+            onShowAll={showAll}
+          />
+        ) : formulaModel ? (
+          <MarketTradesChart
+            product={formulaModel.product}
+            candles={formulaModel.candles}
+            view={formulaModel.selected ? 'zoom' : 'full'}
+            trades={formulaModel.trades}
+            selected={formulaModel.selected}
+            onSelect={formulaModel.select}
+            onShowAll={formulaModel.showAll}
+          />
+        ) : (
+          hasQuick &&
+          (busyQuick || (data === null && state.kind !== 'loading')) && (
+            <p className={RUN.empty} data-testid="run-empty-panel">
+              {busyQuick
+                ? 'Probando… el resultado con precios y operaciones aparece acá cuando termina.'
+                : 'Todavía no hay resultados con precios y operaciones. Tocá «Probar» y elegí «Solo la fórmula» para ver cómo le habría ido en el pasado.'}
+            </p>
+          )
+        )}
+      </div>
       {shown && (
         <VectorbtReportPanel
           key={shown.id}
@@ -1584,6 +1597,13 @@ function QuickProgress({ state }: { state: QuickState }) {
   const text = asking
     ? `Prueba rápida · ${answered} de ${total} fotos · ${Math.round(percent)} %${left ? ` · faltan unos ${left}` : ''}`
     : 'Prueba rápida · preparando las fotos del pasado…'
+  // Preparing the photos has no measurable progress: say so instead of drawing an empty bar
+  if (!asking)
+    return (
+      <p className={RUN.progressText} role="status">
+        <span>{text}</span>
+      </p>
+    )
   return (
     <RunProgress
       label="Progreso de la prueba rápida"
