@@ -57,7 +57,7 @@ def exam_start_ms(cfg):
     return max(qt.date_ms(practice["from"]), qt.date_ms(exam["from"]) if exam.get("from") else 0)
 
 
-def make_photos(history, cfg, product, holdout_ms, texts=True, market=None):
+def make_photos(history, cfg, product, holdout_ms, texts=True, market=None, start_ms=None, moves=True):
     """Every moment the trader would have asked Qwen while flat, with its STATE, the mirrored STATE and the price moves (bp)
     over each horizon. Only candles before the holdout are read, and a moment whose horizon would reach it is dropped.
 
@@ -66,9 +66,11 @@ def make_photos(history, cfg, product, holdout_ms, texts=True, market=None):
     version 8 operation (``_operation``).
 
     ``texts=False`` (the formula-only test, no Qwen): the photos carry no STATE text nor sheet numbers, only the operation.
+    ``start_ms`` replaces the start of the exam range (the replay of the live scheme over any old period) and ``moves=False``
+    keeps the photos whose later horizons are not known (only the operation matters there).
     ``market`` (a list): receives the hourly closes ``[t_ms, close]`` of the exam range, to compare with what really happened."""
     practice, exam = cfg["practice"], cfg["exam"]
-    start = exam_start_ms(cfg)
+    start = exam_start_ms(cfg) if start_ms is None else start_ms
     horizons = [m * MINUTE_MS for m in exam["horizons_min"]]
     bars = history.bars(product, start - practice["warmup_days"] * DAY_MS, holdout_ms)
     if len(bars) < (holdout_ms - (start - practice["warmup_days"] * DAY_MS)) // BAR_MS * 0.98:
@@ -111,10 +113,11 @@ def make_photos(history, cfg, product, holdout_ms, texts=True, market=None):
     out = []
     for t_ms, reasons, state, mirror, numbers, facts in found:
         later = [closes.get(t_ms + h) for h in horizons]
-        if None in later:
+        if None in later and moves:
             continue
         photo = {"product": product, "t_ms": t_ms, "wake": reasons, "state_text": state, "mirror_text": mirror,
-                 "moves": {str(m): (price / closes[t_ms] - 1) * 1e4 for m, price in zip(exam["horizons_min"], later)},
+                 "moves": {str(m): (price / closes[t_ms] - 1) * 1e4 for m, price in zip(exam["horizons_min"], later)
+                           if price is not None},
                  "cost_bp": cost}
         if numbers is not None:
             photo["ficha"] = numbers                                    # the number of each line, to measure what Qwen reads
@@ -150,7 +153,8 @@ def _v8_exit(cfg, t_ms, side, readings, closes, cost, weak):
     c0, c1 = closes.get(t_ms), closes.get(exit_ms)
     if c0 is None or c1 is None:
         return None
-    return {"salida_ms": exit_ms, "motivo": why, "horas": (exit_ms - t_ms) / qt.HOUR_MS, "neto_bp": side * (c1 / c0 - 1) * 1e4 - cost}
+    return {"salida_ms": exit_ms, "motivo": why, "horas": (exit_ms - t_ms) / qt.HOUR_MS, "neto_bp": side * (c1 / c0 - 1) * 1e4 - cost,
+            "entrada_px": c0, "salida_px": c1}
 
 
 def _operation(cfg, t_ms, readings, closes, cost, weak):
@@ -727,6 +731,38 @@ def analyse_formula(photos, cfg):
             "curvas": {"formula": _trade_list(formula), "maestro_fuerte": _trade_list(maestro),
                        "siempre_largo": _trade_list([(r, 1) for r, _ in formula]),
                        "siempre_corto": _trade_list([(r, -1) for r, _ in formula])}}
+
+
+def scheme_trades(history, cfg, product, start_ms, end_ms, holdout_ms, funding=None):
+    """The live scheme replayed over old candles, without Qwen: every entry of the formulas (strong maestro and the portero in
+    favour, one position per product), closed when the maestro turns or at the safety limit, as the live operator does. Trades as
+    the strategy gate reads them; only those that opened at or after ``start_ms`` and closed by ``end_ms``. Nothing at or after
+    the holdout is read."""
+    end_ms = min(end_ms, holdout_ms)
+    start_ms = max(start_ms, qt.date_ms(cfg["practice"]["from"]))
+    if start_ms >= end_ms or product not in cfg["products"]:
+        return []
+    hold = cfg["guardrails"]["max_hold_min"]
+    reach = min(holdout_ms, end_ms + (hold * MINUTE_MS if hold else 10 * DAY_MS) + DAY_MS)
+    photos = [p for p in make_photos(history, cfg, product, reach, texts=False, start_ms=start_ms, moves=False)
+              if p["t_ms"] < end_ms]
+    side = lambda r: 1 if r["operacion"]["maestro"] > 0 else -1
+    chosen = _one_at_a_time([(r, side(r)) for r in photos if r.get("operacion") and abs(r["operacion"]["maestro"]) == 2
+                             and r["operacion"]["portero_si"]])
+    line = qt.FundingLine([(r[0], r[1]) for r in funding]) if funding else None
+    out = []
+    for r, s in chosen:
+        o = _op_side(r, s)
+        if o["salida_ms"] > end_ms:
+            continue                                     # still open at the end of the window: not counted
+        paid, covered = line.accrue(r["t_ms"], o["salida_ms"], 100.0, s > 0) if line is not None else (0.0, 0)
+        held = o["salida_ms"] - r["t_ms"]
+        out.append({"side": "LONG" if s > 0 else "SHORT", "entry_time_ms": r["t_ms"], "exit_time_ms": o["salida_ms"],
+                    "net_bp": o["neto_bp"] - float(paid) / 100.0 * 1e4, "entry_price": str(o["entrada_px"]),
+                    "exit_price": str(o["salida_px"]), "funding_usd": float(paid),
+                    "funding_status": "complete" if covered >= held else ("partial" if covered > 0 else "unknown"),
+                    "exit_reason": o["motivo"], "source": "formula"})
+    return out
 
 
 def run_formula(history, cfg, holdout_ms, state_path, variant, *, log=print):

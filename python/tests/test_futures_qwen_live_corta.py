@@ -265,7 +265,7 @@ class OperationPhotosTests(unittest.TestCase):
 
 
 def op_row(t_ms, action, mirror, maestro, portero, long_net, short_net, why="vuelta", p=0.9):
-    leg = lambda net: {"salida_ms": t_ms + 4 * qt.HOUR_MS, "motivo": why, "horas": 4.0, "neto_bp": net}
+    leg = lambda net: {"salida_ms": t_ms + 4 * qt.HOUR_MS, "motivo": why, "horas": 4.0, "neto_bp": net, "entrada_px": 100.0, "salida_px": 101.0}
     return {"snap_id": "exam:PF_XBTUSD:{}".format(t_ms), "product": "PF_XBTUSD", "t_ms": t_ms, "real_action": action, "real_p": p, "mirror_action": mirror,
             "mirror_p": p, "cost_bp": 10.0, "moves": {"720": 0.0, "1440": 0.0, "2880": 0.0},
             "operacion": {"maestro": maestro, "puntaje": 0.1 * maestro, "portero_si": portero, "portero_p": 0.7,
@@ -400,3 +400,39 @@ class FormulaOnlyTests(unittest.TestCase):
         self.assertTrue(market)
         self.assertTrue(all(t % qt.HOUR_MS == 0 and c > 0 for t, c in market))
         self.assertTrue(all(not p for p in [saved["summary"]["spearman"]]))
+
+
+class SchemeReplayTests(unittest.TestCase):
+    def setUp(self):
+        self.cfg = exam_cfg()
+        self.cfg["products"] = ["PF_XBTUSD"]
+        self.start = qt.date_ms(self.cfg["practice"]["from"])
+
+    def run_with(self, photos, **kwargs):
+        from unittest import mock
+        history = MemHistory()
+        with mock.patch.object(ex, "make_photos", return_value=photos) as made:
+            args = dict(start_ms=self.start, end_ms=self.start + 30 * qt.DAY_MS, holdout_ms=HOLDOUT)
+            args.update(kwargs)
+            out = ex.scheme_trades(history, self.cfg, kwargs.pop("product", "PF_XBTUSD"), args["start_ms"], args["end_ms"],
+                                   args["holdout_ms"])
+        return out, made
+
+    def test_every_entry_of_the_formulas_opens_one_position_at_a_time_and_counts_only_what_closed_in_the_window(self):
+        day = qt.DAY_MS
+        photos = [op_row(self.start + 1 * day, "ESPERAR", None, 2, True, 30.0, -50.0),
+                  op_row(self.start + 1 * day + qt.HOUR_MS, "ESPERAR", None, 2, True, 99.0, -99.0),     # position still open
+                  op_row(self.start + 3 * day, "ESPERAR", None, -2, True, 10.0, 25.0, why="tiempo"),
+                  op_row(self.start + 5 * day, "ESPERAR", None, 2, False, 5.0, -5.0),                    # the portero says no
+                  op_row(self.start + 30 * day - qt.HOUR_MS, "ESPERAR", None, 2, True, 7.0, -7.0)]       # closes after the window
+        trades, made = self.run_with(photos)
+        self.assertEqual([(t["side"], t["net_bp"], t["exit_reason"]) for t in trades],
+                         [("LONG", 30.0, "vuelta"), ("SHORT", 25.0, "tiempo")])
+        self.assertEqual(trades[0]["source"], "formula")
+        self.assertEqual(made.call_args.kwargs["texts"], False)         # no Qwen, no STATE text
+
+    def test_nothing_is_replayed_for_a_product_that_is_not_operated_or_from_the_holdout_on(self):
+        photos = [op_row(self.start + qt.DAY_MS, "ESPERAR", None, 2, True, 30.0, -50.0)]
+        self.assertEqual(ex.scheme_trades(MemHistory(), self.cfg, "PF_ETHUSD", 0, HOLDOUT, HOLDOUT), [])
+        self.assertEqual(ex.scheme_trades(MemHistory(), self.cfg, "PF_XBTUSD", HOLDOUT, HOLDOUT + 10, HOLDOUT), [])
+        self.assertTrue(photos)

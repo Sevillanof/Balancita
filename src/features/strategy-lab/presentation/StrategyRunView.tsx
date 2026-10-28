@@ -563,11 +563,14 @@ export default function StrategyRunView({
     : untriedStages(overview?.runs ?? [], stageList)
   const count = Math.min(Math.max(howMany, 1), Math.max(untried.length, 1))
   const plan = untried.slice(0, count)
-  const testNote = repeatable
-    ? 'Repetir las etapas del mercado cuantas veces quieras'
-    : untried.length > 0
-      ? 'Probar la estrategia en etapas distintas del mercado'
-      : 'Ya la probaste en todas las etapas del mercado'
+  const testNote =
+    kind === 'qwen_live'
+      ? 'Repite sobre velas viejas el esquema que opera en paper (decide la fórmula, sin Qwen): rápido y sin calentar la Mac'
+      : repeatable
+        ? 'Repetir las etapas del mercado cuantas veces quieras'
+        : untried.length > 0
+          ? 'Probar la estrategia en etapas distintas del mercado'
+          : 'Ya la probaste en todas las etapas del mercado'
 
   /** Runs the stages one after the other; each waits for the previous test to end. */
   const runSeries = async (stages: MarketStage[]) => {
@@ -868,7 +871,7 @@ export default function StrategyRunView({
                   quickVariants.find((v) => v.id === quickVariant)?.kind ===
                   'formula'
                     ? 'Prueba solo la fórmula (sin Qwen) sobre todo el período del examen: lee velas guardadas, tarda poco y no calienta la Mac.'
-                    : 'Pregunta a Qwen solo sobre unas 150 fotos del pasado (unos 7 minutos) para filtrar un cambio de prompt o modelo. Es orientativa: no es el Examen.'
+                    : 'Pregunta a Qwen sobre unas 150 fotos del pasado para medir su opinión: tarda entre 25 y 40 minutos y calienta la Mac. Para probar el esquema completo sin Qwen, rápido, usá Testear. Es orientativa: no es el Examen.'
                 }
               >
                 {quickRunning ? 'Prueba rápida en curso…' : 'Prueba rápida'}

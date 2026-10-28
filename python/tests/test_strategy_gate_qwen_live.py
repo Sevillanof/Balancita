@@ -57,7 +57,7 @@ class QwenLiveTradesTests(unittest.TestCase):
         self.live = os.path.join(self.dir.name, "live.sqlite")
 
     def source(self):
-        return models.QwenLiveTrades(self.live, self.exam)
+        return models.QwenLiveTrades(self.live, self.exam, replay=lambda *a: [])
 
     def test_is_a_model_subject_with_a_stable_spec(self):
         self.assertTrue(models.is_model(models.QWEN_LIVE_ID))
@@ -77,7 +77,7 @@ class QwenLiveTradesTests(unittest.TestCase):
     def test_photos_follow_the_lean_extremes_even_when_qwen_always_waits(self):
         leans = [0.4, 0.1, -0.1, 0.05, -0.05, -0.4, 0.0, 0.02, -0.02, 0.01]
         photo_db(self.exam, [(T0 + 5 * HOUR * i, lean, 50.0 if lean > 0 else -50.0) for i, lean in enumerate(leans)])
-        got, _ = self.source()(None, "PF_XBTUSD", None, [], [], [], T0, T0 + 80 * HOUR, lambda f: None)
+        got = self.source().photo_trades("PF_XBTUSD", [])
         self.assertEqual([(t["side"], round(t["net_bp"], 6)) for t in got], [("LONG", 40.0), ("SHORT", 40.0)])
         self.assertEqual(got[0]["exit_time_ms"] - got[0]["entry_time_ms"], models.LIVE_HOLD_MS)
         self.assertEqual({t["funding_status"] for t in got}, {"unknown"})
@@ -86,12 +86,12 @@ class QwenLiveTradesTests(unittest.TestCase):
         leans = [0.4, 0.1, -0.1, 0.05, -0.05, -0.4, 0.0, 0.02, -0.02, 0.01]
         photo_db(self.exam, [(T0 + 5 * HOUR * i, lean, 50.0 if lean > 0 else -50.0) for i, lean in enumerate(leans)],
                  mirrored=False)
-        got, _ = self.source()(None, "PF_XBTUSD", None, [], [], [], T0, T0 + 80 * HOUR, lambda f: None)
+        got = self.source().photo_trades("PF_XBTUSD", [])
         self.assertEqual([(t["side"], round(t["net_bp"], 6)) for t in got], [("LONG", 40.0), ("SHORT", 40.0)])
 
     def test_photos_asked_with_another_protocol_never_count(self):
         photo_db(self.exam, [(T0, 0.4, 50.0), (T0 + 6 * HOUR, -0.4, -30.0)], config_hash="otro-protocolo")
-        got, _ = self.source()(None, "PF_XBTUSD", None, [], [], [], T0, T0 + 80 * HOUR, lambda f: None)
+        got = self.source().photo_trades("PF_XBTUSD", [])
         self.assertEqual(got, [])
 
     def test_kronos_backtest_rows_are_never_evidence(self):
@@ -119,8 +119,18 @@ class QwenLiveTradesTests(unittest.TestCase):
     def test_photo_positions_do_not_overlap(self):
         photo_db(self.exam, [(T0, 0.4, 50.0), (T0 + HOUR, 0.39, 80.0), (T0 + 6 * HOUR, -0.4, -30.0),
                              (T0 + 12 * HOUR, 0.0, 0.0), (T0 + 18 * HOUR, 0.0, 0.0)])
-        got, _ = self.source()(None, "PF_XBTUSD", None, [], [], [], T0, T0 + 80 * HOUR, lambda f: None)
+        got = self.source().photo_trades("PF_XBTUSD", [])
         self.assertEqual([t["entry_time_ms"] for t in got], [T0, T0 + 6 * HOUR])
+
+    def test_the_window_is_judged_by_the_replay_of_the_live_scheme_plus_the_live_trades(self):
+        asked = []
+        replay = lambda product, funding, start, end: asked.append((product, start, end)) or [
+            {"side": "LONG", "entry_time_ms": T0, "exit_time_ms": T0 + HOUR, "net_bp": 5.0, "source": "formula"}]
+        live_db(self.live, [("closed", LIVE_T0, LIVE_T0 + HOUR, 12.5)])
+        got, _ = models.QwenLiveTrades(self.live, self.exam, replay=replay)(
+            None, "PF_XBTUSD", None, [], [], [], T0, LIVE_T0 + 10 * HOUR, lambda f: None)
+        self.assertEqual(asked, [("PF_XBTUSD", T0, LIVE_T0 + 10 * HOUR)])
+        self.assertEqual([(t["source"], t["net_bp"]) for t in got], [("formula", 5.0), ("live", 12.5)])
 
     def test_missing_files_give_no_trades(self):
         got, _ = self.source()(None, "PF_XBTUSD", None, [], [], [], T0, T0 + HOUR, lambda f: None)

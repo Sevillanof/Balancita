@@ -183,14 +183,27 @@ class RecordedTrades:
         return sorted(trades, key=lambda t: t["entry_time_ms"]), 0
 
 
-LIVE_NOTE = ("Qwen en vivo se juzga sin llamar al modelo. Práctica (antes de la fecha de corte): las \"fotos\" del pasado "
-             "que Qwen ya contestó con la configuración vigente (examen por fotos con la ficha de 8 factores, `exam --version "
-             "live`, exam-live.sqlite): largo en el quinto más inclinado a largo y corto en el quinto más inclinado a corto "
-             "(inclinación = suma de los gradientes de la ficha, real contra espejo, sobre 12), como operaciones de 4 h con costos "
-             "y funding reales, una a la vez por producto. Examen (desde la fecha de corte): sus operaciones reales en paper, "
-             "cerradas; las abiertas no cuentan y Qwen sigue operando mientras tanto. Las fotos contestadas con otra configuración "
-             "no cuentan: al cambiar la configuración hay que volver a correr el examen de fotos. Si las fotos todavía no tienen "
-             "la pregunta espejo, se ordenan por la inclinación simple (sin descontar el vicio del modelo).")
+LIVE_NOTE = ("Qwen en vivo se juzga sin llamar al modelo. Práctica (antes de la fecha de corte): se repite sobre las velas viejas "
+             "el esquema que opera en paper (la fórmula decide: maestro fuerte y portero a favor, una posición por producto, sale "
+             "cuando el maestro se da vuelta o por el cierre de seguridad), con costos y funding reales. Es lo que decide la "
+             "fórmula, no la opinión de Qwen (esa se mide aparte, en la Prueba rápida). Examen (desde la fecha de corte): sus "
+             "operaciones reales en paper, cerradas; las abiertas no cuentan.")
+
+def scheme_replay(product_id, funding, start_ms, end_ms):
+    """The live scheme (formula decides, safety close, exit when the maestro turns) over the old candles, no model needed.
+    Candles come from the exam's cache (fetched once from Kraken's public API). Never reaches the holdout."""
+    from . import futures_qwen_live as live
+    from . import futures_qwen_trader as qt
+    from . import futures_qwen_trader_exam as exam
+    cfg = live.apply_overrides(qt.load_config(qt.CONFIG_PATH_LIVE))
+    holdout_ms = qt.load_holdout_ms()
+    if start_ms >= holdout_ms or product_id not in cfg["products"]:
+        return []
+    history = qt.History(qt.DEFAULT_CACHE, holdout_ms)
+    first = qt.date_ms(cfg["practice"]["from"]) - cfg["practice"]["warmup_days"] * qt.DAY_MS
+    for name in dict.fromkeys(list(cfg["products"]) + list(cfg.get("state_context") or ())):
+        history.prefetch(name, first, holdout_ms, log=lambda *a: None)
+    return exam.scheme_trades(history, cfg, product_id, start_ms, end_ms, holdout_ms, funding)
 
 
 class QwenLiveTrades:
@@ -198,8 +211,10 @@ class QwenLiveTrades:
 
     note = LIVE_NOTE
 
-    def __init__(self, live_db_path, exam_db_path):
+    def __init__(self, live_db_path, exam_db_path, replay=None):
         self.live_db_path, self.exam_db_path = live_db_path, exam_db_path
+        self.replay = replay or scheme_replay
+
 
     def photo_trades(self, product_id, funding):
         """The extremes of the lean (the exam's own criterion): long on the fifth of photos where the numbers lean most
@@ -274,7 +289,7 @@ class QwenLiveTrades:
         return out
 
     def __call__(self, spec, product_id, tick_size, ones, fives, funding, start_ms, end_ms, chunk):
-        trades = self.photo_trades(product_id, funding) + self.live_trades(product_id)
+        trades = self.replay(product_id, funding, start_ms, end_ms) + self.live_trades(product_id)
         chunk(1.0)
         trades = [t for t in trades if start_ms <= t["entry_time_ms"] and t["exit_time_ms"] <= end_ms]
         return sorted(trades, key=lambda t: t["entry_time_ms"]), 0
