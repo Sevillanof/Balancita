@@ -4,13 +4,12 @@ import { expect, it, vi } from 'vitest'
 import StrategyRunView from './StrategyRunView.tsx'
 import type { GateApi } from '../infrastructure/gate-api.ts'
 import type { RunVisualApi } from '../infrastructure/run-visual-api.ts'
-import { smallAnalyzerApi } from '../testing/analyzer-fixture.ts'
 
 vi.mock('../../trading-view/presentation/ApprovedTerminalChart.tsx', () => ({
   default: () => <div data-testid="chart" />,
 }))
 
-it('el botón «Analizador de señales» abre el modal y al cerrar devuelve el foco', async () => {
+it('un solo botón «Probar» con las formas de probar adentro, y sin el analizador', async () => {
   const user = userEvent.setup()
   render(
     <StrategyRunView
@@ -27,18 +26,21 @@ it('el botón «Analizador de señales» abre el modal y al cerrar devuelve el f
         } as unknown as GateApi
       }
       visual={{} as RunVisualApi}
-      analyzer={smallAnalyzerApi()}
       kind="rules"
     />,
   )
-  const button = await screen.findByRole('button', {
-    name: 'Analizador de señales',
-  })
-  await user.click(button)
+  const probe = await screen.findByRole('button', { name: 'Probar ▾' })
+  expect(probe).toHaveAttribute('aria-expanded', 'false')
+  await user.click(probe)
+  expect(probe).toHaveAttribute('aria-expanded', 'true')
+  expect(screen.getByRole('button', { name: 'Testear' })).toBeInTheDocument()
   expect(
-    await screen.findByRole('dialog', { name: 'Analizador de señales' }),
+    screen.getByRole('button', { name: 'Explorar con VectorBT' }),
   ).toBeInTheDocument()
-  await user.keyboard('{Escape}')
-  expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
-  expect(button).toHaveFocus()
+  expect(
+    screen.queryByRole('button', { name: 'Analizador de señales' }),
+  ).toBeNull()
+  expect(screen.getByTestId('stage-where')).toHaveTextContent(
+    'En hipótesis. Todavía no tiene pruebas. Siguiente: Optimizar.',
+  )
 })
