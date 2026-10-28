@@ -1,10 +1,7 @@
 import { VBT } from './vectorbt-styles.ts'
 import { RUN } from './run-view-styles.ts'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import ResultsVisual, {
-  type VisualSeries,
-  type VisualTrade,
-} from './ResultsVisual.tsx'
+import ResultsVisual, { type VisualTrade } from './ResultsVisual.tsx'
 import ApprovedTerminalChart from '../../trading-view/presentation/ApprovedTerminalChart.tsx'
 import { amount } from '../../../shared/finance/format.ts'
 import { signedAmount } from '../domain/strategy-format.ts'
@@ -73,6 +70,7 @@ import RunProgress from './RunProgress.tsx'
 import VectorbtModal from './VectorbtModal.tsx'
 import MarketTradesChart from './MarketTradesChart.tsx'
 import RunVerdict from './RunVerdict.tsx'
+import { useFormulaModel } from './formula-model.ts'
 import VectorbtProgress from './VectorbtProgress.tsx'
 import VectorbtReportPanel from './VectorbtReportPanel.tsx'
 import VectorbtVariantLink from './VectorbtVariantLink.tsx'
@@ -615,6 +613,13 @@ export default function StrategyRunView({
   const quickRunning = quickState?.state === 'running'
   const quickVariants = quickState?.variants ?? []
   const [detailsOpen, setDetailsOpen] = useState(false)
+  // The test of the formula alone has no run: its operations and hourly prices come in its saved result.
+  const formulaOf =
+    quickVariants.find(
+      (variant) => variant.kind === 'formula' && variant.summary?.formula,
+    )?.summary?.formula ??
+    (quickState?.state === 'done' ? quickState.summary?.formula : undefined) ??
+    null
   useEffect(() => {
     if (!hasQuick) return
     let cancelled = false
@@ -784,6 +789,85 @@ export default function StrategyRunView({
       .catch(() => setCopied(false))
   }
 
+  const gatePanel =
+    data !== null &&
+    data.tradesDone &&
+    data.trades.length > 0 &&
+    (data.candles?.candles.length ?? 0) > 1
+  const formulaModel = useFormulaModel(gatePanel ? null : formulaOf)
+  const figs = formulaModel?.figures ?? null
+  const kpiRow = figs ? (
+    <div className={RUN.kpis} data-testid="run-kpis">
+      <Kpi
+        label="Operaciones cerradas"
+        value={amount(figs.trades, 0)}
+        note="Solo la fórmula, sin Qwen"
+        tone={null}
+      />
+      <Kpi
+        label="Neto por operación"
+        value={bp(figs.meanBp)}
+        note="Después de costos"
+        tone={figs.meanBp < 0 ? 'bad' : null}
+      />
+      <Kpi
+        label="Períodos positivos"
+        value={`${figs.positivePeriods} / ${figs.periods}`}
+        note="Tramos iguales del período"
+        tone={null}
+      />
+      <Kpi
+        label="Frente al azar"
+        value={`${amount(figs.percentile, 0)} %`}
+        note="1.000 sorteos con los lados al revés"
+        tone={null}
+      />
+    </div>
+  ) : (
+    <div className={RUN.kpis} data-testid="run-kpis">
+      <Kpi
+        label="Operaciones cerradas"
+        value={summary ? amount(summary.trades, 0) : '—'}
+        note={
+          summary
+            ? `${summary.trades >= summary.min_trades ? '✓' : '✗'} Mínimo: ${summary.min_trades}`
+            : ''
+        }
+        tone={summary && summary.trades < summary.min_trades ? 'bad' : null}
+      />
+      <Kpi
+        label="Neto por operación"
+        value={summary ? bp(summary.mean_bp) : '—'}
+        note={
+          summary
+            ? `Después de costes${summary.funding_share != null && summary.funding_share < 0.95 ? ' · funding incompleto' : ''}`
+            : ''
+        }
+        tone={summary && (summary.mean_bp ?? 0) < 0 ? 'bad' : null}
+      />
+      <Kpi
+        label="Períodos positivos"
+        value={summary ? `${summary.positive_folds} / ${summary.folds}` : '—'}
+        note={
+          summary
+            ? `Mínimo: ${Math.ceil(summary.min_positive_fold_share * summary.folds - 1e-9)} de ${summary.folds}`
+            : ''
+        }
+        tone={null}
+      />
+      <Kpi
+        label="Frente al azar"
+        value={
+          summary && summary.percentile != null
+            ? `${amount(summary.percentile, 0)} %`
+            : '—'
+        }
+        note={summary ? `Mínimo: percentil ${summary.min_percentile}` : ''}
+        tone={null}
+      />
+    </div>
+  )
+
   return (
     <section
       className={RUN.card}
@@ -796,9 +880,11 @@ export default function StrategyRunView({
             {titleOf(strategyName)} <small>v{version}</small>
           </p>
           <p className={RUN.hint}>
-            {lastRun
-              ? `Prueba mostrada · ${runName(lastRun)}`
-              : 'Sin prueba terminada con operaciones guardadas'}
+            {formulaModel
+              ? `Solo la fórmula, sin Qwen · ${DAY_FORMAT.format(formulaModel.fromMs)} – ${DAY_FORMAT.format(formulaModel.toMs)} · ${amount(formulaModel.trades.length, 0)} operaciones`
+              : lastRun
+                ? `Prueba mostrada · ${runName(lastRun)}`
+                : 'Sin prueba terminada con operaciones guardadas'}
             {running && ' · hay una prueba en curso'}
           </p>
         </div>
@@ -1064,7 +1150,7 @@ export default function StrategyRunView({
         </p>
       )}
 
-      {data && data.tradesDone && data.trades.length > 0 && (
+      {gatePanel ? (
         <RunVerdict
           trades={data.trades}
           product={data.product}
@@ -1072,57 +1158,43 @@ export default function StrategyRunView({
             Number(c.close),
           )}
         />
-      )}
-      <div className={RUN.kpis} data-testid="run-kpis">
-        <Kpi
-          label="Operaciones cerradas"
-          value={summary ? amount(summary.trades, 0) : '—'}
-          note={
-            summary
-              ? `${summary.trades >= summary.min_trades ? '✓' : '✗'} Mínimo: ${summary.min_trades}`
-              : ''
-          }
-          tone={summary && summary.trades < summary.min_trades ? 'bad' : null}
+      ) : formulaModel ? (
+        <RunVerdict
+          trades={formulaModel.trades}
+          product={formulaModel.product}
+          closes={formulaModel.closes}
         />
-        <Kpi
-          label="Neto por operación"
-          value={summary ? bp(summary.mean_bp) : '—'}
-          note={
-            summary
-              ? `Después de costes${summary.funding_share != null && summary.funding_share < 0.95 ? ' · funding incompleto' : ''}`
-              : ''
-          }
-          tone={summary && (summary.mean_bp ?? 0) < 0 ? 'bad' : null}
+      ) : null}
+      {kpiRow}
+      {gatePanel ? (
+        <MarketTradesChart
+          product={data.product}
+          candles={data.candles?.candles ?? []}
+          view={data.view}
+          trades={data.trades}
+          selected={selected}
+          onSelect={(trade) => void select(trade)}
+          onShowAll={showAll}
         />
-        <Kpi
-          label="Períodos positivos"
-          value={summary ? `${summary.positive_folds} / ${summary.folds}` : '—'}
-          note={
-            summary
-              ? `Mínimo: ${Math.ceil(summary.min_positive_fold_share * summary.folds - 1e-9)} de ${summary.folds}`
-              : ''
-          }
-          tone={null}
+      ) : formulaModel ? (
+        <MarketTradesChart
+          product={formulaModel.product}
+          candles={formulaModel.candles}
+          view={formulaModel.selected ? 'zoom' : 'full'}
+          trades={formulaModel.trades}
+          selected={formulaModel.selected}
+          onSelect={formulaModel.select}
+          onShowAll={formulaModel.showAll}
         />
-        <Kpi
-          label="Frente al azar"
-          value={
-            summary && summary.percentile != null
-              ? `${amount(summary.percentile, 0)} %`
-              : '—'
-          }
-          note={summary ? `Mínimo: percentil ${summary.min_percentile}` : ''}
-          tone={null}
-        />
-      </div>
-      {scopeRun && (
-        <ul className={RUN.scope} data-testid="run-evaluation-scope">
-          {runScopeLines(scopeRun).map((line) => (
-            <li key={line.key} data-tone={line.tone ?? undefined}>
-              {line.text}
-            </li>
-          ))}
-        </ul>
+      ) : (
+        hasQuick &&
+        data === null &&
+        state.kind !== 'loading' && (
+          <p className={RUN.empty} data-testid="run-empty-panel">
+            Todavía no hay resultados con precios y operaciones. Tocá «Probar» y
+            elegí «Solo la fórmula» para ver cómo le habría ido en el pasado.
+          </p>
+        )
       )}
       {shown && (
         <VectorbtReportPanel
@@ -1137,8 +1209,25 @@ export default function StrategyRunView({
           problem={vbtProblem}
         />
       )}
-      <div className="grid gap-2.5" id="run-market">
-        {overview && !unknownToGate && (
+      <details
+        className="rounded-lg border border-solid border-line bg-canvas px-3.5 py-2.5"
+        data-testid="run-details"
+        open={detailsOpen}
+        onToggle={(event) => setDetailsOpen(event.currentTarget.open)}
+      >
+        <summary className="cursor-pointer text-note text-ink-2">
+          Ver velas y detalle de las operaciones
+        </summary>
+        {scopeRun && !formulaModel && (
+          <ul className={RUN.scope} data-testid="run-evaluation-scope">
+            {runScopeLines(scopeRun).map((line) => (
+              <li key={line.key} data-tone={line.tone ?? undefined}>
+                {line.text}
+              </li>
+            ))}
+          </ul>
+        )}
+        {overview && !unknownToGate && !formulaModel && (
           <div className={RUN.tabsWrap}>
             <div className={RUN.tabs} role="group" aria-label="Tramos probados">
               {fallbackRun && (
@@ -1176,27 +1265,6 @@ export default function StrategyRunView({
             </p>
           </div>
         )}
-        {data && data.trades.length > 0 && (
-          <MarketTradesChart
-            product={data.product}
-            candles={data.candles?.candles ?? []}
-            view={data.view}
-            trades={data.trades}
-            selected={selected}
-            onSelect={(trade) => void select(trade)}
-            onShowAll={showAll}
-          />
-        )}
-      </div>
-      <details
-        className="rounded-lg border border-solid border-line bg-canvas px-3.5 py-2.5"
-        data-testid="run-details"
-        open={detailsOpen}
-        onToggle={(event) => setDetailsOpen(event.currentTarget.open)}
-      >
-        <summary className="cursor-pointer text-note text-ink-2">
-          Ver velas y detalle de las operaciones
-        </summary>
         {hasQuick &&
           (quickState?.state === 'done' ||
             quickVariants.some((variant) => variant.summary)) && (
@@ -1207,179 +1275,181 @@ export default function StrategyRunView({
               <QuickComparison variants={quickVariants} />
             </div>
           )}
-        <div className={RUN.chartCard} id="run-candles">
-          <div className={RUN.chartHead}>
-            <h4>
-              {data
-                ? `${data.product} · Velas de la prueba`
-                : 'Velas de la prueba'}
-            </h4>
-            <span className={RUN.chartTags}>LONG / SHORT / Salidas</span>
-          </div>
-          {data?.candles && (
-            <div className={RUN.scope}>
-              <p className={RUN.hint} data-testid="run-scope">
-                {data.view === 'full'
-                  ? fullViewText(
-                      data.candles.resolution,
-                      data.summary.range_start_ms,
-                      data.summary.range_end_ms,
-                    )
-                  : `Velas de ${resolutionText(data.candles.resolution)} · zoom a la operación${selected ? ` del ${dayLabel(selected.entry_time_ms)}` : ''}`}
-              </p>
-              {data.view === 'zoom' && (
-                <button type="button" className={RUN.tab} onClick={showAll}>
-                  Ver todo el tramo
-                </button>
-              )}
+        {!formulaModel && (
+          <div className={RUN.chartCard} id="run-candles">
+            <div className={RUN.chartHead}>
+              <h4>
+                {data
+                  ? `${data.product} · Velas de la prueba`
+                  : 'Velas de la prueba'}
+              </h4>
+              <span className={RUN.chartTags}>LONG / SHORT / Salidas</span>
             </div>
-          )}
-          {data?.view === 'full' && markers.some((m) => isGroupId(m.id)) && (
-            <p className={RUN.hint} data-testid="run-groups-hint">
-              Las marcas con «+N» agrupan varias operaciones: al hacer clic en
-              una se abre la primera de su grupo.
-            </p>
-          )}
-
-          {unknownToGate && (
-            <p className={RUN.empty} data-testid="run-empty">
-              Esta estrategia no tiene pruebas guardadas.
-            </p>
-          )}
-          {state.kind === 'loading' && overviewError === null && (
-            <p className={RUN.empty}>Cargando la última prueba…</p>
-          )}
-          {state.kind === 'empty' && (
-            <p className={RUN.empty} data-testid="run-empty">
-              {state.reason === 'no-runs'
-                ? 'Todavía no hay pruebas terminadas de esta estrategia.'
-                : state.reason === 'run-not-saved'
-                  ? 'Esa prueba no guardó sus operaciones: no hay gráfico de ella.'
-                  : 'Las pruebas anteriores no guardaron sus operaciones: no hay gráfico de ellas.'}
-            </p>
-          )}
-          {state.kind === 'error' && (
-            <p role="alert" className={RUN.empty}>
-              {state.code === 'exam_not_unlocked'
-                ? 'El examen todavía no terminó: sus velas y operaciones se muestran recién después.'
-                : state.text}
-            </p>
-          )}
-
-          {data && (
-            <>
-              {data.candlesError ? (
-                <p className={RUN.empty} data-testid="run-no-candles">
-                  Sin datos de velas para esta ventana: {data.candlesError}
-                </p>
-              ) : (
-                <div className={RUN.chart}>
-                  <ApprovedTerminalChart
-                    key={`${data.summary.run_id}:${data.product}:${data.view}`}
-                    candles={chartCandles}
-                    markers={markers}
-                    selectedId={
-                      focused ?? (selected ? markerIds(selected).entry : '')
-                    }
-                    intervalSeconds={resolutionSeconds(
-                      data.candles?.resolution ?? '1m',
-                    )}
-                    currency="USD"
-                    instrument={data.product}
-                    priceLines={priceLinesOf(selected)}
-                    showVolume
-                    onSelect={(_time, markerId) => {
-                      if (isDiscardId(markerId)) {
-                        setFocusId(markerId ?? null)
-                        return
-                      }
-                      setFocusId(null)
-                      // A group of entries or exits opens its first operation.
-                      const group = isGroupId(markerId)
-                        ? markers.find((marker) => marker.id === markerId)
-                        : undefined
-                      const id = tradeOfMarker(
-                        group ? group.memberIds?.[0] : markerId,
+            {data?.candles && (
+              <div className={RUN.scope}>
+                <p className={RUN.hint} data-testid="run-scope">
+                  {data.view === 'full'
+                    ? fullViewText(
+                        data.candles.resolution,
+                        data.summary.range_start_ms,
+                        data.summary.range_end_ms,
                       )
-                      const trade = data.trades.find((t) => t.trade_id === id)
-                      if (trade) void select(trade)
-                    }}
-                    ariaLabel={`Velas de ${data.product} de la prueba con sus entradas y salidas`}
-                  />
-                </div>
-              )}
-              {data.candles && data.candles.missing_minutes > 0 && (
-                <p className={RUN.hint} data-testid="run-gaps">
-                  Faltan {data.candles.missing_minutes} velas de 1 minuto que
-                  Kraken no publicó en esta ventana; no se rellenaron.
+                    : `Velas de ${resolutionText(data.candles.resolution)} · zoom a la operación${selected ? ` del ${dayLabel(selected.entry_time_ms)}` : ''}`}
                 </p>
-              )}
-              {!data.tradesDone && (
-                <p className={RUN.hint} data-testid="run-trades-loading">
-                  Cargando las operaciones del tramo: {data.trades.length} de{' '}
-                  {data.total}…
-                </p>
-              )}
-              {data.tradesError && (
-                <p className={RUN.hint} data-testid="run-trades-error">
-                  No se pudieron cargar todas las operaciones (se ven{' '}
-                  {data.trades.length} de {data.total}): {data.tradesError}
-                </p>
-              )}
-              {fullView &&
-                traced &&
-                (traced.ignored_position_open ?? 0) > 0 && (
-                  <p className={RUN.hint} data-testid="run-ignored">
-                    {traced.ignored_position_open === 1
-                      ? '1 señal ignorada porque ya había una posición abierta'
-                      : `${amount(traced.ignored_position_open ?? 0, 0)} señales ignoradas porque ya había una posición abierta`}{' '}
-                    (no se dibujan).
+                {data.view === 'zoom' && (
+                  <button type="button" className={RUN.tab} onClick={showAll}>
+                    Ver todo el tramo
+                  </button>
+                )}
+              </div>
+            )}
+            {data?.view === 'full' && markers.some((m) => isGroupId(m.id)) && (
+              <p className={RUN.hint} data-testid="run-groups-hint">
+                Las marcas con «+N» agrupan varias operaciones: al hacer clic en
+                una se abre la primera de su grupo.
+              </p>
+            )}
+
+            {unknownToGate && (
+              <p className={RUN.empty} data-testid="run-empty">
+                Esta estrategia no tiene pruebas guardadas.
+              </p>
+            )}
+            {state.kind === 'loading' && overviewError === null && (
+              <p className={RUN.empty}>Cargando la última prueba…</p>
+            )}
+            {state.kind === 'empty' && (
+              <p className={RUN.empty} data-testid="run-empty">
+                {state.reason === 'no-runs'
+                  ? 'Todavía no hay pruebas terminadas de esta estrategia.'
+                  : state.reason === 'run-not-saved'
+                    ? 'Esa prueba no guardó sus operaciones: no hay gráfico de ella.'
+                    : 'Las pruebas anteriores no guardaron sus operaciones: no hay gráfico de ellas.'}
+              </p>
+            )}
+            {state.kind === 'error' && (
+              <p role="alert" className={RUN.empty}>
+                {state.code === 'exam_not_unlocked'
+                  ? 'El examen todavía no terminó: sus velas y operaciones se muestran recién después.'
+                  : state.text}
+              </p>
+            )}
+
+            {data && (
+              <>
+                {data.candlesError ? (
+                  <p className={RUN.empty} data-testid="run-no-candles">
+                    Sin datos de velas para esta ventana: {data.candlesError}
+                  </p>
+                ) : (
+                  <div className={RUN.chart}>
+                    <ApprovedTerminalChart
+                      key={`${data.summary.run_id}:${data.product}:${data.view}`}
+                      candles={chartCandles}
+                      markers={markers}
+                      selectedId={
+                        focused ?? (selected ? markerIds(selected).entry : '')
+                      }
+                      intervalSeconds={resolutionSeconds(
+                        data.candles?.resolution ?? '1m',
+                      )}
+                      currency="USD"
+                      instrument={data.product}
+                      priceLines={priceLinesOf(selected)}
+                      showVolume
+                      onSelect={(_time, markerId) => {
+                        if (isDiscardId(markerId)) {
+                          setFocusId(markerId ?? null)
+                          return
+                        }
+                        setFocusId(null)
+                        // A group of entries or exits opens its first operation.
+                        const group = isGroupId(markerId)
+                          ? markers.find((marker) => marker.id === markerId)
+                          : undefined
+                        const id = tradeOfMarker(
+                          group ? group.memberIds?.[0] : markerId,
+                        )
+                        const trade = data.trades.find((t) => t.trade_id === id)
+                        if (trade) void select(trade)
+                      }}
+                      ariaLabel={`Velas de ${data.product} de la prueba con sus entradas y salidas`}
+                    />
+                  </div>
+                )}
+                {data.candles && data.candles.missing_minutes > 0 && (
+                  <p className={RUN.hint} data-testid="run-gaps">
+                    Faltan {data.candles.missing_minutes} velas de 1 minuto que
+                    Kraken no publicó en esta ventana; no se rellenaron.
                   </p>
                 )}
-              {decided?.error && (
-                <p className={RUN.hint} data-testid="run-decisions-error">
-                  No se pudo leer el detalle de decisiones: {decided.error}
-                </p>
-              )}
-              {(!hasTrace || decided?.value?.captured === false) && (
-                <p className={RUN.hint} data-testid="run-no-decisions">
-                  Esta prueba se guardó sin el detalle de decisiones; las
-                  entradas y salidas sí se ven.
-                </p>
-              )}
-              {traced?.truncated && (
-                <p className={RUN.hint} data-testid="run-decisions-cut">
-                  Hay más descartes en esta ventana de los que se muestran (los
-                  primeros {traced.signals.length}).
-                </p>
-              )}
-              {data.total === 0 && (
-                <p className={RUN.hint} data-testid="run-no-trades">
-                  La estrategia no abrió posiciones en este producto durante la
-                  prueba.
-                </p>
-              )}
-              <ul className={RUN.legend} aria-label="Leyenda">
-                <li>
-                  <b className={RUN.long}>L</b> Entrada LONG
-                </li>
-                <li>
-                  <b className={RUN.short}>S</b> Entrada SHORT
-                </li>
-                <li>
-                  <b>×</b> Salida (motivo en el detalle)
-                </li>
-                <li>
-                  <b>◦</b> Descarte
-                </li>
-                <li className={RUN.legendNote}>
-                  {data.summary.label} · eje del gráfico en UTC, tablas en hora
-                  de Madrid
-                </li>
-              </ul>
-            </>
-          )}
-        </div>
+                {!data.tradesDone && (
+                  <p className={RUN.hint} data-testid="run-trades-loading">
+                    Cargando las operaciones del tramo: {data.trades.length} de{' '}
+                    {data.total}…
+                  </p>
+                )}
+                {data.tradesError && (
+                  <p className={RUN.hint} data-testid="run-trades-error">
+                    No se pudieron cargar todas las operaciones (se ven{' '}
+                    {data.trades.length} de {data.total}): {data.tradesError}
+                  </p>
+                )}
+                {fullView &&
+                  traced &&
+                  (traced.ignored_position_open ?? 0) > 0 && (
+                    <p className={RUN.hint} data-testid="run-ignored">
+                      {traced.ignored_position_open === 1
+                        ? '1 señal ignorada porque ya había una posición abierta'
+                        : `${amount(traced.ignored_position_open ?? 0, 0)} señales ignoradas porque ya había una posición abierta`}{' '}
+                      (no se dibujan).
+                    </p>
+                  )}
+                {decided?.error && (
+                  <p className={RUN.hint} data-testid="run-decisions-error">
+                    No se pudo leer el detalle de decisiones: {decided.error}
+                  </p>
+                )}
+                {(!hasTrace || decided?.value?.captured === false) && (
+                  <p className={RUN.hint} data-testid="run-no-decisions">
+                    Esta prueba se guardó sin el detalle de decisiones; las
+                    entradas y salidas sí se ven.
+                  </p>
+                )}
+                {traced?.truncated && (
+                  <p className={RUN.hint} data-testid="run-decisions-cut">
+                    Hay más descartes en esta ventana de los que se muestran
+                    (los primeros {traced.signals.length}).
+                  </p>
+                )}
+                {data.total === 0 && (
+                  <p className={RUN.hint} data-testid="run-no-trades">
+                    La estrategia no abrió posiciones en este producto durante
+                    la prueba.
+                  </p>
+                )}
+                <ul className={RUN.legend} aria-label="Leyenda">
+                  <li>
+                    <b className={RUN.long}>L</b> Entrada LONG
+                  </li>
+                  <li>
+                    <b className={RUN.short}>S</b> Entrada SHORT
+                  </li>
+                  <li>
+                    <b>×</b> Salida (motivo en el detalle)
+                  </li>
+                  <li>
+                    <b>◦</b> Descarte
+                  </li>
+                  <li className={RUN.legendNote}>
+                    {data.summary.label} · eje del gráfico en UTC, tablas en
+                    hora de Madrid
+                  </li>
+                </ul>
+              </>
+            )}
+          </div>
+        )}
       </details>
       {vbtModal && vbtState && (
         <VectorbtModal
@@ -1523,16 +1593,6 @@ const MAIN_TRADES = (items: QuickTrade[] | undefined): VisualTrade[] =>
 
 /** The formula alone, no Qwen: everything as pictures; the table is under «Ver el detalle». */
 function FormulaResult({ formula }: { formula: QuickFormula }) {
-  const series: VisualSeries[] = [
-    ['formula', 'La fórmula (como opera en vivo)'],
-    ['maestro_fuerte', 'Maestro fuerte, sin portero'],
-    ['siempre_largo', 'Siempre largo (mismas entradas)'],
-    ['siempre_corto', 'Siempre corto (mismas entradas)'],
-  ].map(([id, label]) => ({
-    id: id!,
-    label: label!,
-    trades: MAIN_TRADES(formula.curvas[id as keyof QuickFormula['curvas']]),
-  }))
   return (
     <div className="grid gap-3" data-testid="formula-result">
       <p className="m-0 text-note text-ink-2">
@@ -1542,19 +1602,7 @@ function FormulaResult({ formula }: { formula: QuickFormula }) {
         {DAY_FORMAT.format(formula.hasta_ms)} · {amount(formula.fotos, 0)}{' '}
         miradas
       </p>
-      <ResultsVisual
-        series={series}
-        market={Object.entries(formula.mercado ?? {}).map(
-          ([product, points]) => ({
-            id: product,
-            label: `Mercado: ${product.replace(/^PF_|USD$/g, '')} comprando y manteniendo`,
-            points,
-          }),
-        )}
-        notionalUsd={formula.nocional_usd}
-        note={`Cada operación mueve ${amount(formula.nocional_usd, 0)} USD. Neto después de costos. Una posición por producto; sale cuando el maestro se da vuelta${formula.max_horas ? ` o a las ${amount(formula.max_horas, 0)} h` : ''}. Pasá el cursor por una marca o una barra para ver entrada, salida y motivo.`}
-      />
-      <details>
+      <details open>
         <summary className="cursor-pointer text-note text-ink-2">
           Ver el detalle en números
         </summary>
@@ -1572,22 +1620,42 @@ function FormulaResult({ formula }: { formula: QuickFormula }) {
             <tbody>
               {(
                 [
-                  ['La fórmula', formula.formula],
-                  ['Maestro fuerte, sin portero', formula.maestro_fuerte],
-                  ['Siempre largo', formula.siempre_largo],
-                  ['Siempre corto', formula.siempre_corto],
-                ] as [string, QuickOperationStats][]
-              ).map(([label, stats]) => (
-                <tr key={label}>
-                  <th scope="row">{label}</th>
-                  <td>{stats.n}</td>
-                  <td>{bp(stats.neto_bp)}</td>
-                  <td>{percentText(stats.ganadoras)}</td>
-                  <td>
-                    {stats.por_vuelta} / {stats.por_tiempo}
-                  </td>
-                </tr>
-              ))}
+                  ['La fórmula', 'formula'],
+                  ['Maestro fuerte, sin portero', 'maestro_fuerte'],
+                  ['Siempre largo', 'siempre_largo'],
+                  ['Siempre corto', 'siempre_corto'],
+                ] as [string, keyof QuickFormula['curvas']][]
+              ).map(([label, key]) => {
+                // Each row comes from its own operations, the ones of the product on screen.
+                const list = (formula.curvas[key] ?? []).filter(
+                  (t) =>
+                    !formula.productos[0] ||
+                    t.producto === formula.productos[0],
+                )
+                const n = list.length
+                return (
+                  <tr key={label}>
+                    <th scope="row">{label}</th>
+                    <td>{n}</td>
+                    <td>
+                      {n > 0
+                        ? bp(list.reduce((sum, t) => sum + t.neto_bp, 0) / n)
+                        : '—'}
+                    </td>
+                    <td>
+                      {n > 0
+                        ? percentText(
+                            list.filter((t) => t.neto_bp > 0).length / n,
+                          )
+                        : '—'}
+                    </td>
+                    <td>
+                      {list.filter((t) => t.motivo === 'vuelta').length} /{' '}
+                      {list.filter((t) => t.motivo === 'tiempo').length}
+                    </td>
+                  </tr>
+                )
+              })}
             </tbody>
           </table>
         </div>

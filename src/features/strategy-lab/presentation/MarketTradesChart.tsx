@@ -6,6 +6,8 @@ import type { RunCandle, RunTrade } from '../infrastructure/run-visual-api.ts'
 const W = 900
 const H = 300
 const PAD_X = 10
+/** Room kept on the right for the price labels, so that the price line never runs over them. */
+const PAD_R = 56
 const PAD_Y = 14
 const PAD_ZOOM_Y = 34
 
@@ -104,7 +106,7 @@ export default function MarketTradesChart({
   const vHi = Math.max(...prices)
   const padY = zoom ? PAD_ZOOM_Y : PAD_Y
   const x = (t: number) =>
-    PAD_X + (hi === lo ? 0.5 : (t - lo) / (hi - lo)) * (W - 2 * PAD_X)
+    PAD_X + (hi === lo ? 0.5 : (t - lo) / (hi - lo)) * (W - PAD_X - PAD_R)
   const y = (v: number) =>
     padY + (vHi === vLo ? 0.5 : (vHi - v) / (vHi - vLo)) * (H - 2 * padY)
   const path = (from: number, to: number) =>
@@ -127,6 +129,10 @@ export default function MarketTradesChart({
   const long = selected?.side === 'LONG'
   const entryPrice = selected
     ? (priceOf(selected.entry_price) ?? priceAt(selected.entry_time_ms))
+    : 0
+  // The price comes into the entry from above or below: the label goes on the other side of the line.
+  const priceBefore = selected
+    ? priceAt(lo + (selected.entry_time_ms - lo) * 0.85)
     : 0
   const exitPrice = selected
     ? (priceOf(selected.exit_price) ?? priceAt(selected.exit_time_ms))
@@ -222,13 +228,13 @@ export default function MarketTradesChart({
           <g key={line.y}>
             <line
               x1={PAD_X}
-              x2={W - PAD_X}
+              x2={W - PAD_R + 6}
               y1={line.y}
               y2={line.y}
               className="stroke-line"
             />
             <text
-              x={W - PAD_X - 2}
+              x={W - 2}
               y={line.y - 3}
               textAnchor="end"
               className="fill-ink-2 text-label"
@@ -275,12 +281,15 @@ export default function MarketTradesChart({
             />
             {potential && potential.bestAtMs !== null && (
               <>
-                <path
-                  d={path(selected.entry_time_ms, potential.bestAtMs)}
-                  fill="none"
+                <line
+                  x1={x(selected.entry_time_ms)}
+                  y1={y(entryPrice)}
+                  x2={x(potential.bestAtMs)}
+                  y2={y(priceAt(potential.bestAtMs))}
                   className="stroke-info"
-                  strokeWidth={3.5}
-                  strokeDasharray="7 5"
+                  strokeWidth={3}
+                  strokeDasharray="3 6"
+                  strokeLinecap="round"
                   data-testid="potential-path"
                 />
                 <circle
@@ -296,7 +305,9 @@ export default function MarketTradesChart({
                     (potential.right === 1 ? -14 : 24)
                   }
                   textAnchor="middle"
-                  className="fill-info text-hint"
+                  className="fill-info text-hint stroke-canvas"
+                  strokeWidth={4}
+                  style={{ paintOrder: 'stroke' }}
                 >
                   mejor salida
                 </text>
@@ -304,7 +315,7 @@ export default function MarketTradesChart({
             )}
             <line
               x1={x(selected.entry_time_ms)}
-              x2={W - PAD_X}
+              x2={W - PAD_R}
               y1={y(entryPrice)}
               y2={y(entryPrice)}
               className="stroke-ink-2"
@@ -318,9 +329,11 @@ export default function MarketTradesChart({
             />
             <text
               x={x(selected.entry_time_ms) - 10}
-              y={y(entryPrice) + (long ? 22 : -14)}
+              y={y(entryPrice) + (priceBefore > entryPrice ? 26 : -20)}
               textAnchor="end"
-              className="fill-ink text-hint"
+              className="fill-ink text-hint stroke-canvas"
+              strokeWidth={4}
+              style={{ paintOrder: 'stroke' }}
             >
               entrada {long ? 'LARGO' : 'CORTO'}
             </text>
@@ -332,11 +345,32 @@ export default function MarketTradesChart({
             />
             <text
               x={x(selected.exit_time_ms) + 10}
-              y={y(exitPrice) + (long ? -12 : 22)}
-              className={`text-hint ${win ? 'fill-long' : 'fill-short'}`}
+              y={y(exitPrice) + (exitPrice >= entryPrice ? -12 : 22)}
+              className={`stroke-canvas text-hint ${win ? 'fill-long' : 'fill-short'}`}
+              strokeWidth={4}
+              style={{ paintOrder: 'stroke' }}
             >
               salida
             </text>
+          </>
+        )}
+        {zoom && (
+          <>
+            {[0, 1, 2, 3, 4].map((k) => {
+              const t = lo + ((hi - lo) * k) / 4
+              return (
+                <text
+                  key={k}
+                  x={x(t)}
+                  y={H - 2}
+                  textAnchor={k === 0 ? 'start' : k === 4 ? 'end' : 'middle'}
+                  className="fill-ink-2 text-label"
+                  data-testid="zoom-time"
+                >
+                  {WHEN.format(t)}
+                </text>
+              )
+            })}
           </>
         )}
         {!zoom && (
@@ -345,7 +379,7 @@ export default function MarketTradesChart({
               {DAY.format(lo)}
             </text>
             <text
-              x={W - PAD_X - 2}
+              x={x(hi)}
               y={H - 2}
               textAnchor="end"
               className="fill-ink-2 text-label"

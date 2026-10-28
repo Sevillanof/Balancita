@@ -885,6 +885,132 @@ describe('StrategyRunView', () => {
   })
 })
 
+describe('StrategyRunView panel of the formula test (Qwen en vivo)', () => {
+  const H = 3_600_000
+  const stats = {
+    n: 3,
+    neto_bp: 10,
+    ganadoras: 0.6,
+    por_vuelta: 2,
+    por_tiempo: 1,
+  }
+  const trade = (i: number, j: number, lado: 1 | -1, neto_bp: number) => ({
+    producto: 'PF_ETHUSD',
+    lado,
+    entrada_ms: T0 + i * H,
+    salida_ms: T0 + j * H,
+    neto_bp,
+    motivo: 'vuelta',
+  })
+  const formulaSummary = {
+    photos: 100,
+    horizon_min: 240,
+    spearman: null,
+    spearman_ci: [null, null],
+    extremes_net_bp: null,
+    extremes_ci: [null, null],
+    vs_random_pct: null,
+    signals: { extremes: null, random: null, spearman: null },
+    note: 'n',
+    formula: {
+      fotos: 100,
+      desde_ms: T0,
+      hasta_ms: T0 + 100 * H,
+      max_horas: 36,
+      nocional_usd: 100,
+      productos: ['PF_ETHUSD'],
+      mercado: {
+        PF_ETHUSD: Array.from({ length: 100 }, (_, i) => [
+          T0 + i * H,
+          2000 + i * 2 + (i % 7) * 5,
+        ]),
+      },
+      formula: stats,
+      maestro_fuerte: stats,
+      siempre_largo: stats,
+      siempre_corto: stats,
+      curvas: {
+        formula: [
+          trade(5, 12, 1, 80),
+          trade(20, 30, -1, -40),
+          trade(40, 50, 1, 25),
+        ],
+        maestro_fuerte: [],
+        siempre_largo: [],
+        siempre_corto: [],
+      },
+    },
+  }
+
+  it('without saved candles for the run, draws the verdict and the ONE chart from the formula result, and zooms on a tap', async () => {
+    const user = userEvent.setup()
+    const quick = {
+      status: vi.fn(async () => ({
+        state: 'done',
+        snapshots: 100,
+        note: 'n',
+        summary: formulaSummary,
+        variants: [
+          {
+            id: 'formula',
+            label: 'La fórmula sola',
+            kind: 'formula',
+            state: 'done',
+            summary: formulaSummary,
+          },
+        ],
+      })),
+      start: vi.fn(),
+    } as unknown as import('../infrastructure/quick-api.ts').QuickApi
+    const visual = visualWith({
+      summary: vi.fn(async () => {
+        throw new RunVisualError('artifact_not_ready', 'sin operaciones')
+      }),
+    })
+    render(
+      <StrategyRunView
+        strategyId="qwen-live"
+        strategyName="Qwen en vivo"
+        version={1}
+        kind="qwen_live"
+        gate={gateWith(overview([run(24)]))}
+        visual={visual}
+        quick={quick}
+      />,
+    )
+    const verdict = await screen.findByTestId('run-verdict')
+    expect(verdict).toHaveTextContent('+0,65 USD')
+    expect(verdict).toHaveTextContent('Gana tras costos')
+    expect(verdict).toHaveTextContent('3 operaciones')
+    const figures = screen.getByTestId('run-kpis')
+    expect(within(figures).getByText('3')).toBeInTheDocument()
+    expect(within(figures).getByText('+21,7 pb')).toBeInTheDocument()
+    expect(within(figures).queryByText('—')).toBeNull()
+    expect(screen.queryByText(/Sin prueba terminada/)).toBeNull()
+    expect(screen.queryByText(/Prueba anterior/)).toBeNull()
+    expect(screen.queryByText(/tramos probados/)).toBeNull()
+    // the table of numbers agrees with the figures above: same operations, same mean
+    const row = within(
+      screen.getByRole('table', { name: 'Detalle de la fórmula' }),
+    )
+      .getByRole('rowheader', { name: 'La fórmula' })
+      .closest('tr')!
+    expect(within(row).getByText('+21,7 pb')).toBeInTheDocument()
+    const chart = await screen.findByTestId('market-chart')
+    expect(
+      within(chart).getAllByRole('button', { name: /^Operación/ }),
+    ).toHaveLength(3)
+    // the old curves chart and its bars are not on screen
+    expect(screen.queryByText(/Siempre largo \(mismas entradas\)/)).toBeNull()
+    await user.click(
+      within(chart).getByRole('button', { name: /^Operación 2/ }),
+    )
+    const compare = await screen.findByTestId('trade-compare')
+    expect(compare).toHaveTextContent('Perdimos')
+    expect(compare).toHaveTextContent('Se podía ganar')
+  })
+})
+
 describe('StrategyRunView stage tabs', () => {
   const threeOfFive = () =>
     overview([stageRun(10, 0), stageRun(11, 1), stageRun(12, 3)])
