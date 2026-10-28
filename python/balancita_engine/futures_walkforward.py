@@ -554,11 +554,11 @@ def meter(trades, *, medicion, trial_count, fit_end_ms=None, pairs_path=None):
         reasons.append("solo el {} % del resultado está fuera del ajuste de la fórmula".format(round(outside * 100)))
     elif dsr < 0.5:
         color = "rojo"
-        reasons.append("con {} intentos, la probabilidad de que no sea suerte es de {} %".format(attempts, round(dsr * 100)))
+        reasons.append("en estas {} operaciones y con {} intentos, la probabilidad de que no sea suerte es de {} %".format(len(nets), attempts, round(dsr * 100)))
     elif dsr < 0.95 or uses_practice or outside < 0.95:
         color = "amarillo"
         if dsr < 0.95:
-            reasons.append("con {} intentos, la probabilidad de que no sea suerte es de {} %".format(attempts, round(dsr * 100)))
+            reasons.append("en estas {} operaciones y con {} intentos, la probabilidad de que no sea suerte es de {} %".format(len(nets), attempts, round(dsr * 100)))
         if uses_practice:
             reasons.append("incluye la práctica, que ya se usó para elegir reglas")
         if outside < 0.95:
@@ -567,7 +567,7 @@ def meter(trades, *, medicion, trial_count, fit_end_ms=None, pairs_path=None):
         color, reasons = "verde", ["todo está fuera del ajuste y supera el descuento por intentos"]
     text = "; ".join(reasons)
     return {"semaforo": color, "motivo": text[:1].upper() + text[1:] + ".",
-            "intentos": trial_count, "fuera_del_ajuste_pct": None if outside is None else round(outside * 100, 1),
+            "intentos": trial_count, "operaciones": len(nets), "fuera_del_ajuste_pct": None if outside is None else round(outside * 100, 1),
             "practica_usada": True, "incluye_practica": uses_practice, "practica": {"desde": PRACTICE_FROM, "hasta": PRACTICE_TO},
             "holdout_intacto": not touched, "holdout_desde": PRACTICE_TO,
             "prob_no_es_suerte": None if dsr is None else round(dsr, 3),

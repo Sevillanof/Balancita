@@ -83,6 +83,8 @@ export type HonestyMeter = {
   /** Variants tried in total (the ones before the audit plus the logged ones). */
   intentos: number
   /** Share of the result outside the fitting period of the formula that decided it. */
+  /** Trades the probabilities below were computed on. */
+  operaciones?: number
   fuera_del_ajuste_pct: number | null
   /** The practice window has already been used to choose rules: it is no fresh data. */
   practica_usada: boolean

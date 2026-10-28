@@ -75,7 +75,7 @@ export default function HonestyMeter({ meter, stale, missing }: Props) {
       'Resultado corregido por los intentos',
       meter.prob_no_es_suerte == null
         ? 'sin operaciones suficientes'
-        : `${number.format(Math.round(meter.prob_no_es_suerte * 100))} % de probabilidad de que no sea suerte${meter.prob_sin_descontar_intentos != null ? ` (sin descontar los intentos serían ${number.format(Math.round(meter.prob_sin_descontar_intentos * 100))} %)` : ''}`,
+        : `${meter.operaciones != null ? `Sobre estas ${number.format(meter.operaciones)} operaciones: ` : ''}${number.format(Math.round(meter.prob_no_es_suerte * 100))} % de probabilidad de que no sea suerte${meter.prob_sin_descontar_intentos != null ? ` (sin descontar los intentos serían ${number.format(Math.round(meter.prob_sin_descontar_intentos * 100))} %)` : ''}`,
     ],
   ]
   return (

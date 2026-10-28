@@ -86,6 +86,13 @@ import VectorbtReportPanel from './VectorbtReportPanel.tsx'
 import VectorbtVariantLink from './VectorbtVariantLink.tsx'
 import { useVectorbt } from './use-vectorbt.ts'
 
+const PERIOD_DAY = new Intl.DateTimeFormat('es-ES', {
+  day: 'numeric',
+  month: 'short',
+  year: '2-digit',
+  timeZone: 'UTC',
+})
+
 const STAGE_LABEL = [
   'En hipótesis',
   'En optimización',
@@ -888,6 +895,8 @@ export default function StrategyRunView({
     const weeks = (toMs - fromMs) / (7 * 86_400_000)
     return weeks >= 1 ? ` · ${amount(trades / weeks, 1)} por semana` : ''
   }
+  const periodNote = (fromMs: number, toMs: number) =>
+    `del ${PERIOD_DAY.format(new Date(fromMs))} al ${PERIOD_DAY.format(new Date(toMs))}`
   const runWeekly =
     lastRun?.params?.from && lastRun.params.to
       ? weeklyNote(
@@ -905,7 +914,7 @@ export default function StrategyRunView({
       <Kpi
         label="Operaciones cerradas"
         value={amount(figs.trades, 0)}
-        note={`Solo la fórmula, sin Qwen${weeklyNote(figs.trades, formulaModel!.fromMs, formulaModel!.toMs)}`}
+        note={`Solo la fórmula, sin Qwen · ${periodNote(formulaModel!.fromMs, formulaModel!.toMs)}${weeklyNote(figs.trades, formulaModel!.fromMs, formulaModel!.toMs)}`}
         tone={null}
       />
       <Kpi
@@ -923,7 +932,7 @@ export default function StrategyRunView({
       <Kpi
         label="Frente al azar"
         value={`${amount(figs.percentile, 0)} %`}
-        note="1.000 sorteos con los lados al revés"
+        note="1.000 sorteos con los lados al revés. No cuenta los intentos: eso lo mide el medidor de honestidad"
         tone={null}
       />
     </div>
