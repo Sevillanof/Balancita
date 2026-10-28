@@ -105,5 +105,35 @@ class NightRulesTests(unittest.TestCase):
         self.assertIn("NO pasa", dst.night_report(None, history, 250, None))
 
 
+class QuarterNightsTests(unittest.TestCase):
+    def test_quarter_names_parse_and_chain(self):
+        self.assertEqual(dst.parse_quarter("2024Q1"), (2024, 1))
+        self.assertEqual(dst.previous_quarter(2024, 1), (2023, 4))
+        self.assertEqual(dst.previous_quarter(2024, 3), (2024, 2))
+        with self.assertRaises(SystemExit):
+            dst.parse_quarter("2024-1")
+
+    def test_the_plan_goes_in_order_and_never_reaches_the_holdout(self):
+        plan = dst.night_plan()
+        self.assertEqual(plan[0], "2023Q2")
+        self.assertEqual(plan, sorted(plan))
+        holdout = dst.qt.load_holdout_ms()
+        self.assertTrue(all(dst.qend_ms(int(n[:4]), int(n[5])) <= holdout for n in plan))
+        self.assertEqual(dst.night_plan("2024Q4")[0], "2025Q1")
+        self.assertEqual(dst.night_plan(plan[-1]), [])
+
+    def test_collected_rows_are_reused_and_keep_their_quarter_label(self):
+        import os
+        import tempfile
+        rows = {"flat": [{"kind": "flat", "t_ms": 1, "formula": "LARGO"}], "position": [{"kind": "position", "t_ms": 2, "formula": "CERRAR"}]}
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "filas-2023Q2.jsonl.gz")
+            with dst.gzip.open(path, "wt", encoding="utf-8") as handle:
+                for row in rows["flat"] + rows["position"]:
+                    handle.write(dst.json.dumps(row) + "\n")
+            got = dst.quarter_rows(None, None, 2023, 2, tmp, 0.03)       # exists: nothing is recollected (no history needed)
+        self.assertEqual(got, rows)
+
+
 if __name__ == "__main__":
     unittest.main()

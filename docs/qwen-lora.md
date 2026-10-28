@@ -33,6 +33,20 @@ Dataset (solo ETH, tope 36 h, fórmulas de cada trimestre ajustadas con BTC+ETH 
 trimestre. Cada ficha sin posición se juzga como si no hubiera posición (hay muchas más miradas con entrada que operaciones). Criterios
 fijos: PASA con acuerdo ≥ 85 %, espejo ≥ 90 %, ninguna respuesta > 70 %. Nada se activa en vivo sin otro Sí de Fran.
 
+### Destilación noche a noche, un trimestre por noche (preparada, sin correr)
+
+Para que Qwen aprenda junto a las fórmulas trimestrales de la medición honesta (`config/walkforward/`): la noche del trimestre T entrena
+con los trimestres anteriores a T (cada fila etiquetada con el par que regía en SU trimestre, cupo 15 % por trimestre, embargo de 36 h),
+parte del adaptador de la noche anterior y se mide en T, que no vio. No usa la práctica ni el holdout, y no toca Qwen en vivo, `.env.local`,
+`pnpm dev` ni el paper: el GGUF queda aparte (`qwen-destila-<T>.gguf`), sin cargar.
+
+- `ops/qwen-lora/destila-trimestre.sh plan`: qué noches hay hechas y cuál toca (2023Q2 hasta el último trimestre completo antes del holdout).
+- `caffeinate -i ops/qwen-lora/destila-trimestre.sh`: la noche que toca (o pasar el trimestre, p. ej. `2024Q1`). Arma el dataset
+  (`futures_qwen_destila armar-trimestre`, ~1 min; las miradas de cada trimestre se juntan una vez y se reutilizan), corre humo + 500 pasos +
+  medición (`destila_noche.py` con `DESTILA_TRIMESTRE` y `DESTILA_PARTIR_DE`) y deja el adaptador en `qwen-lora/destila-trimestre/<T>/adapter`.
+- Dura ~1 h–1 h 15 y calienta la Mac (enchufada, sin otra carga pesada). Las noches van en orden: el script se niega a saltar una.
+- Qué NO está probado en la nube: la parte de MLX (entrenar y medir). El armado del dataset sí se corrió con velas reales (2023Q3).
+
 ### Cargar el adaptador de la destilación en Qwen en vivo (preparado, NO activado)
 
 La noche del 27 al 28-oct dejó `~/balancita-data.noindex/qwen-lora/qwen-destila.gguf` (el mejor paso, sin cargar). Qwen en vivo solo

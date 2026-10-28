@@ -426,15 +426,15 @@ def best_step(history):
     return max(pool, key=lambda h: (h["acuerdo"] or 0, -h["paso"]))["paso"]
 
 
-def night_report(base, history, best, practice, meta=None):
+def night_report(base, history, best, practice, meta=None, valid_label="2025-08/09"):
     """El informe de la mañana (Markdown): PASA / NO pasa de la destilación y las tablas."""
     top = next(h for h in history if h["paso"] == best)
     checks, passes = verdict(top)
     pct = lambda x: "n/d" if x is None else "{:.0f} %".format(100 * x)
     pb = lambda x: "n/d" if x is None else "{:+.1f} pb".format(x)
     lines = ["# Qwen aprende a leer la ficha: qué dejó la noche", "",
-             "**Veredicto de la destilación: {}** (checkpoint del paso {}, elegido en la validación 2025-08/09, no en la práctica).".format(
-                 "PASA" if passes else "NO pasa", best), ""]
+             "**Veredicto de la destilación: {}** (checkpoint del paso {}, elegido en la validación {}, no en la práctica).".format(
+                 "PASA" if passes else "NO pasa", best, valid_label), ""]
     lines += ["- {} {}".format("✓" if ok else "✗", name) for name, ok in checks.items()]
     lines += ["", "Esto mide si Qwen LEE la ficha como la fórmula. No mide si gana más plata: el objetivo de esta corrida no es ganarle a la fórmula.", "",
               "## Validación en cada tramo", "", "| Paso | Acuerdo con la fórmula | Espejo da vuelta | Respuesta más repetida | Neto por entrada | Neto de la fórmula |",
@@ -461,6 +461,92 @@ def night_report(base, history, best, practice, meta=None):
         lines += ["", "Dataset: {}".format(json.dumps(meta.get("balance", meta), ensure_ascii=False))]
     lines += ["", "Un PASA no cambia nada en vivo: el adaptador no se carga solo; se decide aparte."]
     return "\n".join(lines) + "\n"
+
+
+# --------------------------------------------------------------------------- one night per quarter (walk-forward)
+
+
+def parse_quarter(text):
+    """``2024Q1`` -> (2024, 1)."""
+    m = re.fullmatch(r"(\d{4})Q([1-4])", text or "")
+    if not m:
+        raise SystemExit("el trimestre se escribe así: 2024Q1")
+    return int(m.group(1)), int(m.group(2))
+
+
+def previous_quarter(y, q):
+    return (y - 1, 4) if q == 1 else (y, q - 1)
+
+
+def quarter_rows(history, cfg, y, q, rows_dir, wait_rate):
+    """Las miradas del trimestre (sin y con posición), con la etiqueta de la fórmula que regía ESE trimestre. Se juntan una sola vez y
+    quedan en ``rows_dir`` (la etiqueta de un trimestre no cambia cuando llega el siguiente)."""
+    path = os.path.join(rows_dir, "filas-{}.jsonl.gz".format(qname(y, q)))
+    if os.path.exists(path):
+        with gzip.open(path, "rt", encoding="utf-8") as handle:
+            rows = [json.loads(x) for x in handle if x.strip()]
+        return {"flat": [r for r in rows if r["kind"] == "flat"], "position": [r for r in rows if r["kind"] != "flat"]}
+    part = collect_formula(history, cfg, PRODUCT, qstart_ms(y, q), qend_ms(y, q), entry_rate=1.0, wait_rate=wait_rate)
+    os.makedirs(rows_dir, exist_ok=True)
+    with gzip.open(path + ".tmp", "wt", encoding="utf-8") as handle:
+        for row in part["flat"] + part["position"]:
+            handle.write(json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n")
+    os.replace(path + ".tmp", path)
+    return part
+
+
+def _build_quarter(args):
+    """El dataset de la noche del trimestre T: entrena con los trimestres 2023T1 .. T-1 (cada fila con la fórmula de su trimestre, ningún
+    trimestre pasa del 15 % de una clase) y mide en T, que ese adaptador no vio. Un embargo de 36 h separa los dos. Sin práctica ni holdout."""
+    from . import futures_walkforward as wf
+    y, q = parse_quarter(args.trimestre)
+    first = (2023, 1)
+    if (y, q) <= first:
+        raise SystemExit("el primer trimestre que se puede medir es 2023Q2 (antes no hay con qué entrenar)")
+    cut = qstart_ms(y, q)
+    if cut >= qt.load_holdout_ms():
+        raise SystemExit("ese trimestre llega al holdout: no se toca")
+    cfg = wf.with_pairs(qt.load_config(args.config or qt.CONFIG_PATH_LIVE), args.pares)
+    history = qt.History(args.cache_dir, qt.load_holdout_ms(), offline=True)
+    os.makedirs(args.out, exist_ok=True)
+    train_flat, train_pos, valid_flat, valid_pos = [], [], [], []
+    cur = first
+    while cur <= (y, q):
+        part = quarter_rows(history, cfg, cur[0], cur[1], args.rows_dir, args.wait_rate)
+        for target, rows in (("flat", part["flat"]), ("position", part["position"])):
+            for row in rows:
+                if row["t_ms"] >= cut:
+                    (valid_flat if target == "flat" else valid_pos).append(row)
+                elif row["t_ms"] + EMBARGO_MS <= cut:
+                    (train_flat if target == "flat" else train_pos).append(row)
+        print("{}: {} miradas sin posición, {} con posición".format(qname(*cur), len(part["flat"]), len(part["position"])), flush=True)
+        cur = (cur[0] + (cur[1] == 4), cur[1] % 4 + 1)
+    bad = check_readable(train_flat + train_pos + valid_flat + valid_pos)
+    if bad:
+        raise SystemExit("la etiqueta NO se deduce de la ficha en {} filas (primeras: {}): hay un error".format(len(bad), bad[:5]))
+    pairs = wf.load_pairs(args.pares or wf.PARES_PATH)["trimestres"]
+    meta = {"schema": SCHEMA + "-trimestre", "trimestre": qname(y, q), "producto": PRODUCT, "semilla": SEED,
+            "prompt_version": cfg["prompt"]["version"], "tope_h": cfg["guardrails"]["max_hold_min"] // 60,
+            "entrena": [qname(*first), qname(*previous_quarter(y, q))], "mide": qname(y, q), "embargo_h": EMBARGO_MS // qt.HOUR_MS,
+            "cupo_trimestre": QUARTER_CAP, "pares": {k: v for k, v in pairs.items() if (int(k[:4]), int(k[5])) <= (y, q)}}
+    meta["train"] = build_split(cfg, train_flat, train_pos, args.flat_n, args.close_n, SEED, os.path.join(args.out, "train.jsonl"),
+                                os.path.join(args.out, "train-info.jsonl"))
+    meta["valid"] = build_split(cfg, valid_flat, valid_pos, args.valid_flat_n, args.close_n, SEED + 7, os.path.join(args.out, "valid.jsonl"),
+                                os.path.join(args.out, "valid-info.jsonl"), cap=1.0, position_cap=1.0)
+    meta["sha256"] = {n: hashlib.sha256(open(os.path.join(args.out, n), "rb").read()).hexdigest()[:16]
+                      for n in ("train.jsonl", "valid.jsonl", "valid-info.jsonl")}
+    _dump(os.path.join(args.out, "meta.json"), meta)
+    print(json.dumps({k: meta[k] for k in ("trimestre", "entrena", "mide", "train", "valid")}, ensure_ascii=False, indent=1))
+
+
+def night_plan(last_done=None):
+    """Las noches en orden: una por trimestre, de 2023Q2 al último que no llega al holdout. ``last_done`` = el último ya entrenado."""
+    from . import futures_walkforward as wf
+    names = [qname(*k) for k in wf.quarters(qt.load_holdout_ms())][1:]
+    names = [n for n in names if qend_ms(int(n[:4]), int(n[5])) <= qt.load_holdout_ms()]
+    if last_done:
+        names = [n for n in names if (int(n[:4]), int(n[5])) > parse_quarter(last_done)]
+    return names
 
 
 # --------------------------------------------------------------------------- CLI
@@ -544,6 +630,7 @@ def _parser():
     r = sub.add_parser("informe")
     r.add_argument("--dir", required=True, help="carpeta de la noche: base-valid.json, historia.jsonl, best.json, best-practica.json")
     r.add_argument("--out", required=True)
+    r.add_argument("--valid", default="2025-08/09", help="qué se midió (p. ej. el trimestre 2024Q1)")
     b = sub.add_parser("armar")
     b.add_argument("--cache-dir", required=True)
     b.add_argument("--pairs-dir", required=True)
@@ -553,6 +640,19 @@ def _parser():
     b.add_argument("--valid-flat-n", type=int, default=120)
     b.add_argument("--close-n", type=int, default=400)
     b.add_argument("--wait-rate", type=float, default=0.03)
+    t = sub.add_parser("armar-trimestre", help="el dataset de la noche de un trimestre (entrena con los anteriores, mide en ese)")
+    t.add_argument("--trimestre", required=True, help="p. ej. 2024Q1")
+    t.add_argument("--cache-dir", required=True)
+    t.add_argument("--out", required=True)
+    t.add_argument("--rows-dir", required=True, help="donde quedan las miradas ya juntadas de cada trimestre (se reutilizan)")
+    t.add_argument("--pares", default=None, help="tabla de pares trimestrales (por defecto config/walkforward/pares.json)")
+    t.add_argument("--config", default=None)
+    t.add_argument("--flat-n", type=int, default=600)
+    t.add_argument("--valid-flat-n", type=int, default=120)
+    t.add_argument("--close-n", type=int, default=400)
+    t.add_argument("--wait-rate", type=float, default=0.03)
+    n = sub.add_parser("plan-noches", help="las noches que faltan, en orden")
+    n.add_argument("--ultima", default=None, help="el último trimestre ya entrenado")
     return p
 
 
@@ -565,10 +665,15 @@ def main(argv=None):
         history = [json.loads(x) for x in open(os.path.join(args.dir, "historia.jsonl"), encoding="utf-8") if x.strip()]
         path = lambda name: os.path.join(args.dir, name)
         text = night_report(load("base-valid.json") if os.path.exists(path("base-valid.json")) else None, history, load("best.json")["paso"],
-                            load("best-practica.json") if os.path.exists(path("best-practica.json")) else None)
+                            load("best-practica.json") if os.path.exists(path("best-practica.json")) else None, valid_label=args.valid)
         with open(args.out, "w", encoding="utf-8") as handle:
             handle.write(text)
         print(text)
+    elif args.command == "armar-trimestre":
+        _build_quarter(args)
+    elif args.command == "plan-noches":
+        for name in night_plan(args.ultima):
+            print(name)
     elif args.command == "ajustar":
         fit_pairs(args.facts, args.cache_dir, args.out)
     else:
