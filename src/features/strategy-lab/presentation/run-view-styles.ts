@@ -4,6 +4,10 @@ export const RUN = {
   title:
     'm-0 block text-run-title leading-normal font-semibold text-ink panel-small:text-note panel-small:leading-normal panel-small:font-normal panel-small:text-ink-2',
   hint: 'm-0 text-note leading-normal text-ink-2',
+  probe:
+    'cursor-pointer! rounded-sm border border-solid border-long! bg-long! px-3.5! py-1.5! text-note! font-semibold text-on-long!',
+  probeMenu:
+    'absolute top-full right-0 z-10 mt-1 hidden w-72 gap-1 rounded-lg border border-solid border-line-strong bg-surface-2 p-1 data-open:grid *:text-left!',
   stageLabel: 'm-0 text-body text-ink',
   warn: 'm-0 rounded-sm border border-solid border-warn px-2.5 py-2 text-note leading-normal text-ink',
   stages: 'm-0 grid list-none grid-cols-5 gap-2 p-0',
