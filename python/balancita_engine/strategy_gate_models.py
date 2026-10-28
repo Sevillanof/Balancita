@@ -195,7 +195,8 @@ def scheme_replay(product_id, funding, start_ms, end_ms):
     from . import futures_qwen_live as live
     from . import futures_qwen_trader as qt
     from . import futures_qwen_trader_exam as exam
-    cfg = live.apply_overrides(qt.load_config(qt.CONFIG_PATH_LIVE))
+    from . import futures_qwen_exigencia as exigencia
+    cfg = exigencia.apply_env(live.apply_overrides(qt.load_config(qt.CONFIG_PATH_LIVE)))   # niveles de la prueba (5 y 5: paper)
     holdout_ms = qt.load_holdout_ms()
     if start_ms >= holdout_ms or product_id not in cfg["products"]:
         return []
@@ -209,7 +210,12 @@ def scheme_replay(product_id, funding, start_ms, end_ms):
 class QwenLiveTrades:
     """``trade_source`` of the live Qwen operator: answered photos before the cut, its own closed paper trades after it."""
 
-    note = LIVE_NOTE
+    @property
+    def note(self):
+        from . import futures_qwen_exigencia as exigencia
+        got = exigencia.from_env()
+        return "{} Exigencia de esta prueba: maestro {} y portero {} (de 0 a 10; {} es lo que opera en paper).".format(
+            LIVE_NOTE, got["maestro"], got["portero"], exigencia.DEFAULT)
 
     def __init__(self, live_db_path, exam_db_path, replay=None):
         self.live_db_path, self.exam_db_path = live_db_path, exam_db_path

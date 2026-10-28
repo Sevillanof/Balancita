@@ -8,6 +8,7 @@ import json
 import os
 import threading
 
+from . import futures_qwen_exigencia as exigencia
 from . import futures_qwen_quick_variants as variants
 from . import futures_qwen_trader_exam as exam
 from . import strategy_gate_models as models
@@ -76,16 +77,24 @@ class QuickTestApi:
         state = self._read(variant)
         return dict(state, variant=variant, snapshots=exam.QUICK_SNAPSHOTS, note=exam.QUICK_NOTE, variants=catalog)
 
-    def launch(self, strategy_id, variant=None):
+    def launch(self, strategy_id, variant=None, exigencia_levels=None):
+        """``exigencia_levels``: ``{maestro, portero}`` 0-10 for this test only (5 and 5 = what paper operates)."""
         self._check(strategy_id)
         chosen = self._variant(variant)
+        asked = exigencia_levels or {}
+        if not isinstance(asked, dict) or set(asked) - {"maestro", "portero"}:
+            raise GateApiError("invalid_exigencia", "La exigencia lleva 'maestro' y 'portero', de 0 a 10.", 422)
+        try:
+            levels_env = exigencia.env_for(asked.get("maestro"), asked.get("portero"))
+        except ValueError as error:
+            raise GateApiError("invalid_exigencia", str(error), 422) from error
         with self._lock:
             if any(v["state"] == "running" for v in self._catalog()):
                 raise GateApiError("busy", "Ya hay una prueba rápida en curso.", 409)
             # «actual» is Qwen en vivo as it runs today (its own config, ``--version live``); the others change the v3 questions
             args = [self.python, "-m", "balancita_engine.futures_qwen_trader", "exam", "--version", chosen.get("base", "3"),
                     "--exam-db", self.exam_db_path, "--quick", str(exam.QUICK_SNAPSHOTS), "--variant", chosen["id"]]
-            env = dict(os.environ)
+            env = dict(os.environ, **levels_env)
             env["PYTHONPATH"] = os.pathsep.join(p for p in (os.path.join(ROOT, "python"), env.get("PYTHONPATH")) if p)
             log_path = os.path.join(os.path.dirname(self.exam_db_path), "rapida-v3-{}.log".format(chosen["id"]))
             self.spawn(args, env, ROOT, log_path)

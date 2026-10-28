@@ -20,6 +20,7 @@ los que la config declara: cambiar una fórmula es cambiar de versión.
 import math
 import os
 
+from . import futures_qwen_exigencia as exigencia
 from . import futures_qwen_ficha as ficha
 from . import futures_qwen_maestro as maestro
 from . import futures_qwen_portero as portero
@@ -47,6 +48,8 @@ def formulas(cfg):
             raise qt.TraderError("{}: el archivo {} tiene hash {}, la config declara {}: es otra fórmula, hace falta otra versión".format(
                 name, path, got[:12], spec[name + "_hash"]))
         out.append(cached)
+    if cfg.get("exigencia"):                            # solo en las pruebas de /Estrategias: otros umbrales, la fórmula es la misma
+        return exigencia.apply(out[0], out[1], exigencia.levels(**cfg["exigencia"]))
     return tuple(out)
 
 

@@ -314,6 +314,7 @@ describe('StrategyRunView actions', () => {
       ganadoras: winners,
       ic: [net - 20, net + 20] as [number, number],
       total_bp: net * n,
+      por_semana: 2.5,
       por_vuelta: flips,
       por_tiempo: timeouts,
       horas: 11.6,
@@ -390,7 +391,10 @@ describe('StrategyRunView actions', () => {
       />,
     )
     await user.click(await screen.findByRole('button', { name: /Con Qwen/ }))
-    expect(quick.start).toHaveBeenCalledWith('qwen-live', 'actual')
+    expect(quick.start).toHaveBeenCalledWith('qwen-live', 'actual', {
+      maestro: 5,
+      portero: 5,
+    })
     expect(
       await screen.findByRole('progressbar', {
         name: 'Progreso de la prueba rápida',
@@ -415,10 +419,41 @@ describe('StrategyRunView actions', () => {
     const table = screen.getByRole('table', { name: 'Por operación' })
     expect(
       within(table).getByRole('row', {
-        name: /La fórmula sola: maestro fuerte con portero a favor 20 \+45,2 pb 65 % 16 \/ 4/,
+        name: /La fórmula sola: maestro fuerte con portero a favor 20 2,5 \+45,2 pb 65 % 16 \/ 4/,
       }),
     ).toBeInTheDocument()
   }, 15000)
+
+  it('the exigencia of the maestro and the portero starts at paper (5 and 5) and goes with the quick test', async () => {
+    const user = userEvent.setup()
+    const quick = {
+      status: vi.fn(async () => ({ state: 'none', snapshots: 300, note: 'n' })),
+      start: vi.fn(async () => undefined),
+    } as unknown as import('../infrastructure/quick-api.ts').QuickApi
+    render(
+      <StrategyRunView
+        strategyId="qwen-live"
+        strategyName="Qwen en vivo"
+        version={1}
+        kind="qwen_live"
+        gate={gateWith(overview([]))}
+        visual={visualWith()}
+        quick={quick}
+      />,
+    )
+    const sliders = await screen.findAllByRole('slider')
+    expect(sliders.map((s) => (s as HTMLInputElement).value)).toEqual([
+      '5',
+      '5',
+    ])
+    fireEvent.change(sliders[0]!, { target: { value: '8' } })
+    fireEvent.change(sliders[1]!, { target: { value: '2' } })
+    await user.click(await screen.findByRole('button', { name: /Con Qwen/ }))
+    expect(quick.start).toHaveBeenCalledWith('qwen-live', 'actual', {
+      maestro: 8,
+      portero: 2,
+    })
+  })
 
   it('the quick test lets you pick a variant and compares the finished ones', async () => {
     const user = userEvent.setup()
@@ -480,7 +515,10 @@ describe('StrategyRunView actions', () => {
       await screen.findByRole('table', { name: 'Comparación de variantes' }),
     ).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: /Con Qwen · .*Qwen3/ }))
-    expect(quick.start).toHaveBeenCalledWith('qwen-live', 'm1-qwen3-8b')
+    expect(quick.start).toHaveBeenCalledWith('qwen-live', 'm1-qwen3-8b', {
+      maestro: 5,
+      portero: 5,
+    })
   })
 
   it('the sheet variants show the reading table and the comparison with the rule without Qwen', async () => {
@@ -593,7 +631,10 @@ describe('StrategyRunView actions', () => {
         name: /Ficha de 8 factores con pista de reversión/,
       }),
     )
-    expect(quick.start).toHaveBeenCalledWith('qwen-live', 'ficha-pista')
+    expect(quick.start).toHaveBeenCalledWith('qwen-live', 'ficha-pista', {
+      maestro: 5,
+      portero: 5,
+    })
     const reads = await screen.findByRole('table', {
       name: 'Lectura por renglón',
     })

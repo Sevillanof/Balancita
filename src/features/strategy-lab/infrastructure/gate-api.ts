@@ -70,7 +70,13 @@ export type GateRun = {
   error: string | null
   has_report: boolean
   /** Window and products the run asked for (the server stores them). */
-  params?: { from?: string; to?: string; products?: string[] } | null
+  params?: {
+    from?: string
+    to?: string
+    products?: string[]
+    /** Qwen en vivo: the levels 0–10 of the maestro and the portero this test ran with. */
+    exigencia?: { maestro: number; portero: number } | null
+  } | null
   /** True when the run is of the strategy's current content (the server marks it). */
   same_version?: boolean
   /** Scope, accounting, temporal and audit evidence: all missing on runs made before they existed. */
@@ -107,6 +113,8 @@ export type GateRequest = {
   to?: string
   products?: string[]
   exam?: boolean
+  /** Qwen en vivo only: exigencia 0–10 of the maestro and the portero for this test (5 and 5 = what paper operates). */
+  exigencia?: { maestro: number; portero: number }
 }
 
 export type GateApi = {
