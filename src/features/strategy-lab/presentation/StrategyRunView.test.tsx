@@ -389,9 +389,7 @@ describe('StrategyRunView actions', () => {
         quick={quick}
       />,
     )
-    await user.click(
-      await screen.findByRole('button', { name: 'Prueba rápida' }),
-    )
+    await user.click(await screen.findByRole('button', { name: /Con Qwen/ }))
     expect(quick.start).toHaveBeenCalledWith('qwen-live', 'actual')
     expect(
       await screen.findByRole('progressbar', {
@@ -478,14 +476,10 @@ describe('StrategyRunView actions', () => {
         quick={quick}
       />,
     )
-    const picker = await screen.findByRole('combobox', {
-      name: 'Variante de la prueba rápida',
-    })
     expect(
       await screen.findByRole('table', { name: 'Comparación de variantes' }),
     ).toBeInTheDocument()
-    await user.selectOptions(picker, 'm1-qwen3-8b')
-    await user.click(screen.getByRole('button', { name: 'Prueba rápida' }))
+    await user.click(screen.getByRole('button', { name: /Con Qwen · .*Qwen3/ }))
     expect(quick.start).toHaveBeenCalledWith('qwen-live', 'm1-qwen3-8b')
   })
 
@@ -589,21 +583,16 @@ describe('StrategyRunView actions', () => {
         quick={quick}
       />,
     )
-    const picker = await screen.findByRole('combobox', {
-      name: 'Variante de la prueba rápida',
-    })
     expect(
-      within(picker).getByRole('option', {
-        name: 'Ficha de 8 factores con gradiente',
+      await screen.findByRole('button', {
+        name: /Ficha de 8 factores con gradiente/,
       }),
     ).toBeInTheDocument()
-    expect(
-      within(picker).getByRole('option', {
-        name: 'Ficha de 8 factores con pista de reversión',
+    await user.click(
+      screen.getByRole('button', {
+        name: /Ficha de 8 factores con pista de reversión/,
       }),
-    ).toBeInTheDocument()
-    await user.selectOptions(picker, 'ficha-pista')
-    await user.click(screen.getByRole('button', { name: 'Prueba rápida' }))
+    )
     expect(quick.start).toHaveBeenCalledWith('qwen-live', 'ficha-pista')
     const reads = await screen.findByRole('table', {
       name: 'Lectura por renglón',
@@ -629,7 +618,9 @@ describe('StrategyRunView actions', () => {
   it('rules strategies have no quick test button', async () => {
     renderView(gateWith(overview([])), visualWith())
     await screen.findByRole('button', { name: 'Testear' })
-    expect(screen.queryByRole('button', { name: 'Prueba rápida' })).toBeNull()
+    expect(
+      screen.queryByRole('button', { name: /Con Qwen|fórmula/ }),
+    ).toBeNull()
   })
 
   it('Testear asks how many tests in a row and runs them in distinct stretches', async () => {
