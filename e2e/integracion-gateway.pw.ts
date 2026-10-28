@@ -184,8 +184,8 @@ test('Terminal on the real gateway: every interaction answers without 404', asyn
     'aria-pressed',
     'true',
   )
-  await page.getByRole('combobox').first().selectOption('PF_ETHUSD')
-  await expect(page.getByTestId('activity-panel')).toContainText('ETH')
+  await page.getByRole('combobox').first().selectOption('PF_XBTUSD')
+  await expect(page.getByTestId('activity-panel')).toContainText('BTC')
 
   // Health inspector: open and close.
   await page.getByTestId('health-indicator').click()

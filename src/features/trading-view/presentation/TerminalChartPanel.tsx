@@ -136,6 +136,20 @@ const PANES: ReadonlyArray<{ id: Pane; label: string; live: boolean }> = [
 /** How long a pane without data still reads «Cargando» (the collector may be downloading). */
 const PANE_LOAD_MS = 90_000
 
+const BTC_ONLY_PANES: readonly Pane[] = [
+  'flow',
+  'oi',
+  'liquidations',
+  'positioning',
+]
+function btcOnlyPane(id: Pane, product: string | undefined): boolean {
+  return (
+    BTC_ONLY_PANES.includes(id) &&
+    product !== undefined &&
+    product !== 'PF_XBTUSD'
+  )
+}
+
 type Settings = { intervalMs: number; overlays: Overlay[]; panes: Pane[] }
 const STORAGE_KEY = 'balancita.terminal-chart.v1'
 const DEFAULTS: Settings = {
@@ -543,6 +557,13 @@ export default function TerminalChartPanel({
     .filter((id) => !panes.some((pane) => pane.id === id))
     .map((id) => {
       const label = PANES.find((pane) => pane.id === id)!.label
+      // The capture of order flow, open interest, liquidations and long/short
+      // is BTC only: for another product it never arrives, so no «Cargando».
+      if (remote !== null && btcOnlyPane(id, product))
+        return {
+          id,
+          text: `${label} solo se captura para BTC: no hay datos de ${productBase(product)}`,
+        }
       const loading =
         remote === null || now - (askedAt[askKey(id)] ?? now) < PANE_LOAD_MS
       return {

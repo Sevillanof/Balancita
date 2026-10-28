@@ -293,7 +293,7 @@ describe('FuturesTerminal presentation', () => {
     expect(parseTerminalEnvelope(snapshot)).not.toBeNull()
     TerminalSocket.latest!.publish(snapshot)
     expect(await screen.findByText(/100\.123,45/)).toBeTruthy()
-    expect(screen.getByText('Último trade público · USD/BTC')).toBeTruthy()
+    expect(screen.getByText('Último trade público · BTC/USD')).toBeTruthy()
     openStatus()
     expect(
       screen.getByText(/Evento .* UTC · recibido .* UTC · hace \d+ s/),

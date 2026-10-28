@@ -9,8 +9,13 @@ import {
 // terminal keeps retrying on its own instead of staying "unavailable".
 export const TERMINAL_RETRY_MS = 3_000
 
+// Since 2025-10-27 paper trades ETH only; BTC stays selectable as context.
+export const DEFAULT_TERMINAL_PRODUCT = 'PF_ETHUSD'
+
 function TerminalView() {
-  const [product, setProduct] = useState<string | undefined>(undefined)
+  const [product, setProduct] = useState<string | undefined>(
+    DEFAULT_TERMINAL_PRODUCT,
+  )
   const [state, setState] = useState<
     | { kind: 'loading' }
     | {
@@ -53,6 +58,7 @@ function TerminalView() {
               aria-label="Producto"
               value={product ?? products[0]}
               onChange={(event) => {
+                if (event.target.value === (product ?? products[0])) return
                 setState({ kind: 'loading' })
                 setProduct(event.target.value)
               }}

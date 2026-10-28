@@ -66,7 +66,7 @@ export default function FuturesTerminal({
   apiBase?: string
   /** Data-source control owned by the entry; rendered inside the header. */
   sourceSwitch?: ReactNode
-  /** Pinned product shown; undefined is the default (BTC). */
+  /** Pinned product shown; the entry pins ETH by default. */
   product?: string
 }) {
   const {
@@ -95,11 +95,13 @@ export default function FuturesTerminal({
     : undefined
   const market = record(state?.terminal_market)
   const marketState = record(state?.market)
+  const quoteBase = productBase(product ?? bootstrap.products?.[0])
   const quote = projectTerminalQuote({
     mode: bootstrap.mode,
     market: record(state?.market ?? bootstrap.market),
     terminalMarket: market,
     position,
+    base: quoteBase,
   })
   const displayedPrice = quote.price
   // The default view (no product pinned) is the first product: Qwen loads without touching the selector.
@@ -591,6 +593,7 @@ export default function FuturesTerminal({
                     position={position}
                     showAnalysisTime={showAnalysisTime}
                     historical={gatewayEngine}
+                    base={quoteBase}
                   />
                   <ApprovedPortfolioTables
                     label={`CARTERA PAPER · USD / ${productBase(product)}`}
@@ -620,7 +623,7 @@ export default function FuturesTerminal({
                                   ' · ',
                                 )[0]!,
                                 String(position.side),
-                                quantity(position.quantity_btc),
+                                quantity(position.quantity_btc, quoteBase),
                                 money(position.entry_price_usd_per_btc),
                                 money(position.stop),
                                 money(position.target),
@@ -663,7 +666,7 @@ export default function FuturesTerminal({
                               id: String(fill.fill_id ?? `fill-${index}`),
                               cells: [
                                 `Ejecución ${String(fill.action ?? fill.side ?? 'paper')}`,
-                                `${quantity(fill.quantity_btc)} @ ${money(fill.price_usd_per_btc)}`,
+                                `${quantity(fill.quantity_btc, quoteBase)} @ ${money(fill.price_usd_per_btc)}`,
                                 String(fill.fill_id ?? 'Fill registrado'),
                               ],
                             }

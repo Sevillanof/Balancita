@@ -75,7 +75,7 @@ describe('TerminalEntry', () => {
     )
     expect(fetchMock).toHaveBeenCalledTimes(1)
     expect(fetchMock).toHaveBeenCalledWith(
-      '/api-live/terminal/bootstrap',
+      '/api-live/terminal/bootstrap?product=PF_ETHUSD',
       expect.anything(),
     )
     expect(screen.queryByRole('radiogroup')).toBeNull()

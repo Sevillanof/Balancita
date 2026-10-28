@@ -60,7 +60,7 @@ const routed = new WeakSet<Page>()
 const counts = new WeakMap<Page, number>()
 
 async function routeTerminal(page: Page) {
-  await page.route('**/api-live/terminal/bootstrap', (route) =>
+  await page.route('**/api-live/terminal/bootstrap**', (route) =>
     route.fulfill({ json: bootstrap }),
   )
   await page.routeWebSocket(/\/api-live\/terminal\/stream/, (socket) => {
@@ -188,7 +188,7 @@ function systemUsage(cpu: number, rssMb: number, totalMb: number) {
 test('terminal live header shows the flow status and the usage chip', async ({
   page,
 }) => {
-  await page.route('**/api-live/terminal/bootstrap', (route) =>
+  await page.route('**/api-live/terminal/bootstrap**', (route) =>
     route.fulfill({
       json: {
         ...bootstrap,
@@ -297,7 +297,7 @@ test('terminal chart with two sub-panes takes the available height', async ({
     engine: { status: 'off', reason: 'fixture', commands: 'unavailable' },
     terminal_market: liveMarket,
   }
-  await page.route('**/api-live/terminal/bootstrap', (route) =>
+  await page.route('**/api-live/terminal/bootstrap**', (route) =>
     route.fulfill({ json: liveBootstrap }),
   )
   await page.route('**/api-live/terminal/chart**', (route) =>

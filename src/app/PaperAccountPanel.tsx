@@ -7,6 +7,7 @@ export default function PaperAccountPanel({
   position,
   showAnalysisTime,
   historical = false,
+  base = 'BTC',
 }: {
   account: Record<string, unknown>
   netValue: unknown
@@ -14,6 +15,7 @@ export default function PaperAccountPanel({
   showAnalysisTime: boolean
   /** Retired-book data: an empty position is not a current position. */
   historical?: boolean
+  base?: string
 }) {
   return (
     <section className={TERMINAL_PANEL} aria-label="Cuenta paper">
@@ -64,7 +66,7 @@ export default function PaperAccountPanel({
           <dt>Posición</dt>
           <dd>
             {position.side
-              ? `${String(position.side)} · ${quantity(position.quantity_btc)}`
+              ? `${String(position.side)} · ${quantity(position.quantity_btc, base)}`
               : historical
                 ? 'Sin posición abierta en el libro D'
                 : 'Sin posición abierta'}
