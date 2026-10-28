@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process'
-import { mkdirSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import {
   mismatchedDb,
   removeDevPid,
@@ -20,6 +20,7 @@ import {
   planChildExit,
   onlyChildSpecs,
   planStartup,
+  loraMismatchWarning,
   resolveLlamaModel,
   resolveLlamaServer,
   resolvePython,
@@ -138,6 +139,19 @@ let llmModelPath
 if (llmModel) {
   llmModelPath = llmModel.args?.[0] === '-m' ? llmModel.args[1] : undefined
   process.stdout.write(`${llmModel.message}\n`)
+}
+// The adapter llama-server loads must be the one the live config asks for.
+if (llmEnabled) {
+  let expected
+  try {
+    expected = JSON.parse(
+      readFileSync(resolve(root, 'config/qwen-live.json'), 'utf8'),
+    ).lora?.adapter
+  } catch {
+    expected = undefined
+  }
+  const warning = loraMismatchWarning({ expected, env })
+  if (warning) process.stderr.write(`${warning}\n`)
 }
 // Child output that never helps: Node's experimental-feature banner. Set
 // DEV_VERBOSE=1 to see everything.
