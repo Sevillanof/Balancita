@@ -33,6 +33,19 @@ Dataset (solo ETH, tope 36 h, fórmulas de cada trimestre ajustadas con BTC+ETH 
 trimestre. Cada ficha sin posición se juzga como si no hubiera posición (hay muchas más miradas con entrada que operaciones). Criterios
 fijos: PASA con acuerdo ≥ 85 %, espejo ≥ 90 %, ninguna respuesta > 70 %. Nada se activa en vivo sin otro Sí de Fran.
 
+### Cargar el adaptador de la destilación en Qwen en vivo (preparado, NO activado)
+
+La noche del 27 al 28-oct dejó `~/balancita-data.noindex/qwen-lora/qwen-destila.gguf` (el mejor paso, sin cargar). Qwen en vivo solo
+opina (decide la fórmula), así que cargarlo no cambia ninguna operación; solo cambia la opinión que se guarda. Pasos, cuando Fran diga Sí:
+
+1. `.env.local`: `LLAMA_LORA=~/balancita-data.noindex/qwen-lora/qwen-destila.gguf` y reiniciar `pnpm dev` (llama-server arranca con
+   `--lora-scaled <gguf>:0`: cargado con escala 0, sin efecto todavía).
+2. `PYTHONPATH=python python3 ops/qwen-lora/check_adapter.py`: `GET /lora-adapters` debe mostrar scale 0.
+3. En `config/qwen-live.json` agregar `"lora": {"request": [{"id": 0, "scale": 1.0}]}`: desde entonces cada pedido de Qwen en vivo
+   pide el adaptador (`lora_of`). Es parte de la identidad (`config_hash` cambia y la base en vivo se archiva sola), así que va en
+   su propia PR y las opiniones con y sin adaptador no se mezclan.
+4. Para volver atrás: quitar la clave `lora` de la config (y, si se quiere, `LLAMA_LORA`).
+
 ## Qué aprende
 
 **El veredicto del maestro de operación** (dataset v3, Fran 27-oct: «quiero que Qwen aprenda cuándo entrar y cuándo salir, que
