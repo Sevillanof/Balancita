@@ -26,12 +26,12 @@ export function projectTerminalQuote(input: {
     const tickerMark = isTicker ? decimal(normalized.mark) : null
     const price = tradePrice ?? tickerLast ?? tickerMark
     const label = tradePrice
-      ? `Último trade público · USD/${base}`
+      ? `Último trade público · ${base}/USD`
       : tickerLast
-        ? `Último ticker público · USD/${base}`
+        ? `Último ticker público · ${base}/USD`
         : tickerMark
-          ? `Mark público · USD/${base}`
-          : `Precio público no disponible · USD/${base}`
+          ? `Mark público · ${base}/USD`
+          : `Precio público no disponible · ${base}/USD`
     return {
       price,
       label,
@@ -48,8 +48,8 @@ export function projectTerminalQuote(input: {
   return {
     price: positionMark ?? candleClose,
     label: positionMark
-      ? `Precio de marca · USD/${base}`
-      : `Último cierre del fixture · USD/${base}`,
+      ? `Precio de marca · ${base}/USD`
+      : `Último cierre del fixture · ${base}/USD`,
     eventTime: null,
     receivedAt: null,
   }

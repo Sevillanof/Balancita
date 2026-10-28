@@ -14,7 +14,7 @@ describe('terminal market quote projection', () => {
         position: null,
         base: 'ETH',
       }).label,
-    ).toBe('Último ticker público · USD/ETH')
+    ).toBe('Último ticker público · ETH/USD')
   })
 
   it('uses the received public trade rather than a stale candle in PAPER_LIVE', () => {
@@ -34,7 +34,7 @@ describe('terminal market quote projection', () => {
       }),
     ).toEqual({
       price: '100123.45',
-      label: 'Último trade público · USD/BTC',
+      label: 'Último trade público · BTC/USD',
       eventTime: 1_800_000_000_000,
       receivedAt: 1_800_000_000_125,
     })

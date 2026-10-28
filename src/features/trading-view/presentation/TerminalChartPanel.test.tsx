@@ -33,7 +33,7 @@ const flow = (extra: Record<string, number | null>) => ({
   ...extra,
 })
 
-function panel(live = true) {
+function panel(live = true, product?: string) {
   return (
     <TerminalChartPanel
       candles={[candle(1_000), candle(1_060)]}
@@ -42,6 +42,7 @@ function panel(live = true) {
       onSelect={() => undefined}
       apiBase="http://x"
       live={live}
+      product={product}
       ticker={null}
       position={{}}
       orders={[]}
@@ -142,6 +143,17 @@ describe('terminal chart panes still loading', () => {
     expect(
       screen.getByText('Cargando Prima perpetuo-contado (pb)…'),
     ).toBeTruthy()
+  })
+
+  it('says at once that the BTC-only panes have no data for ETH', () => {
+    state.remote = { candles: [], flow: [], depth: null, ticker: null }
+    render(panel(true, 'PF_ETHUSD'))
+    expect(
+      screen.getByText(
+        'Long/short solo se captura para BTC: no hay datos de ETH',
+      ),
+    ).toBeTruthy()
+    expect(screen.queryByText('Cargando Long/short…')).toBeNull()
   })
 
   it('keeps «Cargando» for a pane the server has no points for yet, then says «Sin datos»', () => {
