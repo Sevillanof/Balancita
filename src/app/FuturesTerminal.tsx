@@ -66,7 +66,7 @@ export default function FuturesTerminal({
   apiBase?: string
   /** Data-source control owned by the entry; rendered inside the header. */
   sourceSwitch?: ReactNode
-  /** Pinned product shown; undefined is the default (BTC). */
+  /** Pinned product shown; the entry pins ETH by default. */
   product?: string
 }) {
   const {

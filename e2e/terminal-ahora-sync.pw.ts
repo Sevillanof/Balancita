@@ -130,9 +130,26 @@ async function openTerminal(page: Page) {
   await page.clock.install()
   await page.clock.resume()
   await page.goto('/terminal')
+  // The Terminal opens on ETH; these checks are written against the XBT seed.
+  await expect(page.getByRole('combobox').first()).toHaveValue('PF_ETHUSD')
+  await page.getByRole('combobox').first().selectOption('PF_XBTUSD')
+  await expect(page.getByRole('combobox').first()).toHaveValue('PF_XBTUSD')
+  await expect(page.getByTestId('source-health')).toContainText(
+    'Salud de la fuente · XBT',
+  )
   await expect(page.getByTestId('observer-now')).toBeVisible()
   await expect(page.getByTestId('approved-chart-renderer')).toBeVisible()
 }
+
+test('the Terminal opens on ETH, the traded product', async ({ page }) => {
+  await page.goto('/terminal')
+  await expect(page.getByRole('combobox').first()).toHaveValue('PF_ETHUSD')
+  await expect(page.getByTestId('source-health')).toContainText(
+    'Salud de la fuente · ETH',
+  )
+  if (SHOTS)
+    await page.screenshot({ path: `${SHOTS}/terminal-abre-en-eth.png` })
+})
 
 test('AHORA shows the last real analysis of the stream, with its source', async ({
   page,

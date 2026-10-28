@@ -124,7 +124,7 @@ export function terminalApiBase(): string {
 /** A hung backend must surface as an explicit error, never an endless spinner. */
 export const TERMINAL_BOOTSTRAP_TIMEOUT_MS = 8_000
 
-/** `?product=` suffix; empty for the default product (BTC). */
+/** `?product=` suffix; empty for the server default product (BTC). */
 export function productQuery(product?: string, first = true): string {
   return product
     ? `${first ? '?' : '&'}product=${encodeURIComponent(product)}`
