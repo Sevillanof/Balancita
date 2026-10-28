@@ -8,7 +8,6 @@ already written elsewhere and writes nothing:
   ``config/forward-strategies.json``, ``config/qwen-exit.json``,
 * ``config/strategy-reliability.json`` (verdict and numbers of the backtest),
 * the shipped specs and the model descriptor of Kronos,
-* the carry counter summary, when it exists.
 
 Two axes are never mixed: ``operational`` (does it run: active, closed, ...) and ``research``
 (what the evidence says: the reliability verdict). Nothing is invented: a datum with no source is
@@ -101,7 +100,7 @@ def _horizon(plan):
     return None if plan is None else (plan.get("exit") or {}).get("time_minutes")
 
 
-def build_inventory(entries, specs, *, config_dir=None, carry=None, forward_result=None):
+def build_inventory(entries, specs, *, config_dir=None, forward_result=None):
     """The inventory. ``entries`` is ``registry.list()``; ``specs`` maps ``id`` to the stored spec of that entry."""
     config_dir = config_dir or DEFAULT_CONFIG_DIR
     reliability = _read(config_dir, "strategy-reliability.json") or {}
@@ -251,29 +250,11 @@ def build_inventory(entries, specs, *, config_dir=None, carry=None, forward_resu
             "note": kronos.get("note"), "no_backtest": True,
         })
 
-    if carry is not None:
-        rows.append({
-            "id": carry["id"], "version": 1, "name": carry["name"], "description": carry.get("note", ""),
-            "kind": "carry", "spec_hash": None,
-            # Without a state or summary file the "enabled" flag is only the config default: not verified.
-            "operational": {"state": ("unverified" if carry.get("start_ms") is None and carry.get("updated_ms") is None
-                                      else "tracking" if carry.get("enabled") else "inactive"),
-                            "basis": "registry",
-                            "since_ms": carry.get("start_ms"), "reason": None},
-            "frozen": False,
-            "research": {"state": "registry_note", "evidence_of_edge": False, "reliable": False,
-                         "investigating": False, "backtest": None, "text": carry.get("label")},
-            "forward": forward_block(),
-            "market": {"products": len(carry.get("products") or []) or None, "horizon_minutes": None,
-                       "exit_by": None},
-            "note": carry.get("note"), "no_backtest": True,
-        })
-
     for row in rows:
         _attach_forward(row, forward_result, min_forward)
 
     order = {"closed": 1}
-    rows.sort(key=lambda r: (order.get(r["operational"]["state"], 0), r["kind"] == "carry", r["id"]))
+    rows.sort(key=lambda r: (order.get(r["operational"]["state"], 0), r["id"]))
     return {
         "schema": INVENTORY_SCHEMA,
         "cost_model": reliability.get("cost_model"),
@@ -302,7 +283,6 @@ _NOT_IN_FORWARD = {
     "qwen_live": "Qwen en vivo guarda su resultado en su propia base (qwen-live); este resumen no la lee",
     "qwen_exit": "C31 guarda su resultado en su propia base (qwen-exit); este resumen no la lee",
     "model": "Kronos guarda su actividad aparte (kronos_lab); este resumen no la lee",
-    "carry": "contador aparte: no abre operaciones forward",
 }
 
 
@@ -331,9 +311,9 @@ def _attach_forward(row, forward_result, min_trades):
 
 
 def _counts(rows):
-    open_rows = [r for r in rows if r["operational"]["state"] != "closed" and r["kind"] != "carry"]
+    open_rows = [r for r in rows if r["operational"]["state"] != "closed"]
     return {
-        "strategies": len([r for r in rows if r["kind"] != "carry"]),
+        "strategies": len(rows),
         "active": len([r for r in open_rows if r["operational"]["state"] == "active"]),
         "frozen": len([r for r in rows if r["frozen"]]),
         "closed": len([r for r in rows if r["operational"]["state"] == "closed"]),

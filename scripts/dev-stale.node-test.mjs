@@ -55,7 +55,6 @@ describe('devChildName', () => {
     assert.equal(devChildName(py('futures_qwen_live')), 'qwenlive')
     assert.equal(devChildName(py('futures_qwen_exit')), 'qwenexit')
     assert.equal(devChildName(py('futures_verdicts')), 'verdict')
-    assert.equal(devChildName(py('futures_carry')), 'carry')
     assert.equal(devChildName(py('futures_strategy_registry')), 'strategies')
     assert.equal(devChildName(py('futures_llm_decisions')), 'q')
     assert.equal(
@@ -185,19 +184,19 @@ describe('sweepStale: leftover dev children', () => {
     assert.match(result.stopped[0], /pid 50 \(forward, running 5h\)/)
   })
 
-  it('stops a carry found by its cwd when the command has no root', async () => {
-    const carry = {
+  it('stops a forward found by its cwd when the command has no root', async () => {
+    const forward = {
       pid: 60,
       pgid: 60,
-      command: 'python3 -m balancita_engine.futures_carry --state ./data/c',
+      command: 'python3 -m balancita_engine.futures_forward --out ./data/f',
     }
     const probe = fakeProbe({
-      procs: { 60: { ...carry, cwd: `${root}/server` } },
-      processes: [carry],
+      procs: { 60: { ...forward, cwd: `${root}/server` } },
+      processes: [forward],
     })
     const result = await sweepStale({ ...base, probe })
     assert.deepEqual(probe.signals, [[60, 'SIGTERM', true]])
-    assert.match(result.stopped[0], /pid 60 \(carry\)/)
+    assert.match(result.stopped[0], /pid 60 \(forward\)/)
   })
 
   it('leaves the forward of another checkout alone and does not mention it', async () => {

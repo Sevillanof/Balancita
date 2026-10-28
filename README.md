@@ -21,7 +21,7 @@ Espacio de trading personal, local y **solo futuros perpetuos de Kraken (`PF_*`)
 - Ni las reglas de velas ni Qwen han mostrado ventaja neta tras costes. C25-C28 se dan por cerradas; C29, C30, C31 y Kronos siguen en paper hasta 100 operaciones y no se tocan mientras tanto.
 - La ejecución pasiva (maker) se simuló contra la cinta pública de Kraken y no crea ventaja: archivada.
 - Qwen decide solo en replays (brazo A/B) y como decisor de salida de C31; el reglamento está en la enmienda 2026-10-11 del [ADR 0001](docs/adr/0001-isolated-paper-futures-accounting.md).
-- `DEV_ONLY=vite,capture,live,forward,strategies pnpm dev` arranca solo los procesos que mide el seguimiento, sin el contador de carry; Qwen (modelo, veredictos, decisiones y salida C31) arranca siempre, salvo `DECISIONS_ENABLED=0`.
+- `DEV_ONLY=vite,capture,live,forward,strategies pnpm dev` arranca solo los procesos que mide el seguimiento (hoy `pnpm dev` a secas arranca exactamente eso); Qwen (modelo, veredictos, decisiones y salida C31) arranca siempre, salvo `DECISIONS_ENABLED=0`.
 
 ## Arquitectura
 
@@ -122,7 +122,7 @@ pnpm install
 pnpm dev          # abre http://localhost:5173
 ```
 
-`pnpm dev` comprueba los puertos 5173, 8789 y 8790 antes de arrancar; si uno está ocupado dice cuál y sale con código 1 (`lsof -ti tcp:<puerto> | xargs kill`). Cada proceso tiene su log con prefijo, Ctrl+C detiene todo el grupo y los restos de un `dev` anterior en este checkout se limpian solos: al arrancar cierra las copias viejas de sus propios hijos (forward, carry, Qwen, capture, vite, llama-server...) de este mismo checkout, y nada más. El estado de cada proceso se escribe en `server/data/dev-live/dev-health.json`.
+`pnpm dev` comprueba los puertos 5173, 8789 y 8790 antes de arrancar; si uno está ocupado dice cuál y sale con código 1 (`lsof -ti tcp:<puerto> | xargs kill`). Cada proceso tiene su log con prefijo, Ctrl+C detiene todo el grupo y los restos de un `dev` anterior en este checkout se limpian solos: al arrancar cierra las copias viejas de sus propios hijos (forward, Qwen, capture, vite, llama-server...) de este mismo checkout, y nada más. El estado de cada proceso se escribe en `server/data/dev-live/dev-health.json`.
 
 Sin red, `capture` y la fuente Real avisan; `vite` y el resto siguen funcionando.
 

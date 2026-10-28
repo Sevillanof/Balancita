@@ -41,7 +41,6 @@ const optionalChildren = new Set([
   'verdict',
   'forward',
   'strategies',
-  'carry',
   'llm',
   'q',
   'qwenexit',
@@ -55,7 +54,6 @@ const exitLabels = {
   forward:
     'The forward paper measurement (new forward trades of registered strategies)',
   strategies: 'The strategy registry (strategies page and backtests)',
-  carry: 'The funding carry counter (new carry results)',
   llm: 'The llama-server model (new LLM decisions)',
   q: 'The LLM decision service (new LLM decisions)',
   qwenexit: 'The Qwen exit book C31 (new trades closed by Qwen)',
@@ -94,7 +92,7 @@ if (!llmEnabled && (env.DECISIONS_ENABLED ?? '').trim() !== '0') {
 const liveDir = resolve(root, 'server/data/dev-live')
 mkdirSync(liveDir, { recursive: true })
 // Leftovers of an earlier `pnpm run dev` in this checkout (ports, writer
-// locks, and dev children such as forward or carry that hold neither) are
+// locks, and dev children such as forward or qwenlive that hold neither) are
 // stopped; a port held by anything else is reported and we exit.
 const sweepPorts = [
   ...Object.entries(DEV_PORTS).map(([name, port]) => ({ name, port })),

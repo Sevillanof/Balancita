@@ -13,7 +13,7 @@ import { join } from 'node:path'
 // checkout (command line or cwd under `root`) is a leftover of an earlier
 // `pnpm run dev` and is stopped; anything else is reported and left alone.
 // Last, every process of the system is looked at: the Python/Node children that
-// open no port and leave no lock (forward, carry, qwenlive...) would otherwise
+// open no port and leave no lock (forward, qwenlive...) would otherwise
 // survive an orchestrator that died without cleaning up and run twice.
 
 function run(command, args, maxBuffer) {
@@ -144,7 +144,6 @@ const PYTHON_MODULES = [
   ['qwenexit', 'futures_qwen_exit'],
   ['verdict', 'futures_verdicts'],
   ['forward', 'futures_forward'],
-  ['carry', 'futures_carry'],
   ['strategies', 'futures_strategy_registry'],
 ]
 const NODE_ENTRYPOINTS = [

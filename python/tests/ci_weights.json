@@ -11,7 +11,6 @@
   "test_funding_causal": 2,
   "test_funding_recovery": 4,
   "test_futures_canonical": 1,
-  "test_futures_carry": 1,
   "test_futures_costs": 1,
   "test_futures_forward": 125,
   "test_futures_forward_incremental": 144,

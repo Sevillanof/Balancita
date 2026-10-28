@@ -593,7 +593,7 @@ export const QWEN_CHILDREN = ['verdict', 'llm', 'q', 'qwenexit', 'qwenlive']
 /**
  * `DEV_ONLY=vite,capture,live,forward,strategies` runs just those children (comma separated names of
  * `devChildSpecs`); unset or empty runs everything. Unknown names are ignored. Used to leave only the
- * forward measurement and the capture it reads running, without the carry counter. Qwen (see
+ * forward measurement and the capture it reads running. Qwen (see
  * QWEN_CHILDREN) is never left out by it: only DECISIONS_ENABLED=0 (or a missing model) turns it off.
  */
 export function onlyChildSpecs(specs, env = {}) {
@@ -700,8 +700,6 @@ export function devChildSpecs({
     (env.KRONOS_SUMMARY_PATH ?? '').trim() ||
     `${serverCwd}/data/kronos/kronos-summary.json`
   const kronosDir = kronosSummary.slice(0, kronosSummary.lastIndexOf('/'))
-  // Funding carry counter (no orders): its state and summary; the registry serves and toggles them.
-  const carryDir = liveDb('carry')
   const llmOn =
     Boolean(python?.command && llm?.command) &&
     (env.DECISIONS_ENABLED ?? '').trim() !== '0' &&
@@ -957,29 +955,6 @@ export function devChildSpecs({
         },
       },
       {
-        // Funding carry counter (long spot + short perpetual, paper): public Kraken data, every hour.
-        name: 'carry',
-        command: python.command,
-        cwd: serverCwd,
-        args: [
-          ...python.prefixArgs,
-          '-m',
-          'balancita_engine.futures_carry',
-          '--state',
-          `${carryDir}/carry-state.json`,
-          '--out',
-          `${carryDir}/carry-summary.json`,
-          '--loop-seconds',
-          '3600',
-        ],
-        env: {
-          ...env,
-          PYTHONPATH: [`${root}/python`, env.PYTHONPATH]
-            .filter(Boolean)
-            .join(delimiter),
-        },
-      },
-      {
         name: 'strategies',
         command: python.command,
         cwd: serverCwd,
@@ -1014,7 +989,6 @@ export function devChildSpecs({
         env: {
           ...env,
           STRATEGY_FORWARD_PATH: forwardPath,
-          CARRY_DIR: carryDir,
           PYTHONPATH: [`${root}/python`, env.PYTHONPATH]
             .filter(Boolean)
             .join(delimiter),
