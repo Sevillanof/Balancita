@@ -135,7 +135,8 @@ export const DEFAULT_LLAMA_PORT = 8088
  */
 export const DESTILA_GGUF = 'qwen-lora/qwen-destila.gguf'
 export function defaultLora({ env, exists = existsSync, home = homedir() }) {
-  const dir = (env.BALANCITA_DATA ?? '').trim() || join(home, 'balancita-data.noindex')
+  const dir =
+    (env.BALANCITA_DATA ?? '').trim() || join(home, 'balancita-data.noindex')
   const path = join(dir, DESTILA_GGUF)
   return exists(path) ? path : ''
 }
@@ -839,7 +840,9 @@ export function devChildSpecs({
           // sends a `lora` field, so it runs at the start scale 0 and its answers do not change;
           // only a request that asks for it (`exam --lora`, see futures_qwen_lora.py) gets the adapter.
           ...loraFlags(
-            (env.LLAMA_LORA ?? '').trim() ? env.LLAMA_LORA : defaultLora({ env, exists }),
+            (env.LLAMA_LORA ?? '').trim()
+              ? env.LLAMA_LORA
+              : defaultLora({ env, exists }),
           ),
           '--no-mmproj',
           '--no-webui',
