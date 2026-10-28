@@ -171,8 +171,6 @@ def run_night():
     say("fin. Informe: {}".format(os.path.join(OUT, "informe.md")))
 
 
-if __name__ == "__main__":
-    main()
 
 
 def sigue():
@@ -260,3 +258,7 @@ def finish(history):
     say("GGUF del mejor: {} (NO está cargado en ningún lado)".format(gguf) if ok else "la conversión a GGUF falló")
     run([PY, "-m", "balancita_engine.futures_qwen_destila", "informe", "--dir", OUT, "--out", os.path.join(OUT, "informe.md")], "el informe")
     say("fin. Informe: {}".format(os.path.join(OUT, "informe.md")))
+
+
+if __name__ == "__main__":
+    main()
