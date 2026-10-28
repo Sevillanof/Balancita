@@ -214,6 +214,21 @@ const renderView = (
   )
 
 describe('StrategyRunView actions', () => {
+  it('reports the net per operation the panel shows, for the list beside it', async () => {
+    const onNet = vi.fn()
+    render(
+      <StrategyRunView
+        strategyId="c30"
+        strategyName="C30"
+        version={1}
+        gate={gateWith(overview([stageRun(7, 0)]))}
+        visual={visualWith()}
+        onNet={onNet}
+      />,
+    )
+    await waitFor(() => expect(onNet).toHaveBeenCalledWith('c30', -4.2))
+  })
+
   it('Modificar and Crear call their handlers; they are disabled without one', async () => {
     const user = userEvent.setup()
     const onModify = vi.fn()

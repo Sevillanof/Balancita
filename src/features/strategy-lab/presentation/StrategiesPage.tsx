@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { DataState } from '../../../shared/mission-control/index.ts'
 import type { GateApi } from '../infrastructure/gate-api.ts'
 import type { RunVisualApi } from '../infrastructure/run-visual-api.ts'
@@ -79,7 +79,24 @@ export default function StrategiesPage({
   const [modal, setModal] = useState<Modal | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
   const [problem, setProblem] = useState<string | null>(null)
-  const standings = useStandings(rows, gate, visual)
+  const gateStandings = useStandings(rows, gate, visual)
+  // The figure of the strategy on screen is the one its panel shows (a quick test is not a registry run)
+  const [shownNets, setShownNets] = useState<ReadonlyMap<string, number>>(
+    new Map(),
+  )
+  const reportNet = useCallback(
+    (id: string, meanBp: number) =>
+      setShownNets((now) =>
+        now.get(id) === meanBp ? now : new Map(now).set(id, meanBp),
+      ),
+    [],
+  )
+  const standings = useMemo(() => {
+    const out = new Map(gateStandings)
+    for (const [id, meanBp] of shownNets)
+      out.set(id, { stage: out.get(id)?.stage ?? 0, meanBp })
+    return out
+  }, [gateStandings, shownNets])
   const [purge, setPurge] = useState<{
     name: string
     status: PurgeStatus
@@ -248,7 +265,7 @@ export default function StrategiesPage({
                     {standings.get(row.id)?.meanBp != null && (
                       <small
                         className="ml-auto text-label leading-normal text-ink-2 tabular-nums"
-                        title="Neto por operación de la última práctica del registro (Testear), no de la Prueba rápida"
+                        title="Neto por operación del resultado que se ve en el panel"
                       >
                         {signedAmount(standings.get(row.id)?.meanBp ?? null, 1)}{' '}
                         pb
@@ -375,6 +392,7 @@ export default function StrategiesPage({
             kind={selected.kind}
             registry={api}
             onVariantStarted={(id, note) => done(id, note)}
+            onNet={reportNet}
             onModify={
               editable(selected)
                 ? () => setModal({ kind: 'modify', id: selected.id })

@@ -147,6 +147,8 @@ type Props = {
   kind?: string
   /** A variant was created and its test started: the page selects it and shows the note. */
   onVariantStarted?: (id: string, note: string) => void
+  /** The «Neto por operación» the panel shows (null: none), so the list beside it shows the same figure. */
+  onNet?: (id: string, meanBp: number) => void
   /** «Modificar» / «Crear»: lead to the laboratory's editor; absent = disabled. */
   onModify?: () => void
   onCreate?: () => void
@@ -168,6 +170,7 @@ export default function StrategyRunView({
   registry,
   kind,
   onVariantStarted,
+  onNet,
   onModify,
   onCreate,
 }: Props) {
@@ -852,6 +855,10 @@ export default function StrategyRunView({
           Date.parse(lastRun.params.to),
         )
       : ''
+  const shownNet = figs ? figs.meanBp : (summary?.mean_bp ?? null)
+  useEffect(() => {
+    if (shownNet != null) onNet?.(strategyId, shownNet)
+  }, [onNet, strategyId, shownNet])
   const kpiRow = figs ? (
     <div className={RUN.kpis} data-testid="run-kpis">
       <Kpi
