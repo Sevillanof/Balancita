@@ -1,5 +1,3 @@
-import { STRATEGIES_API_BASE } from './strategy-api.ts'
-
 /**
  * «Analizador de señales» (`GET /analyzer/events`, esquema
  * `balancita.analyzer-events.v1`). Solo lee: datos de práctica, ninguna orden.
@@ -62,13 +60,4 @@ export type AnalyzerResponse =
 
 export type AnalyzerApi = {
   events: () => Promise<AnalyzerResponse>
-}
-
-export const analyzerApi: AnalyzerApi = {
-  async events() {
-    const response = await fetch(`${STRATEGIES_API_BASE}/analyzer/events`)
-    if (!response.ok)
-      throw new Error(`El registro respondió ${response.status}.`)
-    return (await response.json()) as AnalyzerResponse
-  },
 }

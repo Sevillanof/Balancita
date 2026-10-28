@@ -28,7 +28,6 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
-from . import futures_carry
 from .futures_products import load_pinned_products
 from .futures_spec_strategy import (
     COMPARATORS,
@@ -764,15 +763,11 @@ class StrategyService:
         """Operational and research state of every strategy; reads only, writes nothing (docs/strategy-inventory-api.md)."""
         entries = self.registry.list()
         specs = {e["id"]: self.registry.version(e["id"], e["version"])["spec"] for e in entries}
-        try:
-            carry = futures_carry.read_summary(*_carry_paths())
-        except (OSError, ValueError, KeyError):
-            carry = None
         forward = None
         if self.forward_db_path or self.forward_summary_path or self.decisions_db_path:
             forward = read_forward(self.forward_db_path, self.forward_summary_path, self.market_db_path,
                                    self.decisions_db_path, now_ms=_now_ms())
-        return build_inventory(entries, specs, config_dir=self.config_dir, carry=carry, forward_result=forward)
+        return build_inventory(entries, specs, config_dir=self.config_dir, forward_result=forward)
 
     def forward(self):
         """How the forward is going per strategy, the funding per product and Q's skips (docs/forward-result-api.md)."""
@@ -858,11 +853,6 @@ def forward_candidates(db_path):
         db.close()
 
 
-def _carry_paths():
-    """(summary, state) of the funding carry counter; the dev supervisor sets both."""
-    base = os.environ.get("CARRY_DIR") or os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "server", "data", "carry")
-    return os.path.join(base, "carry-summary.json"), os.path.join(base, "carry-state.json")
-
 
 def make_handler(service):
     class Handler(BaseHTTPRequestHandler):
@@ -904,8 +894,6 @@ def make_handler(service):
                 return schema_description()
             if method == "GET" and parts == ["strategies"]:
                 return {"strategies": registry.list()}
-            if method == "GET" and parts == ["carry"]:
-                return futures_carry.read_summary(*_carry_paths())
             if method == "GET" and parts == ["forward"]:
                 return service.forward()
             if method == "GET" and parts == ["inventory"]:
@@ -938,12 +926,6 @@ def make_handler(service):
             if method != "POST":
                 raise RegistryError("not_found", "no route", 404)
             body = self._body()
-            if parts == ["carry", "enabled"]:
-                if not isinstance(body.get("enabled"), bool):
-                    raise RegistryError("invalid_carry", "enabled must be true or false")
-                out_path, state_path = _carry_paths()
-                futures_carry.set_enabled(state_path, body["enabled"], int(time.time() * 1000))
-                return futures_carry.read_summary(out_path, state_path)
             if parts == ["validate"]:
                 spec = body.get("spec", body)
                 try:

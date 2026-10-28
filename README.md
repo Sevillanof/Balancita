@@ -21,7 +21,7 @@ Espacio de trading personal, local y **solo futuros perpetuos de Kraken (`PF_*`)
 - Ni las reglas de velas ni Qwen han mostrado ventaja neta tras costes. C25-C28 se dan por cerradas; C29, C30, C31 y Kronos siguen en paper hasta 100 operaciones y no se tocan mientras tanto.
 - La ejecución pasiva (maker) se simuló contra la cinta pública de Kraken y no crea ventaja: archivada.
 - Qwen decide solo en replays (brazo A/B) y como decisor de salida de C31; el reglamento está en la enmienda 2026-10-11 del [ADR 0001](docs/adr/0001-isolated-paper-futures-accounting.md).
-- `DEV_ONLY=vite,capture,live,forward,strategies pnpm dev` arranca solo los procesos que mide el seguimiento, sin libros paper; Qwen (modelo, veredictos, decisiones y salida C31) arranca siempre, salvo `DECISIONS_ENABLED=0`.
+- `DEV_ONLY=vite,capture,live,forward,strategies pnpm dev` arranca solo los procesos que mide el seguimiento (hoy `pnpm dev` a secas arranca exactamente eso); Qwen (modelo, veredictos, decisiones y salida C31) arranca siempre, salvo `DECISIONS_ENABLED=0`.
 
 ## Arquitectura
 
@@ -30,22 +30,17 @@ Cada proceso tiene **un único escritor** por archivo SQLite, las tablas son _ap
 ```mermaid
 flowchart LR
     K[(Kraken<br/>WS + REST público)] --> A[capture<br/>TS]
-    RSS[(Feeds RSS)] --> N[news<br/>Python]
     A -->|escribe| M[(market.sqlite<br/>trades, ticker, books,<br/>velas oficiales, funding)]
     M --> C[verdict C<br/>Python]
     C -->|escribe| V[(verdicts.sqlite)]
     M --> F[forward<br/>Python]
     R[(registro de estrategias)] --> F
     F -->|escribe| P[(forward.sqlite<br/>operaciones de estrategias activas)]
-    M --> E[scores E<br/>Python]
-    V --> E
-    E -->|escribe| S[(forecast-scores.sqlite)]
     V --> Q[q<br/>Python]
     LLM[llama-server<br/>Qwen local, offline] <--> Q
     Q -->|escribe| L[(llm-decisions.sqlite)]
-    N -->|escribe| NW[(news.sqlite)]
     REG[strategies<br/>registro S :8790] -.lee specs.-> C
-    M & V & S & L & NW --> G[live<br/>gateway :8789]
+    M & V & L --> G[live<br/>gateway :8789]
     G --> W[Web React :5173<br/>Terminal + Estrategias]
     REG --> W
 ```
@@ -59,10 +54,8 @@ flowchart LR
 | `live`       | 8789   | Gateway de solo lectura: sirve `/api/terminal/*` leyendo el market DB; no arranca recolector ni motor                                                                                           |
 | `verdict`    | -      | **C**: lee el market DB y escribe veredictos de entrada (`futures-verdicts.sqlite`)                                                                                                             |
 | `paper`      | -      | Retirado (2026-10-11): D, el motor viejo, ya no corre; su `futures-paper-account.sqlite` queda como historial. Toda estrategia opera en el seguimiento forward (motor nuevo)                    |
-| `scores`     | -      | **E**: puntúa cada propuesta contra las velas oficiales posteriores (`futures-forecast-scores.sqlite`)                                                                                          |
 | `forward`    | -      | Libro de paper hacia delante de toda estrategia activa en el registro (y C30 de `config/forward-strategies.json`), cada hora (`server/data/dev-live/forward/`); Q y el registro leen su resumen |
 | `strategies` | 8790   | Registro de estrategias **S**: validar, evaluar, backtest, versiones y ciclo de vida                                                                                                            |
-| `news`       | -      | **N**: RSS/Atom → `futures-news.sqlite`; con Qwen, relevancia y dirección por noticia                                                                                                           |
 | `llm` / `q`  | 8088   | `llama-server` local y servicio de decisiones **Q** (opcionales, nunca bloquean el arranque)                                                                                                    |
 | `qwenexit`   | -      | **C31**: entradas de C25/C26/C27/C30 y salida decidida solo por Qwen, cada 30 min (`server/data/dev-live/qwen-exit/`); necesita el modelo local, ver `docs/qwen-exit.md`                        |
 
@@ -129,7 +122,7 @@ pnpm install
 pnpm dev          # abre http://localhost:5173
 ```
 
-`pnpm dev` comprueba los puertos 5173, 8789 y 8790 antes de arrancar; si uno está ocupado dice cuál y sale con código 1 (`lsof -ti tcp:<puerto> | xargs kill`). Cada proceso tiene su log con prefijo, Ctrl+C detiene todo el grupo y los restos de un `dev` anterior en este checkout se limpian solos: al arrancar cierra las copias viejas de sus propios hijos (forward, news, Qwen, capture, vite, llama-server...) de este mismo checkout, y nada más. El estado de cada proceso se escribe en `server/data/dev-live/dev-health.json`.
+`pnpm dev` comprueba los puertos 5173, 8789 y 8790 antes de arrancar; si uno está ocupado dice cuál y sale con código 1 (`lsof -ti tcp:<puerto> | xargs kill`). Cada proceso tiene su log con prefijo, Ctrl+C detiene todo el grupo y los restos de un `dev` anterior en este checkout se limpian solos: al arrancar cierra las copias viejas de sus propios hijos (forward, Qwen, capture, vite, llama-server...) de este mismo checkout, y nada más. El estado de cada proceso se escribe en `server/data/dev-live/dev-health.json`.
 
 Sin red, `capture` y la fuente Real avisan; `vite` y el resto siguen funcionando.
 
@@ -150,12 +143,10 @@ Sin red, `capture` y la fuente Real avisan; `vite` y el resto siguen funcionando
 | `LLAMA_UBATCH`          | (servidor)    | Opcional, `-ub`. Con modelos híbridos (Qwen3.5) decide dónde se guarda el punto de reuso del prompt; ver `futures_qwen_prefill_probe.py`                                                                |
 | `LLAMA_CTX_CHECKPOINTS` | (servidor)    | Opcional, `--ctx-checkpoints`                                                                                                                                                                           |
 | `DECISIONS_PRODUCTS`    | `PF_XBTUSD`   | Productos que decide Q (separados por comas)                                                                                                                                                            |
-| `NEWS_ENABLED`          | activo        | `0` desactiva `news`                                                                                                                                                                                    |
-| `NEWS_EXTRA_RSS_FEEDS`  | -             | Feeds extra `id\|label\|https url\|license`                                                                                                                                                             |
 
 En macOS `llm` corre con prioridad de fondo (`taskpolicy -b`) para que la Mac siga usable durante la Prueba rápida y el Examen; mismo modelo, contexto y slots, así que las respuestas no cambian. `pnpm dev` imprime una línea `[dev] llm:` con cómo quedó.
 
-**El modelo corre 100 % offline**: `dev` nunca descarga nada, `llama-server` va con `--offline` en `127.0.0.1` y Q rechaza cualquier URL que no sea loopback. Las noticias nunca se envían a una API remota.
+**El modelo corre 100 % offline**: `dev` nunca descarga nada, `llama-server` va con `--offline` en `127.0.0.1` y Q rechaza cualquier URL que no sea loopback.
 
 ## Datos y utilidades
 
@@ -171,9 +162,6 @@ PYTHONPATH=python python3 -m balancita_engine.futures_replay --help
 
 # Prueba de Q con llama-server levantado
 PYTHONPATH=python python3 -m balancita_engine.futures_llm_decisions --probe
-
-# Agregados de los forecast scores
-PYTHONPATH=python python3 -m balancita_engine.futures_forecast_scores --scores-db <db> --report
 ```
 
 Las preguntas de Q y sus _prompts_ son datos versionados (`config/decision-questions.json`, `config/decision-prompts.json`, `config/decision-calibration.json`): cambiar el texto de una pregunta exige subir su `version`.
@@ -195,9 +183,9 @@ Las preguntas de Q y sus _prompts_ son datos versionados (`config/decision-quest
 
 ```text
 src/                 Front React: app/ (Terminal), features/strategy-lab, trading-view, shared/
-server/src/          app/ (capture, gateway, mock), features/ (kraken-futures, live-gateway, paper-futures, news), platform/
+server/src/          app/ (capture, gateway, mock), features/ (kraken-futures, live-gateway, paper-futures), platform/
 python/balancita_engine/   C, D, E, Q, N, S, simulador, costes, indicadores, replay
-config/              Productos, estrategias C25-C30 y su fiabilidad medida, preguntas y prompts de Q, fuentes de noticias
+config/              Productos, estrategias C25-C30 y su fiabilidad medida, preguntas y prompts de Q
 docs/                Contratos de APIs, ADR 0001, fiabilidad y validación
 docs/archive/        Historial cerrado (spot BTC-EUR, planes de futuros terminados); solo lectura
 odd/tasks/           Planes vivos (strategy-simulation.md, qwen-calibration.md, qwen-funding.md, kronos-as-qwen.md)

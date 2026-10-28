@@ -1,5 +1,4 @@
 import type {
-  AnalyzerApi,
   AnalyzerCell,
   AnalyzerEvent,
   AnalyzerEvents,
@@ -87,11 +86,6 @@ export function smallAnalyzerData(): AnalyzerEvents {
   ]
   return data
 }
-
-/** Respuesta disponible con el fixture chico. */
-export const smallAnalyzerApi = (): AnalyzerApi => ({
-  events: async () => ({ available: true, data: smallAnalyzerData() }),
-})
 
 function prng(seed: number) {
   let a = seed >>> 0

@@ -43,7 +43,6 @@ const KIND_LABEL: Record<InventoryStrategy['kind'], string> = {
   qwen_exit: 'Qwen decide las salidas',
   qwen_live: 'Qwen opera en vivo',
   model: 'Modelo',
-  carry: 'Carry',
 }
 
 const runName = (run: Pick<GateRun, 'id' | 'kind'>) =>

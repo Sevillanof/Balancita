@@ -94,7 +94,7 @@ test.beforeAll(async ({}, info) => {
   let stderr = ''
   gateway.stderr?.on('data', (chunk) => (stderr += String(chunk)))
   // Registry S: real Python, temporary strategies DB, synthetic candles and
-  // verdicts (DATOS DE EJEMPLO), carry folder inside the temp dir.
+  // verdicts (DATOS DE EJEMPLO).
   const pythonPath = join(process.cwd(), 'python')
   const registryDbs = JSON.parse(
     execFileSync('python3', ['e2e/support/seed_registry_sandbox.py', dir], {
@@ -120,7 +120,6 @@ test.beforeAll(async ({}, info) => {
       env: {
         ...process.env,
         PYTHONPATH: pythonPath,
-        CARRY_DIR: join(dir, 'carry'),
       },
       stdio: ['ignore', 'pipe', 'pipe'],
     },
@@ -279,7 +278,7 @@ test('Estrategias with the registry stopped: honest state, no Carry spam', async
 
   saveLog('solicitudes-registro-apagado.json', log)
   const strategies = log.filter((e) => e.url.startsWith('/api-strategies'))
-  // One health probe, nothing else (no carry, no ranking, no retries).
+  // One health probe, nothing else (no ranking, no retries).
   expect(strategies.map((e) => `${e.method} ${e.url}`)).toEqual([
     'GET /api-strategies/health',
   ])

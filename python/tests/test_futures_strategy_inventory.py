@@ -111,18 +111,12 @@ class InventoryTest(unittest.TestCase):
                          {"since": "2026-10-18", "reason": "x", "invalid": False})
         self.assertTrue(qwen_exit_off({"off": {}})["invalid"])
 
-    def test_carry_is_unverified_without_state_files(self):
-        carry = _row(self.inventory(), "carry-funding-c-v1")
-        self.assertEqual(carry["operational"]["state"], "unverified")
-        self.assertEqual(carry["research"]["state"], "registry_note")
-        self.assertIn("criterio", carry["research"]["text"])
-
     def test_a_changed_spec_is_unmeasured(self):
         spec = copy.deepcopy(load_specs()["c29-momentum-perp-v1"])
         spec["params"]["z_min"] = "3"
         entry = {"id": spec["id"], "version": 1, "name": spec["name"], "state": "active", "state_reason": "x",
                  "state_known_at": 5, "spec_hash": "h"}
-        inv = build_inventory([entry], {spec["id"]: spec}, carry=None)
+        inv = build_inventory([entry], {spec["id"]: spec})
         self.assertEqual(_row(inv, "c29-momentum-perp-v1")["research"]["state"], "unmeasured")
 
     def test_missing_config_files_degrade_to_empty(self):

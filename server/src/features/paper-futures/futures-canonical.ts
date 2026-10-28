@@ -30,12 +30,6 @@ export function normalizeDecimal(value: unknown): string {
   return `${sign}${plain}`
 }
 
-export function normalizeTimestampMs(value: unknown): number {
-  if (typeof value !== 'number' || !Number.isSafeInteger(value))
-    throw new TypeError('Timestamps must be safe UTC integer milliseconds.')
-  return value
-}
-
 const SURROGATE = /[\ud800-\udfff]/
 
 function validateScalarText(text: string): void {

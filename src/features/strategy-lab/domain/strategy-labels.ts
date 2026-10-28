@@ -4,7 +4,6 @@
  * mixed: operational state (does it run?) and research state (what does the
  * evidence say?). Contract: `docs/strategy-inventory-api.md`.
  */
-import type { StatusTone } from '../../../shared/mission-control/index.ts'
 
 export type OperationalState =
   | 'active'
@@ -39,18 +38,6 @@ export const OPERATIONAL_LABELS: Record<OperationalState, string> = {
   off: 'Apagada',
 }
 
-export const OPERATIONAL_TONES: Record<OperationalState, StatusTone> = {
-  active: 'ok',
-  shadow: 'warn',
-  draft: 'nodata',
-  retired: 'nodata',
-  closed: 'nodata',
-  tracking: 'ok',
-  inactive: 'nodata',
-  unverified: 'nodata',
-  off: 'nodata',
-}
-
 export const RESEARCH_LABELS: Record<ResearchState, string> = {
   reliable_edge: 'Ventaja fiable',
   tentative_edge: 'Ventaja tentativa',
@@ -60,18 +47,6 @@ export const RESEARCH_LABELS: Record<ResearchState, string> = {
   insufficient_data: 'Datos insuficientes',
   unmeasured: 'Sin evaluación comparable',
   registry_note: 'Según el registro',
-}
-
-/** Only a verdict at `candidate_edge` or better is shown as evidence of advantage. */
-export const RESEARCH_TONES: Record<ResearchState, StatusTone> = {
-  reliable_edge: 'ok',
-  tentative_edge: 'ok',
-  candidate_edge: 'warn',
-  no_edge: 'warn',
-  negative_edge: 'bad',
-  insufficient_data: 'nodata',
-  unmeasured: 'nodata',
-  registry_note: 'nodata',
 }
 
 export const OPERATIONAL_BASIS_HINT: Record<string, string> = {

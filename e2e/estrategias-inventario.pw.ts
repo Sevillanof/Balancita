@@ -82,7 +82,6 @@ test.beforeAll(async ({}, info) => {
       env: {
         ...process.env,
         PYTHONPATH: 'python',
-        CARRY_DIR: join(box, 'carry'),
       },
       stdio: ['ignore', 'ignore', 'pipe'],
     },
