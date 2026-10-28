@@ -25,6 +25,21 @@ function priceAt(points: Array<[number, number]>, ms: number): number {
   return best[1]
 }
 
+/** The period the chart draws: the saved prices can run a little past the last look, and the texts say the same dates. */
+export function periodOf(formula: QuickFormula): {
+  fromMs: number
+  toMs: number
+} {
+  let fromMs = formula.desde_ms
+  let toMs = formula.hasta_ms
+  for (const points of Object.values(formula.mercado ?? {})) {
+    if (points.length === 0) continue
+    fromMs = Math.min(fromMs, points[0]![0])
+    toMs = Math.max(toMs, points[points.length - 1]![0])
+  }
+  return { fromMs, toMs }
+}
+
 export type FormulaModel = {
   product: string
   /** Hourly closes of the whole period, oldest first. */
@@ -107,8 +122,7 @@ export function useFormulaModel(
     select: (trade) => setSelectedId(trade.trade_id),
     showAll: () => setSelectedId(null),
     figures: formulaFigures(trades, formula!.desde_ms, formula!.hasta_ms),
-    fromMs: formula!.desde_ms,
-    toMs: formula!.hasta_ms,
+    ...periodOf(formula!),
   }
 }
 

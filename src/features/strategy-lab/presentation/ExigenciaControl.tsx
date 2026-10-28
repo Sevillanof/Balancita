@@ -104,7 +104,7 @@ export default function ExigenciaControl({ value, onChange, disabled }: Props) {
       {changed && (
         <button
           type="button"
-          className="justify-self-start"
+          className="cursor-pointer justify-self-start rounded-sm border border-solid border-line bg-transparent px-3 py-1 text-hint leading-normal text-ink"
           onClick={() => onChange({ ...EXIGENCIA_PAPER_LEVELS })}
         >
           Volver al nivel de paper (5 y 5)

@@ -74,7 +74,7 @@ import RunProgress from './RunProgress.tsx'
 import VectorbtModal from './VectorbtModal.tsx'
 import MarketTradesChart from './MarketTradesChart.tsx'
 import RunVerdict from './RunVerdict.tsx'
-import { useFormulaModel } from './formula-model.ts'
+import { periodOf, useFormulaModel } from './formula-model.ts'
 import VectorbtProgress from './VectorbtProgress.tsx'
 import VectorbtReportPanel from './VectorbtReportPanel.tsx'
 import VectorbtVariantLink from './VectorbtVariantLink.tsx'
@@ -1055,6 +1055,11 @@ export default function StrategyRunView({
           disabled={testing || quickRunning}
         />
       )}
+      {hasQuick && launching && quickState?.state !== 'running' && (
+        <div className={RUN.quick} role="group" aria-label="Prueba rápida">
+          <p>Prueba rápida · preparando las fotos del pasado…</p>
+        </div>
+      )}
       {hasQuick &&
         (quickState?.state === 'running' ||
           quickState?.state === 'failed' ||
@@ -1145,7 +1150,9 @@ export default function StrategyRunView({
       <p className={RUN.hint} data-testid="stage-where">
         <strong className="text-ink">{STAGE_LABEL[stage.index]}</strong>
         {'. '}
-        {stage.reason}
+        {formulaModel && stage.index === 0
+          ? 'Hay una prueba rápida de la fórmula (todavía no una práctica del registro).'
+          : stage.reason}
         {stage.index < STAGES.length - 1 &&
           ` Siguiente: ${STAGES[stage.index + 1]}.`}
       </p>
@@ -1652,8 +1659,8 @@ function FormulaResult({ formula }: { formula: QuickFormula }) {
       <p className="m-0 text-note text-ink-2">
         <strong className="text-ink">Solo la fórmula, sin Qwen</strong> ·{' '}
         {formula.productos.map((p) => p.replace(/^PF_|USD$/g, '')).join(' y ')}{' '}
-        · del {DAY_FORMAT.format(formula.desde_ms)} al{' '}
-        {DAY_FORMAT.format(formula.hasta_ms)} · {amount(formula.fotos, 0)}{' '}
+        · del {DAY_FORMAT.format(periodOf(formula).fromMs)} al{' '}
+        {DAY_FORMAT.format(periodOf(formula).toMs)} · {amount(formula.fotos, 0)}{' '}
         miradas
       </p>
       <details open>
