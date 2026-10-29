@@ -163,9 +163,9 @@ def config_hash(cfg):
     # ``runtime`` (concurrency, skipping the entry reason) only changes speed / what is stored, never an action: not identity.
     # ``exam`` and ``exam_lean`` (v3) only shape the ``exam`` command, which has its own identity (``futures_qwen_trader_exam``)
     # ``live`` (live operator) is how the process polls and budgets time, never what a decision is
-    # ``positioning_db`` is where the collector's file lives on this machine, not what Qwen is asked
+    # ``positioning_db`` and ``news_db`` are where the collectors' files live on this machine, not what Qwen is asked
     body = {k: v for k, v in cfg.items() if k not in ("entry_threshold", "note", "rules", "runtime", "exam", "exam_lean", "live",
-                                                          "positioning_db")}
+                                                          "positioning_db", "news_db")}
     body["practice"] = {k: v for k, v in cfg["practice"].items() if k != "target_blocks"}   # how many blocks is not identity
     raw = json.dumps({"config": body, "state": STATE_VERSION, "costs": COST_MODEL_VERSION}, sort_keys=True)
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
@@ -552,6 +552,7 @@ class Trader:
         self.t, self.o, self.h, self.l, self.c, self.v, self.lc = [], [], [], [], [], [], []
         self.context = {}                 # other products' closes {product: {bar end ms: close}} (``state_extras``: otros_activos)
         self.positioning = None           # ``positioning_data.PositioningFeed`` of this product (``state_ficha``: renglón F6)
+        self.news = None                  # ``futures_qwen_noticias.NewsFeed`` (analista de noticias, habilitador OR)
         self.position = None
         self.cooldown_until = 0
         self.last_call_ms = None

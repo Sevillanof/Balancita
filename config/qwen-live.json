@@ -157,6 +157,10 @@
     "objective": "total_net_bp",
     "if_none_positive": "max_grid"
   },
+  "noticias": {
+    "version": 1,
+    "note": "Versión de la regla del analista de noticias (habilitador alternativo al portero: maestro fuerte y noticias frescas a favor). Sube cuando cambia la regla, para que la base viva se archive y no mezcle decisiones de reglas distintas."
+  },
   "wake": {
     "flat_every_min": 15,
     "position_every_min": 15,

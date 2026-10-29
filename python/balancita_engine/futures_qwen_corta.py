@@ -23,6 +23,7 @@ import os
 from . import futures_qwen_exigencia as exigencia
 from . import futures_qwen_ficha as ficha
 from . import futures_qwen_maestro as maestro
+from . import futures_qwen_noticias as noticias
 from . import futures_qwen_portero as portero
 from . import futures_qwen_trader as qt
 
@@ -118,25 +119,34 @@ def readings(trader, t_ms, f=None):
     s = maestro.score(teacher, row)
     v = maestro.verdict_of(teacher, s)
     yes, p = portero.verdict(keeper, row, s)
+    news_yes, news_info = noticias.verdict(getattr(trader, "news", None), t_ms, -1 if s < 0 else 1)
     ratio = f["range24"] / f["range7"] if f["range7"] > 0 else 1.0
     regime = "ALTA" if ratio >= VOL_HIGH else "BAJA" if ratio <= VOL_LOW else "NORMAL"
-    return {"hechos": row, "puntaje": s, "flojo": teacher["umbrales"]["flojo"], "veredicto": v, "portero_p": p, "portero_si": yes, "vol_ratio": ratio, "volatilidad": regime,
+    return {"hechos": row, "puntaje": s, "flojo": teacher["umbrales"]["flojo"], "veredicto": v, "portero_p": p, "portero_si": yes,
+            "noticias_si": news_yes, "noticias": news_info, "vol_ratio": ratio, "volatilidad": regime,
             "sigma24": trader._sigma5() * math.sqrt(qt.H24), "range24": f["range24"], "range7": f["range7"]}
+
+
+def _flat_action(r):
+    v = r["veredicto"]
+    if abs(v) < 2:
+        return "ESPERAR", "el maestro no está fuerte"
+    direction = "LARGO" if v > 0 else "CORTO"
+    if r.get("portero_si"):
+        return direction, "maestro fuerte y portero a favor"
+    if r.get("noticias_si"):
+        return direction, "maestro fuerte y noticias a favor"
+    return "ESPERAR", "el portero dice que no conviene"
 
 
 def formula_action(r, side):
     """Lo que deciden las fórmulas (versión 9). ``r``: ``readings``. ``side``: 1 / -1 si hay posición abierta (largo / corto),
-    ``None`` si no. Sin posición: ``LARGO`` / ``CORTO`` cuando el maestro dice FUERTE y el portero dice que conviene entrar (del lado
-    del maestro); si no, ``ESPERAR``. Con posición: ``CERRAR`` cuando el maestro se da vuelta en contra, al menos flojo; si no,
-    ``MANTENER``. Sin límite de tiempo: una operación dura lo que dure el maestro. Devuelve ``(acción, motivo)``."""
-    v = r["veredicto"]
+    ``None`` si no. Sin posición: ``LARGO`` / ``CORTO`` cuando el maestro dice FUERTE y el portero o el analista de noticias dicen
+    que conviene entrar (del lado del maestro); si no, ``ESPERAR``. Con posición: ``CERRAR`` cuando el maestro se da vuelta en contra,
+    al menos flojo; si no, ``MANTENER``. Sin límite de tiempo: una operación dura lo que dure el maestro. Devuelve ``(acción, motivo)``."""
     if side is None:
-        if abs(v) == 2 and r["portero_si"]:
-            return ("LARGO" if v > 0 else "CORTO"), "maestro fuerte y portero a favor"
-        if abs(v) < 2:
-            return "ESPERAR", "el maestro no está fuerte"
-        return "ESPERAR", "el portero dice que no conviene"
-    if side * v <= -1:
+        return _flat_action(r)
+    if side * r["veredicto"] <= -1:
         return "CERRAR", "el maestro se dio vuelta en contra"
     return "MANTENER", "el maestro no se dio vuelta"
 
@@ -144,7 +154,8 @@ def formula_action(r, side):
 def formula_json(r, why):
     """Lo que las fórmulas vieron y por qué decidieron, para guardarlo junto a la decisión (y al ejemplo de entrenamiento)."""
     return {"maestro": r["veredicto"], "puntaje": round(r["puntaje"], 6), "portero_si": bool(r["portero_si"]),
-            "portero_p": round(r["portero_p"], 6), "volatilidad": r["volatilidad"], "motivo": why}
+            "portero_p": round(r["portero_p"], 6), "noticias_si": bool(r.get("noticias_si")),
+            "noticias": r.get("noticias"), "volatilidad": r["volatilidad"], "motivo": why}
 
 
 def lines(trader, t_ms, sg, reasons):
