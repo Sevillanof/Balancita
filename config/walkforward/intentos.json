@@ -1,5 +1,71 @@
 {
  "ids": {
+  "00ac73319f15": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra",
+     120
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     240,
+     6.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "010fb234abb6": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "seguir_agot",
+     240
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     15,
+     2.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "015e19aaf812": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "escalonado_1_2_3",
+     480
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     60,
+     4.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
   "0188cc0f4c9e": {
    "medicion": "honesta",
    "motor": 1,
@@ -16,6 +82,202 @@
     "tope_min": 2160
    }
   },
+  "02f0e4d50220": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "seguir",
+     60
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "liq15",
+     10
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "0311a76d9a86": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra",
+     60
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     60,
+     1.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "036fc92f7b06": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "seguir_agot",
+     240
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     60,
+     1.5
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "03edf82185a8": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "seguir_agot",
+     240
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     15,
+     0.5
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "0439ca10595c": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra",
+     120
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     15,
+     1.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "04678d96d719": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "seguir",
+     60
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     60,
+     2.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "046b9c57bf5a": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "seguir",
+     30
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata",
+    "disparo": [
+     "liq15_pctl",
+     0.999,
+     "caida"
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "048e3a48e6a1": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra",
+     120
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "liq15",
+     10
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "0606c971c3d4": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra_tras_vuelta",
+     240
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     60,
+     2.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
   "0621e122d2bd": {
    "medicion": "honesta",
    "motor": 1,
@@ -29,6 +291,28 @@
     ],
     "tamano": "suave",
     "tope_min": 2160
+   }
+  },
+  "072d069bcb38": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra_tras_vuelta",
+     240
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     240,
+     4.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
    }
   },
   "0785956c0264": {
@@ -118,6 +402,160 @@
     "tope_min": 2160
    }
   },
+  "08d3f79509ee": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra",
+     240
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     60,
+     5.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "08f2d158e488": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "seguir",
+     15
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     60,
+     1.5
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "0912f5a64d92": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "seguir",
+     30
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     60,
+     4.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "092e02b4146a": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "seguir",
+     15
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     15,
+     1.5
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "09470d5a28a2": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra",
+     120
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     60,
+     3.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "0c7c2b77aa76": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "seguir",
+     30
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata",
+    "disparo": [
+     "liq15_pctl",
+     0.997,
+     "caida"
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "0d8689c641e7": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra",
+     240
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     15,
+     0.75
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
   "0d8beb7d2366": {
    "medicion": "honesta",
    "motor": 1,
@@ -188,6 +626,28 @@
     "tope_min": null
    }
   },
+  "0ee890037690": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra",
+     480
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     60,
+     5.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
   "102258c4ab70": {
    "medicion": "honesta",
    "motor": 1,
@@ -208,6 +668,52 @@
     "tope_min": null
    }
   },
+  "1064b9014d8c": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra",
+     240
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata",
+    "disparo": [
+     "liq15_pctl",
+     0.999,
+     "subida"
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "115bb5bf16a0": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra",
+     240
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata",
+    "disparo": [
+     "ret_vs_btc",
+     60,
+     3.0,
+     1.0,
+     "caida"
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
   "119002be26f1": {
    "medicion": "honesta",
    "motor": 1,
@@ -215,6 +721,50 @@
     "analisis": "donde-perdimos",
     "base": "congelado ETH 36h 5/5",
     "corte": "tendencia 30 d"
+   }
+  },
+  "119a5d76f5ab": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra",
+     120
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     60,
+     5.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "119cc772f342": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "seguir",
+     120
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     15,
+     3.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
    }
   },
   "1237036304f4": {
@@ -249,6 +799,50 @@
     "umbral": 0.5
    }
   },
+  "13b2f2002c4c": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra_tras_vuelta",
+     120
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     240,
+     6.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "13be939dc0a3": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra",
+     720
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     15,
+     3.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
   "13c379c94e6a": {
    "medicion": "honesta",
    "motor": 1,
@@ -272,6 +866,28 @@
     "umbral": 0.4
    }
   },
+  "1429206a16fc": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra",
+     60
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     60,
+     4.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
   "14a4e89a8000": {
    "medicion": "honesta",
    "motor": 1,
@@ -290,6 +906,161 @@
     },
     "param": 100,
     "tope_min": 2160
+   }
+  },
+  "1519f880904f": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra",
+     1440
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     60,
+     4.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "158bc05fd3d4": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra",
+     240
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata",
+    "disparo": [
+     "liq15_pctl",
+     0.999,
+     "caida"
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "17acb6da047f": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra",
+     240
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     60,
+     4.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "17b55f03134d": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra_tras_vuelta",
+     480
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     15,
+     1.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "17ba22b02667": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra",
+     30
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata",
+    "disparo": [
+     "liq15_pctl",
+     0.999,
+     "caida"
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "181b7e880b35": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra",
+     240
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata",
+    "disparo": [
+     "ret_vs_btc",
+     60,
+     3.0,
+     2.0,
+     "caida"
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "183eb7353f50": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra",
+     240
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "liq15",
+     5
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
    }
   },
   "18a03fbca054": {
@@ -312,6 +1083,137 @@
     "tope_min": 2160
    }
   },
+  "18a66181b321": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra",
+     60
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     240,
+     4.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "1a4552daa9ac": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra_tras_vuelta",
+     120
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     60,
+     2.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "1aa8e818a401": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "seguir",
+     60
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "liq15",
+     5
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "1af330482ca7": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "seguir",
+     15
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     60,
+     2.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "1b2754d97c5f": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra",
+     1440
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     15,
+     1.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "1b29202a7434": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra_tras_vuelta",
+     480
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     240,
+     4.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
   "1bb24757f9fc": {
    "medicion": "honesta",
    "motor": 1,
@@ -330,6 +1232,30 @@
     },
     "param": 2.0,
     "tope_min": 2160
+   }
+  },
+  "1bff106e6dc4": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra",
+     1440
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata",
+    "disparo": [
+     "ret_vs_btc",
+     60,
+     5.0,
+     2.0,
+     "subida"
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
    }
   },
   "1c231175acad": {
@@ -381,6 +1307,50 @@
     "tope_min": 2160
    }
   },
+  "1cbcc6c0a225": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra_tras_vuelta",
+     480
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     60,
+     1.5
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "1d6d074aa8f1": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra",
+     60
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     240,
+     3.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
   "1e164bd4561c": {
    "medicion": "honesta",
    "motor": 1,
@@ -401,6 +1371,28 @@
     "tope_min": 2160
    }
   },
+  "1e6c1e2e025a": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "seguir_agot",
+     240
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     240,
+     3.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
   "1ec56270af5c": {
    "medicion": "honesta",
    "motor": 1,
@@ -414,6 +1406,28 @@
     ],
     "tamano": "suave",
     "tope_min": null
+   }
+  },
+  "1f08884e5365": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra_tras_vuelta",
+     120
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     60,
+     3.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
    }
   },
   "2077d5a5cfd8": {
@@ -459,6 +1473,50 @@
     "umbral": 0.3
    }
   },
+  "224e3cf439f1": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "seguir",
+     240
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     60,
+     5.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "234061ae960a": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra",
+     240
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     15,
+     3.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
   "2362f772f6ae": {
    "medicion": "honesta",
    "motor": 1,
@@ -479,6 +1537,50 @@
     "tope_min": null
    }
   },
+  "259ba171dcbc": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra_tras_vuelta",
+     120
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     60,
+     1.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "27c0a44cdf91": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra",
+     1440
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     60,
+     2.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
   "28cec0c40342": {
    "medicion": "honesta",
    "motor": 1,
@@ -496,6 +1598,115 @@
      "tope_min": 2160
     },
     "limite_h": 168
+   }
+  },
+  "290cb5d1eb7c": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "escalonado_1_2_3",
+     240
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     240,
+     8.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "2987834f4da5": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra",
+     480
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     60,
+     2.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "29ac87a24d1e": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "seguir",
+     60
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "liq15",
+     20
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "29f1a3090cc2": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "seguir",
+     30
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     15,
+     2.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "2a0384227c12": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra",
+     720
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     240,
+     4.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
    }
   },
   "2a0c882587cd": {
@@ -584,6 +1795,72 @@
     "tope_min": null
    }
   },
+  "2b13357632e6": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "seguir",
+     240
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata",
+    "disparo": [
+     "liq15_pctl",
+     0.99,
+     "subida"
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "2b19255ded80": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra",
+     240
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     60,
+     2.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "2b6dc57ed5fe": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra",
+     480
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     15,
+     1.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
   "2bfa2a831b1c": {
    "medicion": "honesta",
    "motor": 1,
@@ -597,6 +1874,72 @@
     ],
     "tamano": "suave",
     "tope_min": null
+   }
+  },
+  "2d6201bbdb4b": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra_tras_vuelta",
+     480
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     240,
+     2.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "2d8a17b34af7": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "seguir",
+     30
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata",
+    "disparo": [
+     "liq15_pctl",
+     0.99,
+     "caida"
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "2d98a2ea7233": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "seguir",
+     120
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     15,
+     1.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
    }
   },
   "2deb6b3147eb": {
@@ -620,6 +1963,50 @@
     "rasgos": "B",
     "tope_min": 2160,
     "umbral": 0.3
+   }
+  },
+  "2df05892fd5a": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "escalonado_1_2_3",
+     480
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     60,
+     1.5
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "2df208c4cc97": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra_tras_vuelta",
+     480
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     60,
+     1.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
    }
   },
   "2dfc4dc11c1a": {
@@ -648,6 +2035,28 @@
     "tope_min": 2160
    }
   },
+  "2e8ac1a78c06": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra",
+     480
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     240,
+     4.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
   "2f14127985cf": {
    "medicion": "honesta",
    "motor": 1,
@@ -661,6 +2070,93 @@
     ],
     "tamano": "fuerte",
     "tope_min": 2160
+   }
+  },
+  "2fdc46c4305d": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra_tras_vuelta",
+     240
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     15,
+     1.5
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "301f3ffffdde": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra",
+     1440
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata",
+    "disparo": [
+     "liq15_pctl",
+     0.99,
+     "subida"
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "302e99e760a0": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra",
+     240
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "liq15",
+     20
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "3087ba8c2860": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "seguir",
+     120
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     240,
+     8.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
    }
   },
   "30ecf8b4c3bb": {
@@ -686,6 +2182,72 @@
     "umbral": 0.4
    }
   },
+  "3140d791d1d0": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "escalonado_1_2_3",
+     240
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     240,
+     3.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "3142ee50076b": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "escalonado_1_2_3",
+     240
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     60,
+     5.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "31e6820758ba": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "seguir",
+     120
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     240,
+     2.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
   "3356615f1c14": {
    "medicion": "honesta",
    "motor": 1,
@@ -700,6 +2262,28 @@
     ],
     "tamano": "apagado",
     "tope_min": null
+   }
+  },
+  "3426bf4dd648": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra",
+     120
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     15,
+     0.75
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
    }
   },
   "34a258c87196": {
@@ -754,6 +2338,50 @@
     "umbral": 0.3
    }
   },
+  "350da91d896f": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "seguir",
+     30
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata",
+    "disparo": [
+     "liq15_pctl",
+     0.999,
+     "subida"
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "356935c65a95": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "escalonado_1_2_3",
+     480
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     15,
+     1.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
   "35f64847d52a": {
    "medicion": "honesta",
    "motor": 1,
@@ -774,6 +2402,50 @@
     "tope_min": 2160
    }
   },
+  "37453dc69657": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "escalonado_1_2_3",
+     240
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     15,
+     0.5
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "37a4830b2b5c": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "seguir",
+     60
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     60,
+     1.5
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
   "37b14a170ed7": {
    "medicion": "honesta",
    "motor": 1,
@@ -792,6 +2464,71 @@
     },
     "param": 0.5,
     "tope_min": null
+   }
+  },
+  "38f33ef7a4cc": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "seguir",
+     15
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     240,
+     3.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "39b597d0d97c": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra",
+     240
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "liq15",
+     10
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "3a02e9c4ad51": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "escalonado_1_2_3",
+     240
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     60,
+     3.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
    }
   },
   "3aa1a5139afc": {
@@ -870,6 +2607,28 @@
     "tope_min": 2160
    }
   },
+  "3b80fe9cdaf2": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "seguir",
+     30
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     15,
+     3.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
   "3ba155e5a26d": {
    "medicion": "honesta",
    "motor": 1,
@@ -884,6 +2643,28 @@
     ],
     "tamano": "apagado",
     "tope_min": null
+   }
+  },
+  "3c436437fa76": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra",
+     120
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     240,
+     3.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
    }
   },
   "3c6e9e6b563f": {
@@ -930,6 +2711,28 @@
     "tope_min": 2160
    }
   },
+  "3dd5243c05c6": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra",
+     1440
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata",
+    "disparo": [
+     "liq15_pctl",
+     0.997,
+     "subida"
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
   "3df7d09c5813": {
    "medicion": "honesta",
    "motor": 1,
@@ -948,6 +2751,28 @@
     },
     "param": -0.5,
     "tope_min": 2160
+   }
+  },
+  "3e391bd4c66d": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra",
+     1440
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     240,
+     8.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
    }
   },
   "3f7ccdee6390": {
@@ -1013,6 +2838,206 @@
     "umbral": 0.4
    }
   },
+  "40d5bbf876ba": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "seguir",
+     120
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     60,
+     4.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "4155e74ec5b5": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "escalonado_1_2_3",
+     240
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     15,
+     1.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "416c7eb012f6": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "seguir_agot",
+     240
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     60,
+     4.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "41c092595fda": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "escalonado_1_2_3",
+     480
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     60,
+     5.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "422d70cec361": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra_tras_vuelta",
+     480
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     15,
+     3.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "42589a3ea45a": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra",
+     480
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     15,
+     0.75
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "42f0168863c6": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra",
+     720
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     60,
+     5.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "42f2fc958b5b": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra",
+     240
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata",
+    "disparo": [
+     "ret_vs_btc",
+     60,
+     5.0,
+     1.0,
+     "caida"
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "4424edfb6603": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "seguir",
+     30
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     60,
+     1.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
   "4515b0d600d4": {
    "medicion": "honesta",
    "motor": 1,
@@ -1045,6 +3070,142 @@
     "tope_min": null
    }
   },
+  "45afc60500fd": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra",
+     240
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata",
+    "disparo": [
+     "ret_vs_btc",
+     60,
+     2.0,
+     2.0,
+     "subida"
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "4601589216a8": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra",
+     120
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     15,
+     0.5
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "4637b7f469ba": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "seguir",
+     15
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     15,
+     2.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "46a9211d9224": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "seguir",
+     240
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     60,
+     1.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "46f123ddf166": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra_tras_vuelta",
+     240
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     15,
+     3.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "473a1470775e": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra",
+     1440
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata",
+    "disparo": [
+     "ret_vs_btc",
+     60,
+     5.0,
+     2.0,
+     "caida"
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
   "473ec5fb3bc3": {
    "medicion": "honesta",
    "motor": 1,
@@ -1071,6 +3232,50 @@
     "tope_min": 2160
    }
   },
+  "4792fe4fbc77": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "seguir_agot",
+     240
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     60,
+     1.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "484793c5374d": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "escalonado_1_2_3",
+     240
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     60,
+     4.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
   "4862de9e59ec": {
    "medicion": "honesta",
    "motor": 1,
@@ -1089,6 +3294,50 @@
     },
     "param": 0.3,
     "tope_min": 2160
+   }
+  },
+  "48809234af6a": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra",
+     1440
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata",
+    "disparo": [
+     "liq15_pctl",
+     0.99,
+     "caida"
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "489b7eea9347": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra_tras_vuelta",
+     240
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     240,
+     8.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
    }
   },
   "49b404af8728": {
@@ -1111,6 +3360,72 @@
     "tope_min": 2160
    }
   },
+  "49d11f71a69f": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "seguir",
+     240
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     60,
+     1.5
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "49d677f527b2": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "seguir_agot",
+     240
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     60,
+     3.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "4af891c53516": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra",
+     1440
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     15,
+     1.5
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
   "4b665f7cbd04": {
    "medicion": "honesta",
    "motor": 1,
@@ -1127,6 +3442,96 @@
     "tope_min": null
    }
   },
+  "4bc62486a1dd": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "seguir",
+     240
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     240,
+     3.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "4bdeb9e32b7a": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra",
+     1440
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata",
+    "disparo": [
+     "ret_vs_btc",
+     60,
+     3.0,
+     2.0,
+     "subida"
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "4be697d795b2": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra",
+     1440
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     60,
+     1.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "4c478b2415c0": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra",
+     240
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     240,
+     6.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
   "4c9c31426fb1": {
    "medicion": "honesta",
    "motor": 1,
@@ -1134,6 +3539,28 @@
     "analisis": "donde-perdimos",
     "base": "congelado ETH 36h 5/5",
     "corte": "mercado 30 d (baja/lateral/sube)"
+   }
+  },
+  "4cd72beebbdd": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra",
+     240
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata",
+    "disparo": [
+     "liq15_pctl",
+     0.99,
+     "subida"
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
    }
   },
   "4cdef0fab78b": {
@@ -1189,6 +3616,28 @@
     "umbral": "elegido con el pasado"
    }
   },
+  "4d441b7d7d66": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra_tras_vuelta",
+     480
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     15,
+     1.5
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
   "4e778392099d": {
    "medicion": "honesta",
    "motor": 1,
@@ -1228,6 +3677,116 @@
     "umbral": "elegido con el pasado"
    }
   },
+  "4eea1d58a237": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "escalonado_1_2_3",
+     480
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     60,
+     1.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "4f39c13e9de9": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "escalonado_1_2_3",
+     240
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     60,
+     2.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "4f4337edae51": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra",
+     720
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     60,
+     4.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "4fb096b0ee10": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "seguir",
+     15
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     60,
+     3.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "4fdedc50df9f": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "seguir_agot",
+     240
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     240,
+     4.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
   "4fe5cf9865ce": {
    "medicion": "honesta",
    "motor": 1,
@@ -1251,6 +3810,116 @@
     "umbral": 0.4
    }
   },
+  "5058ccd4b7ed": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "escalonado_1_2_3",
+     480
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     240,
+     6.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "5113d20a11c0": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra_tras_vuelta",
+     240
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     60,
+     5.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "525f10def7fc": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "seguir",
+     60
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     15,
+     2.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "526000a1d310": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra",
+     720
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     240,
+     6.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "526ebf0de7a5": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra",
+     1440
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     60,
+     5.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
   "52852737a9c6": {
    "medicion": "honesta",
    "motor": 1,
@@ -1268,6 +3937,118 @@
      "tope_min": 2160
     },
     "limite_h": 72
+   }
+  },
+  "52e9fde2f6b1": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "seguir",
+     60
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     240,
+     2.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "53008d692562": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra",
+     1440
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata",
+    "disparo": [
+     "ret_vs_btc",
+     60,
+     5.0,
+     1.0,
+     "subida"
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "53993bd9fe44": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "seguir",
+     240
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     60,
+     3.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "539955ac1369": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra_tras_vuelta",
+     120
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     240,
+     3.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "53d32d005680": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra",
+     720
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     15,
+     1.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
    }
   },
   "542faf42ed47": {
@@ -1303,6 +4084,28 @@
     },
     "param": 400,
     "tope_min": null
+   }
+  },
+  "54af9b07de18": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "seguir",
+     15
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     60,
+     1.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
    }
   },
   "556358b6e04e": {
@@ -1370,6 +4173,50 @@
     "tope_min": 2160
    }
   },
+  "58239faa8e12": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra",
+     480
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     60,
+     3.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "58d8cffa2646": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "seguir",
+     30
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     15,
+     1.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
   "5957c1151dac": {
    "medicion": "honesta",
    "motor": 1,
@@ -1401,6 +4248,49 @@
     "tope_min": 2160
    }
   },
+  "5d63520fa98b": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra",
+     480
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "liq15",
+     10
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "5d8aeb402e97": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "seguir",
+     30
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     60,
+     1.5
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
   "5ed34c179203": {
    "medicion": "honesta",
    "motor": 1,
@@ -1419,6 +4309,94 @@
     },
     "param": 300,
     "tope_min": null
+   }
+  },
+  "5ede906b17e3": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra_tras_vuelta",
+     480
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     60,
+     5.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "5ef10f0d0c6e": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "seguir",
+     30
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     240,
+     3.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "5fb031c02c5a": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "escalonado_1_2_3",
+     240
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     15,
+     2.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "5fb147af46f4": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "seguir",
+     30
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     60,
+     2.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
    }
   },
   "60b82369497e": {
@@ -1455,6 +4433,50 @@
     ],
     "tamano": "fuerte",
     "tope_min": 2160
+   }
+  },
+  "620e9e319d60": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra_tras_vuelta",
+     480
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     60,
+     4.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "6250bc9613ac": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "seguir",
+     1440
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata",
+    "disparo": [
+     "liq15_pctl",
+     0.99,
+     "subida"
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
    }
   },
   "63523fef43ca": {
@@ -1535,6 +4557,208 @@
     "tope_min": 2160
    }
   },
+  "646c507eee12": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra",
+     1440
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata",
+    "disparo": [
+     "ret_vs_btc",
+     60,
+     5.0,
+     1.0,
+     "caida"
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "647e687ac53f": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "seguir_agot",
+     240
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     240,
+     2.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "65133a41a6cc": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "seguir",
+     30
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     60,
+     5.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "655e509fe643": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra",
+     240
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     240,
+     4.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "65e1575327aa": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "seguir",
+     120
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     60,
+     1.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "66b89cdb59be": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra",
+     1440
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata",
+    "disparo": [
+     "ret_vs_btc",
+     60,
+     2.0,
+     1.0,
+     "subida"
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "66ca09e84e77": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra",
+     720
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     60,
+     3.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "67b72428f2bb": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra",
+     480
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     15,
+     1.5
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "67d03b7f2c1d": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "seguir",
+     60
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     15,
+     1.5
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
   "68bf1990423e": {
    "medicion": "honesta",
    "motor": 1,
@@ -1581,6 +4805,28 @@
     "umbral": 0.5
    }
   },
+  "6a650753fa34": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra",
+     720
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     15,
+     0.75
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
   "6b13c51f4b0a": {
    "medicion": "honesta",
    "motor": 1,
@@ -1601,6 +4847,28 @@
     "tope_min": 2160
    }
   },
+  "6b212d79fdd5": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "seguir",
+     240
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     240,
+     2.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
   "6be787b0e5a1": {
    "medicion": "honesta",
    "motor": 1,
@@ -1619,6 +4887,72 @@
     },
     "param": 12,
     "tope_min": 2160
+   }
+  },
+  "6c45c7fb04f1": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "seguir",
+     120
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     60,
+     3.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "6c5c9432264b": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra_tras_vuelta",
+     240
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     60,
+     1.5
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "6cae75e0074e": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "seguir",
+     60
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     240,
+     8.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
    }
   },
   "6cdcc0ee4b50": {
@@ -1646,6 +4980,30 @@
      300
     ],
     "tope_min": null
+   }
+  },
+  "6d583d5c3ec5": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra",
+     240
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata",
+    "disparo": [
+     "ret_vs_btc",
+     60,
+     3.0,
+     2.0,
+     "subida"
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
    }
   },
   "6e0bb3a5d119": {
@@ -1717,6 +5075,50 @@
     "umbral": 0.5
    }
   },
+  "6e6faf1b766f": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra",
+     240
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     60,
+     1.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "6f77e13ff6ac": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "escalonado_1_2_3",
+     480
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     240,
+     2.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
   "6fb3a8527f27": {
    "medicion": "honesta",
    "motor": 1,
@@ -1730,6 +5132,140 @@
     ],
     "tamano": "fuerte",
     "tope_min": null
+   }
+  },
+  "700effeb470d": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra",
+     1440
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata",
+    "disparo": [
+     "ret_vs_btc",
+     60,
+     2.0,
+     1.0,
+     "caida"
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "730362d2ee6f": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra",
+     120
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     15,
+     1.5
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "738e6661ea7d": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra_tras_vuelta",
+     480
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     60,
+     3.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "73ad3386d161": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra",
+     60
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     15,
+     0.75
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "73c42a19dd97": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "seguir",
+     30
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     240,
+     8.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "760e4fea8797": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "seguir",
+     60
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     15,
+     0.75
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
    }
   },
   "7707a9101a05": {
@@ -1770,6 +5306,50 @@
     },
     "param": 0.1,
     "tope_min": 2160
+   }
+  },
+  "792efa9da481": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "seguir",
+     15
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     60,
+     4.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "794ab3d842c9": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra",
+     120
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     240,
+     4.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
    }
   },
   "79d17e9e9dee": {
@@ -1815,6 +5395,49 @@
     "tope_min": 2160
    }
   },
+  "7a021eba9629": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "escalonado_1_2_3",
+     240
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     60,
+     1.5
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "7a56757d49a2": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra",
+     480
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "liq15",
+     5
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
   "7a826fd561c9": {
    "medicion": "honesta",
    "motor": 1,
@@ -1836,6 +5459,50 @@
     "rasgos": "A",
     "tope_min": 2160,
     "umbral": 0.5
+   }
+  },
+  "7a91f695f4ea": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "escalonado_1_2_3",
+     240
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     240,
+     2.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "7b07c577abba": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "seguir",
+     30
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     15,
+     1.5
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
    }
   },
   "7b3782ab19e1": {
@@ -1861,6 +5528,28 @@
     "umbral": 0.3
    }
   },
+  "7b80d3874097": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "seguir",
+     240
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata",
+    "disparo": [
+     "liq15_pctl",
+     0.997,
+     "caida"
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
   "7c1c632decbe": {
    "medicion": "honesta",
    "motor": 1,
@@ -1879,6 +5568,160 @@
     },
     "param": 0.1,
     "tope_min": null
+   }
+  },
+  "7c8e5f93ee58": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra",
+     1440
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     15,
+     3.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "7c8f7898ef27": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "seguir",
+     240
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     15,
+     3.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "7c8fd4c30648": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra",
+     480
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     15,
+     0.5
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "7ca70ac88e68": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra",
+     30
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata",
+    "disparo": [
+     "liq15_pctl",
+     0.999,
+     "subida"
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "7cb48818d484": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "seguir",
+     1440
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata",
+    "disparo": [
+     "liq15_pctl",
+     0.997,
+     "subida"
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "7cf757f66075": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra",
+     240
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     240,
+     8.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "7d1e2c988386": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra_tras_vuelta",
+     120
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     15,
+     0.5
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
    }
   },
   "7f201191ef41": {
@@ -1902,6 +5745,118 @@
     "rasgos": "B",
     "tope_min": null,
     "umbral": 0.4
+   }
+  },
+  "8008104e4103": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "seguir",
+     15
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     240,
+     4.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "8053e9b59771": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra",
+     1440
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata",
+    "disparo": [
+     "ret_vs_btc",
+     60,
+     3.0,
+     1.0,
+     "subida"
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "80ab373eaba2": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra_tras_vuelta",
+     240
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     15,
+     0.5
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "8120ce8838c9": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra",
+     120
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     60,
+     1.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "81259635a7e9": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "seguir",
+     15
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     240,
+     6.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
    }
   },
   "81b8526939a9": {
@@ -1947,6 +5902,72 @@
     "umbral": "elegido con el pasado"
    }
   },
+  "823984d092a0": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra",
+     60
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     15,
+     3.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "82f462c01e3d": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra_tras_vuelta",
+     120
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     15,
+     3.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "8376efd3e833": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra",
+     60
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     15,
+     1.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
   "84ba1cf62bf4": {
    "medicion": "honesta",
    "motor": 1,
@@ -1970,6 +5991,74 @@
     "umbral": 0.3
    }
   },
+  "84eec9129572": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "seguir_agot",
+     240
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     15,
+     1.5
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "855960888144": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra",
+     1440
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata",
+    "disparo": [
+     "ret_vs_btc",
+     60,
+     2.0,
+     2.0,
+     "caida"
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "8560b1aa3937": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra",
+     60
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     60,
+     3.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
   "859440d1d1f0": {
    "medicion": "honesta",
    "motor": 1,
@@ -1990,6 +6079,138 @@
     "tope_min": 2160
    }
   },
+  "85b01cfd4e0a": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra",
+     1440
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata",
+    "disparo": [
+     "liq15_pctl",
+     0.997,
+     "caida"
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "85c53f850a2b": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "seguir",
+     30
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     240,
+     2.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "8601cf172d3a": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "seguir_agot",
+     240
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     15,
+     3.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "8641e3ef05fe": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra_tras_vuelta",
+     120
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     60,
+     4.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "86b7d50122af": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra",
+     60
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     60,
+     1.5
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "86f6db5ad19b": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "seguir",
+     15
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     240,
+     8.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
   "86fc3652f289": {
    "medicion": "honesta",
    "motor": 1,
@@ -2006,6 +6227,72 @@
     "tope_min": null
    }
   },
+  "872abf966783": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra",
+     720
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     60,
+     1.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "885a1682df8d": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "seguir_agot",
+     240
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     15,
+     1.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "890bd84dcb56": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra",
+     120
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     60,
+     4.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
   "8985e619cfac": {
    "medicion": "honesta",
    "motor": 1,
@@ -2019,6 +6306,184 @@
     ],
     "tamano": "fuerte",
     "tope_min": 2160
+   }
+  },
+  "898783190e58": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "seguir",
+     120
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     60,
+     2.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "89ac5ea52f1e": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "seguir",
+     1440
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata",
+    "disparo": [
+     "liq15_pctl",
+     0.997,
+     "caida"
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "8acf6d6ed3ba": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra",
+     1440
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     60,
+     1.5
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "8bc723b6621f": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra",
+     240
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata",
+    "disparo": [
+     "liq15_pctl",
+     0.997,
+     "subida"
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "8c5c8adecd1d": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra",
+     240
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata",
+    "disparo": [
+     "liq15_pctl",
+     0.99,
+     "caida"
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "8d6c50b80d44": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "seguir_agot",
+     240
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     240,
+     8.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "8e4db50f63a6": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "seguir",
+     15
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     15,
+     1.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "8ee7e88e89b5": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra",
+     240
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata",
+    "disparo": [
+     "ret_vs_btc",
+     60,
+     3.0,
+     1.0,
+     "subida"
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
    }
   },
   "905ffb9849ef": {
@@ -2041,6 +6506,28 @@
     "tope_min": 2160
    }
   },
+  "9193df91ba99": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra",
+     720
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     240,
+     3.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
   "91b1ea83589e": {
    "medicion": "honesta",
    "motor": 1,
@@ -2059,6 +6546,52 @@
     },
     "param": 300,
     "tope_min": null
+   }
+  },
+  "9261ecb7034a": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra",
+     240
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata",
+    "disparo": [
+     "ret_vs_btc",
+     60,
+     5.0,
+     2.0,
+     "subida"
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "927f74bb1445": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra",
+     1440
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     15,
+     0.5
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
    }
   },
   "92907be985ce": {
@@ -2158,6 +6691,204 @@
     "tope_min": 2160
    }
   },
+  "945d48752fd7": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra_tras_vuelta",
+     480
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     240,
+     3.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "94ac663698b1": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "seguir",
+     240
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     240,
+     8.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "9536706d982e": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "escalonado_1_2_3",
+     480
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     240,
+     3.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "954e50ce10fc": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra_tras_vuelta",
+     480
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     240,
+     6.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "9578772226a9": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra_tras_vuelta",
+     480
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     15,
+     0.5
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "95fe4aa10d9a": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra",
+     480
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     60,
+     1.5
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "96543225a025": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra",
+     720
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     15,
+     2.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "968838ca966c": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra",
+     1440
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     240,
+     6.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "96bc49d35c20": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra_tras_vuelta",
+     240
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     240,
+     3.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
   "9729f17566ba": {
    "medicion": "honesta",
    "motor": 1,
@@ -2172,6 +6903,50 @@
     ],
     "tamano": "fuerte",
     "tope_min": 2160
+   }
+  },
+  "976660b952f6": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "seguir",
+     240
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     15,
+     1.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "97e22bbecf8e": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra",
+     480
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     240,
+     8.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
    }
   },
   "97fcd801831a": {
@@ -2197,6 +6972,50 @@
     "umbral": 0.3
    }
   },
+  "98142776bba4": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "seguir",
+     60
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     60,
+     3.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "98278875cad8": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra_tras_vuelta",
+     480
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     240,
+     8.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
   "993c57063df1": {
    "medicion": "honesta",
    "motor": 1,
@@ -2220,6 +7039,28 @@
     "umbral": 0.3
    }
   },
+  "99696968218a": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra",
+     1440
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata",
+    "disparo": [
+     "liq15_pctl",
+     0.999,
+     "subida"
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
   "9a28a5c20d69": {
    "medicion": "honesta",
    "motor": 1,
@@ -2241,6 +7082,160 @@
     "rasgos": "B",
     "tope_min": 2160,
     "umbral": 0.4
+   }
+  },
+  "9b64feff0519": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra_tras_vuelta",
+     240
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     15,
+     1.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "9c938fc143dc": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra",
+     1440
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     15,
+     0.75
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "9c9512179425": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "escalonado_1_2_3",
+     480
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     15,
+     0.5
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "9cfb0799a6e4": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "escalonado_1_2_3",
+     480
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     15,
+     1.5
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "9dba2ab6eb75": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "seguir",
+     30
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata",
+    "disparo": [
+     "liq15_pctl",
+     0.997,
+     "subida"
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "9e2841158f03": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra",
+     30
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata",
+    "disparo": [
+     "liq15_pctl",
+     0.99,
+     "caida"
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "9e4b711f0139": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "escalonado_1_2_3",
+     480
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     60,
+     2.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
    }
   },
   "9eb4a08ed1b6": {
@@ -2313,6 +7308,28 @@
     "tope_min": 2160
    }
   },
+  "a14a294aa071": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra_tras_vuelta",
+     120
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     240,
+     8.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
   "a1c685c36dbd": {
    "medicion": "honesta",
    "motor": 1,
@@ -2333,6 +7350,72 @@
     "tope_min": 2160
    }
   },
+  "a1e51bae08a5": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "seguir",
+     240
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     60,
+     4.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "a1fbd84605a6": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra",
+     30
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata",
+    "disparo": [
+     "liq15_pctl",
+     0.997,
+     "caida"
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "a2d86a941de2": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra",
+     60
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     240,
+     8.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
   "a2e3030e140b": {
    "medicion": "honesta",
    "motor": 1,
@@ -2349,6 +7432,50 @@
     "tope_min": 2160
    }
   },
+  "a2f319e90776": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra",
+     120
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     60,
+     2.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "a50273111a60": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra_tras_vuelta",
+     120
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     15,
+     0.75
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
   "a59aebf4cdec": {
    "medicion": "honesta",
    "motor": 1,
@@ -2362,6 +7489,72 @@
     ],
     "tamano": "apagado",
     "tope_min": null
+   }
+  },
+  "a63f00e2e1a7": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra",
+     240
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     15,
+     1.5
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "a73c9dd4159f": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra",
+     120
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     15,
+     3.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "a73ce2a2acda": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra",
+     240
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     15,
+     0.5
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
    }
   },
   "a78fcc1652b2": {
@@ -2384,6 +7577,138 @@
     "tope_min": 2160
    }
   },
+  "a7aef7a43070": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "escalonado_1_2_3",
+     240
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     15,
+     0.75
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "a8a723792ffa": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra_tras_vuelta",
+     240
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     60,
+     4.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "a91efbe773a4": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra",
+     30
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata",
+    "disparo": [
+     "liq15_pctl",
+     0.997,
+     "subida"
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "aa13e9f27a34": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra_tras_vuelta",
+     480
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     15,
+     2.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "aa8a65a7ac9c": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra_tras_vuelta",
+     120
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     60,
+     1.5
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "abb71e9f5d6b": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "seguir",
+     30
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     240,
+     6.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
   "ac5ff1f3b2a5": {
    "medicion": "honesta",
    "motor": 1,
@@ -2404,6 +7729,30 @@
     "tope_min": 2160
    }
   },
+  "acc842eb7007": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra",
+     240
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata",
+    "disparo": [
+     "ret_vs_btc",
+     60,
+     2.0,
+     1.0,
+     "caida"
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
   "ad1ebb6cd186": {
    "medicion": "honesta",
    "motor": 1,
@@ -2422,6 +7771,52 @@
     },
     "param": 0.0,
     "tope_min": 2160
+   }
+  },
+  "ae4a2b267546": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "seguir",
+     240
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     240,
+     6.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "ae9dd7b694eb": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra",
+     240
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata",
+    "disparo": [
+     "ret_vs_btc",
+     60,
+     2.0,
+     1.0,
+     "subida"
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
    }
   },
   "aefb2ee5e46d": {
@@ -2447,6 +7842,28 @@
     "umbral": "elegido con el pasado"
    }
   },
+  "afad2b318905": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra_tras_vuelta",
+     120
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     60,
+     5.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
   "b079acd42014": {
    "medicion": "honesta",
    "motor": 1,
@@ -2460,6 +7877,138 @@
     ],
     "tamano": "suave",
     "tope_min": 2160
+   }
+  },
+  "b0dd3978b5ea": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "escalonado_1_2_3",
+     240
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     240,
+     6.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "b16fef0d888e": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra_tras_vuelta",
+     240
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     15,
+     0.75
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "b269708a7a3a": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra",
+     60
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     60,
+     5.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "b2b16adf12d6": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "seguir",
+     240
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata",
+    "disparo": [
+     "liq15_pctl",
+     0.999,
+     "subida"
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "b3c854cd0be9": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra",
+     480
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     240,
+     6.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "b523d01ab889": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra",
+     240
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     240,
+     3.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
    }
   },
   "b7689a6bbef3": {
@@ -2502,6 +8051,50 @@
     "tope_min": null
    }
   },
+  "b84b7405c4d9": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "seguir",
+     120
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     240,
+     3.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "b88c34999428": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "escalonado_1_2_3",
+     240
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     15,
+     3.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
   "b932c8aa9a67": {
    "medicion": "honesta",
    "motor": 1,
@@ -2525,6 +8118,50 @@
     "umbral": "elegido con el pasado"
    }
   },
+  "b9cc455cd2ad": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra_tras_vuelta",
+     120
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     240,
+     2.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "b9e13bdc5703": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "escalonado_1_2_3",
+     480
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     15,
+     3.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
   "ba1d99d706e6": {
    "medicion": "honesta",
    "motor": 1,
@@ -2543,6 +8180,138 @@
     },
     "param": 400,
     "tope_min": 2160
+   }
+  },
+  "ba8981a934c6": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra",
+     60
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     240,
+     2.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "ba9021fc2651": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra",
+     60
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     15,
+     1.5
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "bb64828fa330": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "seguir_agot",
+     240
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     60,
+     5.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "bbd4f25b343f": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "escalonado_1_2_3",
+     480
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     240,
+     4.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "bc47a125c9f1": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "seguir",
+     30
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     15,
+     0.75
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "bd9352d9896f": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "escalonado_1_2_3",
+     240
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     15,
+     1.5
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
    }
   },
   "be6dbc8a7a73": {
@@ -2568,6 +8337,28 @@
     "umbral": 0.3
    }
   },
+  "becc4857e3b3": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "seguir",
+     240
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     60,
+     2.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
   "bfd2c38fa77f": {
    "medicion": "honesta",
    "motor": 1,
@@ -2586,6 +8377,28 @@
     },
     "param": 0.1,
     "tope_min": null
+   }
+  },
+  "bfe10691d14e": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra",
+     120
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     60,
+     1.5
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
    }
   },
   "bfe4faa4ee8b": {
@@ -2611,6 +8424,50 @@
     "umbral": 0.5
    }
   },
+  "bfecf3909fa3": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra",
+     1440
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     15,
+     2.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "c1487f4c7e1c": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra",
+     720
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     240,
+     8.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
   "c2408e3ea009": {
    "medicion": "honesta",
    "motor": 1,
@@ -2634,6 +8491,28 @@
     "umbral": 0.3
    }
   },
+  "c281aed447d5": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra_tras_vuelta",
+     240
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     60,
+     3.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
   "c2e464a20235": {
    "medicion": "honesta",
    "motor": 1,
@@ -2648,6 +8527,95 @@
     ],
     "tamano": "apagado",
     "tope_min": 2160
+   }
+  },
+  "c3763c3cd7fe": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra",
+     1440
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     240,
+     4.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "c3c0982a26bd": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra",
+     480
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "liq15",
+     20
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "c411638b395e": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra",
+     1440
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata",
+    "disparo": [
+     "ret_vs_btc",
+     60,
+     3.0,
+     1.0,
+     "caida"
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "c46abaa49c74": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "seguir",
+     60
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     15,
+     1.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
    }
   },
   "c4abe6f5dc95": {
@@ -2673,6 +8641,94 @@
     "umbral": 0.3
    }
   },
+  "c4bc3a45d4ef": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "escalonado_1_2_3",
+     480
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     15,
+     2.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "c5117a43125b": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "seguir",
+     1440
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata",
+    "disparo": [
+     "liq15_pctl",
+     0.99,
+     "caida"
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "c5abaf143e7a": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "escalonado_1_2_3",
+     480
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     60,
+     3.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "c5e2f539e03b": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra",
+     240
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     15,
+     2.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
   "c63f685e002b": {
    "medicion": "honesta",
    "motor": 1,
@@ -2691,6 +8747,298 @@
     },
     "param": 50,
     "tope_min": null
+   }
+  },
+  "c67cb570dfb3": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "seguir",
+     240
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     15,
+     2.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "c6d3616d695d": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra",
+     240
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata",
+    "disparo": [
+     "ret_vs_btc",
+     60,
+     5.0,
+     2.0,
+     "caida"
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "c7876efb7cc0": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra",
+     480
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     15,
+     3.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "c7daf7a50d80": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra",
+     240
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata",
+    "disparo": [
+     "ret_vs_btc",
+     60,
+     5.0,
+     1.0,
+     "subida"
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "c7db9240e505": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra",
+     240
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata",
+    "disparo": [
+     "ret_vs_btc",
+     60,
+     2.0,
+     2.0,
+     "caida"
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "c7f191d18efb": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra",
+     120
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     15,
+     2.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "c7f62fd5d74e": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "seguir",
+     60
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     240,
+     6.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "c82736334dd0": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "seguir",
+     240
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     15,
+     1.5
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "c847d0ddb8d3": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "escalonado_1_2_3",
+     480
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     15,
+     0.75
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "c966ced0a8ee": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra_tras_vuelta",
+     240
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     60,
+     1.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "c9802bc5b62b": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "seguir",
+     60
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     240,
+     4.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "c9a66623ffd2": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra",
+     60
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     15,
+     0.5
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "c9ac6eca3e5a": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra",
+     720
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     15,
+     1.5
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
    }
   },
   "ca09f0cc8ab0": {
@@ -2716,6 +9064,30 @@
     "umbral": "elegido con el pasado"
    }
   },
+  "ca185b8d7b28": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra",
+     1440
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata",
+    "disparo": [
+     "ret_vs_btc",
+     60,
+     3.0,
+     2.0,
+     "caida"
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
   "ca6d70a53508": {
    "medicion": "honesta",
    "motor": 1,
@@ -2723,6 +9095,94 @@
     "analisis": "donde-perdimos",
     "base": "congelado ETH 36h 5/5",
     "corte": "año"
+   }
+  },
+  "cab1f83bc2e1": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "seguir_agot",
+     240
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     240,
+     6.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "cb2eb568bd32": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra",
+     720
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     15,
+     0.5
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "cb4047a19779": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "seguir",
+     60
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     240,
+     3.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "cb970e18a420": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra",
+     1440
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     240,
+     3.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
    }
   },
   "ccc13609e948": {
@@ -2761,6 +9221,27 @@
     "tope_min": null
    }
   },
+  "cd6b9b492fc7": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra",
+     120
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "liq15",
+     5
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
   "cd86b5626eb8": {
    "medicion": "honesta",
    "motor": 1,
@@ -2782,6 +9263,49 @@
     "rasgos": "A",
     "tope_min": 2160,
     "umbral": 0.4
+   }
+  },
+  "ce279b42819f": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra",
+     120
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "liq15",
+     20
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "ced5c7bb0eaa": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra_tras_vuelta",
+     240
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     240,
+     2.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
    }
   },
   "cee7215c9347": {
@@ -2807,6 +9331,28 @@
     "umbral": "elegido con el pasado"
    }
   },
+  "cf1996a11e6d": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra",
+     480
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     240,
+     3.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
   "cf38a359adc6": {
    "medicion": "honesta",
    "motor": 1,
@@ -2827,6 +9373,272 @@
     "tope_min": null
    }
   },
+  "cf3fe755da09": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "seguir",
+     15
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     60,
+     5.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "cfb6943dc23e": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra",
+     1440
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata",
+    "disparo": [
+     "liq15_pctl",
+     0.999,
+     "caida"
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "cfdda1869e6a": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "seguir",
+     120
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     60,
+     1.5
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "d03397a66680": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra",
+     240
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     60,
+     3.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "d0a71753ff75": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra_tras_vuelta",
+     240
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     240,
+     6.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "d0d851aa85a7": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra",
+     240
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata",
+    "disparo": [
+     "liq15_pctl",
+     0.997,
+     "caida"
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "d0f65aeaabc4": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "escalonado_1_2_3",
+     480
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     240,
+     8.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "d11de08e22b2": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "escalonado_1_2_3",
+     240
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     60,
+     1.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "d168fd1bc2d9": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "seguir",
+     1440
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata",
+    "disparo": [
+     "liq15_pctl",
+     0.999,
+     "subida"
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "d1e990316aaa": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "seguir",
+     120
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     15,
+     0.5
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "d3ad1d10ec20": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "seguir",
+     60
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     60,
+     4.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "d3ee8166fe3b": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra",
+     1440
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata",
+    "disparo": [
+     "ret_vs_btc",
+     60,
+     2.0,
+     2.0,
+     "subida"
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
   "d48526d00ce0": {
    "medicion": "honesta",
    "motor": 1,
@@ -2845,6 +9657,72 @@
     },
     "param": 0.3,
     "tope_min": 2160
+   }
+  },
+  "d49f3c0ef660": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "seguir",
+     15
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     15,
+     3.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "d528ccdb1bd4": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra_tras_vuelta",
+     120
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     240,
+     4.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "d6a194d7aa54": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra",
+     60
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     240,
+     6.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
    }
   },
   "d6d8799002bd": {
@@ -2912,6 +9790,71 @@
     "umbral": 0.3
    }
   },
+  "d7aa643befbe": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "seguir",
+     30
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "liq15",
+     20
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "d7b97a83876e": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra",
+     720
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     60,
+     2.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "d7c99b3a7b06": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "seguir",
+     60
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     15,
+     0.5
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
   "da538f64158c": {
    "medicion": "honesta",
    "motor": 1,
@@ -2957,6 +9900,72 @@
     "tope_min": null
    }
   },
+  "db26ed66af2d": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "seguir",
+     30
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     240,
+     4.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "db4f7432ea6f": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra_tras_vuelta",
+     480
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     60,
+     2.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "db791948da92": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra_tras_vuelta",
+     120
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     15,
+     1.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
   "dbcd6dab8a3a": {
    "medicion": "honesta",
    "motor": 1,
@@ -2980,6 +9989,28 @@
     "umbral": 0.3
    }
   },
+  "dc08666fcfa9": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra",
+     240
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     15,
+     1.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
   "dcc52ddf810c": {
    "medicion": "honesta",
    "motor": 1,
@@ -2994,6 +10025,50 @@
     ],
     "tamano": "fuerte",
     "tope_min": null
+   }
+  },
+  "dcd8d5ff6c51": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "seguir_agot",
+     240
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     60,
+     2.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "dd01418f4f9d": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "seguir",
+     240
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     240,
+     4.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
    }
   },
   "dd169494ab81": {
@@ -3017,6 +10092,72 @@
     "rasgos": "B",
     "tope_min": null,
     "umbral": 0.5
+   }
+  },
+  "dd84165780b9": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "seguir",
+     30
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     15,
+     0.5
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "e01dd6cf800c": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "seguir",
+     240
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     15,
+     0.5
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "e0f4b9c040f2": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "seguir_agot",
+     240
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     15,
+     0.75
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
    }
   },
   "e1e93ea0a7d9": {
@@ -3091,6 +10232,94 @@
     "tope_min": 2160
    }
   },
+  "e402cfa091d0": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra_tras_vuelta",
+     240
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     15,
+     2.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "e48332ac9ff5": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "seguir",
+     240
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata",
+    "disparo": [
+     "liq15_pctl",
+     0.999,
+     "caida"
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "e4f1e6e33123": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra",
+     30
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata",
+    "disparo": [
+     "liq15_pctl",
+     0.99,
+     "subida"
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "e55da67d98ee": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra",
+     480
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     240,
+     2.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
   "e5ba62a72bef": {
    "medicion": "honesta",
    "motor": 1,
@@ -3100,6 +10329,72 @@
     "corte": "lado"
    }
   },
+  "e6273b37a0d3": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra_tras_vuelta",
+     480
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     15,
+     0.75
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "e667def5ecea": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra",
+     720
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     60,
+     1.5
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "e6ed8d0b86f2": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra",
+     240
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     240,
+     2.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
   "e7529014563f": {
    "medicion": "honesta",
    "motor": 1,
@@ -3107,6 +10402,50 @@
     "analisis": "donde-perdimos",
     "base": "congelado ETH 36h 5/5",
     "corte": "hora del día (4 tramos)"
+   }
+  },
+  "e7b2269f7ebf": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "seguir",
+     1440
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata",
+    "disparo": [
+     "liq15_pctl",
+     0.999,
+     "caida"
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "e7e6e1a08f1b": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra",
+     720
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     240,
+     2.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
    }
   },
   "e8319a0740a7": {
@@ -3152,6 +10491,50 @@
     "umbral": 0.4
    }
   },
+  "e99cfee80098": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "seguir",
+     240
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata",
+    "disparo": [
+     "liq15_pctl",
+     0.997,
+     "subida"
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "ea9994bf4d79": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra_tras_vuelta",
+     120
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     15,
+     2.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
   "ebe5d5742ff6": {
    "medicion": "honesta",
    "motor": 1,
@@ -3184,6 +10567,49 @@
     "corte": "motivo de salida"
    }
   },
+  "ec7dc87c14b7": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "seguir",
+     30
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "liq15",
+     10
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "ed420359b99e": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "seguir",
+     15
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     15,
+     0.75
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
   "ed9e1f2c82f5": {
    "medicion": "honesta",
    "motor": 1,
@@ -3202,6 +10628,28 @@
     },
     "param": 150,
     "tope_min": null
+   }
+  },
+  "eda02ea350f2": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "seguir",
+     120
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     15,
+     0.75
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
    }
   },
   "ee4d3ef433dd": {
@@ -3224,6 +10672,94 @@
     "tope_min": null
    }
   },
+  "eef23d41ff75": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra",
+     60
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     15,
+     2.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "ef01cd8d7e01": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra",
+     480
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     60,
+     1.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "ef43e968b859": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra_tras_vuelta",
+     120
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     15,
+     1.5
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "f0155de72869": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "seguir",
+     15
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     240,
+     2.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
   "f237f9cb45bf": {
    "medicion": "honesta",
    "motor": 1,
@@ -3242,6 +10778,27 @@
     },
     "param": 0.3,
     "tope_min": null
+   }
+  },
+  "f27638aab856": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "seguir",
+     30
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "liq15",
+     5
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
    }
   },
   "f2d177c0c277": {
@@ -3264,6 +10821,138 @@
     "tope_min": null
    }
   },
+  "f2ed687f3399": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "seguir",
+     30
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata",
+    "disparo": [
+     "liq15_pctl",
+     0.99,
+     "subida"
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "f3bcea3bee19": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra",
+     1440
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     60,
+     3.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "f3c47e3e4d16": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "seguir",
+     120
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     15,
+     1.5
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "f3d04ef51201": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "seguir",
+     60
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     60,
+     5.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "f45276d09b4b": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "seguir",
+     120
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     15,
+     2.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "f4fce50fba5c": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra",
+     480
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     60,
+     4.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
   "f50ab4c7af19": {
    "medicion": "honesta",
    "motor": 1,
@@ -3284,6 +10973,28 @@
     "tope_min": null
    }
   },
+  "f528c95a634b": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "seguir",
+     120
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     240,
+     6.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
   "f543bf03eec9": {
    "medicion": "honesta",
    "motor": 1,
@@ -3297,6 +11008,50 @@
     ],
     "tamano": "apagado",
     "tope_min": null
+   }
+  },
+  "f55891affd66": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "seguir",
+     30
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     60,
+     3.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "f60dbf176cdb": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "seguir",
+     60
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     60,
+     1.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
    }
   },
   "f68082dc011f": {
@@ -3387,6 +11142,28 @@
     "umbral": 0.4
    }
   },
+  "f80d6b1283ff": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "escalonado_1_2_3",
+     240
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     240,
+     4.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
   "f8cb8cd90b63": {
    "medicion": "honesta",
    "motor": 1,
@@ -3410,6 +11187,28 @@
     "umbral": 0.5
    }
   },
+  "f8d03483db72": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "seguir",
+     120
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     60,
+     5.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
   "f9282bc96e33": {
    "medicion": "honesta",
    "motor": 1,
@@ -3428,6 +11227,248 @@
     },
     "param": 1.0,
     "tope_min": 2160
+   }
+  },
+  "f93e74008725": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "seguir",
+     240
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata",
+    "disparo": [
+     "liq15_pctl",
+     0.99,
+     "caida"
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "f978b41d89e4": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra",
+     480
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     15,
+     2.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "f987ab004987": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "seguir",
+     240
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     15,
+     0.75
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "f98fbd99760b": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "seguir",
+     60
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     15,
+     3.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "fa3097432c30": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra",
+     120
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     240,
+     8.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "fc65f85a0e61": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra",
+     60
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     60,
+     2.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "fccd9a2a1af6": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra",
+     120
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     240,
+     2.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "fd3bc3f78b09": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra",
+     1440
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     240,
+     2.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "fda38ac0d31c": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "contra",
+     240
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     60,
+     1.5
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "fdb1fb286cce": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "seguir",
+     120
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     240,
+     4.0
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
+   }
+  },
+  "fe1446d69a04": {
+   "medicion": "cruda",
+   "motor": 1,
+   "variante": {
+    "accion": [
+     "seguir",
+     15
+    ],
+    "analisis": "caidas-fuertes-29oct",
+    "cooldown_min": 60,
+    "costos": "taker 5,19 pb/pata, maker 2,19",
+    "disparo": [
+     "ret",
+     15,
+     0.5
+    ],
+    "productos": [
+     "PF_ETHUSD"
+    ],
+    "relleno": "1 min tras el cierre de 5 min"
    }
   },
   "ff7b99070fb2": {
