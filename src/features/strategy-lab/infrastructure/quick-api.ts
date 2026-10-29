@@ -168,9 +168,10 @@ export type QuickTrade = {
   salida_ms: number
   neto_bp: number
   motivo: string
-  /** The maestro at the entry (−2…+2) and whether the portero agreed. */
+  /** The maestro at the entry (−2…+2), whether the portero agreed, and whether news enabled it. */
   maestro?: number
   portero?: boolean
+  noticias?: boolean
   /** The movement analyst: the size the entry got (1 when off) and whether ETH was moving (`null`: not enough history). */
   tamano?: number
   movimiento?: boolean | null

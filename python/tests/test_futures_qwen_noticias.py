@@ -190,6 +190,34 @@ class AuditAndIdentityTests(unittest.TestCase):
         self.assertAlmostEqual(out["formula"]["total_bp"], 30.0 + 45.0)
         self.assertEqual([t["noticias"] for t in out["curvas"]["formula"]], [False, True])
 
+    def test_short_sheet_includes_news_analyst_line_and_is_readable_by_destila(self):
+        from balancita_engine import futures_qwen_destila as dst
+        env = make(self, policy=Policy(flat="ESPERAR", position="MANTENER"), formula=True)
+        fake_reading = {
+            "hechos": {},
+            "puntaje": 0.25,
+            "flojo": 0.11,
+            "veredicto": 2,
+            "portero_p": 0.64,
+            "portero_si": False,
+            "noticias_si": True,
+            "noticias": {"disponible": True, "n": 2, "sentimiento": 0.75, "max_relevancia": 1.0, "a_favor": True},
+            "vol_ratio": 1.0,
+            "volatilidad": "NORMAL",
+            "sigma24": 0.02,
+            "range24": 0.03,
+            "range7": 0.03,
+        }
+        with mock.patch.object(corta, "readings", return_value=fake_reading):
+            env.op.start()
+            trader = env.op.traders["PF_XBTUSD"]
+            t_ms = trader.t[-1] + 5 * MIN
+            real = trader.state_text(t_ms, ["cada_15_min"])
+            mirror = trader.state_text(t_ms, ["cada_15_min"], mirror=True)
+        self.assertIn("Noticias (últimas 4 h): A FAVOR del maestro (2 relevantes, sentimiento +0,75).", real)
+        self.assertEqual(dst.formula_from_text(real), "LARGO")
+        self.assertEqual(dst.formula_from_text(mirror), "CORTO")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -28,11 +28,14 @@ describe('MarketStrip', () => {
     },
   )
 
-  it('retains the default product, quote evidence and received age', () => {
+  it('retains the default Ethereum product, quote evidence and received age without raw PF_ codes', () => {
     render(<MarketStrip {...props} />)
-    const market = screen.getByRole('region', { name: 'Mercado BTC/USD' })
+    const market = screen.getByRole('region', { name: 'Mercado ETH/USD' })
     expect(within(market).getByRole('heading')).toHaveTextContent(
-      'Bitcoin / DólarPF_XBTUSD · perpetuo',
+      'Ethereum / Dólarperpetuo',
+    )
+    expect(within(market).getByRole('heading')).not.toHaveTextContent(
+      'PF_XBTUSD',
     )
     expect(screen.getByTitle(props.eventTimes)).toHaveTextContent(
       'Último precio · hace 2 s',
@@ -51,7 +54,7 @@ describe('MarketStrip', () => {
         alerts={[{ key: 'feed', tone: 'bad', text: 'Sin conexión' }]}
       />,
     )
-    expect(screen.getByRole('heading')).toHaveTextContent('ETH / Dólar')
+    expect(screen.getByRole('heading')).toHaveTextContent('Ethereum / Dólar')
     expect(screen.queryByText(/24 h/)).toBeNull()
     expect(screen.queryByText(/hace/)).toBeNull()
     expect(screen.getByRole('list', { name: 'Avisos' })).toHaveTextContent(

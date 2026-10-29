@@ -1,4 +1,5 @@
 import { useEffect, useState, type ReactNode } from 'react'
+import { productName } from '../features/trading-view/domain/product-label.ts'
 
 /** Seconds elapsed since mount, refreshed four times a second. */
 function useElapsedMs(): number {
@@ -12,7 +13,7 @@ function useElapsedMs(): number {
 }
 
 function productLabel(product: string | undefined): string {
-  return (product ?? 'PF_ETHUSD').replace(/^PF_/, '').replace(/USD$/, '')
+  return productName(product)
 }
 
 const SOURCE = 'Real\u00a0(paper,\u00a0Kraken\u00a0público)'

@@ -80,6 +80,15 @@ def spearman(legs):
     return num / den if den else 0.0
 
 
+def _week_funding_bp(t, longs, shorts, k, with_funding):
+    pay = 0.0
+    for d in longs:
+        pay += sum(with_funding[d["p"]].get(t + 2 * HOUR + j * HOUR, 0.0) for j in range(1, 169)) * 1e4 / k
+    for d in shorts:
+        pay -= sum(with_funding[d["p"]].get(t + 2 * HOUR + j * HOUR, 0.0) for j in range(1, 169)) * 1e4 / k
+    return pay
+
+
 def run_weeks(opn_by_p, products, with_funding=None):
     weeks, held, ics, contrib = [], None, [], {}
     for t in mondays():
@@ -90,12 +99,7 @@ def run_weeks(opn_by_p, products, with_funding=None):
         longs, shorts, k = pick(legs)
         w = week_result(t, legs, longs, shorts, k, held)
         if with_funding is not None and t + 2 * HOUR >= r.FUNDING_START:
-            pay = 0.0
-            for d in longs:
-                pay += sum(with_funding[d["p"]].get(t + 2 * HOUR + j * HOUR, 0.0) for j in range(1, 169)) * 1e4 / k
-            for d in shorts:
-                pay -= sum(with_funding[d["p"]].get(t + 2 * HOUR + j * HOUR, 0.0) for j in range(1, 169)) * 1e4 / k
-            w["funding"] = pay
+            w["funding"] = _week_funding_bp(t, longs, shorts, k, with_funding)
         weeks.append(w)
         ics.append(spearman(legs))
         for d in longs:
@@ -107,14 +111,14 @@ def run_weeks(opn_by_p, products, with_funding=None):
 
 
 def stationary_ci(series, reps=BOOT, seed=SEED):
-    rng = random.Random(seed)
+    rng = random.Random(seed)  # NOSONAR
     n = len(series)
     vals = []
     for _ in range(reps):
-        i, tot = rng.randrange(n), 0.0
+        i, tot = rng.randrange(n), 0.0  # NOSONAR
         for _ in range(n):
             tot += series[i]
-            i = rng.randrange(n) if rng.random() < 1 / BLOCK else (i + 1) % n
+            i = rng.randrange(n) if rng.random() < 1 / BLOCK else (i + 1) % n  # NOSONAR
         vals.append(tot / n)
     vals.sort()
     return vals[int(0.05 * reps)], vals[int(0.95 * reps) - 1]
@@ -176,14 +180,14 @@ def summarize(weeks, ics, contrib):
 def random_control(opn_by_p, products, net_ref):
     gs, ns = [], []
     for seed in range(CONTROLS):
-        rng = random.Random("{}:mr1:{}".format(SEED, seed))
+        rng = random.Random("{}:mr1:{}".format(SEED, seed))  # NOSONAR
         g, n = [], []
         for t in mondays():
             legs = legs_for(t, opn_by_p, products)
             if len(legs) < MIN_PRODUCTS:
                 continue
             k = len(legs) // 4
-            sel = rng.sample(legs, 2 * k)
+            sel = rng.sample(legs, 2 * k)  # NOSONAR
             lo, sh = sel[:k], sel[k:]
             gross = f.mean([d["lr"] for d in lo]) - f.mean([d["lr"] for d in sh])
             cost = f.mean([d["cost"] for d in lo]) + f.mean([d["cost"] for d in sh])

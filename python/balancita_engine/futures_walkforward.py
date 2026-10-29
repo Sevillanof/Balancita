@@ -251,7 +251,8 @@ def base_photos(cache_dir, work_dir, product, cap_min, pares=PARES_PATH, log=pri
         if not op:
             continue
         slim.append({"product": product, "t_ms": p["t_ms"], "mov": movement.active(p["t_ms"]),
-                     "operacion": {k: op[k] for k in ("maestro", "puntaje", "portero_si", "portero_p", "largo", "corto")}})
+                     "operacion": {**{k: op[k] for k in ("maestro", "puntaje", "portero_si", "portero_p", "largo", "corto")},
+                                   "noticias_si": bool(op.get("noticias_si"))}})
     with gzip.open(path + ".tmp", "wt", encoding="utf-8") as handle:
         handle.write(json.dumps({"clave": key}) + "\n")
         for p in slim:
@@ -309,7 +310,7 @@ class _Stored:
     def __init__(self, value):
         self.value = value
 
-    def active(self, t_ms):
+    def active(self, *_args):
         return self.value
 
 
@@ -340,8 +341,10 @@ def trades_for(photos, product, v, pares=PARES_PATH):
         teacher, keeper = _formulas_at(pares, quarter_of(t_ms), levels)
         op = p["operacion"]
         verdict = maestro.verdict_of(teacher, op["puntaje"])
-        op = dict(op, maestro=verdict, portero_si=bool(op["portero_p"] >= keeper["umbral"]))
-        if abs(verdict) == 2 and op["portero_si"]:
+        portero_ok = bool(op["portero_p"] >= keeper["umbral"])
+        noticias_ok = bool(op.get("noticias_si"))
+        op = dict(op, maestro=verdict, portero_si=portero_ok, noticias_si=noticias_ok)
+        if abs(verdict) == 2 and (portero_ok or noticias_ok):
             op = analista.sized(size_cfg, op, _Stored(p.get("mov")), t_ms)
         flagged.append({"product": product, "t_ms": t_ms, "operacion": op})
     out = []
@@ -394,7 +397,7 @@ def choose_walk_forward(by_variant, quarter_list, default_id, min_trades=MIN_PAS
             if len(past) >= min_trades:
                 scores[vid] = math.fsum(past)
         if scores:
-            top = max(scores, key=lambda k: (scores[k], k == default_id))
+            top = max(scores, key=lambda k, sc=scores: (sc[k], k == default_id))
             if scores[top] > scores.get(default_id, -math.inf):
                 best, best_score = top, scores[top]
         picks.append({"trimestre": destila.qname(y, q), "variante": best, "con_pasado": bool(scores),
@@ -419,7 +422,7 @@ def bootstrap_ic(trades, draws=BOOT_DRAWS, seed=BOOT_SEED):
     for _ in range(draws):
         pool = []
         for _ in keys:
-            pool += weeks[keys[rng.randrange(len(keys))]]
+            pool += weeks[keys[rng.randrange(len(keys))]]  # NOSONAR
         means.append(math.fsum(pool) / len(pool) if pool else 0.0)
     means.sort()
     return [round(means[int(draws * 0.05)], 1), round(means[int(draws * 0.95) - 1], 1)]
@@ -521,50 +524,47 @@ def _thousands(n):
     return "{:,}".format(int(n)).replace(",", ".")
 
 
-def meter(trades, *, medicion, trial_count, fit_end_ms=None, pairs_path=None):
-    """El MEDIDOR DE HONESTIDAD de un resultado: semáforo (verde / amarillo / rojo) y una línea con la razón.
+def _outside_share(trades, medicion, fit_end_ms):
+    if not trades:
+        return None
+    if medicion == "honesta":
+        return 1.0
+    end = fit_end_ms if fit_end_ms is not None else qt.date_ms(LEGACY_FIT_END) + DAY_MS
+    return sum(1 for t in trades if t["t_in"] >= end) / len(trades)
 
-    * intentos: cuántas variantes se probaron en total (registro + las anteriores a él);
-    * fuera del ajuste: qué parte de las operaciones entró DESPUÉS de que terminara el ajuste de la fórmula que las decidió (en modo
-      honesto, cada trimestre usa un par ajustado solo con lo anterior: siempre 100 %; con la fórmula en vigor, solo lo posterior a
-      2025-09-30);
-    * práctica: del 16-oct-2025 al 18-abr-2026 ya se usó para elegir reglas (no es dato fresco); el holdout (desde 19-abr-2026) está intacto;
-    * corregido: probabilidad de que el resultado NO sea suerte tras descontar los intentos (Sharpe desinflado).
-    Rojo: se tocó el holdout, o menos de la mitad está fuera del ajuste, o la probabilidad corregida es menor que 50 %.
-    Verde: todo fuera del ajuste, sin práctica usada y probabilidad corregida de 95 % o más. Amarillo: el resto."""
+
+def _meter_verdict(touched, outside, dsr, uses_practice, n_trades, attempts):
+    if touched:
+        return "rojo", ["se leyó el holdout"]
+    if outside is None or dsr is None:
+        return "amarillo", ["todavía no hay operaciones suficientes para juzgar"]
+    if outside < 0.5:
+        return "rojo", ["solo el {} % del resultado está fuera del ajuste de la fórmula".format(round(outside * 100))]
+    luck_msg = "en estas {} operaciones y con {} intentos, la probabilidad de que no sea suerte es de {} %".format(
+        n_trades, attempts, round(dsr * 100)
+    )
+    if dsr < 0.5:
+        return "rojo", [luck_msg]
+    if dsr >= 0.95 and not uses_practice and outside >= 0.95:
+        return "verde", ["todo está fuera del ajuste y supera el descuento por intentos"]
+    reasons = [luck_msg] if dsr < 0.95 else []
+    if uses_practice:
+        reasons.append("incluye la práctica, que ya se usó para elegir reglas")
+    if outside < 0.95:
+        reasons.append("el {} % está fuera del ajuste".format(round(outside * 100)))
+    return "amarillo", reasons
+
+
+def meter(trades, *, medicion, trial_count, fit_end_ms=None):
+    """El MEDIDOR DE HONESTIDAD de un resultado: semáforo (verde / amarillo / rojo) y una línea con la razón."""
     nets = [t["net"] for t in trades]
     holdout = qt.load_holdout_ms()
     touched = any(t["t_out"] >= holdout for t in trades)
-    if medicion == "honesta":
-        outside = 1.0 if trades else None
-    else:
-        end = fit_end_ms if fit_end_ms is not None else qt.date_ms(LEGACY_FIT_END) + DAY_MS
-        outside = (sum(1 for t in trades if t["t_in"] >= end) / len(trades)) if trades else None
+    outside = _outside_share(trades, medicion, fit_end_ms)
     uses_practice = any(t["t_in"] >= qt.date_ms(PRACTICE_FROM) for t in trades)
     dsr = deflated_probability(nets, max(1, trial_count)) if len(nets) >= 3 else None
     raw = deflated_probability(nets, 1) if len(nets) >= 3 else None
-    attempts = _thousands(trial_count)
-    reasons = []
-    if touched:
-        color, reasons = "rojo", ["se leyó el holdout"]
-    elif outside is None or dsr is None:
-        color, reasons = "amarillo", ["todavía no hay operaciones suficientes para juzgar"]
-    elif outside < 0.5:
-        color = "rojo"
-        reasons.append("solo el {} % del resultado está fuera del ajuste de la fórmula".format(round(outside * 100)))
-    elif dsr < 0.5:
-        color = "rojo"
-        reasons.append("en estas {} operaciones y con {} intentos, la probabilidad de que no sea suerte es de {} %".format(len(nets), attempts, round(dsr * 100)))
-    elif dsr < 0.95 or uses_practice or outside < 0.95:
-        color = "amarillo"
-        if dsr < 0.95:
-            reasons.append("en estas {} operaciones y con {} intentos, la probabilidad de que no sea suerte es de {} %".format(len(nets), attempts, round(dsr * 100)))
-        if uses_practice:
-            reasons.append("incluye la práctica, que ya se usó para elegir reglas")
-        if outside < 0.95:
-            reasons.append("el {} % está fuera del ajuste".format(round(outside * 100)))
-    else:
-        color, reasons = "verde", ["todo está fuera del ajuste y supera el descuento por intentos"]
+    color, reasons = _meter_verdict(touched, outside, dsr, uses_practice, len(nets), _thousands(trial_count))
     text = "; ".join(reasons)
     return {"semaforo": color, "motivo": text[:1].upper() + text[1:] + ".",
             "intentos": trial_count, "operaciones": len(nets), "fuera_del_ajuste_pct": None if outside is None else round(outside * 100, 1),
@@ -641,7 +641,7 @@ def _pb(value):
 
 
 def _years(summary_):
-    return {y: v for y, v in (summary_.get("por_anio") or {}).items()}
+    return dict((summary_.get("por_anio") or {}).items())
 
 
 def _pct(value):

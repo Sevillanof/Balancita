@@ -415,7 +415,7 @@ export interface StrategyApi {
   gatePassed?(id: string, version: number): Promise<boolean>
 }
 
-export const DEFAULT_PRODUCT = 'PF_XBTUSD'
+export const DEFAULT_PRODUCT = 'PF_ETHUSD'
 
 export function httpStrategyApi(
   base = STRATEGIES_API_BASE,

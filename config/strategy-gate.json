@@ -4,7 +4,7 @@
   "holdout_from": "2026-04-19",
   "holdout_note": "Fecha de corte fija (unos 6 meses). La práctica nunca lee velas, señales ni resultados desde esta fecha; solo el examen final las evalúa, una vez por versión.",
   "default_from": "2025-10-16",
-  "default_products": ["PF_XBTUSD", "PF_ETHUSD", "PF_SOLUSD"],
+  "default_products": ["PF_ETHUSD"],
   "practice_folds": 5,
   "exam_folds": 3,
   "random_draws": 1000,

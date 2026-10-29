@@ -291,8 +291,9 @@ class GuardrailTests(unittest.TestCase):
         self.assertEqual([s for _, s, _, _ in script.asked], ["action"])
 
     def test_entry_threshold_must_exist(self):
+        decider = Script(always())
         with self.assertRaises(qt.TraderError):
-            qt.Trader(CFG, "PF_XBTUSD", Script(always()))
+            qt.Trader(CFG, "PF_XBTUSD", decider)
 
 
 class AccountingTests(unittest.TestCase):
@@ -537,9 +538,11 @@ class PracticeTests(unittest.TestCase):
 
     def test_a_database_from_another_seed_is_refused(self):
         run(self.db)
+        history = MemHistory()
+        provider = ClockedProvider([0.0], entries=hashed_policy)
+        cfg = small_cfg()
         with self.assertRaises(qt.TraderError):
-            qt.run_practice(MemHistory(), self.db, ClockedProvider([0.0], entries=hashed_policy), small_cfg(), HOLDOUT,
-                            seed=5, blocks=4, log=lambda *a: None)
+            qt.run_practice(history, self.db, provider, cfg, HOLDOUT, seed=5, blocks=4, log=lambda *a: None)
 
     def test_model_down_stops_cleanly_and_keeps_what_was_done(self):
         provider = ClockedProvider([0.0], entries=hashed_policy)
@@ -713,7 +716,7 @@ class ReportAndExportTests(unittest.TestCase):
         self.assertEqual(count, len(lines))
         self.assertEqual(count, rows(self.db, "SELECT COUNT(*) FROM decisions")[0][0])
         kinds = {line["kind"] for line in lines}
-        self.assertTrue({"flat", "position"} <= kinds)
+        self.assertLessEqual({"flat", "position"}, kinds)
         for line in lines:
             self.assertEqual(line["schema"], qt.DATASET_SCHEMA)
             self.assertEqual(line["source"], "practice")
@@ -1171,14 +1174,17 @@ class V2PracticeTests(unittest.TestCase):
         meta1, meta2 = (dict(rows(db, "SELECT key, value FROM meta")) for db in (self.db1, self.db2))
         self.assertNotEqual(meta1["config_hash"], meta2["config_hash"])
         self.assertEqual(rows(self.db2, "SELECT DISTINCT prompt_version FROM decisions"), [(2,)])
+        history = MemHistory()
+        provider = ClockedProvider([0.0], entries=hashed_policy)
+        cfg2 = small_cfg2()
         with self.assertRaises(qt.TraderError):                                  # a v2 run cannot be mixed into the v1 base
-            qt.run_practice(MemHistory(), self.db1, ClockedProvider([0.0], entries=hashed_policy), small_cfg2(), HOLDOUT,
+            qt.run_practice(history, self.db1, provider, cfg2, HOLDOUT,
                             blocks=4, log=lambda *a: None, clock=lambda: 0.0)
 
     def test_v2_trades_close_only_by_qwen_or_the_block_end(self):
         closed = {r[0] for r in rows(self.db2, "SELECT DISTINCT closed_by FROM trades")}
         self.assertTrue(closed)
-        self.assertTrue(closed <= {"qwen", "fin_de_bloque"}, closed)
+        self.assertLessEqual(closed, {"qwen", "fin_de_bloque"}, closed)
         self.assertEqual(rows(self.db2, "SELECT COUNT(*) FROM decisions WHERE override='stop' OR override='tiempo'")[0][0], 0)
         reasons = rows(self.db2, "SELECT reason_json FROM decisions WHERE reason IS NOT NULL LIMIT 5")
         self.assertTrue(reasons and all(len(json.loads(r[0])["orders"]) == 2 for r in reasons))

@@ -1,5 +1,6 @@
 import { signedAmount } from '../domain/strategy-format.ts'
 import type { RunTrade } from '../infrastructure/run-visual-api.ts'
+import { productName } from '../../trading-view/domain/product-label.ts'
 
 type Props = {
   trades: RunTrade[]
@@ -34,7 +35,7 @@ export default function RunVerdict({
       ? `${signedAmount((bp / 1e4) * notional, 2) ?? '0,00'} USD`
       : `${signedAmount(bp, 0) ?? '0'} pb`
   const wins = (made ?? net) >= 0
-  const coin = product.replace(/^PF_|USD$/g, '')
+  const coin = productName(product)
   return (
     <div
       className="flex flex-wrap items-center gap-x-5 gap-y-1 rounded-lg border border-solid border-line bg-canvas px-4 py-3.5"

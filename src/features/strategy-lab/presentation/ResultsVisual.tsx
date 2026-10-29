@@ -8,9 +8,10 @@ export type VisualTrade = {
   id?: string
   product?: string
   side?: 1 | -1
-  /** The maestro at the entry (−2…+2) and the portero, when the rule has them. */
+  /** The maestro at the entry (−2…+2), the portero, and the news analyst, when the rule has them. */
   maestro?: number
   portero?: boolean
+  noticias?: boolean
   /** `vuelta` (the maestro turned), `tiempo` (the safety limit) or free text. */
   exit?: string
   label: string
@@ -346,7 +347,7 @@ function TradeFocus({
           />
         </g>
         <text x={ex} y={12} textAnchor="middle" className="fill-ink text-hint">
-          {`${long ? 'LARGO' : 'CORTO'} ${arrows(trade.maestro)}${trade.portero == null ? '' : trade.portero ? ' ✓' : ' ✗'}`}
+          {`${long ? 'LARGO' : 'CORTO'} ${arrows(trade.maestro)}${trade.portero == null ? '' : trade.portero ? ' ✓' : trade.noticias ? ' ✗ · noticias ✓' : ' ✗'}`}
         </text>
         <circle
           cx={xx}

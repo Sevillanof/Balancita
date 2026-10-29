@@ -595,7 +595,14 @@ const POSITIONING_ARGS = [
  *   decisions DB, sole writer of the latter), started together with llm.
  */
 /** The children that make Qwen decide and operate: they ignore DEV_ONLY. */
-export const QWEN_CHILDREN = ['verdict', 'llm', 'q', 'qwenexit', 'qwenlive']
+export const QWEN_CHILDREN = [
+  'verdict',
+  'news',
+  'llm',
+  'q',
+  'qwenexit',
+  'qwenlive',
+]
 
 /**
  * `DEV_ONLY=vite,capture,live,forward,strategies` runs just those children (comma separated names of

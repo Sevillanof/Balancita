@@ -62,7 +62,8 @@ def quarter_spec(spec, t_ms=None):
     folder, table = _pairs_table(spec["pares"])
     names = sorted(table)
     name = names[-1] if t_ms is None else _quarter_name(t_ms)
-    name = name if name in table else (names[0] if t_ms is not None and name < names[0] else names[-1])
+    if name not in table:
+        name = names[0] if t_ms is not None and name < names[0] else names[-1]
     pair = table[name]
     return dict(spec, maestro=os.path.join(folder, pair["maestro"]), maestro_hash=pair["maestro_hash"],
                 portero=os.path.join(folder, pair["portero"]), portero_hash=pair["portero_hash"])
@@ -121,7 +122,12 @@ def readings(trader, t_ms, f=None):
     yes, p = portero.verdict(keeper, row, s)
     news_yes, news_info = noticias.verdict(getattr(trader, "news", None), t_ms, -1 if s < 0 else 1)
     ratio = f["range24"] / f["range7"] if f["range7"] > 0 else 1.0
-    regime = "ALTA" if ratio >= VOL_HIGH else "BAJA" if ratio <= VOL_LOW else "NORMAL"
+    if ratio >= VOL_HIGH:
+        regime = "ALTA"
+    elif ratio <= VOL_LOW:
+        regime = "BAJA"
+    else:
+        regime = "NORMAL"
     return {"hechos": row, "puntaje": s, "flojo": teacher["umbrales"]["flojo"], "veredicto": v, "portero_p": p, "portero_si": yes,
             "noticias_si": news_yes, "noticias": news_info, "vol_ratio": ratio, "volatilidad": regime,
             "sigma24": trader._sigma5() * math.sqrt(qt.H24), "range24": f["range24"], "range7": f["range7"]}
@@ -170,17 +176,34 @@ def lines(trader, t_ms, sg, reasons):
                    "n/d" if hit is None else qt.es(hit * 100, 0), WORDS[v], qt.es(s, 2, True),
                    qt.es(teacher["umbrales"]["flojo"], 2), qt.es(teacher["umbrales"]["fuerte"], 2)))
     in_position = trader.position is not None
-    out.append("2. Portero{} (fórmula fija que dice si conviene tomar la señal del maestro ahora, mirando tendencia, lugar en el "
-               "rango y volatilidad): {} (probabilidad de ganar tras costos {}; conviene desde {}).".format(
-                   " (solo cuenta para entrar)" if in_position else "", "CONVIENE ENTRAR" if r["portero_si"] else "NO CONVIENE ENTRAR",
-                   qt.es(r["portero_p"], 2), qt.es(keeper["umbral"], 2)))
-    out.append("3. Volatilidad: {} (rango de las últimas 24 h {} % contra {} % de promedio de los últimos 7 días; movimiento "
-               "esperable en 24 h +-{} %).".format(r["volatilidad"], qt.es(r["range24"] * 100, 2), qt.es(r["range7"] * 100, 2),
-                                                 qt.es(r["sigma24"] * 100, 2)))
-    out.append(_position_line(trader, t_ms, r["veredicto"]))
-    out.append(_context_line(trader, t_ms))
-    out.append("Costo de entrar y salir: ~{} % del tamaño.".format(qt.es(float(qt.round_trip_cost_bps(trader.product)) / 100.0, 2)))
+    out.extend([
+        "2. Portero{} (fórmula fija que dice si conviene tomar la señal del maestro ahora, mirando tendencia, lugar en el "
+        "rango y volatilidad): {} (probabilidad de ganar tras costos {}; conviene desde {}).".format(
+            " (solo cuenta para entrar)" if in_position else "", "CONVIENE ENTRAR" if r["portero_si"] else "NO CONVIENE ENTRAR",
+            qt.es(r["portero_p"], 2), qt.es(keeper["umbral"], 2)),
+        _news_line(r, in_position),
+        "3. Volatilidad: {} (rango de las últimas 24 h {} % contra {} % de promedio de los últimos 7 días; movimiento "
+        "esperable en 24 h +-{} %).".format(r["volatilidad"], qt.es(r["range24"] * 100, 2), qt.es(r["range7"] * 100, 2),
+                                          qt.es(r["sigma24"] * 100, 2)),
+        _position_line(trader, t_ms, r["veredicto"]),
+        _context_line(trader, t_ms),
+        "Costo de entrar y salir: ~{} % del tamaño.".format(qt.es(float(qt.round_trip_cost_bps(trader.product)) / 100.0, 2)),
+    ])
     return out
+
+
+def _news_line(r, in_position):
+    info = r.get("noticias") or {}
+    note = " (solo cuenta para entrar)" if in_position else ""
+    if not info.get("disponible"):
+        return "Noticias (últimas 4 h){}: sin dato.".format(note)
+    n = int(info.get("n") or 0)
+    if n == 0:
+        return "Noticias (últimas 4 h){}: sin noticias relevantes frescas.".format(note)
+    status = "A FAVOR del maestro" if r.get("noticias_si") else "SIN AVAL para el maestro"
+    return "Noticias (últimas 4 h){}: {} ({} relevante{}, sentimiento {}).".format(
+        note, status, n, "" if n == 1 else "s", qt.es(float(info.get("sentimiento") or 0.0), 2, True)
+    )
 
 
 SESSIONS = ((6, "madrugada"), (13, "mañana de Europa"), (21, "sesión de EE. UU."), (24, "noche"))
@@ -203,8 +226,13 @@ def _position_line(trader, t_ms, verdict_now):
     now = qt.settle(trader.product, position, last, "strategy_exit", t_ms, trader.funding, trader.notional)
     side = 1 if position.side == "LONG" else -1
     aligned = side * verdict_now
-    says = ("no dice nada claro" if aligned == 0 else "va a favor de la posición" if aligned > 0 else
-            "va EN CONTRA de la posición ({})".format("flojo" if aligned == -1 else "fuerte"))
+    if aligned == 0:
+        says = "no dice nada claro"
+    elif aligned > 0:
+        says = "va a favor de la posición"
+    else:
+        strength_label = "flojo" if aligned == -1 else "fuerte"
+        says = "va EN CONTRA de la posición ({})".format(strength_label)
     left = position.entry_ms + position.max_hold_ms - t_ms if position.max_hold_ms else None
     return ("4. Posición: {} abierta hace {}. Resultado si cerrás ahora, ya con todos los costos: {} % ({} USD). El maestro ahora "
             "{}.{}").format("LARGO" if side > 0 else "CORTO", qt._hm((t_ms - position.entry_ms) / qt.MINUTE_MS),

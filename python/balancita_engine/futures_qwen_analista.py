@@ -122,7 +122,10 @@ def sized(cfg, operation, movement, t_ms):
     if sizes is None or operation is None:
         return operation
     active = movement.active(t_ms) if movement is not None else None
-    mult = 1.0 if active is None else sizes[0 if active else 1]
+    if active is None:
+        mult = 1.0
+    else:
+        mult = sizes[0] if active else sizes[1]
     out = dict(operation, movimiento=active, tamano=mult)
     for side in ("largo", "corto"):
         inner = dict(operation[side])
@@ -137,7 +140,10 @@ def split(items, side_of):
     out = {key: {"n": 0, "neto_propio_bp": 0.0} for key in ("con", "calma", "sin_dato")}
     for row, side in items:
         moving = (row.get("operacion") or {}).get("movimiento")
-        key = "sin_dato" if moving is None else ("con" if moving else "calma")
+        if moving is None:
+            key = "sin_dato"
+        else:
+            key = "con" if moving else "calma"
         inner = side_of(row, side)
         out[key]["n"] += 1
         out[key]["neto_propio_bp"] += inner.get("neto_bp_propio", inner["neto_bp"])

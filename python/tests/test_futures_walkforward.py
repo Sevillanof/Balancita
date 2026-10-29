@@ -65,8 +65,9 @@ class PairsTableTest(unittest.TestCase):
         bad = os.path.join(self.tmp, "mala.json")
         with open(bad, "w", encoding="utf-8") as handle:
             json.dump(table, handle)
+        feb_ms = ms("2024-02-10")
         with self.assertRaises(qt.TraderError):
-            corta.formulas({"corta": {"pares": bad}}, ms("2024-02-10"))
+            corta.formulas({"corta": {"pares": bad}}, feb_ms)
 
     def test_without_a_table_nothing_changes(self):
         cfg = {"corta": {"maestro": "qwen-lora-maestro.json", "maestro_hash": "3e1f64d478a5",
@@ -99,6 +100,12 @@ class PairsTableTest(unittest.TestCase):
         near = [dict(p, operacion=dict(p["operacion"], puntaje=s * 1.1)) for p in photos]
         self.assertEqual(len(wf.trades_for(near, "PF_ETHUSD", wf.variant(levels=(5, 5)), self.path)), 1)
         self.assertEqual(wf.trades_for(near, "PF_ETHUSD", wf.variant(levels=(9, 5)), self.path), [])
+        # when portero says no (low portero_p) but noticias_si is True, the entry is still taken and sized
+        with_news = [dict(photos[0], operacion=dict(photos[0]["operacion"], portero_si=False, portero_p=0.10, noticias_si=True))]
+        news_trades = wf.trades_for(with_news, "PF_ETHUSD", wf.variant(size="fuerte"), self.path)
+        self.assertEqual(len(news_trades), 1)
+        self.assertEqual(news_trades[0]["tamano"], 1.5)
+        self.assertAlmostEqual(news_trades[0]["net"], 15.0)
 
 
 class RepoTableTest(unittest.TestCase):
