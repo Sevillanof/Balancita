@@ -118,7 +118,7 @@ it('el veredicto dice si gana tras costos y lo compara con mantener', () => {
   expect(screen.getByTestId('run-verdict-total')).toHaveTextContent('−0,15 USD')
   expect(screen.getByText('Pierde tras costos')).toBeInTheDocument()
   expect(
-    screen.getByText(/mantener ETH daría \+10,00 USD/u),
+    screen.getByText(/mantener Ethereum daría \+10,00 USD/u),
   ).toBeInTheDocument()
 })
 

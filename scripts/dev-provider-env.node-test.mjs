@@ -40,6 +40,7 @@ describe('onlyChildSpecs', () => {
     { name: 'vite' },
     { name: 'capture' },
     { name: 'paper' },
+    { name: 'news' },
     { name: 'llm' },
     { name: 'q' },
     { name: 'verdict' },
@@ -52,12 +53,12 @@ describe('onlyChildSpecs', () => {
     assert.deepEqual(onlyChildSpecs(specs, { DEV_ONLY: ' , ' }), specs)
   })
 
-  it('keeps only the named children and Qwen, and ignores unknown names', () => {
+  it('keeps only the named children and Qwen (including news), and ignores unknown names', () => {
     assert.deepEqual(
       onlyChildSpecs(specs, { DEV_ONLY: 'vite, capture,nope' }).map(
         (s) => s.name,
       ),
-      ['vite', 'capture', 'llm', 'q', 'verdict', 'qwenexit', 'qwenlive'],
+      ['vite', 'capture', 'news', 'llm', 'q', 'verdict', 'qwenexit', 'qwenlive'],
     )
   })
 })

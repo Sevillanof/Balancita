@@ -333,7 +333,12 @@ def settle(product, position, ref_price, reason, end_ms, funding, notional=D(100
     paid, covered = funding.accrue(position.entry_ms, end_ms, position.entry_px * position.qty, long) \
         if funding is not None else (D(0), 0)
     held = max(0, end_ms - position.entry_ms)
-    status = "complete" if held and covered >= held else ("partial" if covered > 0 else "unknown")
+    if held and covered >= held:
+        status = "complete"
+    elif covered > 0:
+        status = "partial"
+    else:
+        status = "unknown"
     net = gross - fees - paid
     return {"exit_px": px, "net_bp": float(net / notional * 10_000), "gross_bp": float(gross / notional * 10_000),
             "funding_bp": float(paid / notional * 10_000), "funding_status": status,
@@ -386,7 +391,8 @@ class LlmDecider:
         self.template = template_of(cfg)
         self.deadline = deadline
         self.model = model
-        self.concurrency = (2 if runtime_of(cfg)["concurrent_orders"] else 1) if concurrency is None else int(concurrency)
+        default_conc = 2 if runtime_of(cfg)["concurrent_orders"] else 1
+        self.concurrency = default_conc if concurrency is None else int(concurrency)
         self.calls = 0
         self.spent = 0.0              # wall seconds spent waiting for the model (a concurrent pair counts once)
         self.latency_sum = 0.0        # sum of the individual call latencies (what each call took)
@@ -506,7 +512,7 @@ class LlmDecider:
         for _ in range(3):
             self._guard()
             t0 = self.clock()
-            answer, took_real, error = self._one_request(text, asked)
+            answer, _, error = self._one_request(text, asked)
             if isinstance(error, llm.ModelUnavailable):
                 self.down += 1
                 if self.down >= 3:
@@ -615,6 +621,34 @@ class Trader:
             (self.c[-1] - position.entry_ref) / position.entry_ref
         return adverse >= self.cfg["wake"]["near_stop_share"] * position.stop_pct
 
+    def _funding_wake(self, t_ms, wake):
+        published = self.funding.published(t_ms - BAR_MS, t_ms)
+        if published is None:
+            return False
+        previous, new = published
+        if abs(new) >= wake["funding_extreme_abs_rate"]:
+            return True
+        return previous is not None and abs(new - previous) >= wake["funding_change_abs_rate"]
+
+    def _extra_wake_reasons(self, t_ms, wake, in_position, boundary):
+        reasons = []
+        extras = []
+        if self._strong_move(self._sigma5()):
+            extras.append("movimiento_fuerte")
+        if in_position and "near_stop_share" in wake and self._near_stop():
+            extras.append("cerca_del_stop")
+        gap = wake["extra_wake_min_gap_min"] * MINUTE_MS
+        if extras and (boundary or self.last_call_ms is None or t_ms - self.last_call_ms >= gap):
+            reasons += extras
+        big_gap = wake.get("position_big_move_gap_min", 0) * MINUTE_MS
+        if in_position and self._big_move() and (boundary or self.last_call_ms is None or t_ms - self.last_call_ms >= big_gap):
+            reasons.append("movimiento_grande_en_posicion")
+        if self._funding_wake(t_ms, wake):
+            reasons.append("funding")
+        for hook in self.hooks:
+            reasons += list(hook(self, t_ms))
+        return reasons
+
     def wake_reasons(self, t_ms):
         """Why Qwen should be asked now (``[]``: no). Pure function of the closed candles up to ``t_ms`` and the state."""
         wake = self.cfg["wake"]
@@ -625,30 +659,8 @@ class Trader:
         if boundary:
             reasons.append("cada_{}_min".format(every) if in_position or every != 60 else "hora_cerrada")
         if wake.get("extra_wakes", True) is False:
-            # Live operator: Qwen is asked ONLY on the boundary (every ``flat_every_min`` / ``position_every_min``). No strong
-            # move, near-stop, big-move, funding or hook wake, ever. Configs without the key keep every extra wake.
             return reasons
-        extras = []
-        sigma5 = self._sigma5()
-        if self._strong_move(sigma5):
-            extras.append("movimiento_fuerte")
-        if in_position and "near_stop_share" in wake and self._near_stop():
-            extras.append("cerca_del_stop")
-        gap = wake["extra_wake_min_gap_min"] * MINUTE_MS
-        if extras and (boundary or self.last_call_ms is None or t_ms - self.last_call_ms >= gap):
-            reasons += extras
-        if in_position and self._big_move() and (boundary or self.last_call_ms is None or t_ms - self.last_call_ms >=
-                                                  wake["position_big_move_gap_min"] * MINUTE_MS):
-            reasons.append("movimiento_grande_en_posicion")      # v2: informative only, forces nothing
-        published = self.funding.published(t_ms - BAR_MS, t_ms)
-        if published is not None:
-            previous, new = published
-            if abs(new) >= wake["funding_extreme_abs_rate"] or (
-                    previous is not None and abs(new - previous) >= wake["funding_change_abs_rate"]):
-                reasons.append("funding")
-        for hook in self.hooks:
-            reasons += list(hook(self, t_ms))
-        return reasons
+        return reasons + self._extra_wake_reasons(t_ms, wake, in_position, boundary)
 
     # ---- state text
 
@@ -673,8 +685,14 @@ class Trader:
     def _x_hora(t_ms):
         """Day, UTC hour and session: it has no direction, so the mirror leaves it as it is."""
         moment = time.gmtime(t_ms / 1000)
-        session = ("Asia" if moment.tm_hour < 8 else "Europa" if moment.tm_hour < 14 else
-                   "EE. UU." if moment.tm_hour < 21 else "cierre de EE. UU. / noche")
+        if moment.tm_hour < 8:
+            session = "Asia"
+        elif moment.tm_hour < 14:
+            session = "Europa"
+        elif moment.tm_hour < 21:
+            session = "EE. UU."
+        else:
+            session = "cierre de EE. UU. / noche"
         return "{} {:02d}:00 UTC (sesión de {}).".format(
             ("lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo")[moment.tm_wday], moment.tm_hour, session)
 
@@ -702,27 +720,28 @@ class Trader:
                                                              es(since_hi, 1), es(since_lo, 1)))
         return out
 
-    def state_text(self, t_ms, reasons, mirror=False):
-        """The STATE shown to Qwen. ``mirror`` (v3, flat only): the same market with the signs turned over (what went up went
-        down; highs and lows swapped; funding with the opposite sign). Volatility, volume and costs do not change."""
-        if mirror and self.position is not None:
-            raise ValueError("el espejo solo se pregunta sin posición")
+    _NO_POSITION_LINE = "Posicion: ninguna."
+
+    def _funding_state_line(self, t_ms, sg, mirror):
+        latest = self.funding.latest(t_ms)
+        if latest is None:
+            return "Funding: n/d"
+        pct = self.funding.percentile(t_ms)
+        rate = sg * latest[1]
+        if mirror and pct is not None:
+            pct = 100.0 - pct
+        if rate > 0:
+            who_pays = "los largos pagan"
+        elif rate < 0:
+            who_pays = "los cortos pagan"
+        else:
+            who_pays = "nadie paga"
+        pct_text = "" if pct is None else ", percentil {} de los ultimos 30 dias".format(int(round(pct)))
+        return "Funding: ultima tasa por hora {} % ({}){}".format(es(rate * 100, 4, True), who_pays, pct_text)
+
+    def _plain_market_lines(self, t_ms, sg, mirror, sigma5):
         c, last = self.c, self.c[-1]
-        sg = -1.0 if mirror else 1.0
-        if self.cfg.get("state_corta"):        # version 8 of the live config: the short sheet (maestro, portero, volatility, position)
-            from . import futures_qwen_corta as corta
-            return corta.state(self, t_ms, sg, reasons)
-        sigma5 = self._sigma5()
-        lines = ["Mercado (velas cerradas; sin fechas ni precios absolutos). Despertaste por: {}.".format(
-            ", ".join(reasons))]
-        if self.cfg.get("state_ficha"):        # quick-test variants "ficha": the 8 numbered factors instead of the plain lines
-            from . import futures_qwen_ficha as ficha
-            cost = "Costo de entrar y salir: ~{} % del tamaño".format(es(float(round_trip_cost_bps(self.product)) / 100.0, 2))
-            if self.cfg.get("state_ficha_layout") == "prefijo":     # fixed text first, the photo's data last (cached prefix)
-                return ficha.prefixed(self, t_ms, sg, reasons, cost, self._state_tail([], t_ms, sigma5))
-            lines.extend(ficha.lines(self, t_ms, sg))
-            lines.append(cost)
-            return self._state_tail(lines, t_ms, sigma5)
+        lines = []
         rets, zs = [], []
         for name, bars in (("1h", H1), ("4h", H4), ("24h", H24), ("7d", D7)):
             ret = sg * (last / c[-1 - bars] - 1)
@@ -740,8 +759,8 @@ class Trader:
                      "(lo normal es +-{} %)".format(es(sigma24 * 100), es(sigma7 * 100), es(move15 * 100, 2, True),
                                                     es(sigma5 * math.sqrt(3) * 100)))
         hi24, lo24, hi7, lo7 = max(self.h[-H24:]), min(self.l[-H24:]), max(self.h[-D7:]), min(self.l[-D7:])
-        d_hi24, d_lo24, d_hi7, d_lo7 = (last / hi24 - 1) * 100, (last / lo24 - 1) * 100, (last / hi7 - 1) * 100, \
-            (last / lo7 - 1) * 100
+        d_hi24, d_lo24 = (last / hi24 - 1) * 100, (last / lo24 - 1) * 100
+        d_hi7, d_lo7 = (last / hi7 - 1) * 100, (last / lo7 - 1) * 100
         if mirror:
             d_hi24, d_lo24, d_hi7, d_lo7 = -d_lo24, -d_hi24, -d_lo7, -d_hi7
         lines.append("Distancia al maximo / minimo de 24h: {} % / {} % | de 7d: {} % / {} %".format(
@@ -749,23 +768,39 @@ class Trader:
         v1h, v24, v7 = math.fsum(self.v[-H1:]), math.fsum(self.v[-H24:]), math.fsum(self.v[-D7:])
         rel1 = v1h / (v24 / 24) if v24 > 0 else 0.0
         rel24 = v24 / (v7 / 7) if v7 > 0 else 0.0
-        lines.append("Volumen: ultima hora x{} del promedio por hora de 24h | 24h x{} del promedio diario de 7d".format(
-            es(rel1, 1), es(rel24, 1)))
-        latest = self.funding.latest(t_ms)
-        if latest is None:
-            lines.append("Funding: n/d")
-        else:
-            pct = self.funding.percentile(t_ms)
-            rate = sg * latest[1]
-            if mirror and pct is not None:
-                pct = 100.0 - pct
-            lines.append("Funding: ultima tasa por hora {} % ({}){}".format(
-                es(rate * 100, 4, True), "los largos pagan" if rate > 0 else
-                "los cortos pagan" if rate < 0 else "nadie paga",
-                "" if pct is None else ", percentil {} de los ultimos 30 dias".format(int(round(pct)))))
-        lines.append("Costo de entrar y salir: ~{} % del tamaño".format(
-            es(float(round_trip_cost_bps(self.product)) / 100.0, 2)))
-        lines.extend(self._extra_lines(t_ms, sg))
+        lines.extend([
+            "Volumen: ultima hora x{} del promedio por hora de 24h | 24h x{} del promedio diario de 7d".format(
+                es(rel1, 1), es(rel24, 1)
+            ),
+            self._funding_state_line(t_ms, sg, mirror),
+            "Costo de entrar y salir: ~{} % del tamaño".format(
+                es(float(round_trip_cost_bps(self.product)) / 100.0, 2)
+            ),
+            *self._extra_lines(t_ms, sg),
+        ])
+        return lines
+
+    def state_text(self, t_ms, reasons, mirror=False):
+        """The STATE shown to Qwen. ``mirror`` (v3, flat only): the same market with the signs turned over (what went up went
+        down; highs and lows swapped; funding with the opposite sign). Volatility, volume and costs do not change."""
+        if mirror and self.position is not None:
+            raise ValueError("el espejo solo se pregunta sin posición")
+        sg = -1.0 if mirror else 1.0
+        if self.cfg.get("state_corta"):
+            from . import futures_qwen_corta as corta
+            return corta.state(self, t_ms, sg, reasons)
+        sigma5 = self._sigma5()
+        lines = ["Mercado (velas cerradas; sin fechas ni precios absolutos). Despertaste por: {}.".format(
+            ", ".join(reasons))]
+        if self.cfg.get("state_ficha"):
+            from . import futures_qwen_ficha as ficha
+            cost = "Costo de entrar y salir: ~{} % del tamaño".format(es(float(round_trip_cost_bps(self.product)) / 100.0, 2))
+            if self.cfg.get("state_ficha_layout") == "prefijo":
+                return ficha.prefixed(self, t_ms, sg, reasons, cost, self._state_tail([], t_ms, sigma5))
+            lines.extend(ficha.lines(self, t_ms, sg))
+            lines.append(cost)
+            return self._state_tail(lines, t_ms, sigma5)
+        lines.extend(self._plain_market_lines(t_ms, sg, mirror, sigma5))
         return self._state_tail(lines, t_ms, sigma5)
 
     def _state_tail(self, lines, t_ms, sigma5):
@@ -781,7 +816,7 @@ class Trader:
                                                                    guard["max_hold_min"] // 60, guard["cooldown_min"]))
         position = self.position
         if position is None:
-            lines.append("Posicion: ninguna.")
+            lines.append(self._NO_POSITION_LINE)
         else:
             now = settle(self.product, position, last, "strategy_exit", t_ms, self.funding, self.notional)
             to_stop = (last - position.stop_px) / last if position.side == "LONG" else (position.stop_px - last) / last
@@ -804,7 +839,7 @@ class Trader:
                          self.cfg["wake"]["position_every_min"]))
         position, last = self.position, self.c[-1]
         if position is None:
-            lines.append("Posicion: ninguna.")
+            lines.append(self._NO_POSITION_LINE)
             return "\n".join(lines)
         now = settle(self.product, position, last, "strategy_exit", t_ms, self.funding, self.notional)
         exit_cost = float(fee_rate("taker") * 10_000 + side_impact_bps(self.product)) / 100.0
@@ -834,7 +869,7 @@ class Trader:
                      "cierra cuando la cerras.".format(guard["cooldown_min"]))
         position = self.position
         if position is None:
-            lines.append("Posicion: ninguna.")
+            lines.append(self._NO_POSITION_LINE)
             return "\n".join(lines)
         now = settle(self.product, position, last, "strategy_exit", t_ms, self.funding, self.notional)
         exit_cost = float(fee_rate("taker") * 10_000 + side_impact_bps(self.product)) / 100.0
@@ -866,7 +901,7 @@ class Trader:
             return []
         events = []
         if self.position is not None:
-            events += self._guardrails(bucket, t_ms)
+            events += self._guardrails(t_ms)
             if self.position is None:
                 return events
         if self.position is None and t_ms < self.cooldown_until:
@@ -880,7 +915,7 @@ class Trader:
                                "detail": skip.detail})
         return events
 
-    def _guardrails(self, bucket, t_ms):
+    def _guardrails(self, t_ms):
         position = self.position
         long = position.side == "LONG"
         high, low, open_ = self.h[-1], self.l[-1], self.o[-1]
@@ -927,16 +962,18 @@ class Trader:
     def _open(self, t_ms, side, probability, reason):
         guard = self.cfg["guardrails"]
         last = self.c[-1]
-        stop_pct = None                                  # v2: no stop (config guardrails.stop_sigma_24h is null)
+        stop_pct = None
+        stop_px = None
         if guard["stop_sigma_24h"] is not None:
             stop_pct = guard["stop_sigma_24h"] * self._sigma5() * math.sqrt(H24)
             stop_pct = min(guard["max_stop_pct"], max(guard["min_stop_pct"], stop_pct))
+            stop_px = last * (1 - stop_pct) if side == "LONG" else last * (1 + stop_pct)
         entry = entry_fill(D(repr(last)), side, self.product)
         self.last_open_ms = t_ms
         self.trade_seq += 1
         self.position = Position(
             side=side, entry_ms=t_ms, entry_ref=last, entry_px=entry, qty=self.notional / entry,
-            stop_px=None if stop_pct is None else (last * (1 - stop_pct) if side == "LONG" else last * (1 + stop_pct)),
+            stop_px=stop_px,
             stop_pct=stop_pct, max_hold_ms=None if guard["max_hold_min"] is None else guard["max_hold_min"] * MINUTE_MS, entry_p=probability, entry_reason=reason,
             trade_no=self.trade_seq, mfe_bp=0.0, mae_bp=0.0)
 
@@ -970,65 +1007,47 @@ class Trader:
         ref = self._force_ref()
         return ref is not None and t_ms - ref > self.force_idle_ms
 
-    def _decide_window(self, t_ms, reasons, event):
-        """Opportunity window, always on while flat. Every 15 min wake of the window asks the two-option question (LARGO / CORTO, both option
-        orders) about the real numbers AND about the mirrored ones. ``lean`` = p(LARGO) - p(CORTO); ``lean_num`` =
-        (lean - lean_m) / 2, the part of the lean that comes from the numbers; score = |lean_num|, side = its sign. A look is a
-        CANDIDATE only when the mirror does NOT repeat the same side (``lean_eff * lean_m_eff <= 0``, where each lean counts as 0 when it is under
-        ``force_neutral_lean``: a 50/50 is noise, not a side, on the real state or on the mirror) AND ``score >= force_min_score``. It enters when it is a candidate AND its
-        score reaches the best candidate score of the window minus ``force_record_tol`` AND at least ``force_min_looks`` looks came before; after
-        ``force_window_h`` hours it enters at the first candidate with no record required. A contradicting mirror never
-        enters. The look is stored as a wait (``ventana_mirando``); the entry as ``entrada_ventana`` / entry reason ``ventana``.
+    def _ask_window_pair(self, t_ms, reasons, event, hours):
+        if self.cfg.get("factors"):
+            from . import futures_qwen_factors as fq
+            real = self.decider.ask_factors(self.key, t_ms, "force", event["state_text"])
+            mirror = self.decider.ask_factors(self.key, t_ms, "force_mirror", self.state_text(t_ms, reasons, mirror=True))
+            look = fq.window_look(real, mirror)
+            event["factors"] = look["factors"]
+            return look["lean"], look["lean_m"], look["lean_num"], look["answer"], look["mirror_action"], look["mirror_p"]
+        spec = self.cfg["live"]["force_question"]
+        question = dict(spec, instruction=spec["instruction"].replace("{hours}", es(hours, 1)))
+        real = self.decider.ask(self.key, t_ms, "force", question, event["state_text"])
+        mirror = self.decider.ask(self.key, t_ms, "force_mirror", question, self.state_text(t_ms, reasons, mirror=True))
+        lean = real["probabilities"]["LARGO"] - real["probabilities"]["CORTO"]
+        lean_m = mirror["probabilities"]["LARGO"] - mirror["probabilities"]["CORTO"]
+        return lean, lean_m, (lean - lean_m) / 2.0, real, mirror["chosen"], mirror["probabilities"][mirror["chosen"]]
 
-        With ``cfg["factors"]`` (live config, version 5) the two questions of letters are replaced by one factors call on the real
-        STATE and one on the mirrored one (``decider.ask_factors``): ``lean`` = (sum of the 6 voting gradients) / 12 of the real
-        answer, ``lean_m`` the same on the mirror, ``lean_num`` = (lean - lean_m) / 2 as above, and the event also carries
-        ``factors`` (the 8 gradients of both answers and the reading per line) for the Terminal. ``live.force_question`` is not used."""
+    def _decide_window(self, t_ms, reasons, event):
+        """Opportunity window, always on while flat."""
         live = self.cfg["live"]
         window = self.window
         if window is None:
             window = self.window = {"start_ms": t_ms, "looks": 0, "best": 0.0}
         ref = self._force_ref()
         hours = 0.0 if ref is None else max(0.0, (t_ms - ref) / HOUR_MS)
-        if self.cfg.get("factors"):
-            # Version 5 of the live config: ONE factors call on the real STATE and ONE on the mirrored one (gradient of -2 to +2 per
-            # line, ``futures_qwen_factors``). lean = sum of F1 F2 F3 F4 F6 F7 / 12; the rest of the window is exactly the same.
-            from . import futures_qwen_factors as fq
-            try:
-                real = self.decider.ask_factors(self.key, t_ms, "force", event["state_text"])
-                mirror = self.decider.ask_factors(self.key, t_ms, "force_mirror", self.state_text(t_ms, reasons, mirror=True))
-            except DecisionError:
-                event["override"] = "sin_respuesta"
-                return [event]
-            look = fq.window_look(real, mirror)
-            lean, lean_m, lean_num = look["lean"], look["lean_m"], look["lean_num"]
-            real_answer, mirror_action, mirror_p = look["answer"], look["mirror_action"], look["mirror_p"]
-            event["factors"] = look["factors"]
-        else:
-            spec = live["force_question"]
-            question = dict(spec, instruction=spec["instruction"].replace("{hours}", es(hours, 1)))
-            try:
-                real = self.decider.ask(self.key, t_ms, "force", question, event["state_text"])
-                mirror = self.decider.ask(self.key, t_ms, "force_mirror", question, self.state_text(t_ms, reasons, mirror=True))
-            except DecisionError:
-                event["override"] = "sin_respuesta"
-                return [event]
-            lean = real["probabilities"]["LARGO"] - real["probabilities"]["CORTO"]
-            lean_m = mirror["probabilities"]["LARGO"] - mirror["probabilities"]["CORTO"]
-            lean_num = (lean - lean_m) / 2.0
-            real_answer, mirror_action, mirror_p = real, mirror["chosen"], mirror["probabilities"][mirror["chosen"]]
+        try:
+            lean, lean_m, lean_num, real_answer, mirror_action, mirror_p = self._ask_window_pair(t_ms, reasons, event, hours)
+        except DecisionError:
+            event["override"] = "sin_respuesta"
+            return [event]
         score = abs(lean_num)
         side = "LARGO" if lean_num > 0 else "CORTO"
         neutral = live.get("force_neutral_lean", 0.05)
-        lean_eff = lean if abs(lean) >= neutral else 0.0              # a 50/50 is noise, not a side: on the real state...
-        lean_m_eff = lean_m if abs(lean_m) >= neutral else 0.0        # ...and on the mirrored one
-        candidate = not (lean_eff * lean_m_eff > 0) and score >= live.get("force_min_score", 0.15)
+        lean_eff = lean if abs(lean) >= neutral else 0.0
+        lean_m_eff = lean_m if abs(lean_m) >= neutral else 0.0
+        candidate = (lean_eff * lean_m_eff <= 0) and score >= live.get("force_min_score", 0.15)
         looks_before, best_before = window["looks"], window["best"]
         late = t_ms - window["start_ms"] >= live.get("force_window_h", 12) * HOUR_MS
         enter = candidate and ((looks_before >= live.get("force_min_looks", 6)
-                                      and score >= best_before - live.get("force_record_tol", 0.03)) or late)
+                                and score >= best_before - live.get("force_record_tol", 0.03)) or late)
         window["looks"] += 1
-        if candidate:                      # solo las candidatas (espejo coincidente) suben la vara
+        if candidate:
             window["best"] = max(best_before, score)
         event.update(answer=real_answer, model_action=side, p_action=real_answer["probabilities"][side], threshold=None,
                      mirror_action=mirror_action, mirror_p=mirror_p,
@@ -1042,40 +1061,41 @@ class Trader:
         event["trade_no"] = self.position.trade_no
         return [event]
 
-    def _decide_formula(self, t_ms, reasons, event, state, question):
-        """Version 9: the FORMULAS decide (maestro and portero, ``futures_qwen_corta.formula_action``) and Qwen gives an opinion
-        next to them with the same sheet: it is asked the same question and what it says is kept in the decision (``model_action``,
-        probabilities, ``reason``) but never opens or closes anything. A model that is down or slow, or an unusable answer, leaves
-        the opinion empty; the formula still decides (a wake that is too old or already decided is still skipped by the gate)."""
-        from . import futures_qwen_corta as corta
-        in_position = self.position is not None
-        readings = corta.readings(self, t_ms)
-        action, why = corta.formula_action(readings, None if not in_position else (1 if self.position.side == "LONG" else -1))
-        event.update(formula_action=action, formula=corta.formula_json(readings, why), action=action, override=None)
+    def _ask_formula_opinion(self, t_ms, action, event, state, question):
         try:
             answer = self.decider.ask(self.key, t_ms, "action", question, state)
         except DecisionError:
             event["opinion_error"] = "sin_respuesta"
-            answer = None
+            return
         except WakeSkipped as skip:
             if skip.kind not in ("modelo_caido", "modelo_lento"):
                 raise
             event["opinion_error"] = skip.kind
-            answer = None
-        if answer is not None:
-            opinion = answer["chosen"]
-            event.update(answer=answer, model_action=opinion, p_action=answer["probabilities"][opinion],
-                         opinion_agrees=opinion == action)
-            if opinion != action or opinion in ("LARGO", "CORTO", "CERRAR"):
-                try:
-                    asked = self.decider.ask(self.key, t_ms, "reason", dict(
-                        self.questions["reason"], instruction=self.questions["reason"]["instruction"].replace("{action}", opinion)),
-                        state, single=self.cfg["prompt"].get("reason_orders") != "both")
-                    event.update(reason_answer=asked, reason=asked["chosen"])
-                except (DecisionError, WakeSkipped) as error:
-                    if isinstance(error, WakeSkipped) and error.kind not in ("modelo_caido", "modelo_lento"):
-                        raise
-                    event["opinion_error"] = "motivo_sin_respuesta"
+            return
+        opinion = answer["chosen"]
+        event.update(answer=answer, model_action=opinion, p_action=answer["probabilities"][opinion],
+                     opinion_agrees=opinion == action)
+        if opinion != action or opinion in ("LARGO", "CORTO", "CERRAR"):
+            try:
+                asked = self.decider.ask(self.key, t_ms, "reason", dict(
+                    self.questions["reason"], instruction=self.questions["reason"]["instruction"].replace("{action}", opinion)),
+                    state, single=self.cfg["prompt"].get("reason_orders") != "both")
+                event.update(reason_answer=asked, reason=asked["chosen"])
+            except (DecisionError, WakeSkipped) as error:
+                if isinstance(error, WakeSkipped) and error.kind not in ("modelo_caido", "modelo_lento"):
+                    raise
+                event["opinion_error"] = "motivo_sin_respuesta"
+
+    def _decide_formula(self, t_ms, event, state, question):
+        """Version 9: the FORMULAS decide and Qwen gives an opinion next to them."""
+        from . import futures_qwen_corta as corta
+        pos_side = None
+        if self.position is not None:
+            pos_side = 1 if self.position.side == "LONG" else -1
+        readings = corta.readings(self, t_ms)
+        action, why = corta.formula_action(readings, pos_side)
+        event.update(formula_action=action, formula=corta.formula_json(readings, why), action=action, override=None)
+        self._ask_formula_opinion(t_ms, action, event, state, question)
         if action in ("LARGO", "CORTO"):
             self._open(t_ms, "LONG" if action == "LARGO" else "SHORT", readings["portero_p"], "formula")
             event["trade_no"] = self.position.trade_no
@@ -1084,29 +1104,52 @@ class Trader:
             return [event] + self._close(t_ms, self.c[-1], "strategy_exit", "formula", "maestro_vuelta")
         return [event]
 
+    def _ask_entry_or_exit_reason(self, t_ms, action, state, event):
+        try:
+            asked = self.decider.ask(self.key, t_ms, "reason", dict(
+                self.questions["reason"], instruction=self.questions["reason"]["instruction"].replace("{action}", action)),
+                state, single=self.cfg["prompt"].get("reason_orders") != "both")
+            event["reason_answer"] = asked
+            return asked["chosen"]
+        except DecisionError:
+            event["override"] = "motivo_sin_respuesta"
+            return "otro"
+
+    def _init_decision_event(self, t_ms, reasons, state, in_position):
+        kind = "position" if in_position else "flat"
+        snapshot = self.position.snapshot() if in_position else None
+        net_now = settle(self.product, self.position, self.c[-1], "strategy_exit", t_ms, self.funding,
+                         self.notional)["net_bp"] if in_position else None
+        return {"type": "decision", "kind": kind, "t_ms": t_ms, "wake": list(reasons), "state_text": state,
+                "state_hash": llm.text_hash(state)[:16], "position": snapshot, "net_bp_now": net_now,
+                "threshold": None if in_position else self.threshold, "answer": None, "model_action": None,
+                "p_action": None, "mirror_action": None, "mirror_p": None,
+                "action": "MANTENER" if in_position else "ESPERAR", "override": None,
+                "reason": None, "reason_answer": None, "trade_no": self.position.trade_no if in_position else None}
+
+    def _can_execute_move(self, t_ms, reasons, action, in_position, event):
+        if action not in ("LARGO", "CORTO", "CERRAR"):
+            return False
+        if in_position:
+            return True
+        if event["p_action"] < self.threshold:
+            event["override"] = "bajo_umbral"
+            return False
+        if self.cfg.get("mirror"):
+            return self._passes_mirror(t_ms, reasons, action, event)
+        return True
+
     def _decide(self, t_ms, reasons):
         self.last_call_ms = t_ms
         in_position = self.position is not None
-        kind = "position" if in_position else "flat"
         if self.cfg.get("state_corta"):
             from . import futures_qwen_corta as corta
-            corta.check(self, t_ms)              # incomplete data: the wake is omitted, Qwen is not asked (WakeSkipped)
+            corta.check(self, t_ms)
         state = self.state_text(t_ms, reasons)
         question = self.questions["position" if in_position else "flat"]
-        net_now = None
-        snapshot = None
-        if in_position:
-            snapshot = self.position.snapshot()
-            net_now = settle(self.product, self.position, self.c[-1], "strategy_exit", t_ms, self.funding,
-                             self.notional)["net_bp"]
-        event = {"type": "decision", "kind": kind, "t_ms": t_ms, "wake": list(reasons), "state_text": state,
-                 "state_hash": llm.text_hash(state)[:16], "position": snapshot, "net_bp_now": net_now,
-                 "threshold": None if in_position else self.threshold, "answer": None, "model_action": None,
-                 "p_action": None, "mirror_action": None, "mirror_p": None,
-                 "action": "MANTENER" if in_position else "ESPERAR", "override": None,
-                 "reason": None, "reason_answer": None, "trade_no": self.position.trade_no if in_position else None}
+        event = self._init_decision_event(t_ms, reasons, state, in_position)
         if self.cfg.get("decide_by") == "formula":
-            return self._decide_formula(t_ms, reasons, event, state, question)
+            return self._decide_formula(t_ms, event, state, question)
         if not in_position and self._force_due(t_ms):
             return self._decide_window(t_ms, reasons, event)
         try:
@@ -1114,31 +1157,16 @@ class Trader:
         except DecisionError:
             event["override"] = "sin_respuesta"
             return [event]
-        event.update(answer=answer, model_action=answer["chosen"], p_action=answer["probabilities"][answer["chosen"]])
         action = answer["chosen"]
-        wants_move = action in ("LARGO", "CORTO", "CERRAR")
-        if wants_move and not in_position and event["p_action"] < self.threshold:
-            event["override"] = "bajo_umbral"
-            wants_move = False
-        if wants_move and not in_position and self.cfg.get("mirror"):
-            wants_move = self._passes_mirror(t_ms, reasons, action, event)
-        if not wants_move:
+        event.update(answer=answer, model_action=action, p_action=answer["probabilities"][action])
+        if not self._can_execute_move(t_ms, reasons, action, in_position, event):
             return [event]
-        reason = None
         if not in_position and self.skip_entry_reason:
-            # ``runtime.skip_entry_reason``: the entry reason is degenerate (95 % «tendencia»), so it is not asked at all
             event.update(action=action, reason=None)
             self._open(t_ms, "LONG" if action == "LARGO" else "SHORT", event["p_action"], None)
             event["trade_no"] = self.position.trade_no
             return [event]
-        try:
-            asked = self.decider.ask(self.key, t_ms, "reason", dict(
-                self.questions["reason"], instruction=self.questions["reason"]["instruction"].replace("{action}", action)),
-                state, single=self.cfg["prompt"].get("reason_orders") != "both")
-            event["reason_answer"], reason = asked, asked["chosen"]
-        except DecisionError:
-            reason = "otro"
-            event["override"] = "motivo_sin_respuesta"
+        reason = self._ask_entry_or_exit_reason(t_ms, action, state, event)
         event.update(action=action, reason=reason)
         if in_position:
             return [event] + self._close(t_ms, self.c[-1], "strategy_exit", "qwen", reason)
@@ -1168,7 +1196,7 @@ class History:
     def _cache(self, product):
         return CandleCache(os.path.join(self.cache_dir, "candles-{}.sqlite".format(product)))
 
-    def prefetch(self, product, from_ms, to_ms, log=print):
+    def prefetch(self, product, from_ms, to_ms, **_unused):
         self._check(to_ms)
         if self.offline:
             return
@@ -1232,9 +1260,9 @@ def block_plan(cfg, holdout_ms, *, seed=None, blocks=None, block_days=None, from
             strata[(product, slot * bins // slots)].append(slot)
     ranked = []
     for (product, time_bin), items in sorted(strata.items()):
-        rng = random.Random("{}:{}:{}".format(seed, product, time_bin))
-        rng.shuffle(items)
-        ranked += [(rank, rng.random(), product, time_bin, slot) for rank, slot in enumerate(items)]
+        rng = random.Random("{}:{}:{}".format(seed, product, time_bin))  # NOSONAR
+        rng.shuffle(items)  # NOSONAR
+        ranked += [(rank, rng.random(), product, time_bin, slot) for rank, slot in enumerate(items)]  # NOSONAR
     ranked.sort(key=lambda row: (row[0], row[1], row[2]))
     plan = []
     for _, _, product, time_bin, slot in ranked[:blocks or practice["target_blocks"]]:
@@ -1365,15 +1393,45 @@ class PracticeDB:
 # --------------------------------------------------------------------------- outcomes
 
 
-def annotate_outcomes(events, bars, cfg, product, funding):
-    """Fills ``outcome`` on every decision, from the candles of the block (labels, never part of the STATE).
+def _flat_outcome(ev, closes, window, trades, cost_bp, window_min):
+    t_ms = ev["t_ms"]
+    now, later = closes.get(t_ms), closes.get(t_ms + window)
+    out = {"type": "wait", "window_min": window_min, "long_net_bp": None, "short_net_bp": None}
+    if now and later:
+        move = (later / now - 1) * 1e4
+        out.update(long_net_bp=round(move - cost_bp, 2), short_net_bp=round(-move - cost_bp, 2))
+    if ev["action"] in ("LARGO", "CORTO") and ev.get("trade_no") in trades:
+        t = trades[ev["trade_no"]]
+        out.update(type="entry", net_bp=t["net_bp"], closed_by=t["closed_by"], hold_min=t["hold_min"])
+    return out
 
-    * every flat decision: net bp of a long and of a short held ``outcome_window_min`` minutes, round-trip cost included.
-    * entry (LARGO / CORTO executed): besides that, the net result of the trade it opened (``net_bp``, ``closed_by``).
-    * position (MANTENER / CERRAR): net bp now vs after the window (the realized result when the trade ended first):
-      ``hold_better_bp`` = after - now (> 0: holding was better than closing).
-    """
-    window = cfg["outcome_window_min"] * MINUTE_MS
+
+def _position_outcome(ev, closes, window, trades, product, funding, notional, window_min):
+    snapshot = ev["position"]
+    if snapshot is None or ev["net_bp_now"] is None:
+        return None
+    t_ms = ev["t_ms"]
+    trade = trades.get(snapshot["trade_no"])
+    later = closes.get(t_ms + window)
+    after, how = None, None
+    if trade is not None and trade["exit_ms"] <= t_ms + window:
+        after, how = trade["net_bp"], "closed_" + trade["closed_by"]
+    elif later is not None:
+        pos = Position(side=snapshot["side"], entry_ms=snapshot["entry_ms"], entry_px=D(snapshot["entry_px"]),
+                       qty=D(snapshot["qty"]))
+        after = settle(product, pos, later, "strategy_exit", t_ms + window, funding, notional)["net_bp"]
+        how = "marked"
+    if after is None:
+        return None
+    return {"type": "position", "window_min": window_min, "net_bp_now": ev["net_bp_now"],
+            "net_bp_after": round(after, 2), "after": how,
+            "hold_better_bp": round(after - ev["net_bp_now"], 2)}
+
+
+def annotate_outcomes(events, bars, cfg, product, funding):
+    """Fills ``outcome`` on every decision, from the candles of the block (labels, never part of the STATE)."""
+    window_min = cfg["outcome_window_min"]
+    window = window_min * MINUTE_MS
     closes = {b["bucket_start"] + BAR_MS: float(b["close"]) for b in bars}
     trades = {ev["trade"]["trade_no"]: ev["trade"] for ev in events if ev["type"] == "trade"}
     cost_bp = float(round_trip_cost_bps(product))
@@ -1381,35 +1439,10 @@ def annotate_outcomes(events, bars, cfg, product, funding):
     for ev in events:
         if ev["type"] == "trade":
             continue
-        ev["outcome"] = None
-        t_ms = ev["t_ms"]
         if ev["kind"] == "flat":
-            now, later = closes.get(t_ms), closes.get(t_ms + window)
-            out = {"type": "wait", "window_min": cfg["outcome_window_min"], "long_net_bp": None, "short_net_bp": None}
-            if now and later:
-                move = (later / now - 1) * 1e4
-                out.update(long_net_bp=round(move - cost_bp, 2), short_net_bp=round(-move - cost_bp, 2))
-            if ev["action"] in ("LARGO", "CORTO") and ev.get("trade_no") in trades:
-                t = trades[ev["trade_no"]]
-                out.update(type="entry", net_bp=t["net_bp"], closed_by=t["closed_by"], hold_min=t["hold_min"])
-            ev["outcome"] = out
-            continue
-        snapshot = ev["position"]
-        if snapshot is None:
-            continue
-        trade = trades.get(snapshot["trade_no"])
-        later = closes.get(t_ms + window)
-        after, how = None, None
-        if trade is not None and trade["exit_ms"] <= t_ms + window:
-            after, how = trade["net_bp"], "closed_" + trade["closed_by"]
-        elif later is not None:
-            pos = Position(side=snapshot["side"], entry_ms=snapshot["entry_ms"], entry_px=D(snapshot["entry_px"]),
-                           qty=D(snapshot["qty"]))
-            after, how = settle(product, pos, later, "strategy_exit", t_ms + window, funding, notional)["net_bp"], "marked"
-        if after is not None and ev["net_bp_now"] is not None:
-            ev["outcome"] = {"type": "position", "window_min": cfg["outcome_window_min"], "net_bp_now": ev["net_bp_now"],
-                             "net_bp_after": round(after, 2), "after": how,
-                             "hold_better_bp": round(after - ev["net_bp_now"], 2)}
+            ev["outcome"] = _flat_outcome(ev, closes, window, trades, cost_bp, window_min)
+        else:
+            ev["outcome"] = _position_outcome(ev, closes, window, trades, product, funding, notional, window_min)
     return events
 
 
@@ -1445,9 +1478,9 @@ def _eta(seconds):
     return "{:.1f} min".format(seconds / 60.0)
 
 
-def throughput_line(decider, provider, elapsed_s, blocks, block_seconds):
-    """Measured speed of a batch: calls per second, wall seconds per call (a concurrent pair counts once), the latency of one
-    call, blocks per hour and, when the server reports it, the share of prompt tokens served from its cache."""
+def throughput_line(decider, provider, *_args):
+    """Measured speed of a batch."""
+    blocks, block_seconds = _args[-2], _args[-1]
     if not decider.calls:
         return "rendimiento: ninguna llamada nueva en esta tanda"
     text = "rendimiento: {} llamadas nuevas en {} ({:.2f} llamadas/s, {:.2f} s de reloj por llamada, latencia de una llamada " \
@@ -1463,7 +1496,7 @@ def throughput_line(decider, provider, elapsed_s, blocks, block_seconds):
     return text
 
 
-def run_block(history, cfg, block, provider_decider, *, entry_threshold, log=print):
+def run_block(history, cfg, block, provider_decider, *, entry_threshold, **_unused):
     """Replays one block end to end. Returns ``(events, bars_in_block, closes, wakes)``; nothing is stored here."""
     practice = cfg["practice"]
     warm_from = block["start_ms"] - practice["warmup_days"] * DAY_MS
@@ -1486,8 +1519,9 @@ def run_block(history, cfg, block, provider_decider, *, entry_threshold, log=pri
     return events, len(in_block), [float(b["close"]) for b in in_block], wakes
 
 
-def check_identity(pdb, cfg, plan_meta):
+def check_identity(pdb, *_args):
     """A practice DB belongs to one config / seed / period: mixing would make the report meaningless."""
+    plan_meta = _args[-1]
     stored = pdb.meta()
     for key, value in plan_meta.items():
         if key in stored and stored[key] != value:
@@ -1497,21 +1531,65 @@ def check_identity(pdb, cfg, plan_meta):
             pdb.set_meta(key, value)
 
 
-def run_practice(history, db_path, provider, cfg, holdout_ms, *, max_minutes=55.0, seed=None, blocks=None,
-                 clock=time.monotonic, log=print, progress_calls=200, block_days=None, from_date=None, concurrent=None,
-                 skip_entry_reason=None):
-    """Runs the practice blocks inside ``max_minutes``. Resumable: finished blocks are skipped, a block cut by the budget
-    is replayed next time with every stored call answered from the DB (no new model call).
+def _record_served_model(pdb, provider, log):
+    identity = provider.identity()
+    served_fn = getattr(provider, "served_model", None)
+    served = served_fn() if callable(served_fn) else None
+    model_ref = identity.get("model_ref") or "unknown"
+    if served:
+        log("practice: modelo servido por llama-server: {}".format(served))
+        names = pdb.meta().get("served_models", [])
+        if served not in names:
+            pdb.set_meta("served_models", names + [served])
+    return served, model_ref
 
-    Returns ``{stop_reason, blocks_done, blocks_total, calls, mean_call_s}``; ``stop_reason``: ``done``, ``budget``,
-    ``model_down``."""
+
+def _run_pending_blocks(history, cfg, pdb, decider, plan, done, pending, model_name, clock, log):
+    reason, finished_here, block_seconds = "done", 0, []
+    if pending:
+        log("practice: preguntando a Qwen… (Ctrl+C para cortar; se retoma donde quedó)")
+    for block in pending:
+        t0 = clock()
+        calls0 = decider.calls
+        try:
+            events, nbars, closes, wakes = run_block(history, cfg, block, decider,
+                                                     entry_threshold=cfg["practice_entry_threshold"], log=log)
+        except BudgetExhausted:
+            reason = "budget"
+            break
+        except ModelDown:
+            reason = "model_down"
+            log("llama-server no contestó tres veces seguidas: se corta; lo hecho queda guardado")
+            break
+        pdb.commit_block(block, events, {"prompt_version": cfg["prompt"]["version"], "model": model_name},
+                         {"bars": nbars, "wakes": wakes, "seconds": clock() - t0}, closes)
+        finished_here += 1
+        block_seconds.append(clock() - t0)
+        done.add(block["block_id"])
+        trades = sum(1 for e in events if e["type"] == "trade")
+        left = len(plan) - len(done)
+        mean_block = sum(block_seconds) / len(block_seconds)
+        log("bloque {}/{} {} [{}]: {} despertares, {} llamadas nuevas, {} operaciones, {:.0f} s; llamadas totales {}; "
+            "ETA del plan {} (quedan {} bloques)".format(
+                len(done), len(plan), block["block_id"], block["fold"], wakes, decider.calls - calls0, trades,
+                clock() - t0, decider.calls, _eta(mean_block * left), left))
+    return reason, finished_here, block_seconds
+
+
+def run_practice(history, db_path, provider, cfg, holdout_ms, *, max_minutes=55.0, seed=None, blocks=None,
+                 clock=time.monotonic, log=print, **options):
+    """Runs the practice blocks inside ``max_minutes``."""
     if not provider.health():
         raise TraderError("llama-server no responde en {}: arrancalo con el modelo local y volvé a lanzar `practice`. "
                           "Este comando no descarga ningún modelo y solo habla con 127.0.0.1.".format(
                               getattr(provider, "base_url", "el puerto local")))
+    concurrent = options.get("concurrent")
+    skip_entry_reason = options.get("skip_entry_reason")
+    block_days = options.get("block_days")
+    from_date = options.get("from_date")
     overrides = {k: v for k, v in (("concurrent_orders", concurrent), ("skip_entry_reason", skip_entry_reason))
                  if v is not None}
-    if overrides:                                         # command-line override of the speed options (not identity)
+    if overrides:
         cfg = dict(cfg, runtime=dict(cfg.get("runtime") or {}, **overrides))
     seed = cfg["practice"]["seed"] if seed is None else seed
     plan, fold_cut = block_plan(cfg, holdout_ms, seed=seed, blocks=blocks, block_days=block_days, from_date=from_date)
@@ -1522,22 +1600,16 @@ def run_practice(history, db_path, provider, cfg, holdout_ms, *, max_minutes=55.
             "block_days": block_days or cfg["practice"]["block_days"], "from": from_date or cfg["practice"]["from"],
             "practice_entry_threshold": cfg["practice_entry_threshold"]})
         pdb.set_meta("target_blocks", len(plan))
-        identity = provider.identity()
-        served_fn = getattr(provider, "served_model", None)
-        served = served_fn() if callable(served_fn) else None
-        model_ref = identity.get("model_ref") or "unknown"
-        if served:
-            log("practice: modelo servido por llama-server: {}".format(served))
-            names = pdb.meta().get("served_models", [])
-            if served not in names:
-                pdb.set_meta("served_models", names + [served])
+        served, model_ref = _record_served_model(pdb, provider, log)
+        model_name = served or model_ref
         started = clock()
         decider = LlmDecider(provider, cfg, store=pdb, clock=clock, deadline=started + max_minutes * 60.0,
-                             model=served or model_ref)
+                             model=model_name)
         with pdb.db:
             run_id = pdb.db.execute("INSERT INTO runs(started_ms, args, model_ref, served_model) VALUES(?,?,?,?)", (
                 int(time.time() * 1000), json.dumps({"max_minutes": max_minutes, "seed": seed, "blocks": len(plan)}),
                 model_ref, served)).lastrowid
+
         def progress(d):
             left = max(0.0, started + max_minutes * 60.0 - clock())
             log("progreso: {} llamadas nuevas, {:.2f} s por llamada, {} transcurridos, quedan {} de presupuesto "
@@ -1549,35 +1621,10 @@ def run_practice(history, db_path, provider, cfg, holdout_ms, *, max_minutes=55.
         done = pdb.done_blocks()
         pending = [b for b in plan if b["block_id"] not in done]
         log("practice: {} bloques en el plan ({} ya hechos, {} pendientes), presupuesto {} min, hasta {}, modelo {}".format(
-            len(plan), len(plan) - len(pending), len(pending), max_minutes, stamp(holdout_ms), served or model_ref))
-        reason, finished_here, block_seconds = "done", 0, []
-        if pending:
-            log("practice: preguntando a Qwen… (Ctrl+C para cortar; se retoma donde quedó)")
-        for block in pending:
-            t0 = clock()
-            calls0 = decider.calls
-            try:
-                events, nbars, closes, wakes = run_block(history, cfg, block, decider,
-                                                         entry_threshold=cfg["practice_entry_threshold"], log=log)
-            except BudgetExhausted:
-                reason = "budget"
-                break
-            except ModelDown:
-                reason = "model_down"
-                log("llama-server no contestó tres veces seguidas: se corta; lo hecho queda guardado")
-                break
-            pdb.commit_block(block, events, {"prompt_version": cfg["prompt"]["version"], "model": served or model_ref},
-                             {"bars": nbars, "wakes": wakes, "seconds": clock() - t0}, closes)
-            finished_here += 1
-            block_seconds.append(clock() - t0)
-            done.add(block["block_id"])
-            trades = sum(1 for e in events if e["type"] == "trade")
-            left = len(plan) - len(done)
-            mean_block = sum(block_seconds) / len(block_seconds)
-            log("bloque {}/{} {} [{}]: {} despertares, {} llamadas nuevas, {} operaciones, {:.0f} s; llamadas totales {}; "
-                "ETA del plan {} (quedan {} bloques)".format(
-                    len(done), len(plan), block["block_id"], block["fold"], wakes, decider.calls - calls0, trades,
-                    clock() - t0, decider.calls, _eta(mean_block * left), left))
+            len(plan), len(plan) - len(pending), len(pending), max_minutes, stamp(holdout_ms), model_name))
+        reason, finished_here, block_seconds = _run_pending_blocks(
+            history, cfg, pdb, decider, plan, done, pending, model_name, clock, log
+        )
         mean_call = decider.mean_call() or None
         with pdb.db:
             pdb.db.execute("UPDATE runs SET ended_ms=?, calls=?, mean_call_s=?, stop_reason=? WHERE id=?",
@@ -1597,16 +1644,20 @@ def run_practice(history, db_path, provider, cfg, holdout_ms, *, max_minutes=55.
 # --------------------------------------------------------------------------- export
 
 
+def _best_exit_choice(gain):
+    if gain is None:
+        return None
+    return "MANTENER" if gain >= 0 else "CERRAR"
+
+
 def exit_labels(product, snapshot, t_ms, net_now, block, trade, funding, notional):
     """Learning label of one MANTENER / CERRAR decision: what closing now gives against holding, from the candles stored
-    with the block. ``hold_*``: net bp (after costs, funding included when known) if the position were kept to +1 h, +4 h
-    and the block end and closed there; ``None`` when that moment is past the block end. A forced close
-    (v1 stop / 24 h limit) that comes first is used as it happened. ``best_*`` says which choice was the better one."""
+    with the block."""
     closes, start, end = block["closes"], block["start_ms"], block["end_ms"]
 
     def at(moment):
         index = (moment - start) // BAR_MS - 1
-        if moment <= start or moment > end or index >= len(closes) or index < 0:
+        if not (start < moment <= end and 0 <= index < len(closes)):
             return None
         position = Position(side=snapshot["side"], entry_ms=snapshot["entry_ms"], entry_px=D(snapshot["entry_px"]),
                             qty=D(snapshot["qty"]))
@@ -1623,15 +1674,50 @@ def exit_labels(product, snapshot, t_ms, net_now, block, trade, funding, notiona
         out["hold_" + name + "_how"] = how if value is not None else None
         gain = None if value is None or net_now is None else round(value - net_now, 2)
         out["hold_better_" + name + "_bp"] = gain
-        out["best_" + name] = None if gain is None else ("MANTENER" if gain >= 0 else "CERRAR")
+        out["best_" + name] = _best_exit_choice(gain)
     return out
 
 
-def export_dataset(db_path, out_path, cfg=None, cache_dir=None):
-    """One JSON line per decision: the STATE exactly as prompted, the answer, the guardrail info and the outcome.
+_PRACTICE_EXPORT_TRADE_KEYS = (
+    "side", "entry_ms", "exit_ms", "net_bp", "funding_status", "closed_by", "hold_min", "mfe_bp", "mae_bp",
+)
 
-    ``source`` is ``practice`` here (``live`` once the live process writes the same rows). The lines are ordered by block
-    and sequence, so the file is reproducible. Returns the number of lines."""
+
+def _position_exit_label(r, snapshot, meta, trades, blocks, funding, cache_dir, notional):
+    if r["kind"] != "position" or not snapshot or r["block_id"] not in blocks:
+        return None
+    if r["product"] not in funding:
+        rows = History(cache_dir, meta["holdout_ms"], offline=True).funding(r["product"]) \
+            if cache_dir and meta.get("holdout_ms") else []
+        funding[r["product"]] = FundingLine(rows)
+    return exit_labels(r["product"], snapshot, r["t_ms"], r["net_bp_now"], blocks[r["block_id"]],
+                       trades.get((r["block_id"], snapshot["trade_no"])), funding[r["product"]], notional)
+
+
+def _export_practice_line(r, meta, trades, blocks, funding, cache_dir, notional):
+    trade = trades.get((r["block_id"], r["trade_no"])) if r["trade_no"] else None
+    snapshot = json.loads(r["position_json"] or "null")
+    label = _position_exit_label(r, snapshot, meta, trades, blocks, funding, cache_dir, notional)
+    reason_data = json.loads(r["reason_json"] or "null") or {}
+    return {
+        "schema": DATASET_SCHEMA, "source": "practice", "fold": r["fold"], "block_id": r["block_id"],
+        "seq": r["seq"], "product": r["product"], "t_ms": r["t_ms"], "kind": r["kind"],
+        "state_text": r["state_text"], "state_hash": r["state_hash"], "wake": json.loads(r["wake_json"] or "null"),
+        "orders": json.loads(r["orders_json"] or "null"), "probabilities": json.loads(r["probs_json"] or "null"),
+        "confidence": r["confidence"], "model_action": r["model_action"], "action": r["action"],
+        "p_action": r["p_action"], "entry_threshold": r["threshold"],
+        "guardrail": {"override": r["override"], "forced": r["kind"] == "guardrail"},
+        "reason": r["reason"], "reason_probabilities": reason_data.get("probabilities"),
+        "position": snapshot, "net_bp_now": r["net_bp_now"], "exit_labels": label,
+        "outcome": json.loads(r["outcome_json"] or "null"),
+        "trade": None if trade is None else {k: trade[k] for k in _PRACTICE_EXPORT_TRADE_KEYS},
+        "prompt_version": r["prompt_version"], "prompt_hash": r["prompt_hash"], "model": r["model"],
+        "config_hash": meta.get("config_hash"), "latency_ms": r["latency_ms"],
+    }
+
+
+def export_dataset(db_path, out_path, cfg=None, cache_dir=None):
+    """One JSON line per decision: the STATE exactly as prompted, the answer, the guardrail info and the outcome."""
     cfg = cfg or load_config()
     pdb = PracticeDB(db_path, readonly=True)
     try:
@@ -1647,33 +1733,7 @@ def export_dataset(db_path, out_path, cfg=None, cache_dir=None):
         count = 0
         with open(out_path, "w", encoding="utf-8") as out:
             for r in pdb.db.execute("SELECT * FROM decisions ORDER BY block_id, seq"):
-                trade = trades.get((r["block_id"], r["trade_no"])) if r["trade_no"] else None
-                snapshot = json.loads(r["position_json"] or "null")
-                label = None
-                if r["kind"] == "position" and snapshot and r["block_id"] in blocks:
-                    if r["product"] not in funding:
-                        rows = History(cache_dir, meta["holdout_ms"], offline=True).funding(r["product"]) \
-                            if cache_dir and meta.get("holdout_ms") else []
-                        funding[r["product"]] = FundingLine(rows)
-                    label = exit_labels(r["product"], snapshot, r["t_ms"], r["net_bp_now"], blocks[r["block_id"]],
-                                        trades.get((r["block_id"], snapshot["trade_no"])), funding[r["product"]], notional)
-                line = {
-                    "schema": DATASET_SCHEMA, "source": "practice", "fold": r["fold"], "block_id": r["block_id"],
-                    "seq": r["seq"], "product": r["product"], "t_ms": r["t_ms"], "kind": r["kind"],
-                    "state_text": r["state_text"], "state_hash": r["state_hash"], "wake": json.loads(r["wake_json"] or "null"),
-                    "orders": json.loads(r["orders_json"] or "null"), "probabilities": json.loads(r["probs_json"] or "null"),
-                    "confidence": r["confidence"], "model_action": r["model_action"], "action": r["action"],
-                    "p_action": r["p_action"], "entry_threshold": r["threshold"],
-                    "guardrail": {"override": r["override"], "forced": r["kind"] == "guardrail"},
-                    "reason": r["reason"], "reason_probabilities": (json.loads(r["reason_json"] or "null") or {}).get(
-                        "probabilities"),
-                    "position": snapshot, "net_bp_now": r["net_bp_now"], "exit_labels": label,
-                    "outcome": json.loads(r["outcome_json"] or "null"),
-                    "trade": None if trade is None else {k: trade[k] for k in (
-                        "side", "entry_ms", "exit_ms", "net_bp", "gross_bp", "funding_bp", "closed_by", "hold_min",
-                        "mfe_bp", "mae_bp")},
-                    "prompt_version": r["prompt_version"], "prompt_hash": r["prompt_hash"], "model": r["model"],
-                    "config_hash": meta.get("config_hash"), "latency_ms": r["latency_ms"]}
+                line = _export_practice_line(r, meta, trades, blocks, funding, cache_dir, notional)
                 out.write(json.dumps(line, sort_keys=True, ensure_ascii=False) + "\n")
                 count += 1
         return count
@@ -1785,39 +1845,196 @@ def _parser():
     return parser
 
 
+_LLAMA_DOWN_MSG = "llama-server no responde en {}"
+_QUICK_STATE_MSG = "prueba rápida {}: {}"
+
+
+def _healthy_provider(url):
+    provider = _provider(url)
+    if not provider.health():
+        raise TraderError(_LLAMA_DOWN_MSG.format(provider.base_url))
+    return provider
+
+
+def _prepare_main_config(args):
+    if args.command == "report":
+        return None
+    config_path, default_db = version_paths(args.version)
+    args.config, args.db = args.config or config_path, args.db or default_db
+    print("Qwen operador: versión {} (config {}, base {})".format(args.version, args.config, args.db))
+    cfg = load_config(args.config)
+    if args.command in ("exam", "exam-report"):
+        args.exam_db = args.exam_db or (DEFAULT_EXAM_DB_LIVE if args.version == "live" else DEFAULT_EXAM_DB_V3)
+        if args.version == "live":
+            from .futures_qwen_live import apply_overrides
+            cfg = apply_overrides(cfg)
+        if getattr(args, "exam_from", None):
+            cfg = dict(cfg, practice=dict(cfg["practice"], **{"from": args.exam_from}))
+        if getattr(args, "lora", None):
+            cfg = dict(cfg, runtime=dict(cfg.get("runtime") or {}, lora=parse_lora(args.lora)))
+    return cfg
+
+
+def _cmd_compare_prompts(args, cfg):
+    from .futures_qwen_trader_probe import compare_lines, compare_prompts
+    provider = _healthy_provider(args.llama_url)
+    old_db = version_paths(args.from_version)[1]
+    text = compare_lines(compare_prompts(old_db, cfg, provider, args.n), "v" + args.from_version, "v" + args.version)
+    os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
+    with open(args.out, "w", encoding="utf-8") as handle:
+        handle.write(text)
+    print(text)
+    print("escrito en {}".format(args.out))
+
+
+def _cmd_exam_check_parallel(args, cfg):
+    from .futures_qwen_factors import check_parallel, parallel_text
+    if not cfg.get("state_ficha"):
+        raise TraderError("--check-parallel solo vale para la pregunta por factores (config con state_ficha, "
+                          "como la versión 7: --config config/qwen-live-v7.json)")
+    if not os.path.exists(args.exam_db):
+        raise TraderError("no existe la base del examen: {}".format(args.exam_db))
+    provider = _healthy_provider(args.llama_url)
+    print(parallel_text(check_parallel(args.exam_db, cfg, provider, args.check_parallel,
+                                       log=lambda *a: print(*a, flush=True))))
+
+
+def _cmd_exam_quick(args, cfg, history, holdout_ms, variant, variants):
+    from .futures_qwen_trader_exam import fail_quick, run_formula, run_quick
+    base = os.path.dirname(os.path.abspath(args.exam_db))
+    quick_db = os.path.join(base, variants.db_name(variant["id"]))
+    state_path = os.path.join(base, variants.state_name(variant["id"]))
+    if variant["kind"] == "formula":
+        state = run_formula(history, cfg, holdout_ms, state_path, variant)
+        print(_QUICK_STATE_MSG.format(variant["id"], state["state"]))
+        return
+    try:
+        server = variants.ModelServer(variant["model"]) if variant.get("model") else None
+        with server or contextlib.nullcontext():
+            url = server.url if server else args.llama_url
+            if server:
+                cfg = variants.apply_variant(cfg, variant)
+            state = run_quick(history, quick_db, _provider(url), cfg, holdout_ms,
+                              snapshots=args.quick, max_minutes=args.max_minutes, state_path=state_path,
+                              variant=variant, concurrent=not args.sequential)
+    except variants.VariantError as error:
+        state = fail_quick(state_path, variant, str(error))
+    print(_QUICK_STATE_MSG.format(variant["id"], state["state"]))
+
+
+def _prepare_exam_variant(args, cfg, variants):
+    variant = variants.get_variant(args.variant) if args.variant or args.quick is not None else None
+    if args.version == "live" and variant is not None and variant["kind"] not in ("control", "memory", "formula", "rebote"):
+        raise TraderError("con --version live se pregunta lo que pregunta Qwen en vivo (variante «actual» o «memoria»): "
+                          "las otras variantes se aplican sobre la v3")
+    if variant is not None and variant.get("model") is None and variant["kind"] not in ("formula", "rebote"):
+        cfg = variants.apply_variant(cfg, variant)
+    if args.quick is not None:
+        from .futures_qwen_analista import apply_env as analista_env
+        from .futures_qwen_exigencia import apply_env
+        cfg = analista_env(apply_env(cfg))
+        from . import futures_walkforward as walkforward
+        if variant["kind"] == "formula" and walkforward.medicion_from_env() == "honesta":
+            cfg = walkforward.with_pairs(cfg)
+    if args.positioning_db:
+        cfg = dict(cfg, positioning_db=os.path.abspath(args.positioning_db))
+    return cfg, variant
+
+
+def _cmd_exam(args, cfg, holdout_ms):
+    from . import futures_qwen_quick_variants as variants
+    from .futures_qwen_trader_exam import run_exam
+    if args.check_parallel is not None:
+        _cmd_exam_check_parallel(args, cfg)
+        return
+    cfg, variant = _prepare_exam_variant(args, cfg, variants)
+    from .futures_qwen_analista import extra_days as analista_days
+    history = History(args.cache_dir, holdout_ms, offline=args.offline)
+    if args.quick is not None and variant["kind"] == "rebote":
+        from .futures_qwen_rebote import run_rebote
+        base = os.path.dirname(os.path.abspath(args.exam_db))
+        state = run_rebote(history, holdout_ms, os.path.join(base, variants.state_name(variant["id"])), variant)
+        print(_QUICK_STATE_MSG.format(variant["id"], state["state"]))
+        return
+    if not history.offline:
+        for product in dict.fromkeys(list(cfg["exam"]["products"]) + list(cfg.get("state_context") or ())):
+            print("candles {}: {} a {}".format(product, cfg["practice"]["from"], stamp(holdout_ms)))
+            history.prefetch(product, date_ms(cfg["practice"]["from"]) - (
+                cfg["practice"]["warmup_days"] + analista_days(cfg)) * DAY_MS, holdout_ms)
+    if args.sequential:
+        cfg = dict(cfg, runtime=dict(cfg.get("runtime") or {}, concurrent_orders=False))
+    if args.quick is not None:
+        _cmd_exam_quick(args, cfg, history, holdout_ms, variant, variants)
+        return
+    if variant is not None and variant.get("model"):
+        raise TraderError("el examen completo de una variante de modelo no está soportado")
+    run_exam(history, args.exam_db, _provider(args.llama_url), cfg, holdout_ms, max_minutes=args.max_minutes,
+             concurrent=not args.sequential)
+
+
+def _cmd_prefetch_or_practice(args, cfg, holdout_ms):
+    history = History(args.cache_dir, holdout_ms, offline=getattr(args, "offline", False))
+    plan, _ = block_plan(cfg, holdout_ms, seed=args.seed, blocks=args.blocks)
+    if args.command == "prefetch" or not history.offline:
+        span = {}
+        for b in plan:
+            lo, hi = span.get(b["product"], (b["start_ms"], b["end_ms"]))
+            span[b["product"]] = (min(lo, b["start_ms"]), max(hi, b["end_ms"]))
+        for product, (lo, hi) in sorted(span.items()):
+            print("candles {}: {} a {}".format(product, stamp(lo), stamp(hi)))
+            history.prefetch(product, date_ms(cfg["practice"]["from"]) - cfg["practice"]["warmup_days"] * DAY_MS, hi)
+    if args.command == "practice" and args.check_determinism is not None:
+        from .futures_qwen_trader_probe import check_determinism, determinism_text
+        provider = _healthy_provider(args.llama_url)
+        print(determinism_text(check_determinism(args.db, cfg, provider, args.check_determinism)))
+    elif args.command == "practice":
+        provider = _provider(args.llama_url)
+        run_practice(history, args.db, provider, cfg, holdout_ms, max_minutes=args.max_minutes, seed=args.seed,
+                     blocks=args.blocks, skip_entry_reason=not args.ask_entry_reason, concurrent=not args.sequential)
+
+
+def _report_baselines(wanted, paths):
+    exists = lambda v: os.path.exists(version_paths(v)[1] if v not in paths else paths[v][1])
+    base = (version_paths("1")[1], load_config(version_paths("1")[0])) if ("2" in wanted and exists("1") and exists("2")) else None
+    same_state = (version_paths("2")[1], load_config(version_paths("2")[0])) if ("2.1" in wanted and exists("2") and exists("2.1")) else None
+    return base, same_state
+
+
+def _cmd_report(args):
+    from .futures_qwen_trader_report import build_report
+    wanted = PRACTICE_VERSIONS if args.version == "all" else (args.version,)
+    paths = {v: version_paths(v) for v in wanted}
+    if args.db and len(wanted) == 1:
+        paths[wanted[0]] = (paths[wanted[0]][0], args.db)
+    base, same_state = _report_baselines(wanted, paths)
+    written = 0
+    out_map = {"1": args.out, "2": args.out_v2, "2.1": args.out_v21, "3": args.out_v3}
+    for v in wanted:
+        config_path, db = paths[v]
+        if not os.path.exists(db):
+            if args.version != "all":
+                raise TraderError("no existe la base de la versión {}: {}".format(v, db))
+            print("versión {}: no hay base ({}); se omite".format(v, db))
+            continue
+        text = build_report(db, load_config(args.config or config_path), args.cache_dir,
+                            baseline=base if v == "2" else None, prompt_baseline=same_state if v == "2.1" else None)
+        out = out_map[v]
+        os.makedirs(os.path.dirname(os.path.abspath(out)), exist_ok=True)
+        with open(out, "w", encoding="utf-8") as handle:
+            handle.write(text)
+        print("informe de la versión {} escrito en {}".format(v, out))
+        written += 1
+    if not written:
+        raise TraderError("no hay ninguna base de práctica que informar (ejecutá `practice` primero)")
+
+
 def main(argv=None):
     args = _parser().parse_args(argv)
     try:
-        if args.command not in ("report",):
-            config_path, default_db = version_paths(args.version)
-            args.config, args.db = args.config or config_path, args.db or default_db
-            print("Qwen operador: versión {} (config {}, base {})".format(args.version, args.config, args.db))
-        cfg = load_config(args.config) if args.command != "report" else None
-        if args.command in ("exam", "exam-report"):
-            args.exam_db = args.exam_db or (DEFAULT_EXAM_DB_LIVE if args.version == "live" else DEFAULT_EXAM_DB_V3)
-        if args.command in ("exam", "exam-report") and args.version == "live":
-            # the same size / leverage / products the live process runs with (QWEN_LIVE_*): they are part of the config identity,
-            # and the gate only counts photos asked under the identity of the live database
-            from .futures_qwen_live import apply_overrides
-            cfg = apply_overrides(cfg)
-        if args.command in ("exam", "exam-report"):
-            if getattr(args, "exam_from", None):
-                cfg = dict(cfg, practice=dict(cfg["practice"], **{"from": args.exam_from}))
-            if getattr(args, "lora", None):
-                cfg = dict(cfg, runtime=dict(cfg.get("runtime") or {}, lora=parse_lora(args.lora)))
+        cfg = _prepare_main_config(args)
         holdout_ms = load_holdout_ms()
         if args.command == "compare-prompts":
-            from .futures_qwen_trader_probe import compare_lines, compare_prompts
-            provider = _provider(args.llama_url)
-            if not provider.health():
-                raise TraderError("llama-server no responde en {}".format(provider.base_url))
-            old_db = version_paths(args.from_version)[1]
-            text = compare_lines(compare_prompts(old_db, cfg, provider, args.n), "v" + args.from_version, "v" + args.version)
-            os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
-            with open(args.out, "w", encoding="utf-8") as handle:
-                handle.write(text)
-            print(text)
-            print("escrito en {}".format(args.out))
+            _cmd_compare_prompts(args, cfg)
         elif args.command == "probe":
             from .futures_qwen_trader_probe import run_probe
             run_probe(args.db, cfg, _provider(args.llama_url), sample=args.sample, seed=args.seed, max_minutes=args.max_minutes,
@@ -1831,130 +2048,11 @@ def main(argv=None):
                 handle.write(text)
             print("informe del examen escrito en {}".format(args.out))
         elif args.command == "exam":
-            from . import futures_qwen_quick_variants as variants
-            from .futures_qwen_trader_exam import run_exam
-            if args.check_parallel is not None:
-                from .futures_qwen_factors import check_parallel, parallel_text
-                if not cfg.get("state_ficha"):
-                    raise TraderError("--check-parallel solo vale para la pregunta por factores (config con state_ficha, "
-                                      "como la versión 7: --config config/qwen-live-v7.json)")
-                if not os.path.exists(args.exam_db):
-                    raise TraderError("no existe la base del examen: {}".format(args.exam_db))
-                provider = _provider(args.llama_url)
-                if not provider.health():
-                    raise TraderError("llama-server no responde en {}".format(provider.base_url))
-                print(parallel_text(check_parallel(args.exam_db, cfg, provider, args.check_parallel,
-                                                  log=lambda *a: print(*a, flush=True))))
-                return 0
-            variant = variants.get_variant(args.variant) if args.variant or args.quick is not None else None
-            if args.version == "live" and variant is not None and variant["kind"] not in ("control", "memory", "formula", "rebote"):
-                raise TraderError("con --version live se pregunta lo que pregunta Qwen en vivo (variante «actual» o «memoria»): "
-                                  "las otras variantes se aplican sobre la v3")
-            if variant is not None and variant.get("model") is None and variant["kind"] not in ("formula", "rebote"):
-                cfg = variants.apply_variant(cfg, variant)       # its own questions / state: hashed in the identity
-            if args.quick is not None:                          # los niveles de exigencia llegan por entorno (solo pruebas)
-                from .futures_qwen_analista import apply_env as analista_env
-                from .futures_qwen_exigencia import apply_env
-                cfg = analista_env(apply_env(cfg))
-                from . import futures_walkforward as walkforward
-                if variant["kind"] == "formula" and walkforward.medicion_from_env() == "honesta":
-                    cfg = walkforward.with_pairs(cfg)           # each quarter with the formulas fitted only on what came before
-            if args.positioning_db:
-                cfg = dict(cfg, positioning_db=os.path.abspath(args.positioning_db))
-            from .futures_qwen_analista import extra_days as analista_days
-            history = History(args.cache_dir, holdout_ms, offline=args.offline)
-            if args.quick is not None and variant["kind"] == "rebote":     # no Qwen, no fotos: su propia regla sobre velas de 5 min
-                from .futures_qwen_rebote import run_rebote
-                base = os.path.dirname(os.path.abspath(args.exam_db))
-                state = run_rebote(history, holdout_ms, os.path.join(base, variants.state_name(variant["id"])), variant)
-                print("prueba rápida {}: {}".format(variant["id"], state["state"]))
-                return
-            if not history.offline:
-                for product in dict.fromkeys(list(cfg["exam"]["products"]) + list(cfg.get("state_context") or ())):
-                    print("candles {}: {} a {}".format(product, cfg["practice"]["from"], stamp(holdout_ms)))
-                    history.prefetch(product, date_ms(cfg["practice"]["from"]) - (
-                        cfg["practice"]["warmup_days"] + analista_days(cfg)) * DAY_MS, holdout_ms)
-            if args.sequential:
-                cfg = dict(cfg, runtime=dict(cfg.get("runtime") or {}, concurrent_orders=False))
-            if args.quick is not None:
-                from .futures_qwen_trader_exam import fail_quick, run_formula, run_quick
-                base = os.path.dirname(os.path.abspath(args.exam_db))
-                quick_db = os.path.join(base, variants.db_name(variant["id"]))
-                state_path = os.path.join(base, variants.state_name(variant["id"]))
-                if variant["kind"] == "formula":                # no Qwen: only the formulas over the stored candles
-                    state = run_formula(history, cfg, holdout_ms, state_path, variant)
-                    print("prueba rápida {}: {}".format(variant["id"], state["state"]))
-                    return
-                try:
-                    server = variants.ModelServer(variant["model"]) if variant.get("model") else None
-                    with server or contextlib.nullcontext():
-                        url = server.url if server else args.llama_url
-                        if server:
-                            cfg = variants.apply_variant(cfg, variant)
-                        state = run_quick(history, quick_db, _provider(url), cfg, holdout_ms,
-                                          snapshots=args.quick, max_minutes=args.max_minutes, state_path=state_path,
-                                          variant=variant, concurrent=not args.sequential)
-                except variants.VariantError as error:
-                    state = fail_quick(state_path, variant, str(error))
-                print("prueba rápida {}: {}".format(variant["id"], state["state"]))
-                return
-            if variant is not None and variant.get("model"):
-                raise TraderError("el examen completo de una variante de modelo no está soportado")
-            run_exam(history, args.exam_db, _provider(args.llama_url), cfg, holdout_ms, max_minutes=args.max_minutes,
-                     concurrent=not args.sequential)
+            _cmd_exam(args, cfg, holdout_ms)
         elif args.command in ("prefetch", "practice"):
-            history = History(args.cache_dir, holdout_ms, offline=getattr(args, "offline", False))
-            plan, _ = block_plan(cfg, holdout_ms, seed=args.seed, blocks=args.blocks)
-            if args.command == "prefetch" or not history.offline:
-                span = {}
-                for b in plan:
-                    lo, hi = span.get(b["product"], (b["start_ms"], b["end_ms"]))
-                    span[b["product"]] = (min(lo, b["start_ms"]), max(hi, b["end_ms"]))
-                for product, (lo, hi) in sorted(span.items()):
-                    print("candles {}: {} a {}".format(product, stamp(lo), stamp(hi)))
-                    history.prefetch(product, date_ms(cfg["practice"]["from"]) - cfg["practice"]["warmup_days"] * DAY_MS,
-                                     hi)
-            if args.command == "practice" and args.check_determinism is not None:
-                from .futures_qwen_trader_probe import check_determinism, determinism_text
-                provider = _provider(args.llama_url)
-                if not provider.health():
-                    raise TraderError("llama-server no responde en {}".format(provider.base_url))
-                print(determinism_text(check_determinism(args.db, cfg, provider, args.check_determinism)))
-            elif args.command == "practice":
-                provider = _provider(args.llama_url)
-                run_practice(history, args.db, provider, cfg, holdout_ms, max_minutes=args.max_minutes, seed=args.seed,
-                             blocks=args.blocks, concurrent=False if args.sequential else None,
-                             skip_entry_reason=False if args.ask_entry_reason else None)
+            _cmd_prefetch_or_practice(args, cfg, holdout_ms)
         elif args.command == "report":
-            from .futures_qwen_trader_report import build_report
-            wanted = PRACTICE_VERSIONS if args.version == "all" else (args.version,)
-            paths = {v: version_paths(v) for v in wanted}
-            if args.db and len(wanted) == 1:
-                paths[wanted[0]] = (paths[wanted[0]][0], args.db)
-            base, same_state = None, None
-            exists = lambda v: os.path.exists(version_paths(v)[1] if v not in paths else paths[v][1])
-            if "2" in wanted and exists("1") and exists("2"):
-                base = (version_paths("1")[1], load_config(version_paths("1")[0]))
-            if "2.1" in wanted and exists("2") and exists("2.1"):
-                same_state = (version_paths("2")[1], load_config(version_paths("2")[0]))
-            written = 0
-            for v in wanted:
-                config_path, db = paths[v]
-                if not os.path.exists(db):
-                    if args.version == "all":
-                        print("versión {}: no hay base ({}); se omite".format(v, db))
-                        continue
-                    raise TraderError("no existe la base de la versión {}: {}".format(v, db))
-                text = build_report(db, load_config(args.config or config_path), args.cache_dir,
-                                    baseline=base if v == "2" else None, prompt_baseline=same_state if v == "2.1" else None)
-                out = {"1": args.out, "2": args.out_v2, "2.1": args.out_v21, "3": args.out_v3}[v]
-                os.makedirs(os.path.dirname(os.path.abspath(out)), exist_ok=True)
-                with open(out, "w", encoding="utf-8") as handle:
-                    handle.write(text)
-                print("informe de la versión {} escrito en {}".format(v, out))
-                written += 1
-            if not written:
-                raise TraderError("no hay ninguna base de práctica que informar (ejecutá `practice` primero)")
+            _cmd_report(args)
         else:
             print("{} decisiones escritas en {}".format(export_dataset(args.db, args.out, cfg, args.cache_dir), args.out))
         return 0

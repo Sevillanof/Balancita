@@ -152,11 +152,12 @@ def quarter_cfg(cfg, pair):
 
 def formula_from_text(state_text, in_position=False):
     """La decisión de la fórmula leída del TEXTO de la ficha (lo único que ve Qwen). Sin posición: LARGO / CORTO si el maestro dice
-    FUERTE y el portero «CONVIENE ENTRAR»; si no, ESPERAR. Con posición: CERRAR si el maestro va EN CONTRA (flojo o fuerte)."""
+    FUERTE y el portero «CONVIENE ENTRAR» o las noticias están «A FAVOR del maestro»; si no, ESPERAR. Con posición: CERRAR si el
+    maestro va EN CONTRA (flojo o fuerte)."""
     if in_position:
         return "CERRAR" if "va EN CONTRA de la posición" in state_text else "MANTENER"
     strong = re.search(r"\): (SUBE|BAJA) FUERTE \(puntaje", state_text)
-    yes = "): CONVIENE ENTRAR (" in state_text
+    yes = "): CONVIENE ENTRAR (" in state_text or ": A FAVOR del maestro (" in state_text
     if strong and yes:
         return "LARGO" if strong.group(1) == "SUBE" else "CORTO"
     return "ESPERAR"
@@ -164,23 +165,108 @@ def formula_from_text(state_text, in_position=False):
 
 # --------------------------------------------------------------------------- collecting the looks
 
+TRAIN_JSONL = "train.jsonl"
+VALID_JSONL = "valid.jsonl"
+VALID_INFO_JSONL = "valid-info.jsonl"
+
+
+def _setup_destila_trader(history, cfg, product, from_ms, ahead, warmup):
+    trader = qt.Trader(cfg, product, None, qt.FundingLine(history.funding(product)), key="destila", entry_threshold=cfg["practice_entry_threshold"])
+    for other in cfg.get("state_context") or ():
+        if other != product:
+            trader.context[other] = {int(b["bucket_start"]) + qt.BAR_MS: float(b["close"]) for b in history.bars(other, from_ms - warmup, ahead)}
+    return trader
+
+
+def _step_open_position_destila(trader, product, t_ms, reasons, r, closes, hold_ms, open_trade, rows_pos):
+    held = t_ms - trader.position.entry_ms
+    now = qt.settle(product, trader.position, closes[t_ms], "strategy_exit", t_ms, trader.funding, trader.notional)["net_bp"]
+    side = 1 if trader.position.side == "LONG" else -1
+    act, _ = corta.formula_action(r, side)
+    timed_out = bool(hold_ms) and held >= hold_ms
+    if timed_out or act == "CERRAR":
+        open_trade["final_bp"] = now
+        for row in open_trade["rows"]:
+            row["final_bp"] = now
+            row["por_tiempo"] = timed_out
+            row["vivida"] = ap.position_label(row["net_now_bp"], now)
+        if act == "CERRAR" and not timed_out:
+            row = ap._position_row(trader, t_ms, reasons, r, now, open_trade)
+            row.update(final_bp=now, vivida=ap.position_label(now, now), formula="CERRAR", label="CERRAR",
+                       held_min=int(held // qt.MINUTE_MS))
+            rows_pos.append(row)
+        trader.position = None
+        trader.cooldown_until = t_ms + trader.cfg["guardrails"]["cooldown_min"] * qt.MINUTE_MS
+        return None, False
+    row = ap._position_row(trader, t_ms, reasons, r, now, open_trade)
+    row.update(label=row["formula"], held_min=int(held // qt.MINUTE_MS))
+    open_trade["rows"].append(row)
+    rows_pos.append(row)
+    return open_trade, True
+
+
+def _sample_flat_look(trader, t_ms, reasons, flat_found):
+    held_position, trader.position = trader.position, None
+    try:
+        flat_found.append((t_ms, trader.state_text(t_ms, reasons), trader.state_text(t_ms, reasons, mirror=True),
+                           held_position is not None))
+    finally:
+        trader.position = held_position
+
+
+def _build_flat_rows_destila(cfg, product, flat_found, readings, closes, cost, weak):
+    rows_flat = []
+    for t_ms, state, mirror, was_in_position in flat_found:
+        op = ap.operation(cfg, t_ms, readings, closes, cost, weak)
+        if op is None:
+            continue
+        formula = ap.formula_flat(op["maestro"], op["portero_si"], op.get("noticias_si", False))
+        rows_flat.append({"kind": "flat", "product": product, "t_ms": t_ms, "month": ap._month(t_ms), "state_text": state,
+                          "mirror_text": mirror, "maestro": op["maestro"], "portero_si": op["portero_si"], "portero_p": op["portero_p"],
+                          "largo_bp": op["largo"]["neto_bp"], "corto_bp": op["corto"]["neto_bp"], "formula": formula, "label": formula,
+                          "vivida": ap.flat_label(op["largo"]["neto_bp"], op["corto"]["neto_bp"]), "con_posicion_real": was_in_position})
+    return rows_flat
+
+
+def _wake_reading_destila(trader, t_ms):
+    if len(trader.c) < qt.MIN_BARS:
+        return None, None
+    reasons = trader.wake_reasons(t_ms)
+    if not reasons:
+        return None, None
+    facts = fficha.facts(trader, t_ms)
+    if corta.missing(facts):
+        return None, None
+    return reasons, corta.readings(trader, t_ms, facts)
+
+
+def _step_window_destila(trader, product, t_ms, reasons, r, closes, hold_ms, open_trade, rows_pos, flat_found, rng, entry_rate, wait_rate):
+    action = ap.formula_flat(r["veredicto"], r["portero_si"], r.get("noticias_si", False))
+    rate = entry_rate if action != "ESPERAR" else wait_rate
+    if rng.random() < rate:  # NOSONAR
+        _sample_flat_look(trader, t_ms, reasons, flat_found)
+    if trader.position is not None:
+        open_trade, keep_going = _step_open_position_destila(trader, product, t_ms, reasons, r, closes, hold_ms, open_trade, rows_pos)
+        if keep_going:
+            return open_trade
+    if t_ms >= trader.cooldown_until and action in ("LARGO", "CORTO"):
+        trader._open(t_ms, "LONG" if action == "LARGO" else "SHORT", r["portero_p"], "formula")
+        open_trade = {"trade_no": trader.position.trade_no, "rows": []}
+    return open_trade
+
 
 def collect_formula(history, cfg, product, from_ms, to_ms, *, entry_rate=1.0, wait_rate=0.03, seed=SEED):
     """Como ``futures_qwen_aprende.collect`` pero con la etiqueta = la decisión de la fórmula y sin esperar a estar sin posición:
     cada mirada con ficha completa se juzga como si no hubiera posición (``formula`` LARGO / CORTO / ESPERAR; es lo que dice la
     ficha, y hay muchas más entradas que operaciones). ``entry_rate`` / ``wait_rate`` = fracción que se guarda de las miradas con
     / sin entrada. Con posición real (la que las fórmulas abrirían): una fila por mirada con ``formula`` CERRAR / MANTENER."""
-    practice = cfg["practice"]
-    warmup = practice["warmup_days"] * qt.DAY_MS
-    rng = random.Random("{}:{}:{}".format(seed, product, from_ms))
+    warmup = cfg["practice"]["warmup_days"] * qt.DAY_MS
+    rng = random.Random("{}:{}:{}".format(seed, product, from_ms))  # NOSONAR
     hold = cfg["guardrails"]["max_hold_min"]
     hold_ms = hold * qt.MINUTE_MS if hold else None
     ahead = min(to_ms + (hold or 0) * qt.MINUTE_MS, history.holdout_ms)
     bars = history.bars(product, from_ms - warmup, ahead)
-    trader = qt.Trader(cfg, product, None, qt.FundingLine(history.funding(product)), key="destila", entry_threshold=cfg["practice_entry_threshold"])
-    for other in cfg.get("state_context") or ():
-        if other != product:
-            trader.context[other] = {int(b["bucket_start"]) + qt.BAR_MS: float(b["close"]) for b in history.bars(other, from_ms - warmup, ahead)}
+    trader = _setup_destila_trader(history, cfg, product, from_ms, ahead, warmup)
     weak = corta.formulas(cfg)[0]["umbrales"]["flojo"]
     cost = float(round_trip_cost_bps(product))
     closes, readings, flat_found, rows_pos = {}, {}, [], []
@@ -189,65 +275,15 @@ def collect_formula(history, cfg, product, from_ms, to_ms, *, entry_rate=1.0, wa
         trader.feed(bar, trade=False)
         t_ms = int(bar["bucket_start"]) + qt.BAR_MS
         closes[t_ms] = float(bar["close"])
-        if len(trader.c) < qt.MIN_BARS:
+        reasons, r = _wake_reading_destila(trader, t_ms)
+        if r is None:
             continue
-        reasons = trader.wake_reasons(t_ms)
-        if not reasons:
-            continue
-        facts = fficha.facts(trader, t_ms)
-        if corta.missing(facts):
-            continue
-        r = readings[t_ms] = corta.readings(trader, t_ms, facts)
-        if t_ms < from_ms or t_ms >= to_ms:
-            continue
-        action = ap.formula_flat(r["veredicto"], r["portero_si"])
-        if rng.random() < (entry_rate if action != "ESPERAR" else wait_rate):    # the look as if there were no position
-            held_position, trader.position = trader.position, None
-            try:
-                flat_found.append((t_ms, trader.state_text(t_ms, reasons), trader.state_text(t_ms, reasons, mirror=True),
-                                   held_position is not None))
-            finally:
-                trader.position = held_position
-        if trader.position is not None:                    # the formulas' own position, as they would live it
-            held = t_ms - trader.position.entry_ms
-            now = qt.settle(product, trader.position, closes[t_ms], "strategy_exit", t_ms, trader.funding, trader.notional)["net_bp"]
-            side = 1 if trader.position.side == "LONG" else -1
-            act, _ = corta.formula_action(r, side)
-            if (hold_ms and held >= hold_ms) or act == "CERRAR":
-                open_trade["final_bp"] = now
-                for row in open_trade["rows"]:
-                    row["final_bp"] = now
-                    row["por_tiempo"] = bool(hold_ms) and held >= hold_ms
-                    row["vivida"] = ap.position_label(row["net_now_bp"], now)
-                if act == "CERRAR" and not (hold_ms and held >= hold_ms):     # the wake where the formulas close is a real look
-                    row = ap._position_row(trader, t_ms, reasons, r, now, open_trade)
-                    row.update(final_bp=now, vivida=ap.position_label(now, now), formula="CERRAR", label="CERRAR",
-                               held_min=int(held // qt.MINUTE_MS))
-                    rows_pos.append(row)
-                trader.position = None
-                open_trade = None
-                trader.cooldown_until = t_ms + cfg["guardrails"]["cooldown_min"] * qt.MINUTE_MS
-            else:
-                row = ap._position_row(trader, t_ms, reasons, r, now, open_trade)
-                row.update(label=row["formula"], held_min=int(held // qt.MINUTE_MS))
-                open_trade["rows"].append(row)
-                rows_pos.append(row)
-                continue
-        if t_ms < trader.cooldown_until:
-            continue
-        if action in ("LARGO", "CORTO"):
-            trader._open(t_ms, "LONG" if action == "LARGO" else "SHORT", r["portero_p"], "formula")
-            open_trade = {"trade_no": trader.position.trade_no, "rows": []}
-    rows_flat = []
-    for t_ms, state, mirror, was_in_position in flat_found:
-        op = ap.operation(cfg, t_ms, readings, closes, cost, weak)
-        if op is None:
-            continue
-        formula = ap.formula_flat(op["maestro"], op["portero_si"])
-        rows_flat.append({"kind": "flat", "product": product, "t_ms": t_ms, "month": ap._month(t_ms), "state_text": state,
-                          "mirror_text": mirror, "maestro": op["maestro"], "portero_si": op["portero_si"], "portero_p": op["portero_p"],
-                          "largo_bp": op["largo"]["neto_bp"], "corto_bp": op["corto"]["neto_bp"], "formula": formula, "label": formula,
-                          "vivida": ap.flat_label(op["largo"]["neto_bp"], op["corto"]["neto_bp"]), "con_posicion_real": was_in_position})
+        readings[t_ms] = r
+        if from_ms <= t_ms < to_ms:
+            open_trade = _step_window_destila(
+                trader, product, t_ms, reasons, r, closes, hold_ms, open_trade, rows_pos, flat_found, rng, entry_rate, wait_rate
+            )
+    rows_flat = _build_flat_rows_destila(cfg, product, flat_found, readings, closes, cost, weak)
     rows_pos = [r for r in rows_pos if r.get("final_bp") is not None]
     return {"flat": rows_flat, "position": rows_pos}
 
@@ -260,37 +296,37 @@ def _quarter_of(row):
     return qname(y, (m - 1) // 3 + 1)
 
 
+def _fill_group(group, want, limit, taken, used):
+    got = 0
+    for row in group:
+        if got >= want:
+            break
+        qtr = _quarter_of(row)
+        if used[qtr] < limit and row not in taken:
+            taken.append(row)
+            used[qtr] += 1
+            got += 1
+
+
 def pick(rows, n, rng, cap=QUARTER_CAP, half_long=False):
     """``n`` filas al azar con cupo por trimestre (ninguno más del ``cap`` de ``n``); con ``half_long`` la mitad, si hay, de miradas con
     más de 12 h de posición (ahí se decide algo). Menos de ``n`` si no hay."""
     limit = max(1, int(math.ceil(cap * n)))
     rows = list(rows)
-    rng.shuffle(rows)
+    rng.shuffle(rows)  # NOSONAR
     taken, used = [], collections.Counter()
     groups = [[r for r in rows if r.get("held_min", 0) > 720], [r for r in rows if r.get("held_min", 0) <= 720]] if half_long else [rows]
     wants = [n // 2, n - n // 2] if half_long else [n]
     for want, group in zip(wants, groups):
-        got = 0
-        for row in group:
-            if got >= want:
-                break
-            if used[_quarter_of(row)] < limit and row not in taken:
-                taken.append(row)
-                used[_quarter_of(row)] += 1
-                got += 1
-    for row in rows:                                       # complete if a group fell short
-        if len(taken) >= n:
-            break
-        if row not in taken and used[_quarter_of(row)] < limit:
-            taken.append(row)
-            used[_quarter_of(row)] += 1
+        _fill_group(group, want, limit, taken, used)
+    _fill_group(rows, n - len(taken), limit, taken, used)
     return taken
 
 
 def build_split(cfg, flat, position, flat_n, close_n, seed, out_path, info_path, *, cap=QUARTER_CAP, position_cap=0.25):
     """Escribe un archivo mlx-lm (formato chat) y, al lado, lo que vale cada ejemplo. Sin posición: ``flat_n`` de cada clase con su
     espejo y las dos órdenes de letras. Con posición: todas las CERRAR (hasta ``close_n``) y otras tantas MANTENER. Devuelve el reparto."""
-    rng = random.Random(seed)
+    rng = random.Random(seed)  # NOSONAR
     chosen_flat = []
     for name in FLAT_CLASSES:
         chosen_flat += pick([r for r in flat if r["formula"] == name], flat_n, rng, cap)
@@ -306,7 +342,7 @@ def build_split(cfg, flat, position, flat_n, close_n, seed, out_path, info_path,
         group = "{}:{}".format(row["trade"], row["t_ms"])
         for order, example in enumerate(ap.chat_examples(cfg, row)):
             pairs.append((example, dict(ap.info_of(row), grupo=group, espejo=False, orden=order, mes=row["month"])))
-    random.Random(seed + 1).shuffle(pairs)
+    random.Random(seed + 1).shuffle(pairs)  # NOSONAR
     ap.write_jsonl(out_path, [e for e, _ in pairs])
     ap.write_jsonl(info_path, [i for _, i in pairs])
     return {"ejemplos": len(pairs), "sin_posicion": dict(collections.Counter(r["formula"] for r in chosen_flat)),
@@ -331,6 +367,18 @@ def check_readable(rows):
 # --------------------------------------------------------------------------- measuring (pure; the model calls are in ops/qwen-lora/destila_eval.py)
 
 
+def _action_net(info, action):
+    if action == "LARGO":
+        return info["largo_bp"]
+    if action == "CORTO":
+        return info["corto_bp"]
+    return None
+
+
+def _mean_or_none(xs):
+    return round(sum(xs) / len(xs), 2) if xs else None
+
+
 def valid_report(records):
     """``records``: ``[{info, options{letra: id}, answer(id), gold(id)}]`` sobre ejemplos de ``valid.jsonl`` (con espejo y órdenes).
     Devuelve acuerdo con la fórmula, por clase, costumbre (parte de la respuesta más repetida), espejo (de las respuestas LARGO / CORTO
@@ -345,25 +393,16 @@ def valid_report(records):
         by_class[r["gold"]][1] += 1
     real = {(r["info"]["grupo"], r["info"]["orden"]): r for r in records if r["info"]["kind"] == "flat" and not r["info"]["espejo"]}
     mirror = {(r["info"]["grupo"], r["info"]["orden"]): r for r in records if r["info"]["kind"] == "flat" and r["info"]["espejo"]}
-    sided, flips = 0, 0
-    for key, r in real.items():
-        if r["answer"] in ("LARGO", "CORTO") and key in mirror:
-            sided += 1
-            flips += mirror[key]["answer"] == ap.MIRROR_LABEL[r["answer"]]
-    own, formula = [], []
-    for r in real.values():
-        info = r["info"]
-        net = lambda action: info["largo_bp"] if action == "LARGO" else info["corto_bp"] if action == "CORTO" else None
-        if net(r["answer"]) is not None:
-            own.append(net(r["answer"]))
-        if net(r["gold"]) is not None:
-            formula.append(net(r["gold"]))
-    mean = lambda xs: round(sum(xs) / len(xs), 2) if xs else None
+    sided = sum(1 for key, r in real.items() if r["answer"] in ("LARGO", "CORTO") and key in mirror)
+    flips = sum(1 for key, r in real.items() if r["answer"] in ("LARGO", "CORTO") and key in mirror
+                and mirror[key]["answer"] == ap.MIRROR_LABEL[r["answer"]])
+    own = [val for r in real.values() for val in (_action_net(r["info"], r["answer"]),) if val is not None]
+    formula = [val for r in real.values() for val in (_action_net(r["info"], r["gold"]),) if val is not None]
     return {"n": n, "acuerdo": round(hits / n, 4) if n else None,
             "acuerdo_por_clase": {k: round(v[0] / v[1], 3) for k, v in sorted(by_class.items())},
             "reparto": dict(said), "costumbre_parte": round(max(said.values()) / n, 3) if n else None,
             "espejo_da_vuelta": round(flips / sided, 3) if sided else None, "espejo_n": sided,
-            "entradas": len(own), "neto_por_entrada_bp": mean(own), "formula_entradas": len(formula), "formula_neto_por_entrada_bp": mean(formula)}
+            "entradas": len(own), "neto_por_entrada_bp": _mean_or_none(own), "formula_entradas": len(formula), "formula_neto_por_entrada_bp": _mean_or_none(formula)}
 
 
 def sample_groups(infos, n_examples):
@@ -381,7 +420,7 @@ def sample_groups(infos, n_examples):
     return sorted(i for g in chosen for i in g)
 
 
-def verdict(report, practice=None):
+def verdict(report):
     """PASA la destilación (reglas fijas del diseño): acuerdo ≥ 85 %, espejo ≥ 90 %, ninguna respuesta > 70 %."""
     checks = {"acuerdo con la fórmula ≥ 85 %": (report["acuerdo"] or 0) >= 0.85,
               "el espejo da vuelta ≥ 90 %": (report["espejo_da_vuelta"] or 0) >= 0.90,
@@ -396,6 +435,17 @@ DONE_AGREEMENT, DONE_MIRROR, HABIT = 0.90, 0.90, 0.70
 STALE_STEP = 0.005                               # un tramo «sube» el acuerdo si lo mejora en más de medio punto
 
 
+def _is_stalled(history, patience_best):
+    if patience_best:
+        if len(history) <= patience_best:
+            return False, ""
+        before = max(h["acuerdo"] or 0 for h in history[:-patience_best])
+        stalled = all((h["acuerdo"] or 0) <= before + STALE_STEP for h in history[-patience_best:])
+        return stalled, "{} mediciones seguidas sin superar la mejor".format(patience_best)
+    stalled = len(history) >= 3 and all(history[-i]["acuerdo"] <= history[-i - 1]["acuerdo"] + STALE_STEP for i in (1, 2))
+    return stalled, "dos tramos seguidos no suben el acuerdo"
+
+
 def decide(history, patience_best=None):
     """``history``: una medición de validación por tramo (``paso``, ``acuerdo``, ``espejo_da_vuelta``, ``costumbre_parte``), en orden.
     Devuelve ``(acción, motivo)``: ``piloto_falla`` (corta la noche), ``listo`` (acuerdo y espejo ≥ 90 %), ``sin_mejora`` (dos tramos
@@ -407,13 +457,9 @@ def decide(history, patience_best=None):
             last["paso"], "n/d" if mirror is None else "{:.0f} %".format(100 * mirror), int(100 * PILOT_MIRROR))
     if (last["acuerdo"] or 0) >= DONE_AGREEMENT and (mirror or 0) >= DONE_MIRROR and (last["costumbre_parte"] or 1) <= HABIT:
         return "listo", "acuerdo y espejo ≥ 90 %"
-    if patience_best:        # etapa larga: corta si en las últimas N mediciones ninguna superó la mejor de antes (empeora o se estanca = memoriza)
-        if len(history) > patience_best:
-            before = max(h["acuerdo"] or 0 for h in history[:-patience_best])
-            if all((h["acuerdo"] or 0) <= before + STALE_STEP for h in history[-patience_best:]):
-                return "sin_mejora", "{} mediciones seguidas sin superar la mejor".format(patience_best)
-    elif len(history) >= 3 and all(history[-i]["acuerdo"] <= history[-i - 1]["acuerdo"] + STALE_STEP for i in (1, 2)):
-        return "sin_mejora", "dos tramos seguidos no suben el acuerdo"
+    stalled, reason = _is_stalled(history, patience_best)
+    if stalled:
+        return "sin_mejora", reason
     return "sigue", ""
 
 
@@ -495,6 +541,27 @@ def quarter_rows(history, cfg, y, q, rows_dir, wait_rate):
     return part
 
 
+def _partition_by_cutoff(part, cut, train_flat, train_pos, valid_flat, valid_pos):
+    for row in part["flat"]:
+        if row["t_ms"] >= cut:
+            valid_flat.append(row)
+        elif row["t_ms"] + EMBARGO_MS <= cut:
+            train_flat.append(row)
+    for row in part["position"]:
+        if row["t_ms"] >= cut:
+            valid_pos.append(row)
+        elif row["t_ms"] + EMBARGO_MS <= cut:
+            train_pos.append(row)
+
+
+def _file_hashes(out_dir, names):
+    out = {}
+    for n in names:
+        with open(os.path.join(out_dir, n), "rb") as handle:
+            out[n] = hashlib.sha256(handle.read()).hexdigest()[:16]
+    return out
+
+
 def _build_quarter(args):
     """El dataset de la noche del trimestre T: entrena con los trimestres 2023T1 .. T-1 (cada fila con la fórmula de su trimestre, ningún
     trimestre pasa del 15 % de una clase) y mide en T, que ese adaptador no vio. Un embargo de 36 h separa los dos. Sin práctica ni holdout."""
@@ -513,12 +580,7 @@ def _build_quarter(args):
     cur = first
     while cur <= (y, q):
         part = quarter_rows(history, cfg, cur[0], cur[1], args.rows_dir, args.wait_rate)
-        for target, rows in (("flat", part["flat"]), ("position", part["position"])):
-            for row in rows:
-                if row["t_ms"] >= cut:
-                    (valid_flat if target == "flat" else valid_pos).append(row)
-                elif row["t_ms"] + EMBARGO_MS <= cut:
-                    (train_flat if target == "flat" else train_pos).append(row)
+        _partition_by_cutoff(part, cut, train_flat, train_pos, valid_flat, valid_pos)
         print("{}: {} miradas sin posición, {} con posición".format(qname(*cur), len(part["flat"]), len(part["position"])), flush=True)
         cur = (cur[0] + (cur[1] == 4), cur[1] % 4 + 1)
     bad = check_readable(train_flat + train_pos + valid_flat + valid_pos)
@@ -529,12 +591,11 @@ def _build_quarter(args):
             "prompt_version": cfg["prompt"]["version"], "tope_h": cfg["guardrails"]["max_hold_min"] // 60,
             "entrena": [qname(*first), qname(*previous_quarter(y, q))], "mide": qname(y, q), "embargo_h": EMBARGO_MS // qt.HOUR_MS,
             "cupo_trimestre": QUARTER_CAP, "pares": {k: v for k, v in pairs.items() if (int(k[:4]), int(k[5])) <= (y, q)}}
-    meta["train"] = build_split(cfg, train_flat, train_pos, args.flat_n, args.close_n, SEED, os.path.join(args.out, "train.jsonl"),
+    meta["train"] = build_split(cfg, train_flat, train_pos, args.flat_n, args.close_n, SEED, os.path.join(args.out, TRAIN_JSONL),
                                 os.path.join(args.out, "train-info.jsonl"))
-    meta["valid"] = build_split(cfg, valid_flat, valid_pos, args.valid_flat_n, args.close_n, SEED + 7, os.path.join(args.out, "valid.jsonl"),
-                                os.path.join(args.out, "valid-info.jsonl"), cap=1.0, position_cap=1.0)
-    meta["sha256"] = {n: hashlib.sha256(open(os.path.join(args.out, n), "rb").read()).hexdigest()[:16]
-                      for n in ("train.jsonl", "valid.jsonl", "valid-info.jsonl")}
+    meta["valid"] = build_split(cfg, valid_flat, valid_pos, args.valid_flat_n, args.close_n, SEED + 7, os.path.join(args.out, VALID_JSONL),
+                                os.path.join(args.out, VALID_INFO_JSONL), cap=1.0, position_cap=1.0)
+    meta["sha256"] = _file_hashes(args.out, (TRAIN_JSONL, VALID_JSONL, VALID_INFO_JSONL))
     _dump(os.path.join(args.out, "meta.json"), meta)
     print(json.dumps({k: meta[k] for k in ("trimestre", "entrena", "mide", "train", "valid")}, ensure_ascii=False, indent=1))
 
@@ -552,27 +613,34 @@ def night_plan(last_done=None):
 # --------------------------------------------------------------------------- CLI
 
 
-def _build(args):
-    cfg = qt.load_config(args.config or qt.CONFIG_PATH_LIVE)
-    pairs = json.load(open(os.path.join(args.pairs_dir, "pares.json"), encoding="utf-8"))
-    history = qt.History(args.cache_dir, qt.load_holdout_ms(), offline=True)
-    os.makedirs(args.out, exist_ok=True)
+def _collect_all_quarters(history, cfg, pairs, wait_rate):
     train_flat, train_pos, valid_flat, valid_pos = [], [], [], []
+    cut = qt.date_ms(VALID_FROM)
     for y, q in QUARTERS:
         name = qname(y, q)
         lo, hi = qstart_ms(y, q), min(qend_ms(y, q), qt.date_ms(VALID_TO))
         if lo < qt.date_ms(TRAIN_FROM):
             continue
-        part = collect_formula(history, quarter_cfg(cfg, pairs[name]), PRODUCT, lo, hi, entry_rate=1.0, wait_rate=args.wait_rate)
-        cut = qt.date_ms(VALID_FROM)
-        for target, rows in (("flat", part["flat"]), ("position", part["position"])):
-            for row in rows:
-                if row["t_ms"] >= cut:
-                    (valid_flat if target == "flat" else valid_pos).append(row)
-                elif row["t_ms"] + EMBARGO_MS <= cut:
-                    (train_flat if target == "flat" else train_pos).append(row)
+        part = collect_formula(history, quarter_cfg(cfg, pairs[name]), PRODUCT, lo, hi, entry_rate=1.0, wait_rate=wait_rate)
+        _partition_by_cutoff(part, cut, train_flat, train_pos, valid_flat, valid_pos)
         print("{}: {} miradas sin posición ({} entradas), {} con posición".format(
             name, len(part["flat"]), sum(1 for r in part["flat"] if r["formula"] != "ESPERAR"), len(part["position"])), flush=True)
+    return train_flat, train_pos, valid_flat, valid_pos
+
+
+def _write_gzip_rows(out_dir, name, rows):
+    with gzip.open(os.path.join(out_dir, "filas-{}.jsonl.gz".format(name)), "wt", encoding="utf-8") as handle:
+        for row in rows:
+            handle.write(json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n")
+
+
+def _build(args):
+    cfg = qt.load_config(args.config or qt.CONFIG_PATH_LIVE)
+    with open(os.path.join(args.pairs_dir, "pares.json"), encoding="utf-8") as handle:
+        pairs = json.load(handle)
+    history = qt.History(args.cache_dir, qt.load_holdout_ms(), offline=True)
+    os.makedirs(args.out, exist_ok=True)
+    train_flat, train_pos, valid_flat, valid_pos = _collect_all_quarters(history, cfg, pairs, args.wait_rate)
     live_pair = {"maestro": os.path.join(qt.ROOT, "config", cfg["corta"]["maestro"]), "maestro_hash": cfg["corta"]["maestro_hash"],
                  "portero": os.path.join(qt.ROOT, "config", cfg["corta"]["portero"]), "portero_hash": cfg["corta"]["portero_hash"]}
     practice = collect_formula(history, cfg, PRODUCT, qt.date_ms(PRACTICE_FROM), qt.date_ms(PRACTICE_TO), entry_rate=1.0, wait_rate=args.wait_rate)
@@ -581,9 +649,7 @@ def _build(args):
     if bad:
         raise SystemExit("la etiqueta NO se deduce de la ficha en {} filas (primeras: {}): hay un error".format(len(bad), bad[:5]))
     for name, rows in (("train", train_flat + train_pos), ("valid", valid_flat + valid_pos)):
-        with gzip.open(os.path.join(args.out, "filas-{}.jsonl.gz".format(name)), "wt", encoding="utf-8") as handle:
-            for row in rows:
-                handle.write(json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n")
+        _write_gzip_rows(args.out, name, rows)
     meta = {"schema": SCHEMA, "producto": PRODUCT, "semilla": SEED, "prompt_version": cfg["prompt"]["version"],
             "config_hash": qt.config_hash(cfg), "tope_h": cfg["guardrails"]["max_hold_min"] // 60,
             "cortes": {"train": [TRAIN_FROM, VALID_FROM], "valid": [VALID_FROM, VALID_TO], "practica": [PRACTICE_FROM, PRACTICE_TO],
@@ -592,24 +658,23 @@ def _build(args):
             "par_practica": {x: live_pair[x] for x in ("maestro_hash", "portero_hash")},
             "balance": {"sin_posicion_por_clase_train": args.flat_n, "sin_posicion_por_clase_valid": args.valid_flat_n,
                         "con_posicion_cerrar_max_train": args.close_n}}
-    meta["train"] = build_split(cfg, train_flat, train_pos, args.flat_n, args.close_n, SEED, os.path.join(args.out, "train.jsonl"),
+    meta["train"] = build_split(cfg, train_flat, train_pos, args.flat_n, args.close_n, SEED, os.path.join(args.out, TRAIN_JSONL),
                                 os.path.join(args.out, "train-info.jsonl"))
-    meta["valid"] = build_split(cfg, valid_flat, valid_pos, args.valid_flat_n, args.close_n, SEED + 7, os.path.join(args.out, "valid.jsonl"),
-                                os.path.join(args.out, "valid-info.jsonl"), cap=1.0, position_cap=1.0)
+    meta["valid"] = build_split(cfg, valid_flat, valid_pos, args.valid_flat_n, args.close_n, SEED + 7, os.path.join(args.out, VALID_JSONL),
+                                os.path.join(args.out, VALID_INFO_JSONL), cap=1.0, position_cap=1.0)
     entries = [r for r in practice["flat"] if r["formula"] != "ESPERAR"]
     waits = [r for r in practice["flat"] if r["formula"] == "ESPERAR"]
-    random.Random(SEED + 11).shuffle(waits)
+    random.Random(SEED + 11).shuffle(waits)  # NOSONAR
     closes = [r for r in practice["position"] if r["formula"] == "CERRAR"]        # every close, and four times as many holds
     holds = [r for r in practice["position"] if r["formula"] == "MANTENER"]
-    random.Random(SEED + 13).shuffle(holds)
+    random.Random(SEED + 13).shuffle(holds)  # NOSONAR
     practice["position"] = sorted(closes + holds[:4 * len(closes)], key=lambda r: r["t_ms"])
     ap.write_jsonl(os.path.join(args.out, "practica.jsonl"), sorted(entries + waits[:2 * len(entries)], key=lambda r: r["t_ms"]) + practice["position"])
     meta["practica"] = {"sin_posicion": dict(collections.Counter(r["formula"] for r in entries + waits[:2 * len(entries)])),
                         "con_posicion": dict(collections.Counter(r["formula"] for r in practice["position"]))}
     # the net of the formula alone in each split (to compare an opinion against)
     meta["formula_sola_practica"] = ap.score_opinions(practice["flat"], practice["position"], lambda r: r["formula"])["formula_entradas"]
-    meta["sha256"] = {n: hashlib.sha256(open(os.path.join(args.out, n), "rb").read()).hexdigest()[:16]
-                      for n in ("train.jsonl", "valid.jsonl", "valid-info.jsonl", "practica.jsonl")}
+    meta["sha256"] = _file_hashes(args.out, (TRAIN_JSONL, VALID_JSONL, VALID_INFO_JSONL, "practica.jsonl"))
     _dump(os.path.join(args.out, "meta.json"), meta)
     print(json.dumps(meta, ensure_ascii=False, indent=1))
 

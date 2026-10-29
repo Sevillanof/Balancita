@@ -131,4 +131,30 @@ describe('ResultsVisual one operation', () => {
     expect(picked).toHaveLength(1)
     expect(screen.queryByTestId('trade-focus')).toBeNull()
   })
+
+  it('shows noticias ✓ in the trade focus when news enabled an entry rejected by the keeper', () => {
+    const t = {
+      ...trade(120, 2),
+      product: 'PF_ETHUSD',
+      side: 1 as const,
+      maestro: 2,
+      portero: false,
+      noticias: true,
+      exit: 'vuelta',
+    }
+    const points: Array<[number, number]> = [0, 6, 12, 18, 24, 30, 36, 42].map(
+      (h) => [Date.UTC(2025, 10, 1) + h * 3600000, 2000 + h * 3],
+    )
+    render(
+      <ResultsVisual
+        notionalUsd={100}
+        series={[{ id: 'a', label: 'F', trades: [t] }]}
+        market={[{ id: 'PF_ETHUSD', label: 'M', points }]}
+      />,
+    )
+    fireEvent.click(screen.getAllByRole('button')[0]!)
+    expect(screen.getByTestId('trade-focus')).toHaveTextContent(
+      'LARGO ▲▲ ✗ · noticias ✓',
+    )
+  })
 })

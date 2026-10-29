@@ -907,10 +907,10 @@ class OpportunityWindowTests(unittest.TestCase):
         store = live.LiveStore(path)                         # opens for writing: columns appended, nothing lost
         self.addCleanup(store.close)
         columns = {r[1] for r in store.db.execute("PRAGMA table_info(decisions)")}
-        self.assertTrue({"lean", "lean_m", "lean_num", "score", "best_score", "look_n", "mirror_ok"} <= columns)
+        self.assertLessEqual({"lean", "lean_m", "lean_num", "score", "best_score", "look_n", "mirror_ok"}, columns)
         self.assertIn("window_json", {r[1] for r in store.db.execute("PRAGMA table_info(trader_state)")})
         self.assertEqual(store.db.execute("SELECT action, lean FROM decisions").fetchone()[:], ("ESPERAR", None))
-        self.assertEqual(store.load_state("PF_XBTUSD")["window_json"], None)
+        self.assertIsNone(store.load_state("PF_XBTUSD")["window_json"])
         live.LiveStore(path).close()                          # a second open is harmless
         # the section lives outside config_hash; the pinned hash moved on purpose with version 6 (question without example, F5 out)
         # and again with version 7 (the LoRA adapter, ``lora``, is part of the identity: the version 6 base archives itself)
@@ -926,8 +926,9 @@ class LockTests(unittest.TestCase):
         tmp = tempfile.mkdtemp()
         db = os.path.join(tmp, "live.sqlite")
         with live.ProcessLock(db):
+            second_lock = live.ProcessLock(db)
             with self.assertRaises(live.LockError) as caught:
-                live.ProcessLock(db).acquire()
+                second_lock.acquire()
             message = str(caught.exception)
             self.assertIn("ya está escribiendo", message)
             self.assertIn("QWEN_LIVE_DB", message)
@@ -1041,7 +1042,7 @@ class LearningDataTests(unittest.TestCase):
                          "p_action", "entry_threshold", "guardrail", "reason", "reason_probabilities", "position",
                          "net_bp_now", "exit_labels", "outcome", "trade", "prompt_version", "prompt_hash", "model",
                          "config_hash", "latency_ms"}
-        self.assertTrue(practice_keys <= set(lines[0]))
+        self.assertLessEqual(practice_keys, set(lines[0]))
         self.assertTrue(all(x["schema"] == qt.DATASET_SCHEMA and x["source"] == "live" for x in lines))
         self.assertTrue(all(x["state_text"] and x["probabilities"] and x["orders"] for x in lines))
         entry = next(x for x in lines if x["kind"] == "flat" and x["action"] == "LARGO")

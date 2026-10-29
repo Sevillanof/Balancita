@@ -2,6 +2,7 @@ import { useMemo } from 'react'
 import { signedAmount } from '../domain/strategy-format.ts'
 import { tradePotential } from '../domain/trade-potential.ts'
 import type { RunCandle, RunTrade } from '../infrastructure/run-visual-api.ts'
+import { productName } from '../../trading-view/domain/product-label.ts'
 
 const W = 900
 const H = 300
@@ -303,8 +304,8 @@ export default function MarketTradesChart({
       <div className="flex flex-wrap items-center justify-between gap-2 text-label tracking-section text-ink-2 uppercase">
         <span>
           {zoom && pickedIndex >= 0
-            ? `Operación ${pickedIndex + 1} · mercado real de ${product.replace(/^PF_|USD$/g, '')}`
-            : `${product.replace(/^PF_|USD$/g, '')} · mercado real y operaciones`}
+            ? `Operación ${pickedIndex + 1} · mercado real de ${productName(product)}`
+            : `${productName(product)} · mercado real y operaciones`}
         </span>
         <span className="flex items-center gap-3 tracking-normal normal-case">
           <span className="text-long">━ Ganó</span>

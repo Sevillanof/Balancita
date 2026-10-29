@@ -10,6 +10,7 @@ import {
   EXIGENCIA_PAPER_LEVELS,
 } from './exigencia-levels.ts'
 import ApprovedTerminalChart from '../../trading-view/presentation/ApprovedTerminalChart.tsx'
+import { productName } from '../../trading-view/domain/product-label.ts'
 import { amount } from '../../../shared/finance/format.ts'
 import { signedAmount } from '../domain/strategy-format.ts'
 import {
@@ -102,7 +103,7 @@ const STAGE_LABEL = [
   'En examen',
   'Pasó el examen',
 ]
-const DEFAULT_PRODUCT = 'PF_XBTUSD'
+const DEFAULT_PRODUCT = 'PF_ETHUSD'
 const TRADES_PAGE = 500
 
 /** «C27 Ruptura Donchian» → «C27 · Ruptura Donchian». */
@@ -1506,7 +1507,7 @@ export default function StrategyRunView({
             <div className={RUN.chartHead}>
               <h4>
                 {data
-                  ? `${data.product} · Velas de la prueba`
+                  ? `${productName(data.product)} · Velas de la prueba`
                   : 'Velas de la prueba'}
               </h4>
               <span className={RUN.chartTags}>LONG / SHORT / Salidas</span>
@@ -1816,6 +1817,7 @@ const MAIN_TRADES = (items: QuickTrade[] | undefined): VisualTrade[] =>
     side: trade.lado,
     maestro: trade.maestro,
     portero: trade.portero,
+    noticias: trade.noticias,
     exit: trade.motivo === 'tiempo' ? 'tiempo' : 'vuelta',
     label: `${trade.producto.replace(/^PF_|USD$/g, '')} ${trade.lado > 0 ? 'largo' : 'corto'}`,
     entryMs: trade.entrada_ms,
@@ -1902,7 +1904,7 @@ function FormulaResult({ formula }: { formula: QuickFormula }) {
             : 'Solo la fórmula, sin Qwen'}
         </strong>{' '}
         ·{' '}
-        {formula.productos.map((p) => p.replace(/^PF_|USD$/g, '')).join(' y ')}{' '}
+        {formula.productos.map((p) => productName(p)).join(' y ')}{' '}
         · del {DAY_FORMAT.format(periodOf(formula).fromMs)} al{' '}
         {DAY_FORMAT.format(periodOf(formula).toMs)} · {amount(formula.fotos, 0)}{' '}
         miradas

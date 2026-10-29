@@ -1,5 +1,5 @@
 import {
-  productBase,
+  productName,
   productPair,
 } from '../features/trading-view/domain/product-label.ts'
 import { money } from './terminal-labels.ts'
@@ -29,14 +29,14 @@ export default function MarketStrip({
   return (
     <section
       className="mt-0 mr-0 mb-1.5 ml-0 flex flex-wrap items-baseline gap-x-4 gap-y-0.5"
-      aria-label={`Mercado ${productPair(product)}`}
+      aria-label={`Mercado ${productPair(product ?? 'PF_ETHUSD')}`}
     >
       <h1 className="m-0 text-brand-compact font-semibold">
-        {product && productBase(product) !== 'BTC'
-          ? productBase(product)
-          : 'Bitcoin'}{' '}
+        {productName(product)}{' '}
         <span className="font-medium text-ink-2">/ Dólar</span>
-        <small className="ml-2.5 font-brand-mono text-label leading-normal font-medium tracking-market text-ink-2">{`${product ?? 'PF_XBTUSD'} · perpetuo`}</small>
+        <small className="ml-2.5 font-brand-mono text-label leading-normal font-medium tracking-market text-ink-2">
+          perpetuo
+        </small>
       </h1>
       <strong className="font-brand-mono text-brand-compact font-semibold">
         {money(displayedPrice)}

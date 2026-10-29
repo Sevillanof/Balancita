@@ -87,41 +87,52 @@ def _positive(text, name):
     return value
 
 
+def _non_negative(raw, name):
+    try:
+        number = D(raw)
+    except Exception:
+        number = None
+    if number is None or not number.is_finite() or number < 0:
+        raise qt.TraderError("{}: tiene que ser un número, 0 o más; llegó {!r}".format(name, raw))
+    return float(number)
+
+
+def _apply_window_overrides(out, env):
+    window_keys = (
+        ("QWEN_LIVE_FORCE_SIDE_AFTER_H", "force_side_after_h"),
+        ("QWEN_LIVE_FORCE_WINDOW_H", "force_window_h"),
+        ("QWEN_LIVE_FORCE_MIN_LOOKS", "force_min_looks"),
+        ("QWEN_LIVE_FORCE_NEUTRAL_LEAN", "force_neutral_lean"),
+        ("QWEN_LIVE_FORCE_MIN_SCORE", "force_min_score"),
+        ("QWEN_LIVE_FORCE_RECORD_TOL", "force_record_tol"),
+    )
+    for name, key in window_keys:
+        raw = (env.get(name) or "").strip()
+        if raw:
+            out.setdefault("live", {})[key] = _non_negative(raw, name)
+
+
+def _validate_products(product_list):
+    if not product_list or len(set(product_list)) != len(product_list):
+        raise qt.TraderError("QWEN_LIVE_PRODUCTS: hace falta al menos un producto y sin repetir")
+    for product in product_list:
+        if not is_product_id(product):
+            raise qt.TraderError("producto inválido: {!r} (ejemplo: PF_XBTUSD)".format(product))
+
+
 def apply_overrides(cfg, env=None):
-    """The config with what the owner may change by environment: ``QWEN_LIVE_NOTIONAL_USD`` (size per trade, default the
-    config's 100), ``QWEN_LIVE_LEVERAGE`` (default 1) and ``QWEN_LIVE_PRODUCTS`` (comma separated, default BTC and ETH) and the opportunity window of the entry search: ``QWEN_LIVE_FORCE_WINDOW_H`` (length, 0 = window off), ``QWEN_LIVE_FORCE_NEUTRAL_LEAN`` (a real or mirrored lean under it counts as neutral, 0,05) and ``QWEN_LIVE_FORCE_MIN_SCORE`` (minimum score of a candidate, 0,15) and ``QWEN_LIVE_FORCE_RECORD_TOL`` (how far under the best candidate score still counts as a record, 0,03),
-    ``QWEN_LIVE_FORCE_MIN_LOOKS`` and ``QWEN_LIVE_FORCE_SIDE_AFTER_H`` (optional start delay in hours, default 0). The
-    only check is that sizes are positive numbers and products look like Kraken ids (``futures_costs`` prices any of them): there are no caps on purpose. A changed
-    size, leverage or product list changes the config identity, so a database made with other values is refused; the window
-    settings do not (they live in the ``live`` section, outside ``config_hash``)."""
+    """The config with what the owner may change by environment."""
     env = os.environ if env is None else env
     out = copy_config(cfg)
     notional = (env.get("QWEN_LIVE_NOTIONAL_USD") or "").strip()
     leverage = (env.get("QWEN_LIVE_LEVERAGE") or "").strip()
     products = (env.get("QWEN_LIVE_PRODUCTS") or "").strip()
-    for name, key in (("QWEN_LIVE_FORCE_SIDE_AFTER_H", "force_side_after_h"), ("QWEN_LIVE_FORCE_WINDOW_H", "force_window_h"),
-                      ("QWEN_LIVE_FORCE_MIN_LOOKS", "force_min_looks"),
-                      ("QWEN_LIVE_FORCE_NEUTRAL_LEAN", "force_neutral_lean"), ("QWEN_LIVE_FORCE_MIN_SCORE", "force_min_score"),
-                      ("QWEN_LIVE_FORCE_RECORD_TOL", "force_record_tol")):
-        raw = (env.get(name) or "").strip()
-        if not raw:
-            continue
-        try:
-            number = D(raw)
-        except Exception:
-            number = None
-        if number is None or not number.is_finite() or number < 0:
-            raise qt.TraderError("{}: tiene que ser un número, 0 o más; llegó {!r}".format(name, raw))
-        out.setdefault("live", {})[key] = float(number)
+    _apply_window_overrides(out, env)
     out["notional_usd"] = format(_positive(notional or out["notional_usd"], "QWEN_LIVE_NOTIONAL_USD").normalize(), "f")
     out["leverage"] = format(_positive(leverage or out.get("leverage", "1"), "QWEN_LIVE_LEVERAGE").normalize(), "f")
     if products:
         out["products"] = [p.strip() for p in products.split(",") if p.strip()]
-    if not out["products"] or len(set(out["products"])) != len(out["products"]):
-        raise qt.TraderError("QWEN_LIVE_PRODUCTS: hace falta al menos un producto y sin repetir")
-    for product in out["products"]:
-        if not is_product_id(product):
-            raise qt.TraderError("producto inválido: {!r} (ejemplo: PF_XBTUSD)".format(product))
+    _validate_products(out["products"])
     return out
 
 
@@ -471,13 +482,16 @@ class WakeGate:
 
 def closed_fields(trade, notional, leverage, margin, now):
     """The columns of a closed trade (``trade``: the dict ``Trader`` returns in a ``trade`` event)."""
-    return dict(
-        status="closed", side=trade["side"], entry_ms=trade["entry_ms"], exit_ms=trade["exit_ms"], entry_px=trade["entry_fill"],
-        exit_px=repr(trade["exit_px"]), qty=trade["qty"], notional_usd=str(notional), leverage=str(leverage),
-        margin_usd=str(margin), gross_usd=trade["gross_usd"], fees_usd=trade["fees_usd"], funding_usd=trade["funding_usd"],
-        net_usd=trade["net_usd"], net_bp=trade["net_bp"], funding_status=trade["funding_status"], closed_by=trade["closed_by"],
-        exit_reason=trade["exit_reason"], entry_reason=trade["entry_reason"], entry_p=trade["entry_p"],
-        hold_min=trade["hold_min"], mfe_bp=trade["mfe_bp"], mae_bp=trade["mae_bp"], closed_at_ms=now)
+    return {
+        "status": "closed", "side": trade["side"], "entry_ms": trade["entry_ms"], "exit_ms": trade["exit_ms"],
+        "entry_px": trade["entry_fill"], "exit_px": repr(trade["exit_px"]), "qty": trade["qty"],
+        "notional_usd": str(notional), "leverage": str(leverage), "margin_usd": str(margin),
+        "gross_usd": trade["gross_usd"], "fees_usd": trade["fees_usd"], "funding_usd": trade["funding_usd"],
+        "net_usd": trade["net_usd"], "net_bp": trade["net_bp"], "funding_status": trade["funding_status"],
+        "closed_by": trade["closed_by"], "exit_reason": trade["exit_reason"], "entry_reason": trade["entry_reason"],
+        "entry_p": trade["entry_p"], "hold_min": trade["hold_min"], "mfe_bp": trade["mfe_bp"],
+        "mae_bp": trade["mae_bp"], "closed_at_ms": now,
+    }
 
 
 def _hhmm(ms):
@@ -587,10 +601,11 @@ class LiveOperator:
                                     else now - (b["bucket_start"] + BAR_MS) > self.max_late_ms)]
         for bar in warm:
             trader.feed(bar, trade=False)
-        self.log("Qwen en vivo: {} calentado con {} velas de 5 min{}.".format(
-            product, len(warm), "" if trader.position is None else
-            " (posición {} recuperada, abierta desde {})".format(
-                "LARGO" if trader.position.side == "LONG" else "CORTO", _hhmm(trader.position.entry_ms))))
+        pos_note = ""
+        if trader.position is not None:
+            side_label = "LARGO" if trader.position.side == "LONG" else "CORTO"
+            pos_note = " (posición {} recuperada, abierta desde {})".format(side_label, _hhmm(trader.position.entry_ms))
+        self.log("Qwen en vivo: {} calentado con {} velas de 5 min{}.".format(product, len(warm), pos_note))
         for bar in bars[len(warm):]:
             self._process(product, bar)
 
@@ -664,7 +679,12 @@ class LiveOperator:
     def _say_positioning(self, product, feed):
         """One line in the log when the state of the positioning data of a product changes (and at the start). A missing FILE is
         said once for all the products, not once per product."""
-        status = "ok" if feed.available else ("sin_archivo" if not os.path.isfile(self.positioning_path) else "sin_datos")
+        if feed.available:
+            status = "ok"
+        elif not os.path.isfile(self.positioning_path):
+            status = "sin_archivo"
+        else:
+            status = "sin_datos"
         if self._positioning_seen.get(product) == status:
             return
         said = any(seen == status for other, seen in self._positioning_seen.items() if other != product)
@@ -705,6 +725,15 @@ class LiveOperator:
             return
         self._recovered("noticias", None)
 
+    def _update_context_closes(self, trader, other, bars, to_ms):
+        closes = trader.context.setdefault(other, {})
+        for bar in bars:
+            end = int(bar["bucket_start"]) + BAR_MS
+            if end <= to_ms:
+                closes[end] = float(bar["close"])
+        for key in [k for k in closes if k < to_ms - CONTEXT_KEEP_MS]:
+            del closes[key]
+
     def _load_context(self, product, trader, from_ms, to_ms):
         """Closes of the other assets, keyed by the END of each 5m candle (``trader.context``, as the exam builds it): row F7 of
         the sheet. A product is never its own context. An asset whose candles cannot be read leaves F7 «n/d» for that asset
@@ -723,13 +752,7 @@ class LiveOperator:
             if (product, other) in self._context_warned:
                 self._context_warned.discard((product, other))
                 self.log("Qwen en vivo: las velas de {} (contexto de {}) volvieron.".format(other, product))
-            closes = trader.context.setdefault(other, {})
-            for bar in bars:
-                end = int(bar["bucket_start"]) + BAR_MS
-                if end <= to_ms:
-                    closes[end] = float(bar["close"])
-            for key in [k for k in closes if k < to_ms - CONTEXT_KEEP_MS]:
-                del closes[key]
+            self._update_context_closes(trader, other, bars, to_ms)
 
     # ---- resilience: model state, unexpected failures, heartbeat
 
@@ -820,7 +843,12 @@ class LiveOperator:
                 long = row["side"] == "LONG"
                 paid, covered = line.accrue(row["entry_ms"], row["exit_ms"], D(row["entry_px"]) * D(row["qty"]), long)
                 held = max(0, row["exit_ms"] - row["entry_ms"])
-                status = "complete" if held and covered >= held else ("partial" if covered > 0 else "unknown")
+                if held and covered >= held:
+                    status = "complete"
+                elif covered > 0:
+                    status = "partial"
+                else:
+                    status = "unknown"
                 if status == row["funding_status"] and str(paid) == row["funding_usd"]:
                     continue
                 net = D(row["gross_usd"]) - D(row["fees_usd"]) - paid
@@ -868,27 +896,45 @@ class LiveOperator:
             self.store.save_state(product, trader, t_ms - BAR_MS, now)
 
     @staticmethod
+    def _formula_decision_line(head, event):
+        opinion = event.get("model_action")
+        if opinion is None:
+            opinion_text = "nada (" + str(event.get("opinion_error")) + ")"
+            agree_text = ""
+        else:
+            opinion_text = "{} (p {:.2f})".format(opinion, event.get("p_action") or 0.0)
+            agree_text = " y coincide" if event.get("opinion_agrees") else " y no coincide"
+        return "{}: {} (fórmulas: {}) — Qwen opina {}{}".format(
+            head, event["action"], event["formula"]["motivo"], opinion_text, agree_text
+        )
+
+    @staticmethod
+    def _legacy_tail(event):
+        if event.get("forced"):
+            return " — entró en la mejor ocasión de la ventana (puntaje {:.3f}, chequeo {})".format(
+                event["score"], event["look_n"]
+            )
+        if event.get("override") == "ventana_mirando":
+            mirror_text = "coincide" if event["mirror_ok"] else "no coincide"
+            return " — mirando la mejor ocasión (chequeo {}: puntaje {:.3f}, mejor {:.3f}, espejo {})".format(
+                event["look_n"], event["score"], event["best_score"], mirror_text
+            )
+        if event.get("override"):
+            return " — sin operar: " + str(event["override"])
+        return ""
+
+    @staticmethod
     def _decision_line(product, event):
         """One log line per decision. Version 9 (the formulas decide): the formula's action, why, and what Qwen thinks."""
         head = "{} {}".format(_hhmm(event["t_ms"]), product)
         if event.get("formula_action"):
-            opinion = event.get("model_action")
-            return "{}: {} (fórmulas: {}) — Qwen opina {}{}".format(
-                head, event["action"], event["formula"]["motivo"],
-                "nada (" + str(event.get("opinion_error")) + ")" if opinion is None else
-                "{} (p {:.2f})".format(opinion, event.get("p_action") or 0.0),
-                "" if opinion is None else " y coincide" if event.get("opinion_agrees") else " y no coincide")
+            return LiveOperator._formula_decision_line(head, event)
+        model_act = event.get("model_action")
+        model_note = "" if (not model_act or event["action"] == model_act) else " [el modelo dijo {}]".format(model_act)
         return "{}: {}{} (p {:.2f}, confianza {:.2f}){}".format(
-            head, event["action"],
-            "" if event["action"] == event.get("model_action") or not event.get("model_action")
-            else " [el modelo dijo {}]".format(event["model_action"]),
-            event.get("p_action") or 0.0, event["answer"]["confidence"],
-            " — entró en la mejor ocasión de la ventana (puntaje {:.3f}, chequeo {})".format(
-                event["score"], event["look_n"]) if event.get("forced")
-            else " — mirando la mejor ocasión (chequeo {}: puntaje {:.3f}, mejor {:.3f}, espejo {})".format(
-                event["look_n"], event["score"], event["best_score"], "coincide" if event["mirror_ok"] else "no coincide")
-            if event.get("override") == "ventana_mirando"
-            else "" if not event.get("override") else " — sin operar: " + str(event["override"]))
+            head, event["action"], model_note, event.get("p_action") or 0.0,
+            event["answer"]["confidence"], LiveOperator._legacy_tail(event)
+        )
 
     def _write_open(self, product, trader, position, t_ms, now):
         mark = qt.settle(product, position, trader.c[-1], "strategy_exit", t_ms, trader.funding, self.notional)
@@ -911,33 +957,38 @@ class LiveOperator:
 CHANGE_CLOSE = "cambio_de_version"                # exit_reason of a position closed because the configuration changed
 
 
+def _restore_open_position(store, product, row):
+    state = store.load_state(product)
+    if state and state.get("position_json"):
+        return position_from_json(state["position_json"])
+    return qt.Position(
+        side=row["side"], entry_ms=row["entry_ms"], entry_ref=float(row["entry_px"]), entry_px=D(row["entry_px"]),
+        qty=D(row["qty"]), stop_px=row["stop_px"], stop_pct=None, max_hold_ms=row["max_hold_ms"],
+        entry_p=row["entry_p"], entry_reason=row["entry_reason"], trade_no=row["trade_no"],
+        mfe_bp=row["mfe_bp"] or 0.0, mae_bp=row["mae_bp"] or 0.0)
+
+
+def _safe_funding_rows(funding_for, product):
+    if not funding_for:
+        return []
+    try:
+        return funding_for(product)
+    except Exception:  # noqa: BLE001
+        return []
+
+
 def _close_open_trades(db_path, cfg, funding_for, now_ms, log):
-    """Closes, in the database that is about to be archived, every position still open: ``closed_by`` ``fin_de_bloque`` (like the
-    end of a practice block: not a decision of Qwen), ``exit_reason`` ``cambio_de_version``. It closes at the last price the old
-    process saw (``mark_px`` at ``mark_ms``), with the same accounting as always (``settle``: exit costs and the funding
-    published up to that moment, when the public funding can be read; otherwise the trade says so in ``funding_status``).
-    Nothing needs the model. Returns ``[(product, trade_no, net_usd)]``."""
+    """Closes, in the database that is about to be archived, every position still open."""
     store = LiveStore(db_path)
     done = []
     try:
         open_rows = [dict(r) for r in store.db.execute("SELECT * FROM trades WHERE status='open' ORDER BY product, trade_no")]
         for row in open_rows:
             product = row["product"]
-            state = store.load_state(product)
-            if state and state.get("position_json"):
-                position = position_from_json(state["position_json"])
-            else:                                     # the state row is gone: rebuild the position from the trade row
-                position = qt.Position(
-                    side=row["side"], entry_ms=row["entry_ms"], entry_ref=float(row["entry_px"]), entry_px=D(row["entry_px"]),
-                    qty=D(row["qty"]), stop_px=row["stop_px"], stop_pct=None, max_hold_ms=row["max_hold_ms"],
-                    entry_p=row["entry_p"], entry_reason=row["entry_reason"], trade_no=row["trade_no"],
-                    mfe_bp=row["mfe_bp"] or 0.0, mae_bp=row["mae_bp"] or 0.0)
-            mark_px = row["mark_px"] if row["mark_px"] else position.entry_ref
-            mark_ms = row["mark_ms"] if row["mark_ms"] else now_ms
-            try:
-                rows = funding_for(product) if funding_for else []
-            except Exception:                         # noqa: BLE001 - no network: the funding is left unknown, the close is not
-                rows = []
+            position = _restore_open_position(store, product, row)
+            mark_px = row["mark_px"] or position.entry_ref
+            mark_ms = row["mark_ms"] or now_ms
+            rows = _safe_funding_rows(funding_for, product)
             notional = D(row["notional_usd"] or cfg["notional_usd"])
             trader = qt.Trader(cfg, product, None, qt.FundingLine(rows), key=product, entry_threshold=cfg["entry_threshold"])
             trader.notional, trader.position = notional, position
@@ -950,8 +1001,9 @@ def _close_open_trades(db_path, cfg, funding_for, now_ms, log):
                 store.db.execute("UPDATE trader_state SET position_json=NULL, window_json=NULL, updated_ms=? WHERE product=?",
                                  (now_ms, product))
             done.append((product, row["trade_no"], trade["net_usd"]))
+            side_label = "LARGO" if row["side"] == "LONG" else "CORTO"
             log("Qwen en vivo: la posición {} de {} (n.º {}) estaba abierta en la base vieja: se cerró como fin_de_bloque / {} a "
-                "{} — neto {} USD.".format("LARGO" if row["side"] == "LONG" else "CORTO", product, row["trade_no"], CHANGE_CLOSE,
+                "{} — neto {} USD.".format(side_label, product, row["trade_no"], CHANGE_CLOSE,
                                            _hhmm(int(mark_ms)), _usd(trade["net_usd"])))
         return done
     finally:
@@ -998,11 +1050,42 @@ def archive_other_config(db_path, cfg, *, funding_for=None, now_ms=None, log=pri
 # --------------------------------------------------------------------------- learning data
 
 
-def export_dataset(db_path, out_path, cfg=None):
-    """One JSON line per live decision in the format of ``futures_qwen_trader.export_dataset`` (same schema), with
-    ``source = live``: the state text exactly as prompted, the answer, the guardrail info and, when the trade is known,
-    its result. The 60-minute labels are filled offline from the candles (``outcome`` / ``exit_labels`` stay null here).
-    Read-only; returns the number of lines."""
+_EXPORT_TRADE_KEYS = (
+    "side", "entry_ms", "exit_ms", "net_bp", "funding_status", "closed_by", "hold_min", "mfe_bp",
+    "mae_bp", "net_usd", "fees_usd", "funding_usd"
+)
+
+
+def _export_decision_line(r, seq_num, trades):
+    product = r["product"]
+    snapshot = json.loads(r["position_json"] or "null")
+    trade_no = snapshot["trade_no"] if snapshot else r["trade_no"]
+    trade = trades.get((product, trade_no)) if trade_no else None
+    closed = trade if trade is not None and trade["status"] == "closed" else None
+    outcome = None
+    if closed is not None and r["kind"] == "flat" and r["action"] in ("LARGO", "CORTO"):
+        outcome = {"type": "entry", "net_bp": closed["net_bp"], "closed_by": closed["closed_by"],
+                   "hold_min": closed["hold_min"]}
+    return {
+        "schema": qt.DATASET_SCHEMA, "source": SOURCE, "fold": SOURCE, "block_id": "live:" + product,
+        "seq": seq_num, "product": product, "t_ms": r["t_ms"], "kind": r["kind"],
+        "state_text": r["state_text"], "state_hash": r["state_hash"],
+        "wake": json.loads(r["wake_json"] or "null"), "orders": json.loads(r["orders_json"] or "null"),
+        "probabilities": json.loads(r["probs_json"] or "null"), "confidence": r["confidence"],
+        "model_action": r["model_action"], "action": r["action"], "p_action": r["p_action"],
+        "entry_threshold": r["threshold"], "guardrail": {"override": r["override"], "forced": False},
+        "reason": r["reason"], "reason_probabilities": (json.loads(r["reason_json"] or "null") or {}).get(
+            "probabilities"),
+        "mirror_action": r["mirror_action"], "mirror_p": r["mirror_p"],
+        "position": snapshot, "net_bp_now": r["net_bp_now"], "exit_labels": None, "outcome": outcome,
+        "trade": None if closed is None else {k: closed[k] for k in _EXPORT_TRADE_KEYS},
+        "prompt_version": r["prompt_version"], "prompt_hash": r["prompt_hash"], "model": r["model"],
+        "config_hash": r["config_hash"], "latency_ms": r["latency_ms"],
+    }
+
+
+def export_dataset(db_path, out_path, *_unused):
+    """One JSON line per live decision in the format of ``futures_qwen_trader.export_dataset``."""
     store = LiveStore(db_path, readonly=True)
     try:
         trades = {(r["product"], r["trade_no"]): dict(r) for r in store.db.execute("SELECT * FROM trades")}
@@ -1013,31 +1096,7 @@ def export_dataset(db_path, out_path, cfg=None):
             for r in store.db.execute("SELECT * FROM decisions ORDER BY product, bucket_ms"):
                 product = r["product"]
                 seq[product] = seq.get(product, 0) + 1
-                snapshot = json.loads(r["position_json"] or "null")
-                trade_no = snapshot["trade_no"] if snapshot else r["trade_no"]
-                trade = trades.get((product, trade_no)) if trade_no else None
-                closed = trade if trade is not None and trade["status"] == "closed" else None
-                outcome = None
-                if closed is not None and r["kind"] == "flat" and r["action"] in ("LARGO", "CORTO"):
-                    outcome = {"type": "entry", "net_bp": closed["net_bp"], "closed_by": closed["closed_by"],
-                               "hold_min": closed["hold_min"]}
-                line = {
-                    "schema": qt.DATASET_SCHEMA, "source": SOURCE, "fold": SOURCE, "block_id": "live:" + product,
-                    "seq": seq[product], "product": product, "t_ms": r["t_ms"], "kind": r["kind"],
-                    "state_text": r["state_text"], "state_hash": r["state_hash"],
-                    "wake": json.loads(r["wake_json"] or "null"), "orders": json.loads(r["orders_json"] or "null"),
-                    "probabilities": json.loads(r["probs_json"] or "null"), "confidence": r["confidence"],
-                    "model_action": r["model_action"], "action": r["action"], "p_action": r["p_action"],
-                    "entry_threshold": r["threshold"], "guardrail": {"override": r["override"], "forced": False},
-                    "reason": r["reason"], "reason_probabilities": (json.loads(r["reason_json"] or "null") or {}).get(
-                        "probabilities"),
-                    "mirror_action": r["mirror_action"], "mirror_p": r["mirror_p"],
-                    "position": snapshot, "net_bp_now": r["net_bp_now"], "exit_labels": None, "outcome": outcome,
-                    "trade": None if closed is None else {k: closed[k] for k in (
-                        "side", "entry_ms", "exit_ms", "net_bp", "funding_status", "closed_by", "hold_min", "mfe_bp",
-                        "mae_bp", "net_usd", "fees_usd", "funding_usd")},
-                    "prompt_version": r["prompt_version"], "prompt_hash": r["prompt_hash"], "model": r["model"],
-                    "config_hash": r["config_hash"], "latency_ms": r["latency_ms"]}
+                line = _export_decision_line(r, seq[product], trades)
                 out.write(json.dumps(line, sort_keys=True, ensure_ascii=False) + "\n")
                 count += 1
         return count
@@ -1053,20 +1112,22 @@ def resolve_db(path=None, env=None):
     return path or (env.get(DB_ENV) or "").strip() or DEFAULT_DB
 
 
-def run(operator, *, stop=None, sleep=time.sleep, max_polls=None):
-    """Start, then poll every ``poll_s`` seconds until ``stop()`` is true (or ``max_polls``). Only a signal, the lock or a
-    wrong database identity end it: an unexpected failure of a cycle is recorded and the loop goes on, with a bounded
-    backoff (poll_s doubling, at most 60 s) while cycles keep failing."""
+def _wait_until_ready(operator, stop, sleep):
     failures = 0
     while not operator.ready and not (stop and stop()):
         try:
             operator.start()
         except qt.TraderError:
             raise
-        except Exception as error:                        # noqa: BLE001 - e.g. a busy database at start
+        except Exception as error:  # noqa: BLE001
             failures += 1
             operator.log("Qwen en vivo: no pudo arrancar ({}: {}); reintento.".format(type(error).__name__, error))
             sleep(min(60.0, operator.poll_s * 2 ** min(failures, 6)))
+
+
+def run(operator, *, stop=None, sleep=time.sleep, max_polls=None):
+    """Start, then poll every ``poll_s`` seconds until ``stop()`` is true (or ``max_polls``)."""
+    _wait_until_ready(operator, stop, sleep)
     operator.log("Qwen en vivo: en marcha. Pregunta al modelo cada 15 minutos (productos: {}).".format(
         ", ".join(operator.cfg["products"])))
     polls, failures = 0, 0
@@ -1074,7 +1135,7 @@ def run(operator, *, stop=None, sleep=time.sleep, max_polls=None):
         try:
             operator.poll()
             bad = operator.failed_cycle
-        except Exception as error:                        # noqa: BLE001 - nothing may end the loop
+        except Exception as error:  # noqa: BLE001
             operator._failure("ciclo", None, error)
             bad = True
         failures = failures + 1 if bad else 0

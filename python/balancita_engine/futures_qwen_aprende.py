@@ -72,84 +72,80 @@ def formula_flat(maestro, portero_si, noticias_si=False):
 
 # --------------------------------------------------------------------------- collect (the past, as the formulas would live it)
 
+FORMULA_SOLA = "Fórmula sola"
+
 
 def _month(t_ms):
     return time.strftime("%Y-%m", time.gmtime(t_ms / 1000))
 
 
-def collect(history, cfg, product, from_ms, to_ms, *, flat_rate=0.15, seed=20261027):
-    """Recorre ``[from_ms, to_ms)`` de ``product`` wake a wake y devuelve ``{"flat": [...], "position": [...]}``.
-
-    ``flat``: una fila por mirada muestreada (``flat_rate`` de las miradas) con ``state_text``, ``mirror_text``, la lectura de las
-    fórmulas, el neto de la operación en cada lado (``largo_bp`` / ``corto_bp``) y ``label``. ``position``: una fila por mirada con la
-    posición que las fórmulas habrían abierto, con ``state_text``, ``net_now_bp``, ``final_bp``, ``trade`` y ``label``. Una mirada
-    sin ficha completa no existe (en vivo se omite)."""
-    practice = cfg["practice"]
-    warmup = practice["warmup_days"] * DAY_MS
-    rng = random.Random("{}:{}".format(seed, product))
-    hold = cfg["guardrails"]["max_hold_min"]
-    ahead = to_ms + hold * MINUTE_MS if hold else history.holdout_ms       # without a time limit the exits can be far: read up to the holdout
-    bars = history.bars(product, from_ms - warmup, min(ahead, history.holdout_ms))
+def _setup_aprende_trader(history, cfg, product, from_ms, end_ms, warmup):
     funding = qt.FundingLine(history.funding(product))
     trader = qt.Trader(cfg, product, None, funding, key="aprende", entry_threshold=cfg["practice_entry_threshold"])
     for other in cfg.get("state_context") or ():
         if other != product:
             trader.context[other] = {int(b["bucket_start"]) + qt.BAR_MS: float(b["close"]) for b in history.bars(
-                other, from_ms - warmup, min(ahead, history.holdout_ms))}
-    teacher = corta.formulas(cfg)[0]
-    weak = teacher["umbrales"]["flojo"]
-    cost = float(round_trip_cost_bps(product))
-    hold_ms = hold * MINUTE_MS if hold else None
-    closes, readings, flat_found, trades, rows_pos = {}, {}, [], [], []
-    open_trade = None
-    for bar in bars:
-        trader.feed(bar, trade=False)
-        t_ms = int(bar["bucket_start"]) + qt.BAR_MS
-        closes[t_ms] = float(bar["close"])
-        if len(trader.c) < qt.MIN_BARS:
-            continue
-        reasons = trader.wake_reasons(t_ms)
-        if not reasons:
-            continue
-        facts = fficha.facts(trader, t_ms)
-        if corta.missing(facts):
-            continue
-        r = readings[t_ms] = corta.readings(trader, t_ms, facts)
-        if t_ms < from_ms or t_ms >= to_ms:
-            continue
-        if trader.position is not None:                    # the formulas' own position, as they would live it
-            held = t_ms - trader.position.entry_ms
-            now = qt.settle(product, trader.position, closes[t_ms], "strategy_exit", t_ms, funding, trader.notional)["net_bp"]
-            side = 1 if trader.position.side == "LONG" else -1
-            action, _ = corta.formula_action(r, side)
-            if (hold_ms and held >= hold_ms) or action == "CERRAR":
-                open_trade["final_bp"] = now
-                for row in open_trade["rows"]:
-                    row["final_bp"] = now
-                    row["por_tiempo"] = bool(hold_ms) and held >= hold_ms     # reached the time limit, if there is one
-                    row["salida_ms"] = t_ms
-                    row["label"] = position_label(row["net_now_bp"], now)
-                if not hold_ms or held < hold_ms:          # the wake where the formulas close is a real, labelled look
-                    rows_pos.append(dict(_position_row(trader, t_ms, reasons, r, now, open_trade), final_bp=now,
-                                         label="CERRAR", salida_ms=t_ms))
-                trader.position = None
-                open_trade = None
-                trader.cooldown_until = t_ms + cfg["guardrails"]["cooldown_min"] * MINUTE_MS
-            else:
-                row = _position_row(trader, t_ms, reasons, r, now, open_trade)
-                open_trade["rows"].append(row)
-                rows_pos.append(row)
-                continue
-        if t_ms < trader.cooldown_until:
-            continue
-        if rng.random() < flat_rate:
-            flat_found.append((t_ms, reasons, trader.state_text(t_ms, reasons), trader.state_text(t_ms, reasons, mirror=True)))
-        action = formula_flat(r["veredicto"], r["portero_si"], r.get("noticias_si", False))
-        if action in ("LARGO", "CORTO"):
-            trader._open(t_ms, "LONG" if action == "LARGO" else "SHORT", r["portero_p"], "formula")
-            trades.append(open_trade := {"trade_no": trader.position.trade_no, "rows": [], "entry_ms": t_ms, "side": action})
+                other, from_ms - warmup, end_ms)}
+    return trader, funding
+
+
+def _wake_reading_aprende(trader, t_ms):
+    if len(trader.c) < qt.MIN_BARS:
+        return None, None
+    reasons = trader.wake_reasons(t_ms)
+    if not reasons:
+        return None, None
+    facts = fficha.facts(trader, t_ms)
+    if corta.missing(facts):
+        return None, None
+    return reasons, corta.readings(trader, t_ms, facts)
+
+
+def _step_open_position_aprende(trader, t_ms, reasons, r, closes, hold_ms, open_trade, rows_pos):
+    held = t_ms - trader.position.entry_ms
+    now = qt.settle(trader.product, trader.position, closes[t_ms], "strategy_exit", t_ms, trader.funding, trader.notional)["net_bp"]
+    side = 1 if trader.position.side == "LONG" else -1
+    action, _ = corta.formula_action(r, side)
+    timed_out = bool(hold_ms) and held >= hold_ms
+    if timed_out or action == "CERRAR":
+        open_trade["final_bp"] = now
+        for row in open_trade["rows"]:
+            row["final_bp"] = now
+            row["por_tiempo"] = timed_out
+            row["salida_ms"] = t_ms
+            row["label"] = position_label(row["net_now_bp"], now)
+        if not timed_out:
+            rows_pos.append(dict(_position_row(trader, t_ms, reasons, r, now, open_trade), final_bp=now,
+                                 label="CERRAR", salida_ms=t_ms))
+        trader.position = None
+        trader.cooldown_until = t_ms + trader.cfg["guardrails"]["cooldown_min"] * MINUTE_MS
+        return None, False
+    row = _position_row(trader, t_ms, reasons, r, now, open_trade)
+    open_trade["rows"].append(row)
+    rows_pos.append(row)
+    return open_trade, True
+
+
+def _step_window_aprende(trader, t_ms, reasons, r, closes, hold_ms, open_trade, rows_pos, flat_found, trades, rng, flat_rate):
+    if trader.position is not None:
+        open_trade, keep_going = _step_open_position_aprende(trader, t_ms, reasons, r, closes, hold_ms, open_trade, rows_pos)
+        if keep_going:
+            return open_trade
+    if t_ms < trader.cooldown_until:
+        return open_trade
+    if rng.random() < flat_rate:  # NOSONAR
+        flat_found.append((t_ms, reasons, trader.state_text(t_ms, reasons), trader.state_text(t_ms, reasons, mirror=True)))
+    action = formula_flat(r["veredicto"], r["portero_si"], r.get("noticias_si", False))
+    if action in ("LARGO", "CORTO"):
+        trader._open(t_ms, "LONG" if action == "LARGO" else "SHORT", r["portero_p"], "formula")
+        open_trade = {"trade_no": trader.position.trade_no, "rows": [], "entry_ms": t_ms, "side": action}
+        trades.append(open_trade)
+    return open_trade
+
+
+def _build_flat_rows_aprende(cfg, product, flat_found, readings, closes, cost, weak):
     rows_flat = []
-    for t_ms, reasons, state, mirror in flat_found:
+    for t_ms, _reasons, state, mirror in flat_found:
         op = operation(cfg, t_ms, readings, closes, cost, weak)
         if op is None:
             continue
@@ -159,7 +155,42 @@ def collect(history, cfg, product, from_ms, to_ms, *, flat_rate=0.15, seed=20261
                           "largo_h": op["largo"]["horas"], "corto_h": op["corto"]["horas"],
                           "label": flat_label(op["largo"]["neto_bp"], op["corto"]["neto_bp"]),
                           "formula": formula_flat(op["maestro"], op["portero_si"], op.get("noticias_si", False))})
-    rows_pos = [r for r in rows_pos if r.get("final_bp") is not None]    # a trade still open at the end has no result
+    return rows_flat
+
+
+def collect(history, cfg, product, from_ms, to_ms, *, flat_rate=0.15, seed=20261027):
+    """Recorre ``[from_ms, to_ms)`` de ``product`` wake a wake y devuelve ``{"flat": [...], "position": [...]}``.
+
+    ``flat``: una fila por mirada muestreada (``flat_rate`` de las miradas) con ``state_text``, ``mirror_text``, la lectura de las
+    fórmulas, el neto de la operación en cada lado (``largo_bp`` / ``corto_bp``) y ``label``. ``position``: una fila por mirada con la
+    posición que las fórmulas habrían abierto, con ``state_text``, ``net_now_bp``, ``final_bp``, ``trade`` y ``label``. Una mirada
+    sin ficha completa no existe (en vivo se omite)."""
+    warmup = cfg["practice"]["warmup_days"] * DAY_MS
+    rng = random.Random("{}:{}".format(seed, product))  # NOSONAR
+    hold = cfg["guardrails"]["max_hold_min"]
+    ahead = to_ms + hold * MINUTE_MS if hold else history.holdout_ms
+    end_ms = min(ahead, history.holdout_ms)
+    bars = history.bars(product, from_ms - warmup, end_ms)
+    trader, _funding = _setup_aprende_trader(history, cfg, product, from_ms, end_ms, warmup)
+    weak = corta.formulas(cfg)[0]["umbrales"]["flojo"]
+    cost = float(round_trip_cost_bps(product))
+    hold_ms = hold * MINUTE_MS if hold else None
+    closes, readings, flat_found, trades, rows_pos = {}, {}, [], [], []
+    open_trade = None
+    for bar in bars:
+        trader.feed(bar, trade=False)
+        t_ms = int(bar["bucket_start"]) + qt.BAR_MS
+        closes[t_ms] = float(bar["close"])
+        reasons, r = _wake_reading_aprende(trader, t_ms)
+        if r is None:
+            continue
+        readings[t_ms] = r
+        if from_ms <= t_ms < to_ms:
+            open_trade = _step_window_aprende(
+                trader, t_ms, reasons, r, closes, hold_ms, open_trade, rows_pos, flat_found, trades, rng, flat_rate
+            )
+    rows_flat = _build_flat_rows_aprende(cfg, product, flat_found, readings, closes, cost, weak)
+    rows_pos = [r for r in rows_pos if r.get("final_bp") is not None]
     return {"flat": rows_flat, "position": rows_pos}
 
 
@@ -178,12 +209,15 @@ def operation(cfg, t_ms, readings, closes, cost, weak):
 
 def _position_row(trader, t_ms, reasons, r, net_now_bp, trade):
     position = trader.position
+    side = 1 if position.side == "LONG" else -1
+    act = corta.formula_action(r, side)[0]
+    formula_label = "CERRAR" if act == "CERRAR" else "MANTENER"
     return {"kind": "position", "product": trader.product, "t_ms": t_ms, "month": _month(t_ms),
             "state_text": trader.state_text(t_ms, reasons), "maestro": r["veredicto"], "portero_si": bool(r["portero_si"]),
             "net_now_bp": net_now_bp, "final_bp": None, "label": None, "trade": "{}:{}".format(trader.product, trade["trade_no"]),
             "side": position.side, "entry_ms": position.entry_ms,
             "por_tiempo": False,
-            "formula": "CERRAR" if corta.formula_action(r, 1 if position.side == "LONG" else -1)[0] == "CERRAR" else "MANTENER"}
+            "formula": formula_label}
 
 
 # --------------------------------------------------------------------------- the dataset
@@ -191,15 +225,15 @@ def _position_row(trader, t_ms, reasons, r, net_now_bp, trade):
 
 def balance(rows, key, per_class, seed):
     """``per_class`` filas de cada clase (todas si hay menos), mezcladas con la semilla."""
-    rng = random.Random(seed)
+    rng = random.Random(seed)  # NOSONAR
     by = collections.defaultdict(list)
     for row in rows:
         by[row[key]].append(row)
     out = []
     for items in by.values():
-        rng.shuffle(items)
+        rng.shuffle(items)  # NOSONAR
         out += items[:per_class]
-    rng.shuffle(out)
+    rng.shuffle(out)  # NOSONAR
     return out
 
 
@@ -207,18 +241,18 @@ def balance_position(rows, per_class, seed, late_share=0.5):
     """Con posición: ``per_class`` de cada etiqueta, y la mitad de las CERRAR (``late_share``) de operaciones que llegaron a las 48 h
     sin que el maestro se diera vuelta: ahí está toda la pérdida de la v8 (la cola de −420 a −560 pb) y cortarlas a tiempo es lo
     que Qwen puede agregar. Sin suficientes de ese tipo, se completa con las demás."""
-    rng = random.Random(seed)
+    rng = random.Random(seed)  # NOSONAR
     close = [r for r in rows if r["label"] == "CERRAR"]
     keep = [r for r in rows if r["label"] == "MANTENER"]
     late = [r for r in close if r.get("por_tiempo")]
     other = [r for r in close if not r.get("por_tiempo")]
     for items in (late, other, keep):
-        rng.shuffle(items)
+        rng.shuffle(items)  # NOSONAR
     want_late = min(len(late), int(per_class * late_share))
     chosen = late[:want_late] + other[:per_class - want_late]
     chosen += late[want_late:][:max(0, per_class - len(chosen))]
     out = chosen + keep[:per_class]
-    rng.shuffle(out)
+    rng.shuffle(out)  # NOSONAR
     return out
 
 
@@ -291,7 +325,7 @@ def build_dataset(cfg, flat, position, out_dir, *, per_class=400, seed=20261027,
         p = balance_position(p, max(1, int(per_class * share)), seed + 1)
         pairs = [(e, info_of(row, mirror)) for row in f for mirror in (False, True) for e in chat_examples(cfg, row, mirror)]
         pairs += [(e, info_of(row, False)) for row in p for e in chat_examples(cfg, row)]
-        random.Random(seed + 2).shuffle(pairs)
+        random.Random(seed + 2).shuffle(pairs)  # NOSONAR
         examples = [e for e, _ in pairs]
         sets[name] = (examples, f, p)
         write_jsonl(os.path.join(out_dir, name + ".jsonl"), examples)
@@ -318,38 +352,53 @@ def _stats(values):
             "total_bp": round(sum(values), 1)}
 
 
-def score_opinions(flat, position, opinion):
-    """Qué pasaría si se siguiera una opinión. ``opinion(row) -> acción`` (``LARGO``/``CORTO``/``ESPERAR`` sin posición,
-    ``MANTENER``/``CERRAR`` con posición). Devuelve, para la opinión: el neto por ENTRADA sin posición (``entradas``), por mes, y el
-    neto por operación de las fórmulas si se hubiera cerrado en la primera mirada donde la opinión dijo CERRAR (``cierres``),
-    contra la fórmula sola (``formula_entradas``, ``formula_cierres``). Aciertos contra la etiqueta incluidos."""
+def _row_side_bp(row, action):
+    return row["largo_bp"] if action == "LARGO" else row["corto_bp"]
+
+
+def _score_flat_rows(flat, opinion):
     entries, formula_entries = [], []
     by_month = collections.defaultdict(list)
-    right = [0, 0]
+    hits = 0
     for row in flat:
         said = opinion(row)
-        right[0] += said == row["label"]
-        right[1] += 1
+        hits += said == row["label"]
         if said in ("LARGO", "CORTO"):
-            net = row["largo_bp"] if said == "LARGO" else row["corto_bp"]
+            net = _row_side_bp(row, said)
             entries.append(net)
             by_month[row["month"]].append(net)
         if row["formula"] in ("LARGO", "CORTO"):
-            formula_entries.append(row["largo_bp"] if row["formula"] == "LARGO" else row["corto_bp"])
+            formula_entries.append(_row_side_bp(row, row["formula"]))
+    acc = round(hits / len(flat), 3) if flat else None
+    return acc, entries, formula_entries, by_month
+
+
+def _score_position_rows(position, opinion):
     trades = collections.defaultdict(list)
     for row in position:
         trades[row["trade"]].append(row)
-    closes, formula_closes, pos_right = [], [], [0, 0]
+    closes, formula_closes, hits, total = [], [], 0, 0
     for rows in trades.values():
         rows.sort(key=lambda r: r["t_ms"])
         formula_closes.append(rows[0]["final_bp"])
         first = next((r["net_now_bp"] for r in rows if opinion(r) == "CERRAR"), rows[0]["final_bp"])
         closes.append(first)
         for r in rows:
-            pos_right[0] += opinion(r) == r["label"]
-            pos_right[1] += 1
-    return {"acierto_sin_posicion": round(right[0] / right[1], 3) if right[1] else None,
-            "acierto_con_posicion": round(pos_right[0] / pos_right[1], 3) if pos_right[1] else None,
+            hits += opinion(r) == r["label"]
+            total += 1
+    acc = round(hits / total, 3) if total else None
+    return acc, closes, formula_closes
+
+
+def score_opinions(flat, position, opinion):
+    """Qué pasaría si se siguiera una opinión. ``opinion(row) -> acción`` (``LARGO``/``CORTO``/``ESPERAR`` sin posición,
+    ``MANTENER``/``CERRAR`` con posición). Devuelve, para la opinión: el neto por ENTRADA sin posición (``entradas``), por mes, y el
+    neto por operación de las fórmulas si se hubiera cerrado en la primera mirada donde la opinión dijo CERRAR (``cierres``),
+    contra la fórmula sola (``formula_entradas``, ``formula_cierres``). Aciertos contra la etiqueta incluidos."""
+    flat_acc, entries, formula_entries, by_month = _score_flat_rows(flat, opinion)
+    pos_acc, closes, formula_closes = _score_position_rows(position, opinion)
+    return {"acierto_sin_posicion": flat_acc,
+            "acierto_con_posicion": pos_acc,
             "entradas": _stats(entries), "formula_entradas": _stats(formula_entries),
             "por_mes": {m: _stats(v) for m, v in sorted(by_month.items())},
             "cierres": _stats(closes), "formula_cierres": _stats(formula_closes)}
@@ -357,11 +406,11 @@ def score_opinions(flat, position, opinion):
 
 def baselines(flat, position, seed=1):
     """Las referencias que cualquier opinión tiene que superar: la fórmula, el oráculo (etiqueta), el azar y siempre-esperar."""
-    rng = random.Random(seed)
+    rng = random.Random(seed)  # NOSONAR
     return {
         "formula": score_opinions(flat, position, lambda r: r["formula"]),
         "oraculo": score_opinions(flat, position, lambda r: r["label"]),
-        "azar": score_opinions(flat, position, lambda r: rng.choice(FLAT_OPTIONS if r["kind"] == "flat" else POSITION_OPTIONS)),
+        "azar": score_opinions(flat, position, lambda r: rng.choice(FLAT_OPTIONS if r["kind"] == "flat" else POSITION_OPTIONS)),  # NOSONAR
         "esperar_siempre": score_opinions(flat, position, lambda r: "ESPERAR" if r["kind"] == "flat" else "MANTENER"),
     }
 
@@ -377,12 +426,26 @@ def _scores_by_time(db, product):
     return out
 
 
-def resolve_live(db, closes_of, cfg, now_ms):
-    """Pone la etiqueta a las miradas guardadas cuyo resultado ya se conoce y no la tienen (tabla ``examples``).
+def _resolve_position_look(trades, pos_json, net_now):
+    trade = trades.get(json.loads(pos_json)["trade_no"]) if pos_json else None
+    if trade is None or trade[5] != "closed" or trade[4] is None:
+        return None
+    return position_label(net_now, trade[4]), {"net_now_bp": net_now, "final_bp": trade[4]}
 
-    ``db``: conexión a la base en vivo (escritura); ``closes_of(product, from_ms, to_ms) -> {t_ms: cierre}`` (velas de 5 min por su
-    hora de cierre). Sin posición: el neto de entrar largo y corto con la salida de la fórmula (el maestro se da vuelta; sin límite de tiempo) se conoce
-    cuando las dos salidas ya ocurrieron; se calcula el neto de entrar largo y corto. Con posición: la operación a la que pertenece ya cerró (``trades``)."""
+
+def _resolve_flat_look(cfg, t_ms, scores, closes, cost, weak):
+    readings = {at: {"puntaje": score} for at, score in scores.items()}
+    nets = {}
+    for name, side in (("largo", 1), ("corto", -1)):
+        out = ex._v8_exit(cfg, t_ms, side, readings, closes, cost, weak)
+        if out is None:
+            return None
+        nets[name] = out["neto_bp"]
+    return flat_label(nets["largo"], nets["corto"]), {"largo_bp": nets["largo"], "corto_bp": nets["corto"]}
+
+
+def resolve_live(db, closes_of, cfg, now_ms):
+    """Pone la etiqueta a las miradas guardadas cuyo resultado ya se conoce y no la tienen (tabla ``examples``)."""
     weak = corta.formulas(cfg)[0]["umbrales"]["flojo"]
     done = 0
     closes_all = {}
@@ -396,24 +459,14 @@ def resolve_live(db, closes_of, cfg, now_ms):
             (product,)).fetchall()
         for bucket, t_ms, kind, net_now, pos_json in pending:
             if kind == "position":
-                trade = trades.get(json.loads(pos_json)["trade_no"]) if pos_json else None
-                if trade is None or trade[5] != "closed" or trade[4] is None:
-                    continue
-                label = position_label(net_now, trade[4])
-                detail = {"net_now_bp": net_now, "final_bp": trade[4]}
+                resolved = _resolve_position_look(trades, pos_json, net_now)
             else:
-                if closes_all.get(product) is None:                 # one read of the candles per product and run
+                if closes_all.get(product) is None:
                     closes_all[product] = closes_of(product, min(r[1] for r in pending) - qt.BAR_MS, now_ms)
-                closes = closes_all[product]
-                readings = {at: {"puntaje": score} for at, score in scores.items()}
-                nets = {}
-                for name, side in (("largo", 1), ("corto", -1)):
-                    out = ex._v8_exit(cfg, t_ms, side, readings, closes, cost, weak)    # None until the maestro turned against that side
-                    nets[name] = None if out is None else out["neto_bp"]
-                if None in nets.values():
-                    continue
-                label = flat_label(nets["largo"], nets["corto"])
-                detail = {"largo_bp": nets["largo"], "corto_bp": nets["corto"]}
+                resolved = _resolve_flat_look(cfg, t_ms, scores, closes_all[product], cost, weak)
+            if resolved is None:
+                continue
+            label, detail = resolved
             with db:
                 db.execute("INSERT OR REPLACE INTO examples VALUES(?,?,?,?,?,?,?)",
                            (product, bucket, t_ms, kind, label, json.dumps(detail), now_ms))
@@ -473,12 +526,12 @@ def report_md(base, best, history, meta=None):
              "**Veredicto: {}**".format("PASA" if passes else "NO pasa"), ""]
     lines += ["- {} {}".format("✓" if ok else "✗", name) for name, ok in checks.items()]
     lines += ["", "## Entradas sin posición (neto tras costos por entrada)", "", "| | Entradas | Neto/op | Ganadoras | Acierto contra la etiqueta |", "|---|---|---|---|---|"]
-    for name, r in (("Fórmula sola", best), ("Qwen sin entrenar", base), ("Qwen entrenado (paso {})".format(best.get("paso", "?")), best)):
-        e = r["formula_entradas"] if name == "Fórmula sola" else r["entradas"]
-        acc = "—" if name == "Fórmula sola" else _pct(r["acierto_sin_posicion"])
+    for name, r in ((FORMULA_SOLA, best), ("Qwen sin entrenar", base), ("Qwen entrenado (paso {})".format(best.get("paso", "?")), best)):
+        e = r["formula_entradas"] if name == FORMULA_SOLA else r["entradas"]
+        acc = "—" if name == FORMULA_SOLA else _pct(r["acierto_sin_posicion"])
         lines.append("| {} | {} | {} | {} | {} |".format(name, e["n"], _pb(e["neto_bp"]), _pct(e["ganadoras"]), acc))
     lines += ["", "## Cierres (operaciones de la fórmula, primer CERRAR de la opinión)", "", "| | Operaciones | Neto/op | Ganadoras |", "|---|---|---|---|"]
-    for name, c in (("Fórmula sola", best["formula_cierres"]), ("Qwen sin entrenar", base["cierres"]), ("Qwen entrenado", best["cierres"])):
+    for name, c in ((FORMULA_SOLA, best["formula_cierres"]), ("Qwen sin entrenar", base["cierres"]), ("Qwen entrenado", best["cierres"])):
         lines.append("| {} | {} | {} | {} |".format(name, c["n"], _pb(c["neto_bp"]), _pct(c["ganadoras"])))
     lines += ["", "## Por mes (neto por entrada del Qwen entrenado)", ""]
     lines += ["- {}: {} entradas, {}".format(m, v["n"], _pb(v["neto_bp"])) for m, v in best["por_mes"].items()] or ["- sin entradas"]
@@ -514,45 +567,58 @@ def _history(args):
     return qt.History(args.cache_dir, qt.load_holdout_ms())
 
 
+def _run_informe(args):
+    def load(name):
+        with open(os.path.join(args.dir, name), encoding="utf-8") as handle:
+            return json.load(handle)
+
+    with open(os.path.join(args.dir, "historia.jsonl"), encoding="utf-8") as handle:
+        history = [json.loads(x) for x in handle if x.strip()]
+    best = load("best-practica.json")
+    best["paso"] = load("best.json")["paso"]
+    text = report_md(load("base-practica.json"), best, history)
+    with open(args.out, "w", encoding="utf-8") as handle:
+        handle.write(text)
+    print(text)
+
+
+def _run_dataset_or_refs(args, cfg):
+    import gzip
+
+    history = _history(args)
+    spans = {"train": (TRAIN_FROM, TRAIN_TO), "practica": (PRACTICE_FROM, PRACTICE_TO)}
+    got = {}
+    for name, (a, b) in spans.items():
+        flat, position = [], []
+        for product in cfg["products"]:
+            part = collect(history, cfg, product, qt.date_ms(a), qt.date_ms(b), flat_rate=args.flat_rate)
+            flat += part["flat"]
+            position += part["position"]
+            print("{} {}: {} miradas sin posición, {} con posición".format(name, product, len(part["flat"]), len(part["position"])), flush=True)
+        got[name] = (flat, position)
+    if args.command == "dataset":
+        os.makedirs(args.out, exist_ok=True)
+        for name, (f, p) in got.items():
+            with gzip.open(os.path.join(args.out, "filas-{}.jsonl.gz".format(name)), "wt", encoding="utf-8") as handle:
+                for row in f + p:
+                    handle.write(json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n")
+        build_dataset(cfg, *got["train"], args.out, per_class=args.per_class)
+        write_jsonl(os.path.join(args.out, "practica.jsonl"), got["practica"][0] + got["practica"][1])
+    report = {name: baselines(*rows) for name, rows in got.items()}
+    os.makedirs(args.out, exist_ok=True)
+    with open(os.path.join(args.out, "referencias.json"), "w", encoding="utf-8") as handle:
+        json.dump(report, handle, indent=2, ensure_ascii=False)
+    print(json.dumps(report, ensure_ascii=False, indent=1))
+
+
 def main(argv=None):
     args = _parser().parse_args(argv)
     if args.command == "informe":
-        load = lambda name: json.load(open(os.path.join(args.dir, name), encoding="utf-8"))
-        history = [json.loads(x) for x in open(os.path.join(args.dir, "historia.jsonl"), encoding="utf-8") if x.strip()]
-        best = load("best-practica.json")
-        best["paso"] = load("best.json")["paso"]
-        text = report_md(load("base-practica.json"), best, history)
-        with open(args.out, "w", encoding="utf-8") as handle:
-            handle.write(text)
-        print(text)
+        _run_informe(args)
         return
     cfg = qt.load_config(args.config or qt.CONFIG_PATH_LIVE)
     if args.command in ("dataset", "referencias"):
-        history = _history(args)
-        spans = {"train": (TRAIN_FROM, TRAIN_TO), "practica": (PRACTICE_FROM, PRACTICE_TO)}
-        got = {}
-        for name, (a, b) in spans.items():
-            flat, position = [], []
-            for product in cfg["products"]:
-                part = collect(history, cfg, product, qt.date_ms(a), qt.date_ms(b), flat_rate=args.flat_rate)
-                flat += part["flat"]
-                position += part["position"]
-                print("{} {}: {} miradas sin posición, {} con posición".format(name, product, len(part["flat"]), len(part["position"])), flush=True)
-            got[name] = (flat, position)
-        if args.command == "dataset":
-            import gzip
-            os.makedirs(args.out, exist_ok=True)
-            for name, (f, p) in got.items():                  # the labelled rows with their results, for later analysis
-                with gzip.open(os.path.join(args.out, "filas-{}.jsonl.gz".format(name)), "wt", encoding="utf-8") as handle:
-                    for row in f + p:
-                        handle.write(json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n")
-            build_dataset(cfg, *got["train"], args.out, per_class=args.per_class)
-            write_jsonl(os.path.join(args.out, "practica.jsonl"), got["practica"][0] + got["practica"][1])
-        report = {name: baselines(*rows) for name, rows in got.items()}
-        os.makedirs(args.out, exist_ok=True)
-        with open(os.path.join(args.out, "referencias.json"), "w", encoding="utf-8") as handle:
-            json.dump(report, handle, indent=2, ensure_ascii=False)
-        print(json.dumps(report, ensure_ascii=False, indent=1))
+        _run_dataset_or_refs(args, cfg)
     else:
         import sqlite3
         db = sqlite3.connect(args.db)
