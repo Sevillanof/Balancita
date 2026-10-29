@@ -24,6 +24,16 @@ _PRICE_RECAP_RE = re.compile(
     r"holds above|circles|rebounds|dips|tops|hits|climbs|sinks|tumbles|price|live updates)",
     re.IGNORECASE,
 )
+_BTC_ONLY_RE = re.compile(
+    r"\b(bitcoin|btc|satoshi|halving|hashrate|ordinals|runes|microstrategy|saylor|bitcoiner)\b",
+    re.IGNORECASE,
+)
+_ETH_OR_MACRO_RE = re.compile(
+    r"\b(eth|ethereum|ether|vitalik|pectra|fusaka|eip|layer 2|l2|rollup|zk|defi|staking|restaking|"
+    r"uniswap|aave|lido|arbitrum|optimism|base|crypto|market|markets|sec|cftc|fed|fomc|cpi|"
+    r"inflation|tariff|etf|etfs|stablecoin|usdc|tether)\b",
+    re.IGNORECASE,
+)
 
 
 def default_path(env=None):
@@ -37,8 +47,33 @@ def is_price_recap(title):
     return bool(_PRICE_RECAP_RE.search(str(title or "")))
 
 
+def is_btc_only(title, summary=""):
+    """True when the item is exclusively about Bitcoin without Ethereum, DeFi/L2, or macro/market-wide relevance."""
+    text = "{} {}".format(title or "", summary or "")
+    return bool(_BTC_ONLY_RE.search(text) and not _ETH_OR_MACRO_RE.search(text))
+
+
+def is_irrelevant_headline(title, summary=""):
+    """True when the item is a price recap or Bitcoin-only noise irrelevant to Ethereum."""
+    return is_price_recap(title) or is_btc_only(title, summary)
+
+
 def _connect(db_path):
     return sqlite3.connect("file:{}?mode=ro".format(db_path), uri=True)
+
+
+def _event_weight(r_val, r_chosen):
+    if r_val is not None:
+        return float(r_val)
+    return 1.0 if r_chosen == "high" else 0.6
+
+
+def _event_sign(d_chosen):
+    if d_chosen == "bullish":
+        return 1.0
+    if d_chosen == "bearish":
+        return -1.0
+    return 0.0
 
 
 def load_exogenous_events(db_path, since_ms=0):
@@ -46,30 +81,32 @@ def load_exogenous_events(db_path, since_ms=0):
     db = _connect(db_path)
     try:
         rows = db.execute(
-            "SELECT i.title, i.published_at, i.received_at, "
-            "r.analyzed_at, r.chosen, r.value, d.analyzed_at, d.chosen "
+            "SELECT i.item_hash, i.title, i.summary, i.published_at, i.received_at, "
+            "r.question_version, r.analyzed_at, r.chosen, r.value, d.analyzed_at, d.chosen "
             "FROM paper_futures_news_items i "
             "JOIN paper_futures_news_analysis r ON r.item_hash=i.item_hash "
-            "  AND r.question_id='news_relevance_btc' AND r.question_version=1 AND r.status='done' "
+            "  AND r.question_id='news_relevance_btc' AND r.question_version IN (1, 2) AND r.status='done' "
             "JOIN paper_futures_news_analysis d ON d.item_hash=i.item_hash "
-            "  AND d.question_id='news_direction' AND d.question_version=1 AND d.status='done' "
+            "  AND d.question_id='news_direction' AND d.question_version=r.question_version AND d.status='done' "
             "WHERE i.received_at >= ? AND i.published_at IS NOT NULL "
             "  AND (i.received_at - i.published_at) BETWEEN 0 AND ? "
             "  AND r.chosen IN ('high', 'medium') "
-            "ORDER BY i.received_at",
+            "ORDER BY i.received_at, r.question_version DESC",
             (int(since_ms), MAX_LAG_MS),
         ).fetchall()
     finally:
         db.close()
 
     events = []
-    for title, pub_ms, rec_ms, r_ana_ms, r_chosen, r_val, d_ana_ms, d_chosen in rows:
-        if is_price_recap(title):
+    seen = set()
+    for ihash, title, summary, _, rec_ms, _, r_ana_ms, r_chosen, r_val, d_ana_ms, d_chosen in rows:
+        if ihash in seen:
+            continue
+        seen.add(ihash)
+        if is_irrelevant_headline(title, summary):
             continue
         known_at = max(int(rec_ms), int(r_ana_ms), int(d_ana_ms))
-        weight = float(r_val) if r_val is not None else (1.0 if r_chosen == "high" else 0.6)
-        sign = 1.0 if d_chosen == "bullish" else (-1.0 if d_chosen == "bearish" else 0.0)
-        events.append((known_at, weight, sign))
+        events.append((known_at, _event_weight(r_val, r_chosen), _event_sign(d_chosen)))
     events.sort(key=lambda item: item[0])
     return events
 

@@ -1,14 +1,19 @@
 {
   "version": "news-sources.v1",
-  "note": "Public news feeds polled by the news process N (python/balancita_engine/futures_news.py). https only (plain http is accepted for loopback test servers). The first four are the feeds of the legacy news feature (server/src/features/news: the SEC, ECB and Federal Reserve press feeds from OFFICIAL_RSS_SOURCES and The Block from NEWS_EXTRA_RSS_FEEDS); the rest are public crypto newsroom feeds added for N. Extra feeds can be appended with NEWS_EXTRA_RSS_FEEDS (sourceId|label|https url|unknown or licensed, comma separated, the legacy format). The text of an item is stored, sanitized and capped, and is only ever sent to the local model.",
+  "note": "Public news feeds polled by the news process N (python/balancita_engine/futures_news.py), focused on Ethereum, DeFi/L2, regulation and macro catalysts. https only (plain http is accepted for loopback test servers). Extra feeds can be appended with NEWS_EXTRA_RSS_FEEDS (sourceId|label|https url|unknown or licensed, comma separated, the legacy format). The text of an item is stored, sanitized and capped, and is only ever sent to the local model.",
   "sources": [
+    { "id": "thedefiant", "name": "The Defiant", "url": "https://thedefiant.io/feed", "category": "ethereum" },
+    { "id": "bankless", "name": "Bankless", "url": "https://www.bankless.com/rss/feed", "category": "ethereum" },
+    { "id": "eth_foundation", "name": "Ethereum Foundation", "url": "https://blog.ethereum.org/en/feed.xml", "category": "ethereum" },
     { "id": "theblock", "name": "The Block", "url": "https://www.theblock.co/rss.xml", "category": "crypto" },
     { "id": "coindesk", "name": "CoinDesk", "url": "https://www.coindesk.com/arc/outboundfeeds/rss/", "category": "crypto" },
-    { "id": "cointelegraph", "name": "Cointelegraph", "url": "https://cointelegraph.com/rss", "category": "crypto" },
     { "id": "decrypt", "name": "Decrypt", "url": "https://decrypt.co/feed", "category": "crypto" },
-    { "id": "bitcoinmagazine", "name": "Bitcoin Magazine", "url": "https://bitcoinmagazine.com/.rss/full/", "category": "crypto" },
+    { "id": "unchained", "name": "Unchained", "url": "https://unchainedcrypto.com/feed/", "category": "crypto" },
+    { "id": "cointelegraph", "name": "Cointelegraph", "url": "https://cointelegraph.com/rss", "category": "crypto" },
+    { "id": "cointelegraph_reg", "name": "Cointelegraph Regulation", "url": "https://cointelegraph.com/rss/tag/regulation", "category": "macro" },
     { "id": "sec", "name": "SEC", "url": "https://www.sec.gov/news/pressreleases.rss", "category": "macro" },
-    { "id": "ecb", "name": "European Central Bank", "url": "https://www.ecb.europa.eu/rss/press.html", "category": "macro" },
-    { "id": "fed", "name": "Federal Reserve Board", "url": "https://www.federalreserve.gov/feeds/press_all.xml", "category": "macro" }
+    { "id": "sec_speeches", "name": "SEC Speeches and Statements", "url": "https://www.sec.gov/news/speeches-statements.rss", "category": "macro" },
+    { "id": "fed", "name": "Federal Reserve Board", "url": "https://www.federalreserve.gov/feeds/press_all.xml", "category": "macro" },
+    { "id": "fed_monetary", "name": "Federal Reserve Monetary Policy", "url": "https://www.federalreserve.gov/feeds/press_monetary.xml", "category": "macro" }
   ]
 }

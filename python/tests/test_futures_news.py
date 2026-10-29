@@ -27,6 +27,8 @@ FIXTURES = os.path.join(
 NEWS_QUESTION_PINS = {
     "news_relevance_btc@1": "eba2a051b09a0a1bc5fff8e00e4ce0add6aac800d18ba23e2f5cb898e7b8d266",
     "news_direction@1": "7faf4bbcd146c217dd5ebbf5442224dc89b5d76ca37830a42db84f4dbac443b6",
+    "news_relevance_btc@2": "d5a6d6878f212fc2abc6dcc7aeec3ca19362f52d70eed9c0f914e4774e895476",
+    "news_direction@2": "187ca360a5527bae7566de0cf557da712cc1bc2cabbb7d5d8007594826fcf803",
 }
 
 RELEVANCE = "news_relevance_btc"
@@ -182,6 +184,12 @@ class FeedParsingTests(unittest.TestCase):
         [item] = n.parse_feed(data, "https://a.example/atom")
         self.assertEqual(time.strftime("%Y-%m-%d %H:%M", time.gmtime(item["published_ms"] / 1000)), "2026-09-21 12:00")
 
+    def test_iso_dates_accept_lowercase_separators(self):
+        upper = n.parse_date("2026-10-29T10:11:12Z")
+        self.assertIsNotNone(upper)
+        self.assertEqual(n.parse_date("2026-10-29t10:11:12z"), upper)
+        self.assertEqual(n.parse_date("2026-10-29T10:11:12+02:00"), n.parse_date("2026-10-29t10:11:12+02:00"))
+
     def test_real_world_rss_fixtures(self):
         with open(os.path.join(FIXTURES, "fed.rss"), "rb") as handle:
             [fed] = n.parse_feed(handle.read(), "https://www.federalreserve.gov/feeds/press_all.xml")
@@ -322,9 +330,10 @@ class StoreTests(TempDirTest):
         store = n.NewsStore(self.path, n.NEWS_CONFIG)
         self.addCleanup(store.close)
         store.add_item(self.item())
-        store.append_analysis(self.done())
+        first_row = self.done()
+        store.append_analysis(first_row)
         with self.assertRaises(sqlite3.IntegrityError):
-            store.append_analysis(self.done())
+            store.append_analysis(first_row)
         store.append_analysis(self.done(question_version=2))
         store.append_analysis(self.done(question_id=DIRECTION))
 
@@ -332,10 +341,12 @@ class StoreTests(TempDirTest):
         store = n.NewsStore(self.path, n.NEWS_CONFIG)
         self.addCleanup(store.close)
         store.add_item(self.item())
+        bad_status = self.done(status="whatever")
         with self.assertRaises(sqlite3.IntegrityError):
-            store.append_analysis(self.done(status="whatever"))
+            store.append_analysis(bad_status)
+        bad_chosen = self.done(chosen=None)
         with self.assertRaises(sqlite3.IntegrityError):
-            store.append_analysis(self.done(chosen=None))
+            store.append_analysis(bad_chosen)
         store.append_analysis({"item_hash": "h1", "question_id": DIRECTION, "question_version": 1,
                                "status": "skipped_stale", "analyzed_at": NOW})
 
@@ -352,11 +363,11 @@ class StoreTests(TempDirTest):
         items = {row[1] for row in db.execute("PRAGMA table_info(paper_futures_news_items)")}
         analysis = {row[1] for row in db.execute("PRAGMA table_info(paper_futures_news_analysis)")}
         db.close()
-        self.assertTrue({"item_id", "item_hash", "source_id", "url", "title", "summary", "published_at",
-                         "received_at", "content_hash"} <= items)
-        self.assertTrue({"item_hash", "question_id", "question_version", "status", "analyzed_at", "model_ref",
-                         "model_info_json", "prompt_hash", "prompt_version", "probability_source",
-                         "probabilities_json", "chosen", "confidence", "latency_ms"} <= analysis)
+        self.assertLessEqual({"item_id", "item_hash", "source_id", "url", "title", "summary", "published_at",
+                              "received_at", "content_hash"}, items)
+        self.assertLessEqual({"item_hash", "question_id", "question_version", "status", "analyzed_at", "model_ref",
+                              "model_info_json", "prompt_hash", "prompt_version", "probability_source",
+                              "probabilities_json", "chosen", "confidence", "latency_ms"}, analysis)
         self.assertFalse([c for c in items | analysis if "label" in c])
 
 
@@ -414,7 +425,9 @@ class CatalogTests(unittest.TestCase):
         sources = n.load_sources()
         ids = [s["id"] for s in sources]
         self.assertEqual(len(ids), len(set(ids)))
-        self.assertTrue({"theblock", "sec", "ecb", "fed"} <= set(ids))
+        self.assertLessEqual({"thedefiant", "bankless", "eth_foundation", "theblock", "sec", "fed"}, set(ids))
+        self.assertNotIn("bitcoinmagazine", ids)
+        self.assertNotIn("ecb", ids)
         for source in sources:
             self.assertTrue(source["url"].startswith("https://"), source["id"])
 
@@ -496,29 +509,34 @@ class FetcherTests(unittest.TestCase):
 
     def test_a_body_over_the_size_cap_is_refused(self):
         self.server.body = b"x" * 5000
+        fetcher = n.UrlFetcher(timeout=5, max_bytes=1000)
         with self.assertRaises(n.FetchError) as caught:
-            n.UrlFetcher(timeout=5, max_bytes=1000).fetch(self.server.url)
+            fetcher.fetch(self.server.url)
         self.assertIn("too large", str(caught.exception))
 
     def test_a_slow_server_times_out(self):
         self.server.delay = 1.5
         started = time.monotonic()
+        fetcher = n.UrlFetcher(timeout=0.3)
         with self.assertRaises(n.FetchError):
-            n.UrlFetcher(timeout=0.3).fetch(self.server.url)
+            fetcher.fetch(self.server.url)
         self.assertLess(time.monotonic() - started, 1.4)
 
     def test_http_errors_and_unreachable_hosts_are_fetch_errors(self):
         self.server.status = 503
+        fetcher5 = n.UrlFetcher(timeout=5)
         with self.assertRaises(n.FetchError):
-            n.UrlFetcher(timeout=5).fetch(self.server.url)
+            fetcher5.fetch(self.server.url)
         self.server.stop()
+        fetcher1 = n.UrlFetcher(timeout=1)
         with self.assertRaises(n.FetchError):
-            n.UrlFetcher(timeout=1).fetch(self.server.url)
+            fetcher1.fetch(self.server.url)
 
     def test_only_http_and_https_urls_are_fetched(self):
+        fetcher = n.UrlFetcher(timeout=1)
         for url in ("file:///etc/passwd", "ftp://a.example/x"):
             with self.assertRaises(n.FetchError):
-                n.UrlFetcher(timeout=1).fetch(url)
+                fetcher.fetch(url)
 
 
 # ---------------------------------------------------------------- ingest
@@ -660,7 +678,7 @@ class AnalysisTests(ServiceBase):
         self.assertEqual(provider.calls, 4)
         rows = self.analysis()
         self.assertEqual(sorted((r["question_id"], r["question_version"]) for r in rows),
-                         [(DIRECTION, 1)] * 2 + [(RELEVANCE, 1)] * 2)
+                         [(DIRECTION, 2)] * 2 + [(RELEVANCE, 2)] * 2)
         relevance = next(r for r in rows if r["question_id"] == RELEVANCE)
         self.assertEqual(relevance["status"], "done")
         self.assertEqual(relevance["chosen"], "medium")
@@ -852,11 +870,24 @@ class AnalysisTests(ServiceBase):
         service = self.service(provider=provider)
         service.poll()
         questions = q.load_questions(scope="news")
-        bumped = dict(questions[DIRECTION], version=2)
+        bumped = dict(questions[DIRECTION], version=3)
         service.questions = {RELEVANCE: questions[RELEVANCE], DIRECTION: bumped}
         self.clock.now += MINUTE
         self.assertEqual(service.poll()["analyzed"], 2)
         self.assertEqual(len(self.analysis(question_id=DIRECTION)), 4)
+
+    def test_price_recaps_and_bitcoin_only_headlines_are_skipped_without_calling_the_model(self):
+        self.fetcher.bodies[SRC_A["url"]] = rss([
+            fresh_item(1, title="ETH surges above $3,000 as price rallies"),
+            fresh_item(2, title="Bitcoin miners increase hashrate after halving", desc="Satoshi era blocks"),
+            fresh_item(3, title="Ethereum Foundation announces Pectra upgrade date", desc="Layer 2 blobs expand"),
+        ])
+        provider = self.provider()
+        result = self.service(provider=provider).poll()
+        self.assertEqual(result["ingested"], 3)
+        self.assertEqual(result["analyzed"], 2)
+        self.assertEqual(result["skipped_stale"], 4)
+        self.assertEqual(provider.calls, 2)
 
 
 # ---------------------------------------------------------------- features for C
@@ -879,14 +910,14 @@ class FeatureTests(TempDirTest):
                              "content_hash": "c"})
         analyzed_at = received_at + 1000 if analyzed_at is None else analyzed_at
         values = (0.0, 0.2, 0.6, 1.0)
-        base = {"item_hash": item_hash, "question_version": 1, "status": status, "analyzed_at": analyzed_at,
+        base = {"item_hash": item_hash, "question_version": 2, "status": status, "analyzed_at": analyzed_at,
                 "model_ref": "m", "model_info": {}, "prompt_hash": "p", "prompt_version": 2,
                 "probability_source": "raw_logprobs", "top_logprobs": [], "temperature": 1.0, "confidence": 0.5,
                 "latency_ms": 1, "timings": {}}
         names = ("none", "low", "medium", "high")
         if status != "done":
             for question in (RELEVANCE, DIRECTION):
-                self.store.append_analysis({"item_hash": item_hash, "question_id": question, "question_version": 1,
+                self.store.append_analysis({"item_hash": item_hash, "question_id": question, "question_version": 2,
                                             "status": status, "analyzed_at": analyzed_at})
             return item_hash
         self.store.append_analysis(dict(
@@ -983,15 +1014,15 @@ class FeatureTests(TempDirTest):
     def test_only_the_requested_question_versions_are_used(self):
         item = self.add(NOW - MINUTE)
         self.store.append_analysis({
-            "item_hash": item, "question_id": RELEVANCE, "question_version": 2, "status": "done", "question_type": "score",
+            "item_hash": item, "question_id": RELEVANCE, "question_version": 3, "status": "done", "question_type": "score",
             "analyzed_at": NOW - 1000, "model_ref": "m", "model_info": {}, "prompt_hash": "p", "prompt_version": 2,
             "probability_source": "raw_logprobs", "top_logprobs": [], "temperature": 1.0, "confidence": 0.5,
             "latency_ms": 1, "timings": {}, "probabilities": {"none": 1.0, "low": 0.0, "medium": 0.0, "high": 0.0},
             "chosen": "none", "value": 0.0})
         self.assertAlmostEqual(self.features(NOW)["windows"]["1h"]["relevance_mass"], 1.0)
-        v2 = self.features(NOW, relevance=(RELEVANCE, 2))["windows"]["1h"]
-        self.assertEqual(v2["items"], 1)
-        self.assertEqual(v2["relevance_mass"], 0.0)
+        v3 = self.features(NOW, relevance=(RELEVANCE, 3))["windows"]["1h"]
+        self.assertEqual(v3["items"], 1)
+        self.assertEqual(v3["relevance_mass"], 0.0)
 
     def test_the_result_is_json_serializable_and_deterministic(self):
         for index in range(5):
