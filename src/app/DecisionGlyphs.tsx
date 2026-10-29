@@ -42,9 +42,9 @@ export function DecisionHead({ view }: { view: DecisionView }) {
   )
 }
 
-/** Master, keeper and Qwen's opinion as three small pills. */
+/** Master, keeper, news analyst and Qwen's opinion as small pills. */
 export function DecisionChips({ view }: { view: DecisionView }) {
-  const { opinion, gate, master } = view
+  const { opinion, gate, master, news } = view
   return (
     <span className="flex flex-wrap items-center gap-1" data-testid="chips">
       {master !== null && (
@@ -61,6 +61,14 @@ export function DecisionChips({ view }: { view: DecisionView }) {
           title="Portero: ¿conviene entrar ahora?"
         >
           Portero {gate ? '✓' : '✕'}
+        </span>
+      )}
+      {news === true && (
+        <span
+          className={`${CHIP} text-long`}
+          title="Analista de noticias: noticias frescas a favor"
+        >
+          Noticias ✓
         </span>
       )}
       {opinion &&

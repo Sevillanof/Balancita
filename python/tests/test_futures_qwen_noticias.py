@@ -173,6 +173,23 @@ class AuditAndIdentityTests(unittest.TestCase):
         self.assertEqual(qt.config_hash(dict(cfg, news_db="/otra/ruta/noticias.sqlite")), base)
         self.assertNotEqual(qt.config_hash(dict(cfg, noticias={"version": 2})), base)
 
+    def test_exam_formula_entries_and_analyse_formula_include_news_enabled_entries(self):
+        from balancita_engine import futures_qwen_trader_exam as ex
+        from test_futures_qwen_live_corta import exam_cfg, op_row
+        cfg = exam_cfg()
+        r1 = op_row(1 * 86_400_000, "ESPERAR", None, 2, True, 30.0, -50.0)
+        r2 = op_row(2 * 86_400_000, "ESPERAR", None, -2, False, 10.0, 45.0)
+        r2["operacion"]["noticias_si"] = True
+        r3 = op_row(3 * 86_400_000, "ESPERAR", None, 2, False, 20.0, -20.0)
+        r3["operacion"]["noticias_si"] = False
+        entries = ex.formula_entries([r1, r2, r3])
+        self.assertEqual(len(entries), 2)
+        self.assertEqual([s for _, s in entries], [1, -1])
+        out = ex.analyse_formula([r1, r2, r3], cfg)
+        self.assertEqual(out["formula"]["n"], 2)
+        self.assertAlmostEqual(out["formula"]["total_bp"], 30.0 + 45.0)
+        self.assertEqual([t["noticias"] for t in out["curvas"]["formula"]], [False, True])
+
 
 if __name__ == "__main__":
     unittest.main()

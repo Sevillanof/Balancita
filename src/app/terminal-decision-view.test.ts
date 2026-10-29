@@ -21,11 +21,29 @@ describe('decisionView', () => {
     })
     expect(view.kind).toBe('enter-long')
     expect(view.gate).toBe(true)
+    expect(view.news).toBeNull()
     expect(view.opinion).toMatchObject({
       state: 'agrees',
       label: 'largo',
       p: '62 %',
     })
+    expect(view.relevant).toBe(true)
+  })
+
+  it('reads an entry enabled by the news analyst when the keeper said no', () => {
+    const view = decisionView({
+      formula: {
+        maestro: 2,
+        portero_si: false,
+        noticias_si: true,
+        motivo: 'maestro fuerte y noticias a favor',
+      },
+      action: 'LONG',
+      formula_action: 'LARGO',
+    })
+    expect(view.kind).toBe('enter-long')
+    expect(view.gate).toBe(false)
+    expect(view.news).toBe(true)
     expect(view.relevant).toBe(true)
   })
 

@@ -135,7 +135,7 @@ export default function TerminalMarketChart({
                   type: 'proposal',
                   direction: view.kind === 'enter-long' ? 'long' : 'short',
                   label: view.label,
-                  detail: `${view.label}: maestro fuerte y portero a favor`,
+                  detail: `${view.label}: maestro fuerte y ${view.news && !view.gate ? 'noticias a favor' : 'portero a favor'}`,
                 })
               else if (view.kind === 'blocked')
                 out.push({
