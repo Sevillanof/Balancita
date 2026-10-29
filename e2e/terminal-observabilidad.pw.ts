@@ -36,7 +36,7 @@ async function openTerminal(page: Page, health: unknown, activity: unknown) {
     mode: 'paper_live',
     source: 'kraken-public-live-stream.v1',
     active_run_id: RUN,
-    products: ['PF_XBTUSD', 'PF_ETHUSD'],
+    products: ['PF_ETHUSD'],
     market: { status: 'live', last_received_at: NOW, funding: 'unknown' },
     engine: {
       status: 'running',
@@ -78,9 +78,23 @@ async function openTerminal(page: Page, health: unknown, activity: unknown) {
   await page.route('**/api-live/observability/activity**', (route) => {
     // The gateway echoes the window and product it was asked for.
     const query = new URL(route.request().url()).searchParams
+    const body = activity as {
+      evaluations?: { by_product?: Array<{ product: string }> }
+    }
+    // The examples describe XBT; the Terminal only asks for ETH.
+    const evaluations = body.evaluations?.by_product
+      ? {
+          ...body.evaluations,
+          by_product: body.evaluations.by_product.map((row) => ({
+            ...row,
+            product: query.get('product'),
+          })),
+        }
+      : body.evaluations
     route.fulfill({
       json: {
-        ...(activity as object),
+        ...body,
+        evaluations,
         window: query.get('window'),
         product: query.get('product'),
       },
@@ -96,7 +110,7 @@ async function openTerminal(page: Page, health: unknown, activity: unknown) {
           run_id: RUN,
           seq: 0,
           type: 'snapshot',
-          instrument_id: 'kraken-futures:PF_XBTUSD',
+          instrument_id: 'kraken-futures:PF_ETHUSD',
           event_time: NOW,
           published_at: NOW,
           data: {
@@ -116,8 +130,6 @@ async function openTerminal(page: Page, health: unknown, activity: unknown) {
     )
   })
   await page.goto('/terminal')
-  // The Terminal opens on ETH; the examples below describe XBT.
-  await page.getByRole('combobox').first().selectOption('PF_XBTUSD')
   await expect(page.getByTestId('activity-panel')).toBeVisible()
 }
 

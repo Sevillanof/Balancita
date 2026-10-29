@@ -104,20 +104,16 @@ const account = new AccountDb(box.dir, closers)
 // Two minutes back: the newest verdict is 1-2 min old, far from the 3 min
 // limit of «current» even when CI is slow.
 const latest = now - (now % MINUTE) - 2 * MINUTE
-const STOPPED_MINUTES: Record<string, number> = { PF_ZECUSD: 30 }
 const bucketAt = (i: number) => latest - i * MINUTE
 /** Planned non-WAIT verdicts by product (minutes back from the latest). */
 const PLAN: Record<string, Record<number, 'LONG' | 'SHORT'>> = {
-  PF_XBTUSD: { 7: 'LONG', 22: 'SHORT', 41: 'LONG' },
-  PF_ETHUSD: { 0: 'SHORT', 15: 'LONG' },
-  PF_ZECUSD: { 0: 'LONG' },
+  PF_ETHUSD: { 7: 'LONG', 22: 'SHORT', 41: 'LONG' },
 }
 const facts: Record<string, unknown> = {}
 const waitIds: Record<string, string[]> = {}
 for (const product of PRODUCTS) {
   const plan = PLAN[product] ?? {}
-  // A product whose engine stopped long ago: its newest verdict is history.
-  const at = (i: number) => bucketAt(i + (STOPPED_MINUTES[product] ?? 0))
+  const at = (i: number) => bucketAt(i)
   const summary: unknown[] = []
   waitIds[product] = []
   for (let i = 89; i >= 0; i -= 1) {
@@ -132,7 +128,7 @@ for (const product of PRODUCTS) {
       at(i),
       action,
       {
-        regime: product === 'PF_ETHUSD' ? 'range' : 'trend',
+        regime: 'trend',
         reason_code: reason,
         selected: {
           action,
@@ -160,13 +156,13 @@ for (const product of PRODUCTS) {
   }
   facts[product] = summary
 }
-// One SYNTHETIC executed entry in D's account (a buy fill, XBT), at a minute
+// One SYNTHETIC executed entry in D's account (a buy fill, ETH), at a minute
 // where no LONG/SHORT is planned: the seed links no decision to it, exactly
 // as the product has no record that would.
 const fillAt = bucketAt(12) + 20_000
-account.enter('synthetic-fill-1', fillAt)
+account.enter('synthetic-fill-1', fillAt, 'c25:PF_ETHUSD')
 const executed = {
-  PF_XBTUSD: [
+  PF_ETHUSD: [
     { orderId: 'synthetic-fill-1', side: 'long', timeMs: fillAt + 150 },
   ],
 }
