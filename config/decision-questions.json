@@ -124,14 +124,14 @@
     },
     {
       "id": "news_relevance_btc",
-      "version": 1,
+      "version": 2,
       "scope": "news",
       "type": "score",
-      "instruction": "Read the news item above. How relevant is it to the price of Bitcoin over the next few hours?",
+      "instruction": "Read the news item above. How relevant is it to the price of Ethereum over the next few hours?",
       "options": [
         {
           "id": "none",
-          "description": "no plausible effect on the Bitcoin price",
+          "description": "no plausible effect on the Ethereum price",
           "value": 0.0
         },
         {
@@ -141,30 +141,30 @@
         },
         {
           "id": "medium",
-          "description": "a clear effect on crypto markets",
+          "description": "a clear effect on Ethereum or crypto markets",
           "value": 0.6
         },
         {
           "id": "high",
-          "description": "a major and immediate effect on Bitcoin",
+          "description": "a major and immediate effect on Ethereum",
           "value": 1.0
         }
       ]
     },
     {
       "id": "news_direction",
-      "version": 1,
+      "version": 2,
       "scope": "news",
       "type": "choice",
-      "instruction": "Read the news item above. Over the next few hours, is its likely effect on crypto prices bullish, bearish or neutral?",
+      "instruction": "Read the news item above. Over the next few hours, is its likely effect on Ethereum and crypto prices bullish, bearish or neutral?",
       "options": [
         {
           "id": "bullish",
-          "description": "likely to push crypto prices up"
+          "description": "likely to push Ethereum and crypto prices up"
         },
         {
           "id": "bearish",
-          "description": "likely to push crypto prices down"
+          "description": "likely to push Ethereum and crypto prices down"
         },
         {
           "id": "neutral",

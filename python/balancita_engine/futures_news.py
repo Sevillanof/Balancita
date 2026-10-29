@@ -103,8 +103,8 @@ NEWS_CONFIG = {
 }
 CONFIG_MISMATCH = "news DB was written with a different config; use a new DB"
 
-RELEVANCE_QUESTION = ("news_relevance_btc", 1)
-DIRECTION_QUESTION = ("news_direction", 1)
+RELEVANCE_QUESTION = ("news_relevance_btc", 2)
+DIRECTION_QUESTION = ("news_direction", 2)
 # An item is "relevant" when P(medium) + P(high) reaches this.
 RELEVANT_OPTIONS = ("medium", "high")
 RELEVANT_THRESHOLD = 0.5
@@ -171,10 +171,37 @@ def item_hash(url, title):
 # --------------------------------------------------------------------------- feeds
 
 _DTD = re.compile(rb"<!\s*(DOCTYPE|ENTITY)", re.IGNORECASE)
-_ISO = re.compile(
-    r"^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2})(?::(\d{2})(?:\.\d+)?)?\s*(Z|[+-]\d{2}:?\d{2})?)?$",
-    re.IGNORECASE,
-)
+_ISO_DATE = re.compile(r"^(\d{4})-(\d{2})-(\d{2})(?:[T ](.*))?$", re.IGNORECASE)
+_ISO_CLOCK = re.compile(r"^(\d{2}):(\d{2})(?::(\d{2}))?(.*)")
+_ISO_ZONE = re.compile(r"^(?:\.\d+)?\s*(Z|[+-]\d{2}:?\d{2})?$", re.IGNORECASE)
+
+
+def _parse_iso_datetime(text):
+    date_match = _ISO_DATE.match(text)
+    if not date_match:
+        return None
+    year, month, day, rest = date_match.groups()
+    hour = minute = second = 0
+    zone = None
+    if rest is not None:
+        clock_match = _ISO_CLOCK.match(rest)
+        if not clock_match:
+            return None
+        h_str, m_str, s_str, tail = clock_match.groups()
+        zone_match = _ISO_ZONE.match(tail or "")
+        if not zone_match:
+            return None
+        zone = zone_match.group(1)
+        hour, minute, second = int(h_str), int(m_str), int(s_str or 0)
+    try:
+        moment = datetime(int(year), int(month), int(day), hour, minute, second)
+    except ValueError:
+        return None
+    if zone and zone.upper() != "Z":
+        sign = 1 if zone[0] == "+" else -1
+        digits = zone[1:].replace(":", "")
+        moment = moment.replace(tzinfo=timezone(sign * timedelta(hours=int(digits[:2]), minutes=int(digits[2:]))))
+    return moment
 
 
 def parse_date(text):
@@ -182,21 +209,10 @@ def parse_date(text):
     text = (text or "").strip()
     if not text:
         return None
-    moment = None
     try:
         moment = parsedate_to_datetime(text)
     except (TypeError, ValueError, IndexError):
-        match = _ISO.match(text)
-        if match:
-            year, month, day, hour, minute, second, zone = match.groups()
-            try:
-                moment = datetime(int(year), int(month), int(day), int(hour or 0), int(minute or 0), int(second or 0))
-            except ValueError:
-                return None
-            if zone and zone.upper() != "Z":
-                sign = 1 if zone[0] == "+" else -1
-                digits = zone[1:].replace(":", "")
-                moment = moment.replace(tzinfo=timezone(sign * timedelta(hours=int(digits[:2]), minutes=int(digits[2:]))))
+        moment = _parse_iso_datetime(text)
     if moment is None:
         return None
     if moment.tzinfo is None:
@@ -357,6 +373,23 @@ class UrlFetcher:
         ):
             self._opener.add_handler(handler)
 
+    def _read_bounded_body(self, response, started):
+        declared = response.headers.get("Content-Length")
+        if declared and declared.isdigit() and int(declared) > self.max_bytes:
+            raise FetchError("response too large ({} bytes)".format(declared))
+        chunks, size = [], 0
+        while True:
+            chunk = response.read(65536)
+            if not chunk:
+                break
+            size += len(chunk)
+            if size > self.max_bytes:
+                raise FetchError("response too large (over {} bytes)".format(self.max_bytes))
+            chunks.append(chunk)
+            if time.monotonic() - started > self.timeout:
+                raise FetchError("timed out after {}s".format(self.timeout))
+        return b"".join(chunks)
+
     def fetch(self, url, etag=None, last_modified=None):
         if urllib.parse.urlsplit(str(url)).scheme not in ("http", "https"):
             raise FetchError("only http(s) feeds are fetched")
@@ -371,21 +404,8 @@ class UrlFetcher:
         started = time.monotonic()
         try:
             with self._opener.open(urllib.request.Request(url, headers=headers), timeout=self.timeout) as response:
-                declared = response.headers.get("Content-Length")
-                if declared and declared.isdigit() and int(declared) > self.max_bytes:
-                    raise FetchError("response too large ({} bytes)".format(declared))
-                chunks, size = [], 0
-                while True:
-                    chunk = response.read(65536)
-                    if not chunk:
-                        break
-                    size += len(chunk)
-                    if size > self.max_bytes:
-                        raise FetchError("response too large (over {} bytes)".format(self.max_bytes))
-                    chunks.append(chunk)
-                    if time.monotonic() - started > self.timeout:
-                        raise FetchError("timed out after {}s".format(self.timeout))
-                return FetchResult(response.status, b"".join(chunks), response.headers.get("ETag"),
+                body = self._read_bounded_body(response, started)
+                return FetchResult(response.status, body, response.headers.get("ETag"),
                                    response.headers.get("Last-Modified"))
         except urllib.error.HTTPError as error:
             try:
@@ -543,16 +563,31 @@ def _empty_features(decision_time_ms, windows):
             "windows": {name: dict(_EMPTY_WINDOW) for name, _ in windows}}
 
 
+def _aggregate_feature_window(rows, cutoff_ms):
+    weights, signed, values, relevant, count = [], [], [], 0, 0
+    for received_at, relevance_json, value, direction_json in rows:
+        if received_at <= cutoff_ms:
+            continue
+        relevance_p, direction_p = json.loads(relevance_json), json.loads(direction_json)
+        weight = sum(relevance_p.get(option, 0.0) for option in RELEVANT_OPTIONS)
+        count += 1
+        relevant += 1 if weight >= RELEVANT_THRESHOLD else 0
+        weights.append(weight)
+        signed.append(weight * (direction_p.get("bullish", 0.0) - direction_p.get("bearish", 0.0)))
+        values.append(float(value) if value is not None else 0.0)
+    mass = math.fsum(weights)
+    return {
+        "items": count,
+        "count_relevant": relevant,
+        "relevance_mass": mass,
+        "weighted_sentiment": math.fsum(signed) / mass if mass > 0 else None,
+        "max_relevance": max(values) if values else 0.0,
+    }
+
+
 def news_features(db, decision_time_ms, relevance=RELEVANCE_QUESTION, direction=DIRECTION_QUESTION,
                   windows=FEATURE_WINDOWS):
-    """Time-windowed aggregates of the stored analyses known at ``decision_time_ms``.
-
-    Per window (``1h``, ``4h``, by ``received_at``): ``items`` (both answers known), ``count_relevant``
-    (P(medium)+P(high) >= 0.5), ``relevance_mass`` (sum of P(medium)+P(high)), ``weighted_sentiment``
-    (sum of w*(P(bullish)-P(bearish)) / sum of w with w = P(medium)+P(high); ``None`` when the mass is
-    0) and ``max_relevance`` (largest expected relevance value, 0..1). No lookahead: an item needs
-    ``received_at <= t`` and both analyses ``done`` with ``analyzed_at <= t``.
-    """
+    """Time-windowed aggregates of the stored analyses known at ``decision_time_ms``."""
     t = int(decision_time_ms)
     out = _empty_features(t, windows)
     oldest = t - max(span for _, span in windows)
@@ -570,25 +605,7 @@ def news_features(db, decision_time_ms, relevance=RELEVANCE_QUESTION, direction=
     except sqlite3.OperationalError:  # no tables yet: nothing is known
         return out
     for name, span in windows:
-        weights, signed, values, relevant, count = [], [], [], 0, 0
-        for received_at, relevance_json, value, direction_json in rows:
-            if received_at <= t - span:
-                continue
-            relevance_p, direction_p = json.loads(relevance_json), json.loads(direction_json)
-            weight = sum(relevance_p.get(option, 0.0) for option in RELEVANT_OPTIONS)
-            count += 1
-            relevant += 1 if weight >= RELEVANT_THRESHOLD else 0
-            weights.append(weight)
-            signed.append(weight * (direction_p.get("bullish", 0.0) - direction_p.get("bearish", 0.0)))
-            values.append(float(value) if value is not None else 0.0)
-        mass = math.fsum(weights)
-        out["windows"][name] = {
-            "items": count,
-            "count_relevant": relevant,
-            "relevance_mass": mass,
-            "weighted_sentiment": math.fsum(signed) / mass if mass > 0 else None,
-            "max_relevance": max(values) if values else 0.0,
-        }
+        out["windows"][name] = _aggregate_feature_window(rows, t - span)
     return out
 
 
@@ -617,9 +634,11 @@ class NewsService:
     """Poll loop state; ``poll()`` never raises."""
 
     def __init__(self, store, sources, fetcher, provider=None, questions=None, calibration=None, template=None,
-                 probability_source=None, log=print, clock=None, interval_ms=DEFAULT_INTERVAL_MS,
-                 retry_window_ms=DEFAULT_RETRY_WINDOW_MS, max_published_age_ms=DEFAULT_MAX_PUBLISHED_AGE_MS,
-                 max_analyses_per_poll=DEFAULT_MAX_ANALYSES_PER_POLL, max_attempts=DEFAULT_MAX_ATTEMPTS):
+                 probability_source=None, log=print, clock=None, interval_ms=DEFAULT_INTERVAL_MS, **options):
+        retry_window_ms = options.get("retry_window_ms", DEFAULT_RETRY_WINDOW_MS)
+        max_published_age_ms = options.get("max_published_age_ms", DEFAULT_MAX_PUBLISHED_AGE_MS)
+        max_analyses_per_poll = options.get("max_analyses_per_poll", DEFAULT_MAX_ANALYSES_PER_POLL)
+        max_attempts = options.get("max_attempts", DEFAULT_MAX_ATTEMPTS)
         if interval_ms < MIN_INTERVAL_MS:
             raise ValueError("the polling interval must be at least {} s".format(MIN_INTERVAL_MS // 1000))
         self.store = store
@@ -652,29 +671,30 @@ class NewsService:
             self._problems[key] = message
 
     # -- ingest
+    def _ingest_one_source(self, source, now, result):
+        state = self._feeds[source["id"]]
+        if now < state["next_due"]:
+            return
+        try:
+            fetched = self.fetcher.fetch(source["url"], etag=state["etag"], last_modified=state["last_modified"])
+            items = [] if fetched.status == 304 else parse_feed(fetched.body, source["url"])
+        except (FetchError, FeedError) as error:
+            self._source_failed(source, state, now, result, str(error))
+            return
+        except Exception as error:  # a source must never stop the others
+            self._source_failed(source, state, now, result, "unexpected {}: {}".format(type(error).__name__, error))
+            return
+        if state["problem"] is not None:
+            self.log("source {} recovered".format(source["id"]))
+        state.update(fails=0, problem=None, next_due=now + self.interval_ms,
+                     etag=fetched.etag or state["etag"], last_modified=fetched.last_modified or state["last_modified"])
+        for raw in items:
+            key = "ingested" if self._store_item(source, raw, now) else "duplicates"
+            result[key] += 1
+
     def _ingest(self, now, result):
         for source in self.sources:
-            state = self._feeds[source["id"]]
-            if now < state["next_due"]:
-                continue
-            try:
-                fetched = self.fetcher.fetch(source["url"], etag=state["etag"], last_modified=state["last_modified"])
-                items = [] if fetched.status == 304 else parse_feed(fetched.body, source["url"])
-            except (FetchError, FeedError) as error:
-                self._source_failed(source, state, now, result, str(error))
-                continue
-            except Exception as error:  # a source must never stop the others
-                self._source_failed(source, state, now, result, "unexpected {}: {}".format(type(error).__name__, error))
-                continue
-            if state["problem"] is not None:
-                self.log("source {} recovered".format(source["id"]))
-            state.update(fails=0, problem=None, next_due=now + self.interval_ms,
-                         etag=fetched.etag or state["etag"], last_modified=fetched.last_modified or state["last_modified"])
-            for raw in items:
-                if self._store_item(source, raw, now):
-                    result["ingested"] += 1
-                else:
-                    result["duplicates"] += 1
+            self._ingest_one_source(source, now, result)
 
     def _source_failed(self, source, state, now, result, message):
         state["fails"] += 1
@@ -700,10 +720,14 @@ class NewsService:
 
     # -- analysis
     def _is_stale(self, row, now):
-        _, _, _, _, published_at, received_at = row
+        from . import futures_qwen_noticias as noticias
+
+        _, _, title, summary, published_at, received_at = row
         if now - received_at > self.retry_window_ms:
             return True
-        return published_at is not None and now - published_at > self.max_published_age_ms
+        if published_at is not None and now - published_at > self.max_published_age_ms:
+            return True
+        return noticias.is_irrelevant_headline(title, summary)
 
     def _model_down(self, reason):
         if self._model_up is not False:
@@ -711,9 +735,7 @@ class NewsService:
         self._model_up = False
         self._identity = None
 
-    def _analyze(self, now, result):
-        if self.provider is None:
-            return
+    def _collect_pending_work(self, now, result):
         work = []
         for question in self.questions.values():
             for row in self.store.unresolved(question["id"], question["version"]):
@@ -724,9 +746,46 @@ class NewsService:
                     result["skipped_stale"] += 1
                 else:
                     work.append((row, question))
-        # newest items first, an item's questions together (same STATE prefix)
         work.sort(key=lambda pair: (-(min(pair[0][4], pair[0][5]) if pair[0][4] else pair[0][5]), -pair[0][0],
                                     pair[1]["id"], pair[1]["version"]))
+        return work
+
+    def _analyze_one_item(self, row, question, ref, result):
+        _, hash_, title, summary, _, _ = row
+        base = {"item_hash": hash_, "question_id": question["id"], "question_version": question["version"]}
+        prompt = build_prompt(news_state({"title": title, "summary": summary}), question, self.template)
+        try:
+            done = ask_model(self.provider, prompt, question_letters(question), question,
+                             temperature_for(self.calibration, question["id"], question["version"]),
+                             self.template, self.probability_source)
+        except ModelUnavailable as error:
+            self._model_down(str(error))
+            return False
+        except ModelResponseError as error:
+            self.store.append_error(dict(base, kind=error.kind, message=error, model_ref=ref))
+            self.log("error {} {}: {}".format(hash_[:12], question["id"], error.kind))
+            if self.store.error_count(hash_, question["id"], question["version"]) >= self.max_attempts:
+                self.store.append_analysis(dict(base, status="failed", analyzed_at=self.clock()))
+                result["pending"] -= 1
+            return True
+        outcome, output = done["result"], done["output"]
+        self.store.append_analysis(dict(
+            base, status="done", analyzed_at=self.clock(), question_type=question["type"], model_ref=ref,
+            model_info=self._identity, prompt_hash=prompt_hash(prompt, self.template),
+            prompt_version=self.template["version"], probability_source=done["source"],
+            top_logprobs=output["top_logprobs"], probabilities=outcome["probabilities"],
+            temperature=outcome["temperature"], chosen=outcome["chosen"], value=outcome["value"],
+            confidence=outcome["confidence"], latency_ms=output.get("latency_ms", 0),
+            timings=output.get("timings", {}),
+        ))
+        result["analyzed"] += 1
+        result["pending"] -= 1
+        return True
+
+    def _analyze(self, now, result):
+        if self.provider is None:
+            return
+        work = self._collect_pending_work(now, result)
         result["pending"] = len(work)
         if not work:
             return
@@ -740,35 +799,8 @@ class NewsService:
             self._identity = self.provider.identity()
         ref = self._identity.get("model_ref") or "unknown"
         for row, question in work[: self.max_analyses_per_poll]:
-            _, hash_, title, summary, _, _ = row
-            base = {"item_hash": hash_, "question_id": question["id"], "question_version": question["version"]}
-            prompt = build_prompt(news_state({"title": title, "summary": summary}), question, self.template)
-            try:
-                done = ask_model(self.provider, prompt, question_letters(question), question,
-                                 temperature_for(self.calibration, question["id"], question["version"]),
-                                 self.template, self.probability_source)
-            except ModelUnavailable as error:
-                self._model_down(str(error))
+            if not self._analyze_one_item(row, question, ref, result):
                 break
-            except ModelResponseError as error:
-                self.store.append_error(dict(base, kind=error.kind, message=error, model_ref=ref))
-                self.log("error {} {}: {}".format(hash_[:12], question["id"], error.kind))
-                if self.store.error_count(hash_, question["id"], question["version"]) >= self.max_attempts:
-                    self.store.append_analysis(dict(base, status="failed", analyzed_at=self.clock()))
-                    result["pending"] -= 1
-                continue
-            outcome, output = done["result"], done["output"]
-            self.store.append_analysis(dict(
-                base, status="done", analyzed_at=self.clock(), question_type=question["type"], model_ref=ref,
-                model_info=self._identity, prompt_hash=prompt_hash(prompt, self.template),
-                prompt_version=self.template["version"], probability_source=done["source"],
-                top_logprobs=output["top_logprobs"], probabilities=outcome["probabilities"],
-                temperature=outcome["temperature"], chosen=outcome["chosen"], value=outcome["value"],
-                confidence=outcome["confidence"], latency_ms=output.get("latency_ms", 0),
-                timings=output.get("timings", {}),
-            ))
-            result["analyzed"] += 1
-            result["pending"] -= 1
 
     def poll(self):
         """Ingests the due feeds and analyzes the pending items; returns counts and never raises."""
@@ -805,7 +837,7 @@ def _env_flag(value):
     return str(value or "").strip().lower() in ("1", "true", "yes", "on")
 
 
-def main(argv=None, provider=None, fetcher=None):
+def _build_news_parser():
     import argparse
 
     parser = argparse.ArgumentParser(description="Balancita futures news process (N)")
@@ -830,7 +862,42 @@ def main(argv=None, provider=None, fetcher=None):
     parser.add_argument("--prompts-file")
     parser.add_argument("--questions-file")
     parser.add_argument("--calibration-file")
-    args = parser.parse_args(argv)
+    return parser
+
+
+def _resolve_analysis_options(args, env, provider):
+    analyze = args.analyze or _env_flag(env.get("NEWS_ANALYSIS"))
+    if not analyze:
+        return None, None, None, None, None
+    questions = load_questions(args.questions_file, scope="news")
+    calibration = load_calibration(args.calibration_file)
+    prompts = load_prompt_config(args.prompts_file)
+    version = args.prompt_version if args.prompt_version is not None else prompts["default_version"]
+    if version not in prompts["templates"]:
+        raise ValueError("unknown prompt version {}".format(version))
+    template = prompts["templates"][version]
+    mode = args.probability_source or prompts["probability_source"]
+    if provider is None:
+        provider = LlamaCppProvider(args.llama_url or llama_url(env), model_ref(env), timeout=args.timeout_seconds)
+    return provider, questions, calibration, template, mode
+
+
+def _run_service_loop(service, store, args, sources, interval, provider, log):
+    if args.once:
+        print(_summary(service.poll()))
+        return 0
+    log("news writing to {} (config {}); {} source(s), every {} s; analysis {}".format(
+        args.news_db, store.config_hash[:12], len(sources), int(interval),
+        "on ({})".format(", ".join(sorted(service.questions))) if provider is not None else "off"))
+    while True:
+        outcome = service.poll()
+        if outcome["ingested"] or outcome["analyzed"] or outcome["skipped_stale"]:
+            log(_summary(outcome))
+        time.sleep(args.poll_seconds)
+
+
+def main(argv=None, provider=None, fetcher=None):
+    args = _build_news_parser().parse_args(argv)
     env = os.environ
     log = lambda line: print(line, flush=True)
     if args.features_at is not None:
@@ -845,22 +912,7 @@ def main(argv=None, provider=None, fetcher=None):
     store = None
     try:
         sources = configured_sources(args.sources_file, env)
-        analyze = args.analyze or _env_flag(env.get("NEWS_ANALYSIS"))
-        questions = load_questions(args.questions_file, scope="news") if analyze else None
-        calibration = load_calibration(args.calibration_file) if analyze else None
-        template = mode = None
-        if analyze:
-            prompts = load_prompt_config(args.prompts_file)
-            version = args.prompt_version if args.prompt_version is not None else prompts["default_version"]
-            if version not in prompts["templates"]:
-                raise ValueError("unknown prompt version {}".format(version))
-            template = prompts["templates"][version]
-            mode = args.probability_source or prompts["probability_source"]
-            if provider is None:
-                # Q's provider: refuses any URL that is not loopback, never uses an HTTP proxy.
-                provider = LlamaCppProvider(args.llama_url or llama_url(env), model_ref(env), timeout=args.timeout_seconds)
-        else:
-            provider = None
+        provider, questions, calibration, template, mode = _resolve_analysis_options(args, env, provider)
         interval = args.interval_seconds if args.interval_seconds is not None else float(env.get("NEWS_POLL_SECONDS") or 300)
         if fetcher is None:
             fetcher = UrlFetcher(timeout=args.fetch_timeout_seconds,
@@ -878,17 +930,7 @@ def main(argv=None, provider=None, fetcher=None):
         print("configuration error: {}".format(error), file=sys.stderr)
         return 2
     try:
-        if args.once:
-            print(_summary(service.poll()))
-            return 0
-        log("news writing to {} (config {}); {} source(s), every {} s; analysis {}".format(
-            args.news_db, store.config_hash[:12], len(sources), int(interval),
-            "on ({})".format(", ".join(sorted(service.questions))) if provider is not None else "off"))
-        while True:
-            outcome = service.poll()
-            if outcome["ingested"] or outcome["analyzed"] or outcome["skipped_stale"]:
-                log(_summary(outcome))
-            time.sleep(args.poll_seconds)
+        return _run_service_loop(service, store, args, sources, interval, provider, log)
     except KeyboardInterrupt:
         pass
     finally:

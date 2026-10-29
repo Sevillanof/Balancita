@@ -70,9 +70,15 @@ class NewsAnalystFilterTests(unittest.TestCase):
         )
         # 2. Price recap headline (narrating price move -> ignored)
         _seed_news_item(
-            self.store, 2, "Bitcoin slides below $80,000 as traders react",
+            self.store, 2, "Ethereum slides below $3,000 as traders react",
             self.t0 - 8 * MIN, self.t0 - 5 * MIN, self.t0 - 4 * MIN,
             "high", 1.0, "bearish"
+        )
+        # 2b. Bitcoin-only headline (no Ethereum, DeFi, or macro relevance -> ignored)
+        _seed_news_item(
+            self.store, 25, "Bitcoin miners expand hashrate ahead of difficulty adjustment",
+            self.t0 - 7 * MIN, self.t0 - 5 * MIN, self.t0 - 4 * MIN,
+            "high", 1.0, "bullish"
         )
         # 3. Future item (analyzed after decision time t0 -> no look-ahead, ignored at t0)
         _seed_news_item(
