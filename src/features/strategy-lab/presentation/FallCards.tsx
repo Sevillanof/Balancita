@@ -89,7 +89,12 @@ export default function FallCards({ trades, selected, onSelect }: Props) {
           operación · tocá una para verla arriba
         </span>
       </div>
-      <div className="grid grid-cols-[repeat(auto-fill,minmax(11rem,1fr))] gap-2">
+      <div
+        className="grid gap-2"
+        style={{
+          gridTemplateColumns: 'repeat(auto-fill, minmax(11rem, 1fr))',
+        }}
+      >
         {falls.map((trade) => {
           const on = trade.trade_id === selected?.trade_id
           const win = trade.net_bp >= 0
