@@ -6,13 +6,26 @@ type Props = {
   /** Closes of the whole stretch, oldest first: the price of buying at the start and holding. */
   closes: number[]
   product: string
+  /** The account the trades started from, when each one used the whole account (then the USD figures follow it). */
+  accountUsd?: number | null
 }
 
 /** The answer first: does it win after costs, and against holding the product. */
-export default function RunVerdict({ trades, closes, product }: Props) {
+export default function RunVerdict({
+  trades,
+  closes,
+  product,
+  accountUsd,
+}: Props) {
   if (trades.length === 0) return null
-  const notional = Number(trades.find((t) => t.notional_usd)?.notional_usd) || 0
+  const notional =
+    accountUsd ??
+    (Number(trades.find((t) => t.notional_usd)?.notional_usd) || 0)
   const net = trades.reduce((sum, t) => sum + t.net_bp, 0)
+  // Each operation can have its own size (the whole account): then the total is what they made, not bp times one size
+  const made = accountUsd
+    ? trades.reduce((sum, t) => sum + (t.pnl_usd ?? 0), 0)
+    : null
   const first = closes[0]
   const last = closes[closes.length - 1]
   const held = first && last && first > 0 ? (last / first - 1) * 1e4 : null
@@ -20,7 +33,7 @@ export default function RunVerdict({ trades, closes, product }: Props) {
     notional > 0
       ? `${signedAmount((bp / 1e4) * notional, 2) ?? '0,00'} USD`
       : `${signedAmount(bp, 0) ?? '0'} pb`
-  const wins = net >= 0
+  const wins = (made ?? net) >= 0
   const coin = product.replace(/^PF_|USD$/g, '')
   return (
     <div
@@ -31,7 +44,7 @@ export default function RunVerdict({ trades, closes, product }: Props) {
         data-testid="run-verdict-total"
         className={`text-run-value leading-none tabular-nums ${wins ? 'text-long' : 'text-short'}`}
       >
-        {text(net)}
+        {made !== null ? `${signedAmount(made, 2) ?? '0,00'} USD` : text(net)}
       </strong>
       <div className="grid gap-0.5">
         <span className="text-title font-semibold text-ink">

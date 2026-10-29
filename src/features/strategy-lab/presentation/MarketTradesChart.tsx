@@ -60,6 +60,8 @@ const tradeLabel = (trade: RunTrade, index: number) =>
   `Operación ${index + 1} · ${trade.side === 'LONG' ? 'largo' : 'corto'} · ${WHEN.format(trade.entry_time_ms)} · ${signedAmount(trade.net_bp, 1)} pb${movementText(trade) ? ` · ${movementText(trade)}` : ''}${dropText(trade) ? ` · ${dropText(trade)}` : ''}`
 
 type Props = {
+  /** The strip of operations is drawn elsewhere (inside the closed details under the chart). */
+  hideStrip?: boolean
   product: string
   candles: RunCandle[]
   /** `full` = the whole stretch of the test; `zoom` = the window around the chosen operation. */
@@ -70,12 +72,82 @@ type Props = {
   onShowAll: () => void
 }
 
+type StripProps = {
+  trades: RunTrade[]
+  selected: RunTrade | null
+  onSelect: (trade: RunTrade) => void
+}
+
+/** One bar per operation (green won, red lost); tapping one opens it on the chart. */
+export function TradeStrip({ trades, selected, onSelect }: StripProps) {
+  const sorted = useMemo(
+    () => [...trades].sort((a, b) => a.entry_time_ms - b.entry_time_ms),
+    [trades],
+  )
+  const rated = trades.some((t) => movementOf(t) !== null)
+  if (sorted.length === 0) return null
+  return (
+    <div className="grid gap-1.5 rounded-lg bg-canvas px-3.5 py-3">
+      <div className="flex justify-between gap-2 text-label tracking-section text-ink-2 uppercase">
+        <span>Cada operación</span>
+        <span className="tracking-normal normal-case">
+          {rated
+            ? 'ancho = tamaño · raya sólida = con movimiento · raya cortada = en calma · tocá una para ver qué pasó'
+            : 'tocá una para ver qué pasó'}
+        </span>
+      </div>
+      <div
+        className="flex flex-wrap gap-0.75"
+        role="group"
+        aria-label="Cada operación"
+      >
+        {sorted.map((trade, index) => {
+          const moving = movementOf(trade)
+          return (
+            <span
+              key={trade.trade_id}
+              className="grid content-end justify-items-center gap-0.5"
+            >
+              <button
+                type="button"
+                aria-label={tradeLabel(trade, index)}
+                aria-pressed={trade.trade_id === selected?.trade_id}
+                onClick={() => onSelect(trade)}
+                data-movement={
+                  moving === null
+                    ? undefined
+                    : moving
+                      ? 'con-movimiento'
+                      : 'en-calma'
+                }
+                style={{
+                  height: 14 + Math.min(18, Math.abs(trade.net_bp) / 6),
+                  // the width is the size the analyst gave the entry (12 px = size 1)
+                  width: 12 * (trade.size_mult ?? 1),
+                }}
+                className={`cursor-pointer rounded-swatch border-none p-0 outline-offset-2 aria-pressed:outline-2 aria-pressed:outline-ink aria-pressed:outline-solid ${trade.net_bp >= 0 ? 'bg-long' : 'bg-short'}`}
+              />
+              {moving !== null && (
+                <span
+                  aria-hidden="true"
+                  className={`block w-full border-0 border-t-2 ${moving ? 'border-solid border-ink' : 'border-dashed border-ink-3'}`}
+                />
+              )}
+            </span>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
 /**
  * One chart for the whole story: the real price of the product, each operation painted on it (green
  * won, red lost) and, when one is chosen, the same chart zooms to it and draws what could have been
  * earned. Under it, the two bars (what we made vs what was there) and the three icons of the right call.
  */
 export default function MarketTradesChart({
+  hideStrip = false,
   product,
   candles,
   view,
@@ -491,58 +563,8 @@ export default function MarketTradesChart({
         )}
       </svg>
 
-      {sorted.length > 0 && (
-        <div className="grid gap-1.5 rounded-lg bg-canvas px-3.5 py-3">
-          <div className="flex justify-between gap-2 text-label tracking-section text-ink-2 uppercase">
-            <span>Cada operación</span>
-            <span className="tracking-normal normal-case">
-              {rated
-                ? 'ancho = tamaño · raya sólida = con movimiento · raya cortada = en calma · tocá una para ver qué pasó'
-                : 'tocá una para ver qué pasó'}
-            </span>
-          </div>
-          <div
-            className="flex flex-wrap gap-0.75"
-            role="group"
-            aria-label="Cada operación"
-          >
-            {sorted.map((trade, index) => {
-              const moving = movementOf(trade)
-              return (
-                <span
-                  key={trade.trade_id}
-                  className="grid content-end justify-items-center gap-0.5"
-                >
-                  <button
-                    type="button"
-                    aria-label={tradeLabel(trade, index)}
-                    aria-pressed={trade.trade_id === selected?.trade_id}
-                    onClick={() => onSelect(trade)}
-                    data-movement={
-                      moving === null
-                        ? undefined
-                        : moving
-                          ? 'con-movimiento'
-                          : 'en-calma'
-                    }
-                    style={{
-                      height: 14 + Math.min(18, Math.abs(trade.net_bp) / 6),
-                      // the width is the size the analyst gave the entry (12 px = size 1)
-                      width: 12 * (trade.size_mult ?? 1),
-                    }}
-                    className={`cursor-pointer rounded-swatch border-none p-0 outline-offset-2 aria-pressed:outline-2 aria-pressed:outline-ink aria-pressed:outline-solid ${trade.net_bp >= 0 ? 'bg-long' : 'bg-short'}`}
-                  />
-                  {moving !== null && (
-                    <span
-                      aria-hidden="true"
-                      className={`block w-full border-0 border-t-2 ${moving ? 'border-solid border-ink' : 'border-dashed border-ink-3'}`}
-                    />
-                  )}
-                </span>
-              )
-            })}
-          </div>
-        </div>
+      {!hideStrip && (
+        <TradeStrip trades={trades} selected={selected} onSelect={onSelect} />
       )}
 
       {zoom && selected && potential && (

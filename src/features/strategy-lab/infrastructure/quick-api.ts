@@ -105,7 +105,14 @@ export type ExigenciaLevels = {
   portero: number
   analista: AnalistaModo
   medicion?: Medicion
+  /** What decides the entries of the test: the formula (paper) or ETH's rebound after a fall of 5 % in 1 h. */
+  entrada?: Entrada
+  /** Screen only (never sent): 100 USD per trade, or the whole account (1.000 USD plus what was won or lost). */
+  cuenta?: Cuenta
 }
+
+export type Entrada = 'formula' | 'rebote' | 'rebote_btc'
+export type Cuenta = 'fija' | 'entera'
 
 /** One row of the operation table (version 8): operations closed by the fixed exit rule, net after costs. */
 export type QuickOperationStats = {
@@ -167,10 +174,24 @@ export type QuickTrade = {
   /** The movement analyst: the size the entry got (1 when off) and whether ETH was moving (`null`: not enough history). */
   tamano?: number
   movimiento?: boolean | null
+  /** Rebound entries: the fall that fired it (ETH down `pct` % in the hour before `hasta_ms`; BTC's move in the same hour). */
+  caida?: {
+    desde_ms: number
+    hasta_ms: number
+    desde_px: number
+    hasta_px: number
+    pct: number
+    btc_pct: number | null
+  }
+  /** Rebound entries: 5-minute closes `[t_ms, close]` around the operation, for the zoom. */
+  velas?: Array<[number, number]>
 }
 
 /** The formula alone (no Qwen) over every wake of the exam range, one position per product, as it operates live. */
 export type QuickFormula = {
+  /** What decided the entries (absent in results made before: the formula) and, for a rebound, the rule in words. */
+  entrada?: Entrada
+  regla?: string
   /** The honesty meter of this test (absent in results made before it existed). */
   honestidad?: HonestyMeter | null
   exigencia?: Exigencia | null
@@ -198,85 +219,6 @@ export type QuickFormula = {
   >
 }
 
-/** The fall that fired the rebound analyst: ETH down `pct` % in the hour before `hasta_ms` (BTC's move in the same hour, when the filter asks). */
-export type ReboteDrop = {
-  desde_ms: number
-  hasta_ms: number
-  desde_px: number
-  hasta_px: number
-  pct: number
-  btc_pct: number | null
-}
-
-/** What the account looks like after an operation, sized with the whole account (`compuesto`) or with 100 USD (`fijo`). */
-export type ReboteAccountStep = {
-  nocional_usd: number
-  pnl_usd: number
-  cuenta_usd: number
-}
-
-export type ReboteTrade = {
-  producto: string
-  lado: 1
-  entrada_ms: number
-  salida_ms: number
-  neto_bp: number
-  motivo: string
-  entrada_px: number
-  salida_px: number
-  caida: ReboteDrop
-  /** 5-minute closes `[t_ms, close]` around the operation, for the zoom. */
-  velas: Array<[number, number]>
-  cuenta: Record<'compuesto' | 'fijo', ReboteAccountStep>
-}
-
-export type ReboteAccount = {
-  inicial_usd: number
-  final_usd: number
-  ganancia_usd: number
-  ganancia_pct: number
-  caida_maxima_pct: number
-  /** Account after each operation: `[exit_ms, usd]`. */
-  curva: Array<[number, number]>
-}
-
-export type ReboteVariant = {
-  id: 'principal' | 'filtro_btc'
-  label: string
-  salida_horas: number
-  filtro_btc_pct: number | null
-  caidas: number
-  operaciones: ReboteTrade[]
-  resumen: {
-    operaciones: number
-    neto_pb: number
-    por_operacion_pb?: number
-    ganadoras?: number
-    por_anio: Record<string, { operaciones: number; neto_pb: number }>
-    peor_pb?: number
-    mejor_pb?: number
-  }
-  cuentas: Record<'compuesto' | 'fijo', ReboteAccount>
-  honestidad: HonestyMeter
-}
-
-/** The rebound analyst (no Qwen): ETH falls 5 % in 1 h → long, out after 24 h; and its variant with the BTC filter. */
-export type QuickRebote = {
-  schema: string
-  producto: string
-  desde_ms: number
-  hasta_ms: number
-  inicial_usd: number
-  fijo_usd: number
-  costo_ida_vuelta_pb: number
-  caida_pct: number
-  ventana_min: number
-  variantes: ReboteVariant[]
-  /** Hourly closes `[t_ms, close]` by product over the period. */
-  mercado: Record<string, Array<[number, number]>>
-  note: string
-}
-
 export type QuickSummary = {
   photos: number
   horizon_min: number
@@ -297,8 +239,6 @@ export type QuickSummary = {
   operacion?: QuickOperation
   /** Only the formula-only variant (no Qwen). */
   formula?: QuickFormula
-  /** Only the rebound analyst (no Qwen). */
-  rebote?: QuickRebote
 }
 
 /** One candidate of the quick test (another prompt or another model) with its last state; the finished ones are compared. */
@@ -358,6 +298,13 @@ async function failure(response: Response): Promise<Error> {
 const url = (strategyId: string) =>
   `${STRATEGIES_API_BASE}/strategies/${encodeURIComponent(strategyId)}/quick`
 
+/** The levels the server knows: the account size is only how the screen adds up the same operations. */
+const wire = (levels: ExigenciaLevels) => {
+  const out = { ...levels }
+  delete out.cuenta
+  return out
+}
+
 export const quickApi: QuickApi = {
   async status(strategyId) {
     const response = await fetch(url(strategyId))
@@ -370,7 +317,7 @@ export const quickApi: QuickApi = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         ...(variant ? { variant } : {}),
-        ...(exigencia ? { exigencia } : {}),
+        ...(exigencia ? { exigencia: wire(exigencia) } : {}),
       }),
     })
     if (!response.ok) throw await failure(response)
