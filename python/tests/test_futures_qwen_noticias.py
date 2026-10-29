@@ -221,6 +221,7 @@ class AuditAndIdentityTests(unittest.TestCase):
             real = trader.state_text(t_ms, ["cada_15_min"])
             mirror = trader.state_text(t_ms, ["cada_15_min"], mirror=True)
         self.assertIn("Noticias (últimas 4 h): A FAVOR del maestro (2 relevantes, sentimiento +0,75).", real)
+        self.assertIn("Noticias (últimas 4 h): A FAVOR del maestro (2 relevantes, sentimiento -0,75).", mirror)
         self.assertEqual(dst.formula_from_text(real), "LARGO")
         self.assertEqual(dst.formula_from_text(mirror), "CORTO")
 

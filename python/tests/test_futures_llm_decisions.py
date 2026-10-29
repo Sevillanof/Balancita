@@ -206,16 +206,19 @@ class ConversionTests(unittest.TestCase):
         self.assertEqual(result["observed"], ["A", "B"])
 
     def test_no_letter_is_an_error_not_a_decision(self):
+        question = choice_question()
+        logprobs = top(x=-0.1, y=-1.0)
         with self.assertRaises(q.ModelResponseError) as caught:
-            q.convert(choice_question(), top(x=-0.1, y=-1.0), 1.0)
+            q.convert(question, logprobs, 1.0)
         self.assertEqual(caught.exception.kind, "no_letters")
 
     def test_thinking_leak_is_flagged_and_errors_without_letters(self):
         leaked = top(**{"<think>": -0.01, "Okay": -4.0})
         self.assertTrue(q.thinking_leaked(leaked, "<think>\n"))
         self.assertFalse(q.thinking_leaked(entries(), "A"))
+        question = choice_question()
         with self.assertRaises(q.ModelResponseError) as caught:
-            q.convert(choice_question(), leaked, 1.0, content="<think>\n")
+            q.convert(question, leaked, 1.0, content="<think>\n")
         self.assertEqual(caught.exception.kind, "thinking_leak")
 
     def test_confidence_is_bounded_and_uses_normalized_entropy(self):
@@ -237,9 +240,11 @@ class ConversionTests(unittest.TestCase):
         raw = [math.exp(-0.2 / 2), math.exp(-2.0 / 2), math.exp(-3.5 / 2)]
         self.assertAlmostEqual(warm["probabilities"]["up"], raw[0] / sum(raw), places=9)
         self.assertEqual(warm["temperature"], 2.0)
+        question = choice_question()
+        base_entries = entries()
         for bad in (0, -1, float("nan")):
             with self.assertRaises(ValueError):
-                q.convert(choice_question(), entries(), bad)
+                q.convert(question, base_entries, bad)
 
     def test_bool_is_asked_as_true_false_and_returns_p_true(self):
         prompt = q.build_prompt("s", BOOL_QUESTION)
@@ -281,8 +286,9 @@ class OrderDebiasTests(unittest.TestCase):
         self.assertEqual(len(q.option_orders(dict(self.question, order_debias="all"))), 6)
         self.assertEqual(q.option_orders(choice_question()), [[0, 1, 2]])
         self.assertEqual(q.option_orders(dict(BOOL_QUESTION, order_debias="cyclic")), [[0, 1]])
+        bad_question = dict(choice_question(), order_debias="random")
         with self.assertRaises(ValueError):
-            q.validate_question(dict(choice_question(), order_debias="random"))
+            q.validate_question(bad_question)
 
     def _letter_biased(self, prompt, letters):
         """A model that always says 'A' with p=0.9 and ignores what the options mean."""
@@ -674,12 +680,13 @@ class StoreTests(unittest.TestCase):
 
     def test_one_decision_per_bucket_question_version(self):
         store = q.DecisionStore(self.path, q.DECISION_CONFIG)
-        store.append_decision(self.decision_row())
+        row = self.decision_row()
+        store.append_decision(row)
         self.assertTrue(store.has(BTC, 1, "t", 1))
         self.assertFalse(store.has(BTC, 2, "t", 1))
         self.assertFalse(store.has(BTC, 1, "t", 2))
         with self.assertRaises(sqlite3.IntegrityError):
-            store.append_decision(self.decision_row())
+            store.append_decision(row)
         store.close()
 
     def test_config_guard_refuses_another_config_untouched(self):
@@ -694,10 +701,10 @@ class StoreTests(unittest.TestCase):
         db = sqlite3.connect(self.path)
         columns = {row[1] for row in db.execute("PRAGMA table_info(paper_futures_llm_decisions)")}
         db.close()
-        self.assertTrue({"product_id", "bucket_start", "verdict_hash", "question_id", "question_version",
-                         "model_ref", "model_info_json", "prompt_hash", "state_text", "top_logprobs_json",
-                         "probabilities_json", "temperature", "chosen", "confidence", "latency_ms",
-                         "timings_json", "prompt_version", "probability_source"} <= columns)
+        self.assertLessEqual({"product_id", "bucket_start", "verdict_hash", "question_id", "question_version",
+                              "model_ref", "model_info_json", "prompt_hash", "state_text", "top_logprobs_json",
+                              "probabilities_json", "temperature", "chosen", "confidence", "latency_ms",
+                              "timings_json", "prompt_version", "probability_source"}, columns)
         self.assertFalse([c for c in columns if "label" in c])
 
 
@@ -748,10 +755,10 @@ class ServiceBase(unittest.TestCase):
         finally:
             db.close()
 
-    def skips(self):
+    def skips(self):  # NOSONAR - test helper on base class
         return self.rows("paper_futures_llm_skips")
 
-    def add_candle(self):
+    def add_candle(self):  # NOSONAR - test helper on base class
         # Extend market and verdicts through a scratch fixture-like path.
         market = MarketDb.__new__(MarketDb)
         market.path, market.responses = self.market_path, 10_000
@@ -1254,8 +1261,9 @@ class SourceRequestTests(unittest.TestCase):
         self.assertNotIn("top_k", body)
 
     def test_unknown_source_is_rejected(self):
+        template = q.default_template()
         with self.assertRaises(ValueError):
-            q.request_body("p", ["A"], q.default_template(), "weird")
+            q.request_body("p", ["A"], template, "weird")
 
 
 class PostSamplingProviderTests(unittest.TestCase):

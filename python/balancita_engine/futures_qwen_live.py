@@ -715,7 +715,7 @@ class LiveOperator:
             self._say_positioning(product, feed)
 
     def _refresh_news(self, now):
-        if self.news is None or now - self.news_checked_ms < self.positioning_every_ms:
+        if self.news is None:
             return
         self.news_checked_ms = now
         try:
