@@ -71,10 +71,12 @@ export class AccountDb {
       .run(this.snapshots, time, '{}', '{}', 'h')
   }
   /** order_created, order_filled and position_opened for one long entry. */
-  enter(orderId = 'o1', time = NOW): void {
+  enter(orderId = 'o1', time = NOW, book?: string): void {
+    const owner = book === undefined ? {} : { book }
     this.add('verdict_considered', time, {
       outcome: 'entered',
       signal_key: `k-${orderId}`,
+      ...owner,
     })
     this.add('order_created', time, {
       order_id: orderId,
@@ -87,8 +89,10 @@ export class AccountDb {
       strategy_id: 'c25-pullback-perp-v1',
       stop: '99900',
       target: '100500',
+      ...owner,
     })
     this.add('order_filled', time + 150, {
+      ...owner,
       order_id: orderId,
       side: 'buy',
       quantity: '0.0099',
@@ -98,6 +102,7 @@ export class AccountDb {
       account: OPEN_ACCOUNT,
     })
     this.add('position_opened', time + 150, {
+      ...owner,
       order_id: orderId,
       account: OPEN_ACCOUNT,
     })

@@ -153,12 +153,12 @@ test('B1 and B2 answer through the Vite proxy; the old doubled path is a 404', a
   expect((await health.json()).schema).toBe('observability-health.v1')
   for (const window of ['3h', '24h']) {
     const res = await request.get(
-      `/api-live/observability/activity?window=${window}&product=PF_XBTUSD`,
+      `/api-live/observability/activity?window=${window}&product=PF_ETHUSD`,
     )
     expect(res.status()).toBe(200)
     const body = await res.json()
     expect(body.window).toBe(window)
-    expect(body.product).toBe('PF_XBTUSD')
+    expect(body.product).toBe('PF_ETHUSD')
   }
   // What the frontend asked for before the fix: /api/api/... at the gateway.
   expect(
@@ -178,14 +178,13 @@ test('Terminal on the real gateway: every interaction answers without 404', asyn
   await expect(page.getByTestId('window-summary')).toContainText('evaluaciones')
   await expect(page.getByText('No se pudo leer la actividad')).toHaveCount(0)
 
-  // Window 24 h and another product.
+  // Window 24 h.
   await page.getByRole('button', { name: '24 h' }).click()
   await expect(page.getByRole('button', { name: '24 h' })).toHaveAttribute(
     'aria-pressed',
     'true',
   )
-  await page.getByRole('combobox').first().selectOption('PF_XBTUSD')
-  await expect(page.getByTestId('activity-panel')).toContainText('BTC')
+  await expect(page.getByTestId('activity-panel')).toContainText('ETH')
 
   // Health inspector: open and close.
   await page.getByTestId('health-indicator').click()

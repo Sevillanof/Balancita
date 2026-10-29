@@ -130,12 +130,10 @@ async function openTerminal(page: Page) {
   await page.clock.install()
   await page.clock.resume()
   await page.goto('/terminal')
-  // The Terminal opens on ETH; these checks are written against the XBT seed.
-  await expect(page.getByRole('combobox').first()).toHaveValue('PF_ETHUSD')
-  await page.getByRole('combobox').first().selectOption('PF_XBTUSD')
-  await expect(page.getByRole('combobox').first()).toHaveValue('PF_XBTUSD')
+  // The Terminal is ETH only: there is no product selector.
+  await expect(page.getByRole('combobox')).toHaveCount(0)
   await expect(page.getByTestId('source-health')).toContainText(
-    'Salud de la fuente · XBT',
+    'Salud de la fuente · ETH',
   )
   await expect(page.getByTestId('observer-now')).toBeVisible()
   await expect(page.getByTestId('approved-chart-renderer')).toBeVisible()
@@ -145,7 +143,7 @@ async function openTerminal(page: Page) {
 
 test('the Terminal opens on ETH, the traded product', async ({ page }) => {
   await page.goto('/terminal')
-  await expect(page.getByRole('combobox').first()).toHaveValue('PF_ETHUSD')
+  await expect(page.getByRole('combobox')).toHaveCount(0)
   await expect(page.getByTestId('source-health')).toContainText(
     'Salud de la fuente · ETH',
   )
@@ -157,8 +155,8 @@ test('AHORA shows the last real analysis of the stream, with its source', async 
   page,
 }) => {
   await openTerminal(page)
-  const newest = facts.PF_XBTUSD!.at(-1)!
-  // Newest XBT verdict is a WAIT: espera is a state, not an error.
+  const newest = facts.PF_ETHUSD!.at(-1)!
+  // Newest ETH verdict is a WAIT: espera is a state, not an error.
   expect(newest.action).toBe('WAIT')
   await expect(page.getByTestId('now-action')).toHaveText('Espera')
   const detail = page.getByTestId('now-detail')
@@ -182,7 +180,7 @@ test('AHORA shows the last real analysis of the stream, with its source', async 
   // The health of the source (B1) stays a separate fact next to it, and it is
   // the one of the product on screen (the global one lives in the header).
   await expect(page.getByTestId('source-health')).toContainText(
-    'Salud de la fuente · XBT',
+    'Salud de la fuente · ETH',
   )
   // A WAIT is never presented as a proposal.
   await expect(page.getByTestId('observer-now')).not.toContainText(
@@ -199,7 +197,7 @@ test('history rows and chart markers are the same decisions and select each othe
 }) => {
   await openTerminal(page)
   const chart = page.getByTestId('approved-chart-renderer')
-  const entries = facts.PF_XBTUSD!.filter((f) => f.action !== 'WAIT')
+  const entries = facts.PF_ETHUSD!.filter((f) => f.action !== 'WAIT')
   expect(entries).toHaveLength(3)
   const rows = page.locator('[aria-label="Lista de decisiones"] li button')
   await expect(rows).toHaveCount(3)
@@ -216,9 +214,9 @@ test('history rows and chart markers are the same decisions and select each othe
   for (const f of entries) expect(ids).toContain(f.analysisId)
   // The executed marker is the durable fill itself (its id is the fill's).
   expect(ids.filter((id) => id.startsWith('fill:'))).toHaveLength(
-    executed.PF_XBTUSD!.length,
+    executed.PF_ETHUSD!.length,
   )
-  const waits = ids.filter((id) => waitIds.PF_XBTUSD!.includes(id))
+  const waits = ids.filter((id) => waitIds.PF_ETHUSD!.includes(id))
   // Every other marker is a WAIT group, far fewer than one per minute.
   expect(ids).toHaveLength(entries.length + 1 + waits.length)
   expect(waits.length).toBeGreaterThan(0)
@@ -276,7 +274,7 @@ test('clicking the EJEC. marker on the canvas opens the facts of its fill, apart
 }) => {
   await openTerminal(page)
   const chart = page.getByTestId('approved-chart-renderer')
-  const sale = executed.PF_XBTUSD![0]!
+  const sale = executed.PF_ETHUSD![0]!
   const positions = await markerPositions(chart)
   const target = positions.find((p) => p.id.startsWith('fill:'))!
   const pressedBefore = await page
@@ -299,7 +297,7 @@ test('clicking the EJEC. marker on the canvas opens the facts of its fill, apart
   await expect(detail.locator('[data-field="time"]')).toContainText(
     new Date(sale.timeMs).toISOString().replace('T', ' ').replace('Z', ' UTC'),
   )
-  await expect(detail.locator('[data-field="quantity"]')).toContainText(/BTC/)
+  await expect(detail.locator('[data-field="quantity"]')).toContainText(/ETH/)
   await expect(detail.locator('[data-field="side"]')).toContainText(
     'LONG (compra)',
   )
@@ -322,7 +320,7 @@ test('clicking the EJEC. marker on the canvas opens the facts of its fill, apart
     await page.screenshot({ path: `${SHOTS}/ejecucion-seleccionada.png` })
   }
   // Picking a decision marker clears the facts of the fill.
-  const entries = facts.PF_XBTUSD!.filter((f) => f.action !== 'WAIT')
+  const entries = facts.PF_ETHUSD!.filter((f) => f.action !== 'WAIT')
   const now = (await chart.boundingBox())!
   // The one well inside the chart, not at its edge.
   const other = (await markerPositions(chart))
@@ -418,57 +416,6 @@ test('clicking the bare background of the chart opens neither a decision nor a f
   }
 })
 
-test('changing product swaps AHORA, rows and markers; nothing leaks across', async ({
-  page,
-}) => {
-  await openTerminal(page)
-  const chart = page.getByTestId('approved-chart-renderer')
-  await expect(page.getByTestId('now-action')).toHaveText('Espera')
-  await page.getByRole('combobox').first().selectOption('PF_ETHUSD')
-  const eth = facts.PF_ETHUSD!
-  const newest = eth.at(-1)!
-  expect(newest.action).toBe('SHORT')
-  // ETH's newest verdict is a SHORT proposal, labelled as such.
-  await expect(page.getByTestId('now-action')).toHaveText('SHORT')
-  await expect(page.getByTestId('source-health')).toContainText(
-    'Salud de la fuente · ETH',
-  )
-  await expect(page.getByTestId('observer-now')).toContainText(
-    'propuesta, no operación',
-  )
-  await expect(page.getByTestId('now-detail')).toContainText(
-    'c26_short_reversion',
-  )
-  await expect(page.getByTestId('now-detail')).toContainText('Régimen range')
-  const ethIds = (await markerPositions(chart)).map((p) => p.id)
-  for (const f of eth.filter((x) => x.action !== 'WAIT'))
-    expect(ethIds).toContain(f.analysisId)
-  // ETH has no executed operation in D: no executed marker may appear.
-  expect(ethIds.filter((id) => id.startsWith('fill:'))).toEqual([])
-  const rows = page.locator('[aria-label="Lista de decisiones"] li button')
-  await expect(rows).toHaveCount(2)
-  for (const xbt of facts.PF_XBTUSD!.filter((f) => f.action !== 'WAIT'))
-    await expect(
-      page.getByRole('button', {
-        name: `Seleccionar análisis ${xbt.analysisId}`,
-      }),
-    ).toHaveCount(0)
-  await markerPositions(chart)
-  if (SHOTS) await page.screenshot({ path: `${SHOTS}/ahora-propuesta.png` })
-
-  // A product with no individual decision in view says so (no engine data
-  // outside the seeded products' own verdicts: SOL only has waits).
-  await page.getByRole('combobox').first().selectOption('PF_SOLUSD')
-  await expect(page.getByTestId('now-action')).toHaveText('Espera')
-  await expect(page.getByTestId('now-detail')).toContainText('Régimen trend')
-  // SOL only has WAITs: grouped WAIT markers, no proposal and no operation.
-  await expect(
-    page.getByRole('button', { name: /Seleccionar análisis/ }),
-  ).toHaveCount(0)
-  const solIds = (await markerPositions(chart)).map((p) => p.id)
-  for (const id of solIds) expect(waitIds.PF_SOLUSD).toContain(id)
-})
-
 test('without a B1 read AHORA says «Sin confirmar», never a current decision', async ({
   page,
 }) => {
@@ -492,7 +439,7 @@ test('without a B1 read AHORA says «Sin confirmar», never a current decision',
 test('a hole in the candles never moves a marker onto an earlier candle', async ({
   page,
 }) => {
-  const entries = facts.PF_XBTUSD!.filter((f) => f.action !== 'WAIT')
+  const entries = facts.PF_ETHUSD!.filter((f) => f.action !== 'WAIT')
   const holed = entries.find((f) => f.action === 'SHORT')!
   // Remove from the snapshot the candle of that verdict's bucket (SYNTHETIC
   // gap); the verdict itself stays in the stream and in the history.
@@ -546,27 +493,6 @@ test('a hole in the candles never moves a marker onto an earlier candle', async 
   }
 })
 
-test('an old verdict of a stopped engine is history, never the current state', async ({
-  page,
-}) => {
-  await openTerminal(page)
-  await page.getByRole('combobox').first().selectOption('PF_ZECUSD')
-  const stale = facts.PF_ZECUSD!.at(-1)!
-  expect(stale.action).toBe('LONG')
-  await expect(page.getByTestId('last-decision')).toContainText('No disponible')
-  await expect(page.getByTestId('now-action')).toHaveCount(0)
-  await expect(page.getByTestId('now-detail')).toHaveCount(0)
-  const historic = page.getByTestId('now-historic')
-  await expect(historic).toContainText('histórica, no es el estado actual')
-  await expect(historic).toContainText('LONG')
-  await expect(historic).toContainText(hmm(stale.decisionTimeMs))
-  await expect(historic).toContainText(/hace (3\d|2\d) min|hace \d+ min/)
-  // A LONG that is not current is not presented as a current proposal.
-  await expect(page.getByTestId('last-decision')).not.toContainText(
-    'propuesta, no operación',
-  )
-})
-
 test('chart controls on real data: timeframes, zoom, navigation, back to present, indicators', async ({
   page,
 }) => {
@@ -582,7 +508,7 @@ test('chart controls on real data: timeframes, zoom, navigation, back to present
   await openTerminal(page)
   const chart = page.getByTestId('approved-chart-renderer')
   const box = (await chart.boundingBox())!
-  const entries = facts.PF_XBTUSD!.filter((f) => f.action !== 'WAIT')
+  const entries = facts.PF_ETHUSD!.filter((f) => f.action !== 'WAIT')
   const xOf = async (id: string) => {
     const found = (
       JSON.parse(
@@ -640,13 +566,13 @@ test('chart controls on real data: timeframes, zoom, navigation, back to present
       ) as { id: string }[]
     ).map((p) => p.id)
     // Never a marker that is not a real proposal, WAIT or executed fill.
-    const real = [...entries.map((f) => f.analysisId), ...waitIds.PF_XBTUSD!]
+    const real = [...entries.map((f) => f.analysisId), ...waitIds.PF_ETHUSD!]
     for (const id of ids)
       expect(real.includes(id) || id.startsWith('fill:')).toBe(true)
     // Same-hour entries stack on one candle; none may be dropped or invented.
     for (const f of entries) expect(ids).toContain(f.analysisId)
     expect(ids.filter((id) => id.startsWith('fill:'))).toHaveLength(
-      executed.PF_XBTUSD!.length,
+      executed.PF_ETHUSD!.length,
     )
   }
 
