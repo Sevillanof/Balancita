@@ -1,6 +1,8 @@
 import type { ExigenciaLevels } from '../infrastructure/quick-api.ts'
 import {
   ANALISTA_OPCIONES,
+  CUENTAS,
+  ENTRADAS,
   EXIGENCIA_PAPER,
   MEDICIONES,
   EXIGENCIA_PAPER_LEVELS,
@@ -43,10 +45,15 @@ export default function ExigenciaControl({ value, onChange, disabled }: Props) {
   ]
   const analista = ANALISTA_OPCIONES.find((o) => o.modo === value.analista)!
   const medicion = value.medicion ?? 'honesta'
+  const entrada = value.entrada ?? 'formula'
+  const cuenta = value.cuenta ?? 'fija'
+  // A rebound entry does not use the maestro, the portero, the movement analyst or the way of measuring
+  const rebote = entrada !== 'formula'
   const changed =
     value.maestro !== EXIGENCIA_PAPER ||
     value.portero !== EXIGENCIA_PAPER ||
-    value.analista !== EXIGENCIA_PAPER_LEVELS.analista
+    value.analista !== EXIGENCIA_PAPER_LEVELS.analista ||
+    entrada !== 'formula'
   return (
     <div
       role="group"
@@ -61,134 +68,181 @@ export default function ExigenciaControl({ value, onChange, disabled }: Props) {
           es lo que opera en paper
         </span>
       </div>
-      {rows.map(({ key, label, detail }) => (
-        <label
-          key={key}
-          className="grid grid-cols-6 items-center gap-x-3 gap-y-0.5 text-note text-ink"
-        >
-          <span>{label}</span>
-          <span className="col-span-4 grid min-w-0">
-            <input
-              type="range"
-              min={0}
-              max={10}
-              step={1}
-              value={value[key]}
-              disabled={disabled}
-              aria-valuetext={`${value[key]} de 10${value[key] === EXIGENCIA_PAPER ? ' (como en paper)' : ''}`}
-              list={`exigencia-marcas-${key}`}
-              onChange={(event) =>
-                onChange({ ...value, [key]: Number(event.target.value) })
-              }
-            />
-            <datalist id={`exigencia-marcas-${key}`}>
-              {MARKS.map((mark) => (
-                <option key={mark} value={mark} />
-              ))}
-            </datalist>
-            <span
-              aria-hidden="true"
-              className="relative h-3 text-ink-2"
-              style={{ fontSize: '0.7rem' }}
-            >
+      <Choice
+        testId="entrada"
+        label="Qué decide la entrada"
+        name="entrada"
+        options={ENTRADAS.map((o) => ({
+          id: o.modo,
+          label: o.label,
+          suffix: o.modo === 'formula' ? ' · paper' : '',
+        }))}
+        value={entrada}
+        onChange={(modo) => onChange({ ...value, entrada: modo })}
+        detail={ENTRADAS.find((o) => o.modo === entrada)!.detail}
+        disabled={disabled}
+      />
+      {!rebote &&
+        rows.map(({ key, label, detail }) => (
+          <label
+            key={key}
+            className="grid grid-cols-6 items-center gap-x-3 gap-y-0.5 text-note text-ink"
+          >
+            <span>{label}</span>
+            <span className="col-span-4 grid min-w-0">
+              <input
+                type="range"
+                min={0}
+                max={10}
+                step={1}
+                value={value[key]}
+                disabled={disabled}
+                aria-valuetext={`${value[key]} de 10${value[key] === EXIGENCIA_PAPER ? ' (como en paper)' : ''}`}
+                list={`exigencia-marcas-${key}`}
+                onChange={(event) =>
+                  onChange({ ...value, [key]: Number(event.target.value) })
+                }
+              />
+              <datalist id={`exigencia-marcas-${key}`}>
+                {MARKS.map((mark) => (
+                  <option key={mark} value={mark} />
+                ))}
+              </datalist>
               <span
-                className="absolute -translate-x-1/2 font-semibold"
-                style={{ left: `${EXIGENCIA_PAPER * 10}%` }}
+                aria-hidden="true"
+                className="relative h-3 text-ink-2"
+                style={{ fontSize: '0.7rem' }}
               >
-                ▲ paper
+                <span
+                  className="absolute -translate-x-1/2 font-semibold"
+                  style={{ left: `${EXIGENCIA_PAPER * 10}%` }}
+                >
+                  ▲ paper
+                </span>
               </span>
             </span>
-          </span>
-          <strong className="text-right tabular-nums">{value[key]}</strong>
-          <span />
-          <span className="col-span-4 text-ink-2">{detail}</span>
-        </label>
-      ))}
-      <fieldset
-        data-testid="analista"
-        className="m-0 grid min-w-0 grid-cols-6 items-center gap-x-3 gap-y-0.5 border-0 border-t border-solid border-line p-0 pt-2 text-note text-ink"
-        disabled={disabled}
-      >
-        <legend className="sr-only">Analista de movimiento</legend>
-        <span aria-hidden="true">Analista de movimiento</span>
-        <span
-          role="radiogroup"
-          aria-label="Analista de movimiento"
-          className="col-span-5 flex flex-wrap gap-1.5"
-        >
-          {ANALISTA_OPCIONES.map((option) => (
-            <label
-              key={option.modo}
-              className={`cursor-pointer rounded-sm border border-solid px-2.5 py-1 ${value.analista === option.modo ? 'border-ink bg-row-selected font-semibold text-ink' : 'border-line-strong text-ink-2'}`}
-            >
-              <input
-                type="radio"
-                name="analista-movimiento"
-                value={option.modo}
-                checked={value.analista === option.modo}
-                onChange={() => onChange({ ...value, analista: option.modo })}
-                className="sr-only"
-              />
-              {option.label}
-              {option.modo === 'apagado' && (
-                <span className="font-normal"> · paper</span>
-              )}
-            </label>
-          ))}
-        </span>
-        <span />
-        <span className="col-span-5 text-ink-2">
-          {analista.detail}. «Con movimiento» = la volatilidad de las últimas 24
-          h está en o sobre su mediana de 90 días. No cambia qué operaciones se
-          hacen, solo cuánto pesa cada una.
-        </span>
-      </fieldset>
-      <fieldset
-        data-testid="medicion"
-        className="m-0 grid min-w-0 grid-cols-6 items-center gap-x-3 gap-y-0.5 border-0 border-t border-solid border-line p-0 pt-2 text-note text-ink"
-        disabled={disabled}
-      >
-        <legend className="sr-only">Cómo se mide</legend>
-        <span aria-hidden="true">Cómo se mide</span>
-        <span
-          role="radiogroup"
-          aria-label="Cómo se mide"
-          className="col-span-5 flex flex-wrap gap-1.5"
-        >
-          {MEDICIONES.map((option) => (
-            <label
-              key={option.modo}
-              className={`cursor-pointer rounded-sm border border-solid px-2.5 py-1 ${medicion === option.modo ? 'border-ink bg-row-selected font-semibold text-ink' : 'border-line-strong text-ink-2'}`}
-            >
-              <input
-                type="radio"
-                name="medicion"
-                value={option.modo}
-                checked={medicion === option.modo}
-                onChange={() => onChange({ ...value, medicion: option.modo })}
-                className="sr-only"
-              />
-              {option.label}
-              {option.modo === 'honesta' && (
-                <span className="font-normal"> · por defecto</span>
-              )}
-            </label>
-          ))}
-        </span>
-        <span />
-        <span className="col-span-5 text-ink-2">
-          {MEDICIONES.find((o) => o.modo === medicion)!.detail}
-        </span>
-      </fieldset>
+            <strong className="text-right tabular-nums">{value[key]}</strong>
+            <span />
+            <span className="col-span-4 text-ink-2">{detail}</span>
+          </label>
+        ))}
+      {!rebote && (
+        <Choice
+          testId="analista"
+          label="Analista de movimiento"
+          name="analista-movimiento"
+          options={ANALISTA_OPCIONES.map((o) => ({
+            id: o.modo,
+            label: o.label,
+            suffix: o.modo === 'apagado' ? ' · paper' : '',
+          }))}
+          value={value.analista}
+          onChange={(modo) => onChange({ ...value, analista: modo })}
+          detail={`${analista.detail}. «Con movimiento» = la volatilidad de las últimas 24 h está en o sobre su mediana de 90 días. No cambia qué operaciones se hacen, solo cuánto pesa cada una.`}
+          disabled={disabled}
+        />
+      )}
+      {!rebote && (
+        <Choice
+          testId="medicion"
+          label="Cómo se mide"
+          name="medicion"
+          options={MEDICIONES.map((o) => ({
+            id: o.modo,
+            label: o.label,
+            suffix: o.modo === 'honesta' ? ' · por defecto' : '',
+          }))}
+          value={medicion}
+          onChange={(modo) => onChange({ ...value, medicion: modo })}
+          detail={MEDICIONES.find((o) => o.modo === medicion)!.detail}
+          disabled={disabled}
+        />
+      )}
+      <Choice
+        testId="cuenta"
+        label="Tamaño de la cuenta"
+        name="cuenta"
+        options={CUENTAS.map((o) => ({
+          id: o.modo,
+          label: o.label,
+          suffix: o.modo === 'fija' ? ' · paper' : '',
+        }))}
+        value={cuenta}
+        onChange={(modo) => onChange({ ...value, cuenta: modo })}
+        detail={CUENTAS.find((o) => o.modo === cuenta)!.detail}
+      />
       {changed && (
         <button
           type="button"
           className="cursor-pointer justify-self-start rounded-sm border border-solid border-line bg-transparent px-3 py-1 text-hint leading-normal text-ink"
-          onClick={() => onChange({ ...EXIGENCIA_PAPER_LEVELS, medicion })}
+          onClick={() =>
+            onChange({ ...EXIGENCIA_PAPER_LEVELS, medicion, cuenta })
+          }
         >
-          Volver a lo de paper (5, 5 y analista apagado)
+          Volver a lo de paper (maestro + portero 5 y 5, analista apagado)
         </button>
       )}
     </div>
+  )
+}
+
+type ChoiceProps<T extends string> = {
+  testId: string
+  label: string
+  name: string
+  options: Array<{ id: T; label: string; suffix: string }>
+  value: T
+  onChange: (id: T) => void
+  detail: string
+  disabled?: boolean
+}
+
+/** One row of radio buttons of the control, with what the chosen option means underneath. */
+function Choice<T extends string>({
+  testId,
+  label,
+  name,
+  options,
+  value,
+  onChange,
+  detail,
+  disabled,
+}: ChoiceProps<T>) {
+  return (
+    <fieldset
+      data-testid={testId}
+      className="m-0 grid min-w-0 grid-cols-6 items-center gap-x-3 gap-y-0.5 border-0 border-t border-solid border-line p-0 pt-2 text-note text-ink"
+      disabled={disabled}
+    >
+      <legend className="sr-only">{label}</legend>
+      <span aria-hidden="true">{label}</span>
+      <span
+        role="radiogroup"
+        aria-label={label}
+        className="col-span-5 flex flex-wrap gap-1.5"
+      >
+        {options.map((option) => (
+          <label
+            key={option.id}
+            className={`cursor-pointer rounded-sm border border-solid px-2.5 py-1 ${value === option.id ? 'border-ink bg-row-selected font-semibold text-ink' : 'border-line-strong text-ink-2'}`}
+          >
+            <input
+              type="radio"
+              name={name}
+              value={option.id}
+              checked={value === option.id}
+              onChange={() => onChange(option.id)}
+              className="sr-only"
+            />
+            {option.label}
+            {option.suffix && (
+              <span className="font-normal">{option.suffix}</span>
+            )}
+          </label>
+        ))}
+      </span>
+      <span />
+      <span className="col-span-5 text-ink-2">{detail}</span>
+    </fieldset>
   )
 }

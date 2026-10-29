@@ -1,9 +1,11 @@
 import { useMemo, useState } from 'react'
 import { ROUND_TRIP_COST_BP } from '../domain/trade-potential.ts'
-import type { QuickFormula } from '../infrastructure/quick-api.ts'
+import type { Cuenta, QuickFormula } from '../infrastructure/quick-api.ts'
 import type { RunCandle, RunTrade } from '../infrastructure/run-visual-api.ts'
 
 const HOUR_MS = 3_600_000
+/** The account the whole-account size starts from, in USD. */
+export const ACCOUNT_USD = 1000
 
 /** The hourly closes the formula test saved, as the candles the market chart draws. */
 function candlesOf(points: Array<[number, number]>): RunCandle[] {
@@ -54,6 +56,8 @@ export type FormulaModel = {
   /** The stretch the result covers. */
   fromMs: number
   toMs: number
+  /** The account the trades started from when each one used the whole account; `null` with fixed sizes. */
+  accountUsd: number | null
 }
 
 /**
@@ -63,6 +67,7 @@ export type FormulaModel = {
  */
 export function useFormulaModel(
   formula: QuickFormula | null,
+  cuenta: Cuenta = 'fija',
 ): FormulaModel | null {
   const product =
     formula?.productos[0] ?? Object.keys(formula?.mercado ?? {})[0]
@@ -70,40 +75,58 @@ export function useFormulaModel(
     () => (product ? (formula?.mercado?.[product] ?? []) : []),
     [formula, product],
   )
-  const trades = useMemo<RunTrade[]>(
-    () =>
-      !formula || points.length < 2 || !product
-        ? []
-        : (formula.curvas.formula ?? [])
-            .filter((trade) => trade.producto === product)
-            .map((trade, index) => ({
-              trade_id: `formula-${index}`,
-              product_id: trade.producto,
-              side: trade.lado === 1 ? ('LONG' as const) : ('SHORT' as const),
-              entry_time_ms: trade.entrada_ms,
-              entry_bucket_ms: null,
-              entry_price: String(priceAt(points, trade.entrada_ms)),
-              exit_time_ms: trade.salida_ms,
-              exit_bucket_ms: null,
-              exit_price: String(priceAt(points, trade.salida_ms)),
-              exit_reason: trade.motivo,
-              reason_code: null,
-              net_bp: trade.neto_bp,
-              pnl_usd: (trade.neto_bp / 1e4) * formula.nocional_usd,
-              funding_usd: null,
-              funding_status: 'unknown',
-              notional_usd: String(formula.nocional_usd),
-              signal_time_ms: null,
-              size_mult: trade.tamano ?? null,
-              with_movement: trade.movimiento ?? null,
-            })),
-    [formula, points, product],
-  )
+  const trades = useMemo<RunTrade[]>(() => {
+    if (!formula || points.length < 2 || !product) return []
+    // With the whole account each operation is as big as the account when it opens: 1.000 USD plus what the ones before made
+    let account = ACCOUNT_USD
+    return (formula.curvas.formula ?? [])
+      .filter((trade) => trade.producto === product)
+      .map((trade, index) => {
+        const nocional = cuenta === 'entera' ? account : formula.nocional_usd
+        const pnl = (trade.neto_bp / 1e4) * nocional
+        account += cuenta === 'entera' ? pnl : 0
+        return {
+          trade_id: `formula-${index}`,
+          product_id: trade.producto,
+          side: trade.lado === 1 ? ('LONG' as const) : ('SHORT' as const),
+          entry_time_ms: trade.entrada_ms,
+          entry_bucket_ms: null,
+          entry_price: String(priceAt(points, trade.entrada_ms)),
+          exit_time_ms: trade.salida_ms,
+          exit_bucket_ms: null,
+          exit_price: String(priceAt(points, trade.salida_ms)),
+          exit_reason: trade.motivo,
+          reason_code: null,
+          net_bp: trade.neto_bp,
+          pnl_usd: pnl,
+          funding_usd: null,
+          funding_status: 'unknown',
+          notional_usd: String(nocional),
+          signal_time_ms: null,
+          size_mult: trade.tamano ?? null,
+          with_movement: trade.movimiento ?? null,
+          detail: trade.velas ?? null,
+          drop: trade.caida
+            ? {
+                from_ms: trade.caida.desde_ms,
+                to_ms: trade.caida.hasta_ms,
+                pct: trade.caida.pct,
+                btc_pct: trade.caida.btc_pct,
+              }
+            : null,
+        }
+      })
+  }, [formula, points, product, cuenta])
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const selected = trades.find((trade) => trade.trade_id === selectedId) ?? null
   const all = useMemo(() => candlesOf(points), [points])
   const candles = useMemo(() => {
     if (!selected) return all
+    // The rebound entries bring the 5-minute prices around each operation: the zoom uses them instead of the hourly ones
+    const detail = formula?.curvas.formula.find(
+      (t) => t.entrada_ms === selected.entry_time_ms,
+    )?.velas
+    if (detail && detail.length >= 2) return candlesOf(detail)
     const held = selected.exit_time_ms - selected.entry_time_ms
     const pad = Math.max(held * 0.5, 6 * HOUR_MS)
     const cut = all.filter(
@@ -112,7 +135,7 @@ export function useFormulaModel(
         c.time_ms <= selected.exit_time_ms + pad,
     )
     return cut.length >= 2 ? cut : all
-  }, [all, selected])
+  }, [all, selected, formula])
   const closes = useMemo(() => points.map(([, close]) => close), [points])
   if (!product || trades.length === 0) return null
   return {
@@ -125,6 +148,7 @@ export function useFormulaModel(
     showAll: () => setSelectedId(null),
     figures: formulaFigures(trades, formula!.desde_ms, formula!.hasta_ms),
     ...periodOf(formula!),
+    accountUsd: cuenta === 'entera' ? ACCOUNT_USD : null,
   }
 }
 

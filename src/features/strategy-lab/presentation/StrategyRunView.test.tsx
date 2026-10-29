@@ -9,7 +9,6 @@ import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 import StrategyRunView from './StrategyRunView.tsx'
 import { MARKET_STAGES } from '../domain/market-stages.ts'
-import { rebote } from './rebote-fixture.ts'
 import type {
   GateApi,
   GateOverview,
@@ -62,6 +61,14 @@ vi.mock('../../trading-view/presentation/ApprovedTerminalChart.tsx', () => ({
     </div>
   ),
 }))
+
+/** «Probar» → option → the exigencia modal: confirms it with what is set there. */
+async function confirmExigencia(user: ReturnType<typeof userEvent.setup>) {
+  const dialog = await screen.findByRole('dialog', {
+    name: 'Exigencia de la prueba',
+  })
+  await user.click(within(dialog).getByRole('button', { name: /^Probar/ }))
+}
 
 /* DATOS DE EJEMPLO: corridas y operaciones inventadas solo para estas pruebas. */
 const MIN = 60_000
@@ -407,6 +414,7 @@ describe('StrategyRunView actions', () => {
       />,
     )
     await user.click(await screen.findByRole('button', { name: /Con Qwen/ }))
+    await confirmExigencia(user)
     expect(quick.start).toHaveBeenCalledWith('qwen-live', 'actual', {
       maestro: 5,
       portero: 5,
@@ -459,6 +467,7 @@ describe('StrategyRunView actions', () => {
         quick={quick}
       />,
     )
+    await user.click(await screen.findByRole('button', { name: /Con Qwen/ }))
     const sliders = await screen.findAllByRole('slider')
     expect(sliders.map((s) => (s as HTMLInputElement).value)).toEqual([
       '5',
@@ -466,7 +475,7 @@ describe('StrategyRunView actions', () => {
     ])
     fireEvent.change(sliders[0]!, { target: { value: '8' } })
     fireEvent.change(sliders[1]!, { target: { value: '2' } })
-    await user.click(await screen.findByRole('button', { name: /Con Qwen/ }))
+    await confirmExigencia(user)
     expect(quick.start).toHaveBeenCalledWith('qwen-live', 'actual', {
       maestro: 8,
       portero: 2,
@@ -492,6 +501,7 @@ describe('StrategyRunView actions', () => {
         quick={quick}
       />,
     )
+    await user.click(await screen.findByRole('button', { name: /Con Qwen/ }))
     const group = await screen.findByRole('radiogroup', {
       name: 'Analista de movimiento',
     })
@@ -502,7 +512,7 @@ describe('StrategyRunView actions', () => {
       ['fuerte', false],
     ])
     await user.click(within(group).getByLabelText('1,25 / 0,75'))
-    await user.click(await screen.findByRole('button', { name: /Con Qwen/ }))
+    await confirmExigencia(user)
     expect(quick.start).toHaveBeenCalledWith('qwen-live', 'actual', {
       maestro: 5,
       portero: 5,
@@ -631,6 +641,7 @@ describe('StrategyRunView actions', () => {
       await screen.findByRole('table', { name: 'Comparación de variantes' }),
     ).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: /Con Qwen · .*Qwen3/ }))
+    await confirmExigencia(user)
     expect(quick.start).toHaveBeenCalledWith('qwen-live', 'm1-qwen3-8b', {
       maestro: 5,
       portero: 5,
@@ -749,6 +760,7 @@ describe('StrategyRunView actions', () => {
         name: /Ficha de 8 factores con pista de reversión/,
       }),
     )
+    await confirmExigencia(user)
     expect(quick.start).toHaveBeenCalledWith('qwen-live', 'ficha-pista', {
       maestro: 5,
       portero: 5,
@@ -1150,31 +1162,62 @@ describe('StrategyRunView panel of the formula test (Qwen en vivo)', () => {
     expect(screen.queryByText(/Sin prueba terminada/)).toBeNull()
     expect(screen.queryByText(/Prueba anterior/)).toBeNull()
     expect(screen.queryByText(/tramos probados/)).toBeNull()
-    // the table of numbers agrees with the figures above: same operations, same mean
-    const row = within(
-      screen.getByRole('table', { name: 'Detalle de la fórmula' }),
-    )
-      .getByRole('rowheader', { name: 'La fórmula' })
-      .closest('tr')!
-    expect(within(row).getByText('+21,7 pb')).toBeInTheDocument()
-    const chart = await screen.findByTestId('market-chart')
+    // the bars of the detail agree with the figures above: same operations, same mean
     expect(
-      within(chart).getAllByRole('button', { name: /^Operación/ }),
+      within(screen.getByTestId('formula-ways')).getByText('+21,7 pb'),
+    ).toBeInTheDocument()
+    const chart = await screen.findByTestId('market-chart')
+    const operations = within(screen.getByTestId('run-operations'))
+    // the strip of operations lives in the closed details, not under the chart
+    expect(
+      within(chart).queryByRole('button', { name: /^Operación/ }),
+    ).toBeNull()
+    expect(
+      operations.getAllByRole('button', { name: /^Operación/ }),
     ).toHaveLength(3)
     // the old curves chart and its bars are not on screen
     expect(screen.queryByText(/Siempre largo \(mismas entradas\)/)).toBeNull()
-    await user.click(
-      within(chart).getByRole('button', { name: /^Operación 2/ }),
-    )
+    await user.click(operations.getByRole('button', { name: /^Operación 2/ }))
     const compare = await screen.findByTestId('trade-compare')
     expect(compare).toHaveTextContent('Perdimos')
     expect(compare).toHaveTextContent('Se podía ganar')
   })
 })
 
-describe('StrategyRunView analista de rebote (Qwen en vivo)', () => {
+describe('StrategyRunView rebote de ETH en los paneles de siempre', () => {
+  const H = 3_600_000
+  const stats = {
+    n: 2,
+    neto_bp: 500,
+    ganadoras: 0.5,
+    por_vuelta: 0,
+    por_tiempo: 2,
+  }
+  const velas = (from: number, to: number): Array<[number, number]> => {
+    const out: Array<[number, number]> = []
+    for (let t = from; t <= to; t += 300_000)
+      out.push([t, 2000 + ((t - from) / H) * 3])
+    return out
+  }
+  const trade = (at: number, net: number) => ({
+    producto: 'PF_ETHUSD',
+    lado: 1 as const,
+    entrada_ms: T0 + at * H + 60_000,
+    salida_ms: T0 + (at + 24) * H + 60_000,
+    neto_bp: net,
+    motivo: 'tiempo',
+    caida: {
+      desde_ms: T0 + (at - 1) * H,
+      hasta_ms: T0 + at * H,
+      desde_px: 2100,
+      hasta_px: 1980,
+      pct: -5.7,
+      btc_pct: -2.1,
+    },
+    velas: velas(T0 + (at - 4) * H, T0 + (at + 27) * H),
+  })
   const summary = {
-    photos: 0,
+    photos: 100,
     horizon_min: 1440,
     spearman: null,
     spearman_ci: [null, null],
@@ -1182,19 +1225,43 @@ describe('StrategyRunView analista de rebote (Qwen en vivo)', () => {
     extremes_ci: [null, null],
     vs_random_pct: null,
     signals: { extremes: null, random: null, spearman: null },
-    note: 'Analista de rebote, sin Qwen.',
-    rebote,
+    note: 'n',
+    formula: {
+      entrada: 'rebote' as const,
+      regla: 'caída de 5 % en 1 h → largo 24 h',
+      fotos: 100,
+      desde_ms: T0,
+      hasta_ms: T0 + 100 * H,
+      max_horas: 24,
+      nocional_usd: 100,
+      productos: ['PF_ETHUSD'],
+      mercado: {
+        PF_ETHUSD: Array.from({ length: 100 }, (_, i) => [
+          T0 + i * H,
+          2000 + (i % 9) * 4,
+        ]),
+      },
+      formula: stats,
+      maestro_fuerte: stats,
+      siempre_largo: stats,
+      siempre_corto: stats,
+      curvas: {
+        formula: [trade(10, 1000), trade(50, -500)],
+        maestro_fuerte: [],
+        siempre_largo: [],
+        siempre_corto: [],
+      },
+    },
   }
-  const quickWith = (started: string) =>
-    ({
+  const view = (user = false) => {
+    const quick = {
       status: vi.fn(async () => ({
         state: 'done',
-        variant: started,
+        variant: 'rebote',
         snapshots: 100,
         note: 'n',
         summary,
         variants: [
-          { id: 'actual', label: 'Actual', kind: 'control', state: 'none' },
           {
             id: 'formula',
             label: 'La fórmula sola',
@@ -1203,16 +1270,16 @@ describe('StrategyRunView analista de rebote (Qwen en vivo)', () => {
           },
           {
             id: 'rebote',
-            label: 'Analista de rebote',
+            label: 'Rebote',
             kind: 'rebote',
             state: 'done',
             summary,
+            started_ms: 5,
           },
         ],
       })),
       start: vi.fn(),
-    }) as unknown as import('../infrastructure/quick-api.ts').QuickApi
-  const view = (quick: import('../infrastructure/quick-api.ts').QuickApi) =>
+    } as unknown as import('../infrastructure/quick-api.ts').QuickApi
     render(
       <StrategyRunView
         strategyId="qwen-live"
@@ -1228,29 +1295,85 @@ describe('StrategyRunView analista de rebote (Qwen en vivo)', () => {
         quick={quick}
       />,
     )
+    return { quick, user: user ? userEvent.setup() : null }
+  }
 
-  it('muestra la cuenta, las caídas marcadas en el gráfico de ETH y el medidor rojo', async () => {
-    view(quickWith('rebote'))
-    expect(await screen.findByTestId('rebote-view')).toBeInTheDocument()
-    expect(screen.getByTestId('rebote-total')).toHaveTextContent('+45,00 USD')
+  const openExigencia = async (user: ReturnType<typeof userEvent.setup>) => {
+    await user.click(
+      await screen.findByRole('button', {
+        name: 'Sin Qwen: la fórmula o el rebote de ETH (rápida)',
+      }),
+    )
+    return screen.findByRole('dialog', { name: 'Exigencia de la prueba' })
+  }
+
+  it('usa el veredicto, las 4 cifras y el gráfico de siempre, con cada caída marcada', async () => {
+    view()
+    const verdict = await screen.findByTestId('run-verdict')
+    expect(verdict).toHaveTextContent('+5,00 USD')
+    expect(verdict).toHaveTextContent('2 operaciones')
     expect(screen.getAllByTestId('drop-mark')).toHaveLength(2)
-    expect(screen.getByText('Rojo')).toBeInTheDocument()
-    // the formula test's panel is not on screen
-    expect(screen.queryByTestId('run-verdict')).toBeNull()
+    expect(screen.getByTestId('drop-legend')).toBeInTheDocument()
+    // the exigencia is not on the page: it opens in a modal from «Probar»
+    expect(screen.queryByTestId('exigencia')).toBeNull()
+    expect(screen.queryByTestId('rebote-view')).toBeNull()
   })
 
-  it('el botón «Analista de rebote» lanza esa variante', async () => {
-    const user = userEvent.setup()
-    const quick = quickWith('rebote')
-    view(quick)
-    await screen.findByTestId('rebote-view')
-    await user.click(
-      screen.getByRole('button', { name: /Analista de rebote \(caídas/ }),
+  it('el desplegable cerrado trae cada operación y cada caída con su rebote', async () => {
+    const { user } = view(true)
+    await screen.findByTestId('run-verdict')
+    const details = screen.getByTestId('run-details') as HTMLDetailsElement
+    expect(details.open).toBe(false)
+    const falls = within(screen.getByTestId('fall-cards'))
+    expect(
+      falls.getAllByRole('button', { name: /^Caída −5,7 %/ }),
+    ).toHaveLength(2)
+    await user!.click(falls.getAllByRole('button', { name: /^Caída/ })[1]!)
+    expect(screen.getByTestId('market-chart')).toHaveTextContent('Operación 2')
+  })
+
+  it('el modal de exigencia muestra la entrada de la prueba y «Toda la cuenta» suma con 1.000 USD', async () => {
+    const { user } = view(true)
+    await screen.findByTestId('run-verdict')
+    const dialog = await openExigencia(user!)
+    expect(
+      within(dialog).getByRole('radio', { name: 'Rebote de ETH' }),
+    ).toBeChecked()
+    await user!.click(
+      within(dialog).getByRole('radio', { name: 'Toda la cuenta' }),
+    )
+    await user!.click(within(dialog).getByRole('button', { name: 'Cancelar' }))
+    // +10 % sobre 1.000 → 1.100; −5 % sobre 1.100 → −55
+    expect(screen.getByTestId('run-verdict')).toHaveTextContent('+45,00 USD')
+  })
+
+  it('al tocar una operación hace zoom con los precios de 5 minutos y marca la caída y el BTC', async () => {
+    const { user } = view(true)
+    const chart = await screen.findByTestId('market-chart')
+    await user!.click(
+      within(screen.getByTestId('run-operations')).getAllByRole('button', {
+        name: /^Operación 1/,
+      })[0]!,
+    )
+    expect(chart).toHaveTextContent('caída −5,7 % en 1 h')
+    expect(chart).toHaveTextContent('BTC −2,1 %')
+    expect(chart).toHaveTextContent('entrada LARGO')
+  })
+
+  it('confirmar el modal lanza la prueba con la entrada elegida y sin mandar el tamaño de la cuenta', async () => {
+    const { quick, user } = view(true)
+    await screen.findByTestId('run-verdict')
+    const dialog = await openExigencia(user!)
+    await user!.click(
+      within(dialog).getByRole('radio', { name: 'Toda la cuenta' }),
+    )
+    await user!.click(
+      within(dialog).getByRole('button', { name: 'Probar el rebote de ETH' }),
     )
     expect(quick.start).toHaveBeenCalledWith(
       'qwen-live',
-      'rebote',
-      expect.anything(),
+      'formula',
+      expect.objectContaining({ entrada: 'rebote', cuenta: 'entera' }),
     )
   })
 })

@@ -69,7 +69,6 @@ import {
   type QuickApi,
   type QuickFicha,
   type QuickFormula,
-  type QuickRebote,
   type QuickOperation,
   type QuickOperationStats,
   type QuickState,
@@ -79,9 +78,9 @@ import {
 import { installCommands } from '../domain/vectorbt-format.ts'
 import RunProgress from './RunProgress.tsx'
 import VectorbtModal from './VectorbtModal.tsx'
-import MarketTradesChart from './MarketTradesChart.tsx'
-import ReboteView from './ReboteView.tsx'
-import { useReboteModel } from './rebote-model.ts'
+import FallCards from './FallCards.tsx'
+import MarketTradesChart, { TradeStrip } from './MarketTradesChart.tsx'
+import ModalFrame from './ModalFrame.tsx'
 import RunVerdict from './RunVerdict.tsx'
 import { periodOf, useFormulaModel } from './formula-model.ts'
 import VectorbtProgress from './VectorbtProgress.tsx'
@@ -651,11 +650,19 @@ export default function StrategyRunView({
   const quickRunning = quickState?.state === 'running' || launching != null
   const quickVariants = quickState?.variants ?? []
   const [detailsOpen, setDetailsOpen] = useState(false)
+  // The «Probar» option picked: its exigencia is asked in a modal before the test starts
+  const [asking, setAsking] = useState<string | null>(null)
   // The test of the formula alone has no run: its operations and hourly prices come in its saved result.
+  // (the rebound entries have their own variant but the same result shape: the one started last is the one on screen)
   const formulaOf =
-    quickVariants.find(
-      (variant) => variant.kind === 'formula' && variant.summary?.formula,
-    )?.summary?.formula ??
+    quickVariants
+      .filter(
+        (variant) =>
+          (variant.kind === 'formula' || variant.kind === 'rebote') &&
+          variant.summary?.formula,
+      )
+      .sort((a, b) => (b.started_ms ?? 0) - (a.started_ms ?? 0))[0]?.summary
+      ?.formula ??
     (quickState?.state === 'done' ? quickState.summary?.formula : undefined) ??
     null
   // While a test runs its own state has no result yet: the panel keeps the previous formula result instead of falling back
@@ -664,39 +671,12 @@ export default function StrategyRunView({
   useEffect(() => {
     if (formulaOf) setKeptFormula(formulaOf)
   }, [formulaOf])
-  // The rebound analyst (no Qwen) has its own result: when it is the test started last it is the one on screen
-  const reboteOf =
-    (quickState?.state === 'done' ? quickState.summary?.rebote : undefined) ??
-    quickVariants.find(
-      (variant) => variant.kind === 'rebote' && variant.summary?.rebote,
-    )?.summary?.rebote ??
-    null
-  const lastKind = quickVariants.find(
-    (variant) => variant.id === quickState?.variant,
-  )?.kind
-  const [keptRebote, setKeptRebote] = useState<QuickRebote | null>(null)
-  useEffect(() => {
-    if (reboteOf) setKeptRebote(reboteOf)
-  }, [reboteOf])
   const busyQuick = hasQuick && (quickRunning || running != null || testing)
-  const wantsRebote =
-    reboteOf != null && (lastKind === 'rebote' || formulaOf == null)
-  const reboteShown = wantsRebote
-    ? reboteOf
-    : busyQuick && lastKind === 'rebote' && formulaOf == null
-      ? keptRebote
-      : null
-  const formulaShown = reboteShown
-    ? null
-    : (formulaOf ?? (busyQuick ? keptFormula : null))
+  const formulaShown = formulaOf ?? (busyQuick ? keptFormula : null)
   // The honesty meter of the result on screen: the formula test's own, else the one of the last practice run
-  const reboteModel = useReboteModel(reboteShown)
   const shownMeter =
-    (reboteShown ? reboteModel?.variant.honestidad : undefined) ??
     formulaShown?.honestidad ??
-    (formulaShown == null && reboteShown == null
-      ? lastRun?.params?.honestidad
-      : null) ??
+    (formulaShown == null ? lastRun?.params?.honestidad : null) ??
     null
   // Qwen en vivo only has the new panel: the old practice view is for the other strategies
   const legacyView = !hasQuick
@@ -789,7 +769,7 @@ export default function StrategyRunView({
   // Retired strategies of the old engine are not in the gate's registry.
   const unknownToGate = overviewError?.startsWith('No existe') ?? false
   const usedMedicion =
-    hasQuick && !reboteModel
+    hasQuick && !formulaShown?.entrada?.startsWith('rebote')
       ? (shownMeter?.medicion ?? lastRun?.params?.medicion ?? null)
       : null
 
@@ -896,8 +876,14 @@ export default function StrategyRunView({
     data.trades.length > 0 &&
     (data.candles?.candles.length ?? 0) > 1 &&
     !busyQuick
-  const formulaModel = useFormulaModel(gatePanel ? null : formulaShown)
+  const formulaModel = useFormulaModel(
+    gatePanel ? null : formulaShown,
+    exigencia.cuenta ?? 'fija',
+  )
   const figs = formulaModel?.figures ?? null
+  const sourceLabel = formulaShown?.entrada?.startsWith('rebote')
+    ? 'Rebote de ETH'
+    : 'Solo la fórmula'
   // The levels the shown test ran with (the formula test keeps them in its result, a run in its params)
   const usedLevels = formulaModel
     ? (formulaShown?.exigencia ?? null)
@@ -912,14 +898,20 @@ export default function StrategyRunView({
       : ''
   const porMovimiento = formulaModel ? formulaShown?.por_movimiento : null
   // The controls show what the result on screen ran with; a new result moves them, the user's own changes do not
-  const shownKey = `${usedLevels?.maestro ?? ''}/${usedLevels?.portero ?? ''}/${usedAnalista ?? ''}`
+  const usedEntrada = formulaModel ? (formulaShown?.entrada ?? 'formula') : null
+  const shownKey = `${usedLevels?.maestro ?? ''}/${usedLevels?.portero ?? ''}/${usedAnalista ?? ''}/${usedEntrada ?? ''}`
   useEffect(() => {
-    if (usedLevels && usedAnalista)
-      setExigencia({
-        maestro: usedLevels.maestro,
-        portero: usedLevels.portero,
-        analista: usedAnalista,
-      })
+    setExigencia((now) => ({
+      ...now,
+      ...(usedLevels && usedAnalista
+        ? {
+            maestro: usedLevels.maestro,
+            portero: usedLevels.portero,
+            analista: usedAnalista,
+          }
+        : {}),
+      ...(usedEntrada ? { entrada: usedEntrada } : {}),
+    }))
     // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed on the shown result's levels only
   }, [shownKey])
   const weeklyNote = (trades: number, fromMs: number, toMs: number) => {
@@ -945,7 +937,7 @@ export default function StrategyRunView({
       <Kpi
         label="Operaciones cerradas"
         value={amount(figs.trades, 0)}
-        note={`Solo la fórmula, sin Qwen · ${periodNote(formulaModel!.fromMs, formulaModel!.toMs)}${weeklyNote(figs.trades, formulaModel!.fromMs, formulaModel!.toMs)}`}
+        note={`${sourceLabel}, sin Qwen · ${periodNote(formulaModel!.fromMs, formulaModel!.toMs)}${weeklyNote(figs.trades, formulaModel!.fromMs, formulaModel!.toMs)}`}
         tone={null}
       />
       <Kpi
@@ -1027,7 +1019,7 @@ export default function StrategyRunView({
             {formulaModel && busyQuick
               ? `Resultado anterior${usedLevels ? ` (maestro ${usedLevels.maestro}, portero ${usedLevels.portero})` : ''} · probando maestro ${exigencia.maestro}, portero ${exigencia.portero}…`
               : formulaModel
-                ? `Solo la fórmula, sin Qwen · ${DAY_FORMAT.format(formulaModel.fromMs)} – ${DAY_FORMAT.format(formulaModel.toMs)} · ${amount(formulaModel.trades.length, 0)} operaciones`
+                ? `${sourceLabel}, sin Qwen · ${DAY_FORMAT.format(formulaModel.fromMs)} – ${DAY_FORMAT.format(formulaModel.toMs)} · ${amount(formulaModel.trades.length, 0)} operaciones`
                 : lastRun
                   ? `Prueba mostrada · ${runName(lastRun)}`
                   : 'Sin prueba terminada con operaciones guardadas'}
@@ -1124,36 +1116,27 @@ export default function StrategyRunView({
                           },
                         ]),
                   ]
+                    .filter((variant) => variant.kind !== 'rebote')
                     .sort(
                       (a, b) =>
                         Number(b.kind === 'formula') -
-                          Number(a.kind === 'formula') ||
-                        Number(b.kind === 'rebote') -
-                          Number(a.kind === 'rebote'),
+                        Number(a.kind === 'formula'),
                     )
                     .map((variant) => (
                       <button
                         key={variant.id}
                         type="button"
-                        onClick={() => {
-                          setDetailsOpen(true)
-                          void startQuick(variant.id)
-                        }}
+                        onClick={() => setAsking(variant.id)}
                         disabled={quickRunning}
                         title={
-                          variant.kind === 'formula' ||
-                          variant.kind === 'rebote'
-                            ? variant.kind === 'rebote'
-                              ? 'Lee velas guardadas, tarda poco y no calienta la Mac. No usa el maestro, el portero ni los controles de exigencia.'
-                              : 'Lee velas guardadas, tarda poco y no calienta la Mac.'
+                          variant.kind === 'formula'
+                            ? 'Lee velas guardadas, tarda poco y no calienta la Mac.'
                             : 'Le pregunta a Qwen sobre unas 150 fotos del pasado. Es orientativa: no es el Examen.'
                         }
                       >
                         {variant.kind === 'formula'
-                          ? 'Solo la fórmula (rápida, por defecto)'
-                          : variant.kind === 'rebote'
-                            ? 'Analista de rebote (caídas de ETH, rápido)'
-                            : `Con Qwen · ${variantLabel(variant as QuickVariant)} (25-40 min, calienta la Mac)`}
+                          ? 'Sin Qwen: la fórmula o el rebote de ETH (rápida)'
+                          : `Con Qwen · ${variantLabel(variant as QuickVariant)} (25-40 min, calienta la Mac)`}
                       </button>
                     ))}
                 <button
@@ -1171,12 +1154,31 @@ export default function StrategyRunView({
           </div>
         </div>
       </header>
-      {hasQuick && (
-        <ExigenciaControl
-          value={exigencia}
-          onChange={setExigencia}
-          disabled={testing || quickRunning}
-        />
+      {asking && (
+        <ModalFrame
+          label="Exigencia de la prueba"
+          onClose={() => setAsking(null)}
+        >
+          <ExigenciaControl value={exigencia} onChange={setExigencia} />
+          <div className="flex flex-wrap justify-end gap-2">
+            <button type="button" onClick={() => setAsking(null)}>
+              Cancelar
+            </button>
+            <button
+              type="button"
+              className={RUN.probe}
+              onClick={() => {
+                const variant = asking
+                setAsking(null)
+                void startQuick(variant)
+              }}
+            >
+              {(exigencia.entrada ?? 'formula') === 'formula'
+                ? 'Probar'
+                : 'Probar el rebote de ETH'}
+            </button>
+          </div>
+        </ModalFrame>
       )}
       {hasQuick && (
         <HonestyMeter
@@ -1352,9 +1354,7 @@ export default function StrategyRunView({
         data-testid="run-results"
         data-previous={busyQuick && formulaShown ? 'true' : undefined}
       >
-        {reboteModel && reboteShown ? (
-          <ReboteView rebote={reboteShown} model={reboteModel} />
-        ) : gatePanel ? (
+        {gatePanel ? (
           <RunVerdict
             trades={data.trades}
             product={data.product}
@@ -1367,11 +1367,13 @@ export default function StrategyRunView({
             trades={formulaModel.trades}
             product={formulaModel.product}
             closes={formulaModel.closes}
+            accountUsd={formulaModel.accountUsd}
           />
         ) : null}
-        {reboteModel ? null : kpiRow}
-        {reboteModel ? null : gatePanel ? (
+        {kpiRow}
+        {gatePanel ? (
           <MarketTradesChart
+            hideStrip
             product={data.product}
             candles={data.candles?.candles ?? []}
             view={data.view}
@@ -1382,6 +1384,7 @@ export default function StrategyRunView({
           />
         ) : formulaModel ? (
           <MarketTradesChart
+            hideStrip
             product={formulaModel.product}
             candles={formulaModel.candles}
             view={formulaModel.selected ? 'zoom' : 'full'}
@@ -1421,8 +1424,26 @@ export default function StrategyRunView({
         onToggle={(event) => setDetailsOpen(event.currentTarget.open)}
       >
         <summary className="cursor-pointer text-note text-ink-2">
-          Ver velas y detalle de las operaciones
+          Operaciones, caídas y detalle
         </summary>
+        {(gatePanel || formulaModel) && (
+          <div className="grid gap-3 pb-2" data-testid="run-operations">
+            <TradeStrip
+              trades={gatePanel ? data.trades : formulaModel!.trades}
+              selected={gatePanel ? selected : formulaModel!.selected}
+              onSelect={
+                gatePanel ? (trade) => void select(trade) : formulaModel!.select
+              }
+            />
+            {!gatePanel && formulaModel && (
+              <FallCards
+                trades={formulaModel.trades}
+                selected={formulaModel.selected}
+                onSelect={formulaModel.select}
+              />
+            )}
+          </div>
+        )}
         {scopeRun && !formulaModel && legacyView && (
           <ul className={RUN.scope} data-testid="run-evaluation-scope">
             {runScopeLines(scopeRun).map((line) => (
@@ -1807,74 +1828,86 @@ const MAIN_TRADES = (items: QuickTrade[] | undefined): VisualTrade[] =>
   }))
 
 /** The formula alone, no Qwen: everything as pictures; the table is under «Ver el detalle». */
+/** The ways of operating the test compared on the same entries: the bar is the net per operation, the thin line the share that won. */
+function WaysBars({ formula }: { formula: QuickFormula }) {
+  const ways = (
+    [
+      ['La fórmula', 'formula'],
+      ['Maestro fuerte, sin portero', 'maestro_fuerte'],
+      ['Siempre largo', 'siempre_largo'],
+      ['Siempre corto', 'siempre_corto'],
+    ] as [string, keyof QuickFormula['curvas']][]
+  )
+    .map(([label, key]) => {
+      // Each row comes from its own operations, the ones of the product on screen.
+      const list = (formula.curvas[key] ?? []).filter(
+        (t) => !formula.productos[0] || t.producto === formula.productos[0],
+      )
+      const n = list.length
+      return {
+        label:
+          formula.entrada?.startsWith('rebote') && key === 'formula'
+            ? 'El rebote'
+            : label,
+        n,
+        mean: n > 0 ? list.reduce((sum, t) => sum + t.neto_bp, 0) / n : 0,
+        won: n > 0 ? list.filter((t) => t.neto_bp > 0).length / n : 0,
+      }
+    })
+    .filter((way) => way.n > 0)
+  const widest = Math.max(1, ...ways.map((way) => Math.abs(way.mean)))
+  return (
+    <div className="grid gap-2" data-testid="formula-ways">
+      {ways.map((way) => (
+        <div key={way.label} className="grid gap-1 text-note">
+          <div className="flex flex-wrap items-baseline justify-between gap-2 text-ink-2">
+            <span className="text-ink">{way.label}</span>
+            <span className="tabular-nums">
+              {way.n} operaciones ·{' '}
+              <b
+                className={`font-medium ${way.mean >= 0 ? 'text-long' : 'text-short'}`}
+              >
+                {bp(way.mean)}
+              </b>{' '}
+              por operación · ganan {percentText(way.won)}
+            </span>
+          </div>
+          <div className="h-3 rounded-sm bg-surface-2">
+            <div
+              className={`h-full rounded-sm ${way.mean >= 0 ? 'bg-long' : 'bg-short'}`}
+              style={{
+                width: `${Math.max(2, (Math.abs(way.mean) / widest) * 100)}%`,
+              }}
+            />
+          </div>
+          <div className="h-0.5 rounded-sm bg-surface-2">
+            <div
+              className="h-full rounded-sm bg-ink-2"
+              style={{ width: `${way.won * 100}%` }}
+            />
+          </div>
+        </div>
+      ))}
+    </div>
+  )
+}
+
 function FormulaResult({ formula }: { formula: QuickFormula }) {
   return (
     <div className="grid gap-3" data-testid="formula-result">
       <p className="m-0 text-note text-ink-2">
-        <strong className="text-ink">Solo la fórmula, sin Qwen</strong> ·{' '}
+        <strong className="text-ink">
+          {formula.entrada?.startsWith('rebote')
+            ? `Rebote de ETH, sin Qwen: ${formula.regla}`
+            : 'Solo la fórmula, sin Qwen'}
+        </strong>{' '}
+        ·{' '}
         {formula.productos.map((p) => p.replace(/^PF_|USD$/g, '')).join(' y ')}{' '}
         · del {DAY_FORMAT.format(periodOf(formula).fromMs)} al{' '}
         {DAY_FORMAT.format(periodOf(formula).toMs)} · {amount(formula.fotos, 0)}{' '}
         miradas
       </p>
-      <details open>
-        <summary className="cursor-pointer text-note text-ink-2">
-          Ver el detalle en números
-        </summary>
-        <div className={RUN.tableWrap}>
-          <table className={RUN.table} aria-label="Detalle de la fórmula">
-            <thead>
-              <tr>
-                <th scope="col">Qué</th>
-                <th scope="col">Operaciones</th>
-                <th scope="col">Neto por operación</th>
-                <th scope="col">Ganadoras</th>
-                <th scope="col">Por vuelta / por tiempo</th>
-              </tr>
-            </thead>
-            <tbody>
-              {(
-                [
-                  ['La fórmula', 'formula'],
-                  ['Maestro fuerte, sin portero', 'maestro_fuerte'],
-                  ['Siempre largo', 'siempre_largo'],
-                  ['Siempre corto', 'siempre_corto'],
-                ] as [string, keyof QuickFormula['curvas']][]
-              ).map(([label, key]) => {
-                // Each row comes from its own operations, the ones of the product on screen.
-                const list = (formula.curvas[key] ?? []).filter(
-                  (t) =>
-                    !formula.productos[0] ||
-                    t.producto === formula.productos[0],
-                )
-                const n = list.length
-                return (
-                  <tr key={label}>
-                    <th scope="row">{label}</th>
-                    <td>{n}</td>
-                    <td>
-                      {n > 0
-                        ? bp(list.reduce((sum, t) => sum + t.neto_bp, 0) / n)
-                        : '—'}
-                    </td>
-                    <td>
-                      {n > 0
-                        ? percentText(
-                            list.filter((t) => t.neto_bp > 0).length / n,
-                          )
-                        : '—'}
-                    </td>
-                    <td>
-                      {list.filter((t) => t.motivo === 'vuelta').length} /{' '}
-                      {list.filter((t) => t.motivo === 'tiempo').length}
-                    </td>
-                  </tr>
-                )
-              })}
-            </tbody>
-          </table>
-        </div>
-      </details>
+      <WaysBars formula={formula} />
     </div>
   )
 }
@@ -1891,7 +1924,6 @@ function QuickResult({ state }: { state: QuickState }) {
   if (!summary)
     return <p>Prueba rápida terminada, pero no alcanzó para una lectura.</p>
   if (summary.formula) return <FormulaResult formula={summary.formula} />
-  if (summary.rebote) return <p className={RUN.hint}>{summary.note}</p>
   const curvas = summary.operacion?.curvas
   return (
     <div>

@@ -1,5 +1,7 @@
 import type {
   AnalistaModo,
+  Cuenta,
+  Entrada,
   ExigenciaLevels,
   Medicion,
 } from '../infrastructure/quick-api.ts'
@@ -53,5 +55,43 @@ export const MEDICIONES: Array<{
     label: 'Fórmula en vigor',
     detail:
       'Las fórmulas que operan en paper, ajustadas hasta sep-2025: las etapas anteriores a oct-2025 salen marcadas «dentro del ajuste» y no prueban nada.',
+  },
+]
+
+/** What decides the entries of a test (mirrors `ENTRADAS` in futures_qwen_rebote.py); the formula is what paper operates. */
+export const ENTRADAS: Array<{ modo: Entrada; label: string; detail: string }> =
+  [
+    {
+      modo: 'formula',
+      label: 'Maestro + portero',
+      detail:
+        'La fórmula que opera en paper: entra cuando el maestro es fuerte y el portero está de acuerdo.',
+    },
+    {
+      modo: 'rebote',
+      label: 'Rebote de ETH',
+      detail:
+        'ETH cae 5 % en 1 h → largo, sale a las 24 h. No usa el maestro, el portero ni el analista de movimiento. La regla se eligió mirando este mismo período: el medidor sale rojo.',
+    },
+    {
+      modo: 'rebote_btc',
+      label: 'Rebote con filtro de BTC',
+      detail:
+        'Igual, pero solo si ETH cayó 2 puntos más que BTC en esa hora, y sale a las 4 h.',
+    },
+  ]
+
+/** How big each trade is when the result is added up: the same trades, only the USD change. */
+export const CUENTAS: Array<{ modo: Cuenta; label: string; detail: string }> = [
+  {
+    modo: 'fija',
+    label: '100 USD fijos',
+    detail: 'El tamaño de paper: 100 USD en cada operación.',
+  },
+  {
+    modo: 'entera',
+    label: 'Toda la cuenta',
+    detail:
+      'La primera operación usa 1.000 USD; cada siguiente, 1.000 más lo ganado o perdido hasta ahí. Sin apalancamiento.',
   },
 ]

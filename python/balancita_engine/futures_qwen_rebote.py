@@ -5,12 +5,11 @@ No usa el maestro, el portero ni Qwen, y no toca paper. Es la regla medida en ``
 * **Disparo**: al cierre de una vela de 5 min, el cierre es 5 % (o más) más bajo que el de 60 min antes.
 * **Entrada**: largo a mercado al cierre del minuto siguiente (la vela de 1 min que empieza en el cierre de 5 min). Sin stop ni objetivo.
 * **Salida**: 24 h exactas después de la entrada. Una posición por vez; tras salir, 60 min sin disparar.
-* **Variante con filtro**: además, ETH cayó al menos 2 puntos más que BTC en la misma hora (o sea, fue algo de ETH y no del
+* **Variante con filtro** (entrada ``rebote_btc``): además, ETH cayó al menos 2 puntos más que BTC en la misma hora (o sea, fue algo de ETH y no del
   mercado); sale a las 4 h.
 * **Costos**: taker 5,19 pb por pata (comisión 0,05 % más impacto), 10,38 pb ida y vuelta. Sin funding, como en la medición.
 
-La cuenta empieza en 1.000 USD. «Cuenta entera»: cada operación usa toda la cuenta del momento (1.000 más lo ganado o perdido hasta ahí,
-sin apalancamiento). «100 USD fijos»: el nominal de paper. Las dos curvas salen de las mismas operaciones.
+El tamaño de la cuenta (100 USD fijos o toda la cuenta, 1.000 USD más lo ganado) lo pone la pantalla sobre estas mismas operaciones.
 
 Honestidad: la regla se eligió mirando 2022-2026 (el mismo período en que se mide), así que nada de lo que se ve está fuera del ajuste:
 el medidor sale rojo y cada variante mirada cuenta como un intento más. Lo único limpio es el holdout, que no se lee (``History`` lo rechaza).
@@ -31,17 +30,39 @@ LOOK_BARS = 12                           # 60 min = 12 velas de 5 min
 DROP_PCT = 5.0
 COOLDOWN_MIN = 60
 TAKER_BP = 5.19                          # por pata
-ACCOUNT_USD = 1000.0
-FIXED_USD = 100.0                        # el nominal de paper
+NOTIONAL_USD = 100.0                     # el nominal de paper
+ENV = "QWEN_ENTRADA"
+ENTRADAS = ("formula", "rebote", "rebote_btc")     # qué decide la entrada de la prueba; ``formula`` es el maestro con el portero (paper)
+DEFAULT = "formula"
 BEFORE_MS, AFTER_MS = 4 * HOUR_MS, 3 * HOUR_MS     # precios de 5 min que se guardan alrededor de cada operación (para el zoom)
 REASON = "tiempo"
-VARIANTS = (
-    {"id": "principal", "label": "Caída de 5 % en 1 h → largo 24 h", "hold_min": 1440, "gap_pct": None},
-    {"id": "filtro_btc", "label": "Con filtro: ETH 2 puntos peor que BTC → largo 4 h", "hold_min": 240, "gap_pct": 2.0},
-)
-NOTE = ("Analista de rebote, sin Qwen: ETH cae 5 % o más en 1 h → largo, salida a las 24 h (variante con filtro: ETH 2 puntos peor que "
-        "BTC, salida a las 4 h). Costos taker de 10,38 pb ida y vuelta, sin funding. La regla se eligió mirando este mismo período, "
-        "así que el medidor sale rojo: es para VER cada caída y cada rebote, no una prueba de que funciona.")
+RULES = {
+    "rebote": {"id": "principal", "label": "caída de 5 % en 1 h → largo 24 h", "hold_min": 1440, "gap_pct": None},
+    "rebote_btc": {"id": "filtro_btc", "label": "caída de 5 % en 1 h y ETH 2 puntos peor que BTC → largo 4 h", "hold_min": 240,
+                   "gap_pct": 2.0},
+}
+NOTE = ("Rebote de ETH, sin Qwen: cae 5 % o más en 1 h → largo, salida a las 24 h (con filtro: ETH 2 puntos peor que BTC, salida a las "
+        "4 h). Costos taker de 10,38 pb ida y vuelta, sin funding. La regla se eligió mirando este mismo período, así que el medidor "
+        "sale rojo: es para VER cada caída y cada rebote, no una prueba de que funciona.")
+
+
+def entrada(value, name="entrada"):
+    """Una entrada válida (``formula`` donde falta)."""
+    if value in (None, ""):
+        return DEFAULT
+    if value not in ENTRADAS:
+        raise ValueError("{}: tiene que ser {}".format(name, ", ".join(ENTRADAS)))
+    return value
+
+
+def from_env(env=None):
+    env = os.environ if env is None else env
+    return entrada(env.get(ENV))
+
+
+def env_for(value=None):
+    """La variable de entorno que le pasa la entrada elegida al proceso de la prueba."""
+    return {ENV: entrada(value)}
 
 
 class ReboteError(Exception):
@@ -158,43 +179,24 @@ def trade_of(drop, variant, minutes, eth_by_start):
             "velas": prices}
 
 
-def account(trades, size):
-    """Pone a cada operación su nominal, su ganancia en USD y la cuenta después, y devuelve el resumen de la cuenta.
-
-    ``size``: ``"compuesto"`` (toda la cuenta del momento, empezando en 1.000 USD) o ``"fijo"`` (100 USD por operación)."""
-    balance, peak, drawdown = ACCOUNT_USD, ACCOUNT_USD, 0.0
-    curve = []
-    for trade in trades:
-        notional = balance if size == "compuesto" else FIXED_USD
-        pnl = notional * trade["neto_bp"] / 1e4
-        balance += pnl
-        peak = max(peak, balance)
-        drawdown = max(drawdown, 1 - balance / peak) if peak > 0 else 0.0
-        trade.setdefault("cuenta", {})[size] = {"nocional_usd": round(notional, 2), "pnl_usd": round(pnl, 2),
-                                                "cuenta_usd": round(balance, 2)}
-        curve.append([trade["salida_ms"], round(balance, 2)])
-    return {"inicial_usd": ACCOUNT_USD, "final_usd": round(balance, 2), "ganancia_usd": round(balance - ACCOUNT_USD, 2),
-            "ganancia_pct": round((balance / ACCOUNT_USD - 1) * 100, 2), "caida_maxima_pct": round(drawdown * 100, 2),
-            "curva": curve}
-
-
-def stats(trades):
-    """Operaciones, neto en pb (sobre un nominal fijo), acierto y año por año; el mismo formato que usa el medidor."""
+def stats(trades, hold_min):
+    """Las cifras de una forma de operar en el formato de ``QuickOperationStats`` (la pantalla ya lo lee)."""
     from . import futures_walkforward as wf
-    rows = [{"t_in": t["entrada_ms"], "t_out": t["salida_ms"], "net": t["neto_bp"], "motivo": t["motivo"]} for t in trades]
-    if not rows:
-        return {"operaciones": 0, "neto_pb": 0, "por_anio": {}}
-    out = wf.summarize(rows, trials=1)
-    return {"operaciones": out["operaciones"], "neto_pb": out["neto_pb"], "por_operacion_pb": out["por_operacion_pb"],
-            "ganadoras": out["ganadoras"], "por_anio": out["por_anio"], "ic90_por_operacion_pb": out["ic90_por_operacion_pb"],
-            "peor_pb": round(min(t["neto_bp"] for t in trades), 1), "mejor_pb": round(max(t["neto_bp"] for t in trades), 1)}
+    nets = [t["neto_bp"] for t in trades]
+    n = len(nets)
+    if not n:
+        return {"n": 0, "neto_bp": None, "ganadoras": None, "ic": [None, None], "total_bp": None, "por_vuelta": 0, "por_tiempo": 0,
+                "horas": None}
+    rows = [{"t_in": t["entrada_ms"], "t_out": t["salida_ms"], "net": t["neto_bp"]} for t in trades]
+    return {"n": n, "neto_bp": sum(nets) / n, "ganadoras": sum(1 for v in nets if v > 0) / n, "ic": wf.bootstrap_ic(rows),
+            "total_bp": sum(nets), "por_vuelta": 0, "por_tiempo": n, "horas": hold_min / 60.0}
 
 
-def honesty(variant, trades):
+def honesty(rule, trades):
     """Registra el intento y juzga el resultado: la regla se eligió con este período, así que nada queda fuera del ajuste."""
     from . import futures_walkforward as wf
     spec = {"analista": "rebote", "producto": PRODUCT, "caida_pct": DROP_PCT, "ventana_min": LOOK_BARS * 5,
-            "salida_min": variant["hold_min"], "filtro_btc_pct": variant["gap_pct"]}
+            "salida_min": rule["hold_min"], "filtro_btc_pct": rule["gap_pct"]}
     wf.register(spec, medicion="vigente")
     rows = [{"t_in": t["entrada_ms"], "t_out": t["salida_ms"], "net": t["neto_bp"]} for t in trades]
     return wf.meter(rows, medicion="vigente", trial_count=wf.trials(), fit_end_ms=qt.load_holdout_ms())
@@ -203,42 +205,41 @@ def honesty(variant, trades):
 # --------------------------------------------------------------------------- the run
 
 
-def build(history, holdout_ms, minutes, *, start_ms=None, log=print):
-    """Todo el resultado del analista: las dos variantes con sus caídas, operaciones, cuentas y medidor."""
+def build(history, holdout_ms, minutes, choice, *, start_ms=None, log=print):
+    """El resultado de la entrada ``choice`` (``rebote`` o ``rebote_btc``) con el mismo formato que la prueba de la fórmula."""
+    rule = RULES[choice]
     start_ms = qt.date_ms(START) if start_ms is None else start_ms
     log("rebote: leyendo las velas de 5 min de ETH y BTC (sin modelo)…")
     eth = history.bars(PRODUCT, start_ms - 2 * HOUR_MS, holdout_ms)
-    btc = history.bars(BTC, start_ms - 2 * HOUR_MS, holdout_ms)
+    btc = history.bars(BTC, start_ms - 2 * HOUR_MS, holdout_ms) if rule["gap_pct"] is not None else []
     if len(eth) < LOOK_BARS + 2:
         raise ReboteError("no hay velas guardadas de {} para el período".format(PRODUCT))
     eth_by_start = {int(b["bucket_start"]): b for b in eth}
     last_ms = int(eth[-1]["bucket_start"]) + BAR_MS
-    out = {"schema": SCHEMA, "producto": PRODUCT, "desde_ms": start_ms, "hasta_ms": last_ms, "inicial_usd": ACCOUNT_USD,
-           "fijo_usd": FIXED_USD, "costo_ida_vuelta_pb": 2 * TAKER_BP, "caida_pct": DROP_PCT, "ventana_min": LOOK_BARS * 5,
-           "variantes": [], "note": NOTE}
-    for variant in VARIANTS:
-        # una operación necesita su salida (y los precios que se guardan después) antes del holdout y de la última vela
-        end_ms = min(holdout_ms, last_ms) - (variant["hold_min"] * MIN_MS + AFTER_MS + 2 * MIN_MS)
-        drops = find_drops(eth, btc, variant, start_ms, end_ms)
-        log("rebote {}: {} caídas; bajando los precios de 1 minuto…".format(variant["id"], len(drops)))
-        trades = [trade_of(d, variant, minutes, eth_by_start) for d in drops]
-        minutes.save()
-        out["variantes"].append({"id": variant["id"], "label": variant["label"], "salida_horas": variant["hold_min"] / 60.0,
-                                 "filtro_btc_pct": variant["gap_pct"], "caidas": len(drops), "operaciones": trades,
-                                 "resumen": stats(trades), "cuentas": {"compuesto": account(trades, "compuesto"),
-                                                                       "fijo": account(trades, "fijo")},
-                                 "honestidad": honesty(variant, trades)})
+    # una operación necesita su salida (y los precios que se guardan después) antes del holdout y de la última vela
+    end_ms = min(holdout_ms, last_ms) - (rule["hold_min"] * MIN_MS + AFTER_MS + 2 * MIN_MS)
+    drops = find_drops(eth, btc, rule, start_ms, end_ms)
+    log("rebote {}: {} caídas; bajando los precios de 1 minuto…".format(rule["id"], len(drops)))
+    trades = [trade_of(d, rule, minutes, eth_by_start) for d in drops]
+    minutes.save()
     hourly = [[int(b["bucket_start"]) + BAR_MS, round(float(b["close"]), 2)] for b in eth
               if (int(b["bucket_start"]) + BAR_MS) % HOUR_MS == 0 and start_ms <= int(b["bucket_start"]) + BAR_MS < holdout_ms]
-    out["mercado"] = {PRODUCT: hourly}
-    return out
+    weeks = (last_ms - start_ms) / (7 * 86_400_000)
+    main = stats(trades, rule["hold_min"])
+    main["por_semana"] = main["n"] / weeks if weeks >= 1 else None
+    empty = stats([], rule["hold_min"])
+    return {"entrada": choice, "regla": rule["label"], "fotos": len(eth), "desde_ms": start_ms, "hasta_ms": last_ms,
+            "max_horas": rule["hold_min"] / 60.0, "nocional_usd": NOTIONAL_USD, "productos": [PRODUCT], "exigencia": None,
+            "analista": None, "mercado": {PRODUCT: hourly}, "formula": main, "maestro_fuerte": empty, "siempre_largo": empty,
+            "siempre_corto": empty, "honestidad": honesty(rule, trades),
+            "curvas": {"formula": trades, "maestro_fuerte": [], "siempre_largo": [], "siempre_corto": []}}
 
 
-def prefetch(history, holdout_ms, log=print):
-    """Baja a la caché las velas de 5 min de ETH y BTC del período (solo lo que falta)."""
+def prefetch(history, holdout_ms, choice, log=print):
+    """Baja a la caché las velas de 5 min de ETH (y de BTC con el filtro) del período: solo lo que falta."""
     if history.offline:
         return
-    for product in (PRODUCT, BTC):
+    for product in (PRODUCT, BTC) if RULES[choice]["gap_pct"] is not None else (PRODUCT,):
         log("candles {}: {} a {}".format(product, START, qt.stamp(holdout_ms)))
         cache = history._cache(product)
         try:
@@ -247,23 +248,26 @@ def prefetch(history, holdout_ms, log=print):
             cache.close()
 
 
-def run_rebote(history, holdout_ms, state_path, variant, *, minutes=None, log=print):
-    """La prueba del analista de rebote: deja ``{state, summary}`` en ``state_path`` con el mismo formato que la prueba de la fórmula."""
+def run_rebote(history, holdout_ms, state_path, variant, *, choice=None, minutes=None, log=print):
+    """La prueba del rebote: deja ``{state, summary}`` en ``state_path`` con el mismo formato que la prueba de la fórmula."""
     from . import futures_qwen_trader_exam as exam
+    choice = choice or from_env()
     started = int(time.time() * 1000)
-    state = {"state": "running", "pid": os.getpid(), "started_ms": started, "answered": 0, "total": 3, "phase": "fotos",
+    state = {"state": "running", "pid": os.getpid(), "started_ms": started, "answered": 0, "total": 2, "phase": "fotos",
              "updated_ms": started, "summary": None, "error": None, "variant": variant["id"]}
     exam._write_state(state_path, state)
     try:
-        prefetch(history, holdout_ms, log)
+        if choice not in RULES:
+            raise ReboteError("la entrada {!r} no es un rebote".format(choice))
+        prefetch(history, holdout_ms, choice, log)
         state.update(answered=1, updated_ms=int(time.time() * 1000))
         exam._write_state(state_path, state)
         minutes = minutes or Minutes(os.path.join(history.cache_dir, "rebote-1m-{}.json".format(PRODUCT)), offline=history.offline)
-        result = build(history, holdout_ms, minutes, log=log)
-        state.update(state="done", answered=3, summary={
-            "photos": 0, "horizon_min": 1440, "spearman": None, "spearman_ci": [None, None], "extremes_net_bp": None,
-            "extremes_ci": [None, None], "vs_random_pct": None,
-            "signals": {"extremes": None, "random": None, "spearman": None}, "note": NOTE, "rebote": result})
+        op = build(history, holdout_ms, minutes, choice, log=log)
+        state.update(state="done", answered=2, summary={
+            "photos": op["fotos"], "horizon_min": RULES[choice]["hold_min"], "spearman": None, "spearman_ci": [None, None],
+            "extremes_net_bp": None, "extremes_ci": [None, None], "vs_random_pct": None,
+            "signals": {"extremes": None, "random": None, "spearman": None}, "note": NOTE, "formula": op})
     except Exception as error:  # noqa: BLE001 - whatever went wrong must reach the screen
         state.update(state="failed", error=str(error))
     state["finished_ms"] = int(time.time() * 1000)

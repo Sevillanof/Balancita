@@ -50,7 +50,7 @@ class FakeHistory:
 
 
 class FindDropsTest(unittest.TestCase):
-    principal, filtro = rb.VARIANTS
+    principal, filtro = rb.RULES["rebote"], rb.RULES["rebote_btc"]
 
     def test_a_drop_of_5_percent_in_an_hour_fires_and_4_9_does_not(self):
         n = 12 * 24 * 3
@@ -102,9 +102,9 @@ class TradeTest(unittest.TestCase):
         for k in range(12 * 30 + 12 * 24 + 1, n):
             closes[k] = closes[12 * 30] * 1.04
         eth = series(closes)
-        drop = rb.find_drops(eth, None, rb.VARIANTS[0], T0, T0 + n * BAR)[0]
+        drop = rb.find_drops(eth, None, rb.RULES["rebote"], T0, T0 + n * BAR)[0]
         minutes = FakeMinutes(eth)
-        trade = rb.trade_of(drop, rb.VARIANTS[0], minutes, {int(b["bucket_start"]): b for b in eth})
+        trade = rb.trade_of(drop, rb.RULES["rebote"], minutes, {int(b["bucket_start"]): b for b in eth})
         self.assertEqual(trade["entrada_ms"], drop["t_ms"] + MIN)
         self.assertEqual(trade["salida_ms"], drop["t_ms"] + 1440 * MIN + MIN)
         self.assertEqual(minutes.asked, [drop["t_ms"], drop["t_ms"] + 1440 * MIN])
@@ -116,56 +116,57 @@ class TradeTest(unittest.TestCase):
         self.assertTrue(all(trade["entrada_ms"] - rb.BEFORE_MS <= t <= trade["salida_ms"] + rb.AFTER_MS for t, _ in trade["velas"]))
 
 
-class AccountTest(unittest.TestCase):
-    def trades(self, nets):
-        return [{"neto_bp": n, "salida_ms": T0 + (k + 1) * HOUR, "entrada_ms": T0 + k * HOUR, "motivo": rb.REASON}
-                for k, n in enumerate(nets)]
-
-    def test_compound_uses_the_whole_account_and_fixed_uses_100(self):
-        trades = self.trades([1000.0, -500.0])                  # +10 % y -5 %
-        big = rb.account(trades, "compuesto")
-        small = rb.account(trades, "fijo")
-        self.assertEqual(trades[0]["cuenta"]["compuesto"]["nocional_usd"], 1000.0)
-        self.assertEqual(trades[0]["cuenta"]["compuesto"]["cuenta_usd"], 1100.0)
-        self.assertEqual(trades[1]["cuenta"]["compuesto"]["nocional_usd"], 1100.0)     # 1.000 + lo ganado
-        self.assertEqual(big["final_usd"], 1045.0)
-        self.assertEqual(big["caida_maxima_pct"], 5.0)
-        self.assertEqual(trades[1]["cuenta"]["fijo"]["nocional_usd"], 100.0)
-        self.assertEqual(small["final_usd"], 1005.0)
-        self.assertEqual([p[1] for p in big["curva"]], [1100.0, 1045.0])
-
-    def test_a_loss_reduces_the_next_size(self):
-        trades = self.trades([-1000.0, 1000.0])
-        rb.account(trades, "compuesto")
-        self.assertEqual(trades[1]["cuenta"]["compuesto"]["nocional_usd"], 900.0)
+class EntradaTest(unittest.TestCase):
+    def test_default_is_the_formula_and_only_known_entries_pass(self):
+        self.assertEqual(rb.entrada(None), "formula")
+        self.assertEqual(rb.from_env({}), "formula")
+        self.assertEqual(rb.env_for("rebote_btc"), {rb.ENV: "rebote_btc"})
+        with self.assertRaises(ValueError):
+            rb.entrada("raro")
 
 
 class BuildTest(unittest.TestCase):
-    def test_build_and_run_leave_both_variants_with_accounts_and_a_red_meter(self):
+    def eth_with_drops(self):
         day = 12 * 24
         n = day * 40
         closes = [2000.0] * n
         for k, start in enumerate(range(day * 3, day * 36, day * 6)):     # una caída de 6 % cada 6 días, con rebote a las 24 h
             for i in range(start, min(n, start + day * 3)):
                 closes[i] = 2000.0 * (0.94 if i < start + day else 1.02 + 0.01 * k)
-        eth = series(closes)
-        btc = series([60000.0] * n)
+        return series(closes), series([60000.0] * n)
+
+    def test_build_has_the_shape_of_the_formula_result_with_drops_and_a_red_meter(self):
+        eth, btc = self.eth_with_drops()
         with tempfile.TemporaryDirectory() as tmp:
             os.environ["BALANCITA_WF_INTENTOS"] = os.path.join(tmp, "intentos.jsonl")
             self.addCleanup(os.environ.pop, "BALANCITA_WF_INTENTOS", None)
-            out = rb.build(FakeHistory(eth, btc), HOLDOUT, FakeMinutes(eth), start_ms=T0, log=lambda *a: None)
-        self.assertEqual([v["id"] for v in out["variantes"]], ["principal", "filtro_btc"])
-        main, filtered = out["variantes"]
-        self.assertEqual(main["caidas"], len(main["operaciones"]))
-        self.assertGreaterEqual(main["caidas"], 3)
-        self.assertEqual(main["cuentas"]["compuesto"]["inicial_usd"], 1000.0)
-        self.assertGreater(main["cuentas"]["compuesto"]["final_usd"], 1000.0)
-        self.assertEqual(main["honestidad"]["fuera_del_ajuste_pct"], 0.0)       # la regla se eligió con este mismo período
-        self.assertEqual(main["honestidad"]["semaforo"], "rojo")
-        self.assertTrue(main["honestidad"]["holdout_intacto"])
-        self.assertEqual(filtered["caidas"], main["caidas"])                     # BTC quieto: ETH cayó 6 puntos más que BTC
-        self.assertEqual(filtered["salida_horas"], 4.0)
+            out = rb.build(FakeHistory(eth, btc), HOLDOUT, FakeMinutes(eth), "rebote", start_ms=T0, log=lambda *a: None)
+            filtered = rb.build(FakeHistory(eth, btc), HOLDOUT, FakeMinutes(eth), "rebote_btc", start_ms=T0, log=lambda *a: None)
+        trades = out["curvas"]["formula"]
+        self.assertGreaterEqual(len(trades), 3)
+        self.assertEqual(out["formula"]["n"], len(trades))
+        self.assertEqual(out["max_horas"], 24.0)
+        self.assertEqual(out["productos"], ["PF_ETHUSD"])
+        self.assertTrue(all(t["caida"]["pct"] <= -5 and t["velas"] for t in trades))
+        self.assertEqual(out["honestidad"]["fuera_del_ajuste_pct"], 0.0)       # la regla se eligió con este mismo período
+        self.assertEqual(out["honestidad"]["semaforo"], "rojo")
+        self.assertTrue(out["honestidad"]["holdout_intacto"])
+        self.assertEqual(filtered["max_horas"], 4.0)
+        self.assertEqual(len(filtered["curvas"]["formula"]), len(trades))       # BTC quieto: ETH cayó 6 puntos más que BTC
         json.dumps(out)                                                          # todo se puede guardar
+
+    def test_the_run_leaves_the_formula_result_in_the_state_file(self):
+        eth, btc = self.eth_with_drops()
+        with tempfile.TemporaryDirectory() as tmp:
+            os.environ["BALANCITA_WF_INTENTOS"] = os.path.join(tmp, "intentos.jsonl")
+            self.addCleanup(os.environ.pop, "BALANCITA_WF_INTENTOS", None)
+            path = os.path.join(tmp, "rapida-v3-rebote.json")
+            state = rb.run_rebote(FakeHistory(eth, btc), HOLDOUT, path, {"id": "rebote"}, choice="rebote", minutes=FakeMinutes(eth),
+                                  log=lambda *a: None)
+            self.assertEqual(state["state"], "done")
+            with open(path, encoding="utf-8") as handle:
+                saved = json.load(handle)
+        self.assertEqual(saved["summary"]["formula"]["entrada"], "rebote")
 
     def test_the_run_writes_done_or_the_reason_it_failed(self):
         class Down(FakeHistory):
@@ -174,7 +175,7 @@ class BuildTest(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             path = os.path.join(tmp, "rapida-v3-rebote.json")
-            state = rb.run_rebote(Down([], []), HOLDOUT, path, {"id": "rebote"}, minutes=FakeMinutes([]), log=lambda *a: None)
+            state = rb.run_rebote(Down([], []), HOLDOUT, path, {"id": "rebote"}, choice="rebote", minutes=FakeMinutes([]), log=lambda *a: None)
             self.assertEqual(state["state"], "failed")
             self.assertIn("sin velas", state["error"])
             with open(path, encoding="utf-8") as handle:
