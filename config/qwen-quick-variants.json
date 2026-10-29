@@ -15,6 +15,13 @@
       "kind": "formula",
       "base": "live",
       "note": "La misma regla que opera en vivo (maestro fuerte + portero a favor, una posición por producto, sale cuando el maestro se da vuelta, cierre de seguridad) probada sobre todas las miradas desde la fecha del examen. No usa Qwen ni el modelo: lee velas guardadas, tarda poco y no calienta la Mac."
+    },
+    {
+      "id": "rebote",
+      "label": "Analista de rebote (sin Qwen, rápido)",
+      "kind": "rebote",
+      "base": "live",
+      "note": "ETH cae 5 % o más en 1 h → largo, salida a las 24 h (variante con filtro: ETH 2 puntos peor que BTC, salida a las 4 h). Sin maestro, portero ni Qwen: lee velas guardadas, tarda poco y no calienta la Mac. Solo para ver cada caída y cada rebote en /Estrategias; no opera en paper."
     }
   ]
 }

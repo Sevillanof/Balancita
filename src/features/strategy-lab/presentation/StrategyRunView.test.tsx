@@ -9,6 +9,7 @@ import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 import StrategyRunView from './StrategyRunView.tsx'
 import { MARKET_STAGES } from '../domain/market-stages.ts'
+import { rebote } from './rebote-fixture.ts'
 import type {
   GateApi,
   GateOverview,
@@ -1168,6 +1169,89 @@ describe('StrategyRunView panel of the formula test (Qwen en vivo)', () => {
     const compare = await screen.findByTestId('trade-compare')
     expect(compare).toHaveTextContent('Perdimos')
     expect(compare).toHaveTextContent('Se podía ganar')
+  })
+})
+
+describe('StrategyRunView analista de rebote (Qwen en vivo)', () => {
+  const summary = {
+    photos: 0,
+    horizon_min: 1440,
+    spearman: null,
+    spearman_ci: [null, null],
+    extremes_net_bp: null,
+    extremes_ci: [null, null],
+    vs_random_pct: null,
+    signals: { extremes: null, random: null, spearman: null },
+    note: 'Analista de rebote, sin Qwen.',
+    rebote,
+  }
+  const quickWith = (started: string) =>
+    ({
+      status: vi.fn(async () => ({
+        state: 'done',
+        variant: started,
+        snapshots: 100,
+        note: 'n',
+        summary,
+        variants: [
+          { id: 'actual', label: 'Actual', kind: 'control', state: 'none' },
+          {
+            id: 'formula',
+            label: 'La fórmula sola',
+            kind: 'formula',
+            state: 'none',
+          },
+          {
+            id: 'rebote',
+            label: 'Analista de rebote',
+            kind: 'rebote',
+            state: 'done',
+            summary,
+          },
+        ],
+      })),
+      start: vi.fn(),
+    }) as unknown as import('../infrastructure/quick-api.ts').QuickApi
+  const view = (quick: import('../infrastructure/quick-api.ts').QuickApi) =>
+    render(
+      <StrategyRunView
+        strategyId="qwen-live"
+        strategyName="Qwen en vivo"
+        version={1}
+        kind="qwen_live"
+        gate={gateWith(overview([run(24)]))}
+        visual={visualWith({
+          summary: vi.fn(async () => {
+            throw new RunVisualError('artifact_not_ready', 'sin operaciones')
+          }),
+        })}
+        quick={quick}
+      />,
+    )
+
+  it('muestra la cuenta, las caídas marcadas en el gráfico de ETH y el medidor rojo', async () => {
+    view(quickWith('rebote'))
+    expect(await screen.findByTestId('rebote-view')).toBeInTheDocument()
+    expect(screen.getByTestId('rebote-total')).toHaveTextContent('+45,00 USD')
+    expect(screen.getAllByTestId('drop-mark')).toHaveLength(2)
+    expect(screen.getByText('Rojo')).toBeInTheDocument()
+    // the formula test's panel is not on screen
+    expect(screen.queryByTestId('run-verdict')).toBeNull()
+  })
+
+  it('el botón «Analista de rebote» lanza esa variante', async () => {
+    const user = userEvent.setup()
+    const quick = quickWith('rebote')
+    view(quick)
+    await screen.findByTestId('rebote-view')
+    await user.click(
+      screen.getByRole('button', { name: /Analista de rebote \(caídas/ }),
+    )
+    expect(quick.start).toHaveBeenCalledWith(
+      'qwen-live',
+      'rebote',
+      expect.anything(),
+    )
   })
 })
 
