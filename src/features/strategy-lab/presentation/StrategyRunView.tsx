@@ -1903,9 +1903,8 @@ function FormulaResult({ formula }: { formula: QuickFormula }) {
             ? `Rebote de ETH, sin Qwen: ${formula.regla}`
             : 'Solo la fórmula, sin Qwen'}
         </strong>{' '}
-        ·{' '}
-        {formula.productos.map((p) => productName(p)).join(' y ')}{' '}
-        · del {DAY_FORMAT.format(periodOf(formula).fromMs)} al{' '}
+        · {formula.productos.map((p) => productName(p)).join(' y ')} · del{' '}
+        {DAY_FORMAT.format(periodOf(formula).fromMs)} al{' '}
         {DAY_FORMAT.format(periodOf(formula).toMs)} · {amount(formula.fotos, 0)}{' '}
         miradas
       </p>

@@ -58,7 +58,16 @@ describe('onlyChildSpecs', () => {
       onlyChildSpecs(specs, { DEV_ONLY: 'vite, capture,nope' }).map(
         (s) => s.name,
       ),
-      ['vite', 'capture', 'news', 'llm', 'q', 'verdict', 'qwenexit', 'qwenlive'],
+      [
+        'vite',
+        'capture',
+        'news',
+        'llm',
+        'q',
+        'verdict',
+        'qwenexit',
+        'qwenlive',
+      ],
     )
   })
 })
