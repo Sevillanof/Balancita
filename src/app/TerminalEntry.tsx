@@ -34,7 +34,9 @@ function describeBootstrapFailure(error: unknown): string {
 }
 
 function TerminalView() {
-  const product = DEFAULT_TERMINAL_PRODUCT
+  const [product, setProduct] = useState<string | undefined>(
+    DEFAULT_TERMINAL_PRODUCT,
+  )
   const [state, setState] = useState<
     | { kind: 'loading' }
     | {
@@ -68,12 +70,33 @@ function TerminalView() {
     }
   }, [apiBase, product, attempt])
   if (state.kind === 'ready') {
+    const products = state.bootstrap.products ?? []
     return (
       <FuturesTerminal
-        key={product}
+        key={product ?? 'default'}
         bootstrap={state.bootstrap}
         apiBase={apiBase}
         product={product}
+        sourceSwitch={
+          products.length > 1 ? (
+            <select
+              className="min-h-7! rounded-sm! border border-solid border-line! bg-surface-2! px-3! py-0! font-mono! text-hint! leading-control! text-ink! scheme-dark hover:bg-surface-hover! focus-visible:outline-2! focus-visible:outline-info! focus-visible:outline-offset-2!"
+              aria-label="Producto"
+              value={product ?? products[0]}
+              onChange={(event) => {
+                if (event.target.value === (product ?? products[0])) return
+                setState({ kind: 'loading' })
+                setProduct(event.target.value)
+              }}
+            >
+              {products.map((id) => (
+                <option key={id} value={id}>
+                  {id}
+                </option>
+              ))}
+            </select>
+          ) : undefined
+        }
       />
     )
   }
