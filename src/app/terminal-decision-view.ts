@@ -19,6 +19,8 @@ export type DecisionView = {
   master: number | null
   /** The keeper let the entry through (true), stopped it (false), or is unknown. */
   gate: boolean | null
+  /** The news analyst enabled the entry (true), did not (false), or is unknown. */
+  news?: boolean | null
   /** Qwen's opinion next to the formulas; null before version 9 or on a skipped look. */
   opinion: {
     state: 'agrees' | 'differs' | 'none'
@@ -73,12 +75,15 @@ export function decisionView(analysis: Record<string, unknown>): DecisionView {
       : null
   const gate =
     typeof formula.portero_si === 'boolean' ? formula.portero_si : null
+  const news =
+    typeof formula.noticias_si === 'boolean' ? formula.noticias_si : null
   const opinion = opinionOf(analysis)
   const make = (kind: DecisionKind): DecisionView => ({
     kind,
     label: KIND_LABEL[kind],
     master,
     gate,
+    news,
     opinion,
     relevant:
       kind === 'enter-long' ||

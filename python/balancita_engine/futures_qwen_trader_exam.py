@@ -26,6 +26,7 @@ from . import futures_qwen_exigencia as exigencia
 from . import futures_qwen_factors as fq
 from . import futures_qwen_ficha as fficha
 from . import futures_qwen_maestro as maestro
+from . import futures_qwen_noticias as noticias
 from . import futures_qwen_trader as qt
 from . import positioning_data
 from .futures_costs import round_trip_cost_bps
@@ -81,6 +82,8 @@ def make_photos(history, cfg, product, holdout_ms, texts=True, market=None, star
     ficha, short = bool(cfg.get("state_ficha")) and texts, bool(cfg.get("state_corta"))
     if ficha:                                                           # row F6: the collector's database, read-only
         trader.positioning = positioning_data.PositioningFeed(positioning_path(cfg), product)
+    if short:
+        trader.news = noticias.NewsFeed(news_path(cfg))
     for other in cfg.get("state_context") or ():                        # closes of the other assets shown in the STATE
         if other == product:                                            # never its own context (the live config lists BTC, ETH, SOL)
             continue
@@ -172,12 +175,17 @@ def _operation(cfg, t_ms, readings, closes, cost, weak):
     if None in sides.values():
         return None
     return {"maestro": r["veredicto"], "puntaje": r["puntaje"], "portero_si": bool(r["portero_si"]), "portero_p": r["portero_p"],
-            "volatilidad": r["volatilidad"], **sides}
+            "noticias_si": bool(r.get("noticias_si")), "volatilidad": r["volatilidad"], **sides}
 
 
 def positioning_path(cfg):
     """The collector's database: ``cfg["positioning_db"]`` (``--positioning-db``), else the one ``pnpm dev`` writes."""
     return cfg.get("positioning_db") or positioning_data.default_path()
+
+
+def news_path(cfg):
+    """The news collector's database: ``cfg["news_db"]`` when given, else the default path."""
+    return cfg.get("news_db") if "news_db" in cfg else noticias.default_path()
 
 
 def choose_photos(photos, cfg, holdout_ms):
@@ -667,6 +675,10 @@ def _op_random_percentile(items, draws, seed, observed):
     return 100.0 * below / draws
 
 
+def _formula_says_yes(op):
+    return bool(op.get("portero_si") or op.get("noticias_si"))
+
+
 def analyse_operation(rows, cfg):
     """How the version 8 operator would have done on the photos: every entry Qwen makes (LARGO / CORTO over the threshold and
     confirmed by the mirror, as the live operator requires), closed when the maestro turns at least flojo against it or at the
@@ -680,7 +692,7 @@ def analyse_operation(rows, cfg):
     said = [(r, side_of(r)) for r in rows if r["real_action"] in ("LARGO", "CORTO")]
     maestro_side = lambda r: 1 if r["operacion"]["maestro"] > 0 else -1
     strong = [(r, maestro_side(r)) for r in rows if abs(r["operacion"]["maestro"]) == 2]
-    formula = [(r, s) for r, s in strong if r["operacion"]["portero_si"]]
+    formula = [(r, s) for r, s in strong if _formula_says_yes(r["operacion"])]
     qwen = _per_week(_op_stats(entries, draws, seed), rows)
     qwen["con_maestro"] = mean([1.0 if r["operacion"]["maestro"] * s > 0 else 0.0 for r, s in entries])
     qwen["con_portero"] = mean([1.0 if r["operacion"]["portero_si"] else 0.0 for r, _ in entries])
@@ -716,7 +728,7 @@ def _trade_list(items):
         o = _op_side(r, s)
         out.append({"producto": r["product"], "lado": s, "entrada_ms": r["t_ms"], "salida_ms": o["salida_ms"],
                     "neto_bp": round(o["neto_bp"], 2), "motivo": o["motivo"], "maestro": r["operacion"]["maestro"],
-                    "portero": bool(r["operacion"]["portero_si"]),
+                    "portero": bool(r["operacion"]["portero_si"]), "noticias": bool(r["operacion"].get("noticias_si")),
                     "tamano": r["operacion"].get("tamano", 1.0), "movimiento": r["operacion"].get("movimiento")})
     return out
 
@@ -742,7 +754,7 @@ def analyse_formula(photos, cfg):
     draws, seed = cfg["exam_rules"]["random_draws"], cfg["exam"]["seed"]
     side = lambda r: 1 if r["operacion"]["maestro"] > 0 else -1
     strong = [(r, side(r)) for r in rows if abs(r["operacion"]["maestro"]) == 2]
-    formula = _one_at_a_time([(r, s) for r, s in strong if r["operacion"]["portero_si"]])
+    formula = _one_at_a_time([(r, s) for r, s in strong if _formula_says_yes(r["operacion"])])
     maestro = _one_at_a_time(strong)
     hold = cfg["guardrails"]["max_hold_min"]
     return {"fotos": len(rows), "desde_ms": min(r["t_ms"] for r in rows), "hasta_ms": max(r["t_ms"] for r in rows),
@@ -763,7 +775,7 @@ def formula_entries(photos):
     ``(photo, side)`` by time. The honest measurement engine (``futures_walkforward``) picks its entries with this same function."""
     side = lambda r: 1 if r["operacion"]["maestro"] > 0 else -1
     return _one_at_a_time([(r, side(r)) for r in photos if r.get("operacion") and abs(r["operacion"]["maestro"]) == 2
-                           and r["operacion"]["portero_si"]])
+                           and _formula_says_yes(r["operacion"])])
 
 
 def scheme_trades(history, cfg, product, start_ms, end_ms, holdout_ms, funding=None):

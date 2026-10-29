@@ -99,4 +99,37 @@ describe('Qwen waits in the decisions list', () => {
     expect(screen.getByText(/Qwen ▼ corto 55 % ≠/)).toBeTruthy()
     expect(screen.getByText(/Mantiene ×2/)).toBeTruthy()
   })
+
+  it('paints the Noticias ✓ chip when the news analyst enabled the entry', () => {
+    const newsEntry = {
+      id: 'n1',
+      action: 'LONG',
+      strategy: 'Qwen',
+      reason: 'x',
+      time: '11:00',
+      explained: true,
+      view: decisionView({
+        action: 'LONG',
+        formula_action: 'LARGO',
+        formula: {
+          maestro: 2,
+          portero_si: false,
+          noticias_si: true,
+          motivo: 'maestro fuerte y noticias a favor',
+        },
+        model_action: 'LARGO',
+        p_action: 0.68,
+        opinion_agrees: 1,
+      }),
+    }
+    render(
+      <TerminalDecisions
+        rows={[newsEntry]}
+        selectedId="n1"
+        onSelect={() => {}}
+      />,
+    )
+    expect(screen.getByText('Portero ✕')).toBeTruthy()
+    expect(screen.getByText('Noticias ✓')).toBeTruthy()
+  })
 })
