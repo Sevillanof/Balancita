@@ -181,7 +181,7 @@ def lines(trader, t_ms, sg, reasons):
         "rango y volatilidad): {} (probabilidad de ganar tras costos {}; conviene desde {}).".format(
             " (solo cuenta para entrar)" if in_position else "", "CONVIENE ENTRAR" if r["portero_si"] else "NO CONVIENE ENTRAR",
             qt.es(r["portero_p"], 2), qt.es(keeper["umbral"], 2)),
-        _news_line(r, in_position),
+        _news_line(r, in_position, sg),
         "3. Volatilidad: {} (rango de las últimas 24 h {} % contra {} % de promedio de los últimos 7 días; movimiento "
         "esperable en 24 h +-{} %).".format(r["volatilidad"], qt.es(r["range24"] * 100, 2), qt.es(r["range7"] * 100, 2),
                                           qt.es(r["sigma24"] * 100, 2)),
@@ -192,7 +192,7 @@ def lines(trader, t_ms, sg, reasons):
     return out
 
 
-def _news_line(r, in_position):
+def _news_line(r, in_position, sg=1):
     info = r.get("noticias") or {}
     note = " (solo cuenta para entrar)" if in_position else ""
     if not info.get("disponible"):
@@ -201,8 +201,9 @@ def _news_line(r, in_position):
     if n == 0:
         return "Noticias (últimas 4 h){}: sin noticias relevantes frescas.".format(note)
     status = "A FAVOR del maestro" if r.get("noticias_si") else "SIN AVAL para el maestro"
+    sentiment = int(sg) * float(info.get("sentimiento") or 0.0)
     return "Noticias (últimas 4 h){}: {} ({} relevante{}, sentimiento {}).".format(
-        note, status, n, "" if n == 1 else "s", qt.es(float(info.get("sentimiento") or 0.0), 2, True)
+        note, status, n, "" if n == 1 else "s", qt.es(sentiment, 2, True)
     )
 
 

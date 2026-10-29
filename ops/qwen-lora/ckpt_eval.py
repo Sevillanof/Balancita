@@ -23,9 +23,13 @@ VOTERS = ("F1", "F2", "F3", "F4", "F6", "F7")
 
 def key_of(user):
     """Clave que comparten la ficha real y su espejo: los números (sin signo) de las líneas F1 y F2."""
-    f1 = re.search(r"F1 Tendencia.*", user).group(0)
-    f2 = re.search(r"F2 .*", user).group(0)
-    return tuple(re.findall(r"\d+,\d+", f1 + f2))
+    f1, f2 = "", ""
+    for line in user.splitlines():
+        if line.startswith("F1 Tendencia"):
+            f1 = line
+        elif line.startswith("F2 "):
+            f2 = line
+    return tuple(re.findall(r"\d+,\d+", f1 + f2))  # NOSONAR
 
 
 def direction_pairs(valid_path, limit):
@@ -77,9 +81,22 @@ def answer_loss(mx, model, prompt_ids, answer_ids):
     return float(mx.mean(nll))
 
 
+def _eval_single_row(mx, generate, model, tok, row):
+    answer = row["messages"][-1]["content"]
+    prompt = tok.apply_chat_template(row["messages"][:2], add_generation_prompt=True, tokenize=False, enable_thinking=False)
+    text = generate(model, tok, prompt=prompt, max_tokens=40, verbose=False).strip().splitlines()
+    vals = values_of(text[0] if text else "")
+    lab = values_of(answer)
+    v1 = vals.get("F1")
+    prompt_ids = tok.encode(prompt, add_special_tokens=False)
+    answer_ids = tok.encode(answer + "<|im_end|>", add_special_tokens=False)
+    loss = answer_loss(mx, model, prompt_ids, answer_ids)
+    return v1, lab["F1"], any(vals.get(k) == 0 for k in VOTERS), loss
+
+
 def measure(label, pairs, model_path, adapter_path):
-    import mlx.core as mx
-    from mlx_lm import generate, load
+    import mlx.core as mx  # type: ignore[import-not-found]
+    from mlx_lm import generate, load  # type: ignore[import-not-found]
 
     started = time.time()
     model, tok = load(model_path, adapter_path=adapter_path)
@@ -90,33 +107,21 @@ def measure(label, pairs, model_path, adapter_path):
     for pair in pairs:
         outs, labs = [], []
         for row in pair:
-            answer = row["messages"][-1]["content"]
-            prompt = tok.apply_chat_template(row["messages"][:2], add_generation_prompt=True, tokenize=False, enable_thinking=False)
-            text = generate(model, tok, prompt=prompt, max_tokens=40, verbose=False).strip().splitlines()
-            vals = values_of(text[0] if text else "")
-            lab = values_of(answer)
-            v1 = vals.get("F1")
+            v1, lab_f1, has_zero, loss = _eval_single_row(mx, generate, model, tok, row)
             f1[str(v1)] += 1
             n += 1
-            if v1 == lab["F1"]:                                   # exactly the teacher's verdict (0, ±1 or ±2)
-                agree += 1
-            if v1 is not None and sign(v1) == sign(lab["F1"]):   # at least its side (0 counts as a side of its own)
-                agree_sign += 1
-            if any(vals.get(k) == 0 for k in VOTERS):
-                zeros += 1
-            prompt_ids = tok.encode(prompt, add_special_tokens=False)
-            answer_ids = tok.encode(answer + "<|im_end|>", add_special_tokens=False)
-            losses.append(answer_loss(mx, model, prompt_ids, answer_ids))
+            agree += int(v1 == lab_f1)
+            agree_sign += int(v1 is not None and sign(v1) == sign(lab_f1))
+            zeros += int(has_zero)
+            losses.append(loss)
             outs.append(v1)
-            labs.append(lab["F1"])
+            labs.append(lab_f1)
         if None in outs:
             continue
-        if labs[0] != 0:                                          # a pair with a side: the mirror must take the other one
+        if labs[0] != 0:
             sided += 1
-            if outs[0] != 0 and sign(outs[0]) == -sign(outs[1]):
-                flips += 1
-        if outs[0] == outs[1] and outs[0] != 0:                   # the same non-zero answer to a sheet and its mirror: a habit
-            same += 1
+            flips += int(outs[0] != 0 and sign(outs[0]) == -sign(outs[1]))
+        same += int(outs[0] == outs[1] and outs[0] != 0)
     del model
     mx.clear_cache()
     return {"paso": label, "fichas": n, "F1": dict(f1), "acuerdo_maestro": round(agree / n, 3) if n else None,
