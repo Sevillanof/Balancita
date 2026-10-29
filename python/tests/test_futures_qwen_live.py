@@ -94,6 +94,7 @@ class Env:
         self.tmp = db or tempfile.mkdtemp()
         # the sheet reads the collector's database: a test never reads the real one of this machine
         self.cfg.setdefault("positioning_db", os.path.join(self.tmp, "sin-posicionamiento.sqlite"))
+        self.cfg.setdefault("news_db", os.path.join(self.tmp, "sin-noticias.sqlite"))
         self.db_path = os.path.join(self.tmp, "live.sqlite")
         self.policy = policy or Policy()
         self.provider = provider or llm.FakeProvider(entries=self.policy)

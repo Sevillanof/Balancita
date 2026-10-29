@@ -41,6 +41,7 @@ from decimal import Decimal
 
 from . import futures_llm_decisions as llm
 from . import futures_qwen_factors as fq
+from . import futures_qwen_noticias as noticias
 from . import futures_qwen_trader as qt
 from . import positioning_data
 from .futures_products import is_product_id
@@ -523,6 +524,9 @@ class LiveOperator:
         self.positioning = {}                             # product -> PositioningFeed
         self.positioning_checked_ms = 0
         self._positioning_seen = {}                       # product -> last availability said in the log
+        self.news_path = cfg.get("news_db") if "news_db" in cfg else noticias.default_path()
+        self.news = None
+        self.news_checked_ms = 0
         self._context_warned = set()
         self.config_hash = qt.config_hash(cfg)
         self.traders = {}
@@ -606,6 +610,7 @@ class LiveOperator:
         except Exception as error:                        # noqa: BLE001
             self._failure("funding", None, error)
         self._refresh_positioning(now)
+        self._refresh_news(now)
         for product in self.cfg["products"]:
             if product not in self.traders:
                 try:
@@ -645,6 +650,10 @@ class LiveOperator:
     def _attach_sheet_data(self, product, trader, now):
         """Row F6: the collector's database, read-only. Without the file (or without rows of this product) F6 says «n/d» and the
         process goes on; it is said once in the log, and again only when that changes."""
+        if self.news is None:
+            self.news = noticias.NewsFeed(self.news_path, since_ms=now - POSITIONING_KEEP_MS)
+            self.news_checked_ms = now
+        trader.news = self.news
         if not self.cfg.get("state_ficha"):
             return
         feed = positioning_data.PositioningFeed(self.positioning_path, product, since_ms=now - POSITIONING_KEEP_MS)
@@ -684,6 +693,17 @@ class LiveOperator:
                 continue
             self._recovered("posicionamiento", product)
             self._say_positioning(product, feed)
+
+    def _refresh_news(self, now):
+        if self.news is None or now - self.news_checked_ms < self.positioning_every_ms:
+            return
+        self.news_checked_ms = now
+        try:
+            self.news.reload(since_ms=now - POSITIONING_KEEP_MS)
+        except Exception as error:                        # noqa: BLE001 - news is optional: never stop the process for it
+            self._failure("noticias", None, error)
+            return
+        self._recovered("noticias", None)
 
     def _load_context(self, product, trader, from_ms, to_ms):
         """Closes of the other assets, keyed by the END of each 5m candle (``trader.context``, as the exam builds it): row F7 of

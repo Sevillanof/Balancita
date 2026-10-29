@@ -63,9 +63,9 @@ def position_label(net_now_bp, final_bp):
     return "CERRAR" if net_now_bp >= final_bp else "MANTENER"
 
 
-def formula_flat(maestro, portero_si):
-    """Lo que hacen las fórmulas sin posición (``futures_qwen_corta.formula_action`` con los dos datos que usa)."""
-    if abs(maestro) == 2 and portero_si:
+def formula_flat(maestro, portero_si, noticias_si=False):
+    """Lo que hacen las fórmulas sin posición (``futures_qwen_corta.formula_action`` con el portero o el analista de noticias)."""
+    if abs(maestro) == 2 and (portero_si or noticias_si):
         return "LARGO" if maestro > 0 else "CORTO"
     return "ESPERAR"
 
@@ -144,7 +144,7 @@ def collect(history, cfg, product, from_ms, to_ms, *, flat_rate=0.15, seed=20261
             continue
         if rng.random() < flat_rate:
             flat_found.append((t_ms, reasons, trader.state_text(t_ms, reasons), trader.state_text(t_ms, reasons, mirror=True)))
-        action = formula_flat(r["veredicto"], r["portero_si"])
+        action = formula_flat(r["veredicto"], r["portero_si"], r.get("noticias_si", False))
         if action in ("LARGO", "CORTO"):
             trader._open(t_ms, "LONG" if action == "LARGO" else "SHORT", r["portero_p"], "formula")
             trades.append(open_trade := {"trade_no": trader.position.trade_no, "rows": [], "entry_ms": t_ms, "side": action})
@@ -158,7 +158,7 @@ def collect(history, cfg, product, from_ms, to_ms, *, flat_rate=0.15, seed=20261
                           "portero_p": op["portero_p"], "largo_bp": op["largo"]["neto_bp"], "corto_bp": op["corto"]["neto_bp"],
                           "largo_h": op["largo"]["horas"], "corto_h": op["corto"]["horas"],
                           "label": flat_label(op["largo"]["neto_bp"], op["corto"]["neto_bp"]),
-                          "formula": formula_flat(op["maestro"], op["portero_si"])})
+                          "formula": formula_flat(op["maestro"], op["portero_si"], op.get("noticias_si", False))})
     rows_pos = [r for r in rows_pos if r.get("final_bp") is not None]    # a trade still open at the end has no result
     return {"flat": rows_flat, "position": rows_pos}
 
@@ -173,7 +173,7 @@ def operation(cfg, t_ms, readings, closes, cost, weak):
     if None in sides.values():
         return None
     return {"maestro": r["veredicto"], "puntaje": r["puntaje"], "portero_si": bool(r["portero_si"]), "portero_p": r["portero_p"],
-            "volatilidad": r["volatilidad"], **sides}
+            "noticias_si": bool(r.get("noticias_si")), "volatilidad": r["volatilidad"], **sides}
 
 
 def _position_row(trader, t_ms, reasons, r, net_now_bp, trade):
