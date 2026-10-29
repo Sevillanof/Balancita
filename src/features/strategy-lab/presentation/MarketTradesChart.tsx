@@ -52,8 +52,12 @@ function movementText(trade: RunTrade): string {
   return `${moving ? 'con movimiento' : 'en calma'} ×${String(size).replace('.', ',')}`
 }
 
+/** `caída −5,3 % en 1 h`; empty when the entry has no fall behind it (only the rebound analyst has one). */
+const dropText = (trade: RunTrade) =>
+  trade.drop ? `caída ${signedAmount(trade.drop.pct, 1)} % en 1 h` : ''
+
 const tradeLabel = (trade: RunTrade, index: number) =>
-  `Operación ${index + 1} · ${trade.side === 'LONG' ? 'largo' : 'corto'} · ${WHEN.format(trade.entry_time_ms)} · ${signedAmount(trade.net_bp, 1)} pb${movementText(trade) ? ` · ${movementText(trade)}` : ''}`
+  `Operación ${index + 1} · ${trade.side === 'LONG' ? 'largo' : 'corto'} · ${WHEN.format(trade.entry_time_ms)} · ${signedAmount(trade.net_bp, 1)} pb${movementText(trade) ? ` · ${movementText(trade)}` : ''}${dropText(trade) ? ` · ${dropText(trade)}` : ''}`
 
 type Props = {
   product: string
@@ -103,7 +107,9 @@ export default function MarketTradesChart({
         : null,
     [candles, selected, zoom],
   )
-  const notional = notionalOf(trades)
+  // With the whole account the size changes from one operation to the next: the chosen one tells its own
+  const notional = Number(selected?.notional_usd) || notionalOf(trades)
+  const falls = trades.some((t) => t.drop != null)
   // The legend of «con movimiento» / «en calma» only shows when the analyst rated the entries of this test
   const rated = trades.some((t) => movementOf(t) !== null)
   if (closes.length < 2)
@@ -231,6 +237,11 @@ export default function MarketTradesChart({
         <span className="flex items-center gap-3 tracking-normal normal-case">
           <span className="text-long">━ Ganó</span>
           <span className="text-short">━ Perdió</span>
+          {falls && (
+            <span className="text-warn" data-testid="drop-legend">
+              ● Caída que dispara
+            </span>
+          )}
           {rated && (
             <span className="text-ink-2" data-testid="movement-legend">
               <span className="text-ink">━ con movimiento</span> ·{' '}
@@ -302,6 +313,54 @@ export default function MarketTradesChart({
             >
               <title>{tradeLabel(trade, index)}</title>
             </path>
+          )
+        })}
+        {sorted.map((trade) => {
+          const drop = trade.drop
+          if (!drop || drop.to_ms < lo || drop.from_ms > hi) return null
+          const on = trade.trade_id === selected?.trade_id
+          if (zoom && !on) return null
+          return (
+            <g key={`drop-${trade.trade_id}`} data-testid="drop-mark">
+              {zoom && (
+                <path
+                  d={path(drop.from_ms, drop.to_ms)}
+                  fill="none"
+                  strokeWidth={5}
+                  strokeLinecap="round"
+                  className="stroke-warn"
+                />
+              )}
+              <circle
+                cx={x(drop.to_ms)}
+                cy={y(priceAt(drop.to_ms))}
+                r={zoom ? 6 : 3.5}
+                className="fill-warn stroke-canvas"
+                strokeWidth={1.5}
+                onClick={() => onSelect(trade)}
+                style={{ cursor: 'pointer' }}
+              >
+                <title>{`${dropText(trade)} · ${WHEN.format(drop.to_ms)}`}</title>
+              </circle>
+              {zoom && (
+                <text
+                  x={
+                    x(drop.from_ms) < 170
+                      ? x(drop.from_ms) + 10
+                      : x(drop.from_ms) - 8
+                  }
+                  y={y(priceAt(drop.from_ms)) - 10}
+                  textAnchor={x(drop.from_ms) < 170 ? 'start' : 'end'}
+                  className="fill-warn text-hint stroke-canvas"
+                  strokeWidth={4}
+                  style={{ paintOrder: 'stroke' }}
+                >
+                  {dropText(trade)}
+                  {drop.btc_pct !== null &&
+                    ` · BTC ${signedAmount(drop.btc_pct, 1)} %`}
+                </text>
+              )}
+            </g>
           )
         })}
         {zoom && selected && (

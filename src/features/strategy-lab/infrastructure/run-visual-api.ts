@@ -92,6 +92,13 @@ export type RunTrade = {
   /** Movement analyst (Qwen en vivo tests): the size the entry got and whether ETH was moving (`null`: no data). */
   size_mult?: number | null
   with_movement?: boolean | null
+  /** Rebound analyst: the fall that fired this entry (ETH's drop in the hour before it). */
+  drop?: {
+    from_ms: number
+    to_ms: number
+    pct: number
+    btc_pct: number | null
+  } | null
 }
 
 export type RunTrades = {

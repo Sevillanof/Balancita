@@ -69,6 +69,7 @@ import {
   type QuickApi,
   type QuickFicha,
   type QuickFormula,
+  type QuickRebote,
   type QuickOperation,
   type QuickOperationStats,
   type QuickState,
@@ -79,6 +80,8 @@ import { installCommands } from '../domain/vectorbt-format.ts'
 import RunProgress from './RunProgress.tsx'
 import VectorbtModal from './VectorbtModal.tsx'
 import MarketTradesChart from './MarketTradesChart.tsx'
+import ReboteView from './ReboteView.tsx'
+import { useReboteModel } from './rebote-model.ts'
 import RunVerdict from './RunVerdict.tsx'
 import { periodOf, useFormulaModel } from './formula-model.ts'
 import VectorbtProgress from './VectorbtProgress.tsx'
@@ -661,12 +664,39 @@ export default function StrategyRunView({
   useEffect(() => {
     if (formulaOf) setKeptFormula(formulaOf)
   }, [formulaOf])
+  // The rebound analyst (no Qwen) has its own result: when it is the test started last it is the one on screen
+  const reboteOf =
+    (quickState?.state === 'done' ? quickState.summary?.rebote : undefined) ??
+    quickVariants.find(
+      (variant) => variant.kind === 'rebote' && variant.summary?.rebote,
+    )?.summary?.rebote ??
+    null
+  const lastKind = quickVariants.find(
+    (variant) => variant.id === quickState?.variant,
+  )?.kind
+  const [keptRebote, setKeptRebote] = useState<QuickRebote | null>(null)
+  useEffect(() => {
+    if (reboteOf) setKeptRebote(reboteOf)
+  }, [reboteOf])
   const busyQuick = hasQuick && (quickRunning || running != null || testing)
-  const formulaShown = formulaOf ?? (busyQuick ? keptFormula : null)
+  const wantsRebote =
+    reboteOf != null && (lastKind === 'rebote' || formulaOf == null)
+  const reboteShown = wantsRebote
+    ? reboteOf
+    : busyQuick && lastKind === 'rebote' && formulaOf == null
+      ? keptRebote
+      : null
+  const formulaShown = reboteShown
+    ? null
+    : (formulaOf ?? (busyQuick ? keptFormula : null))
   // The honesty meter of the result on screen: the formula test's own, else the one of the last practice run
+  const reboteModel = useReboteModel(reboteShown)
   const shownMeter =
+    (reboteShown ? reboteModel?.variant.honestidad : undefined) ??
     formulaShown?.honestidad ??
-    (formulaShown == null ? lastRun?.params?.honestidad : null) ??
+    (formulaShown == null && reboteShown == null
+      ? lastRun?.params?.honestidad
+      : null) ??
     null
   // Qwen en vivo only has the new panel: the old practice view is for the other strategies
   const legacyView = !hasQuick
@@ -758,9 +788,10 @@ export default function StrategyRunView({
   }
   // Retired strategies of the old engine are not in the gate's registry.
   const unknownToGate = overviewError?.startsWith('No existe') ?? false
-  const usedMedicion = hasQuick
-    ? (shownMeter?.medicion ?? lastRun?.params?.medicion ?? null)
-    : null
+  const usedMedicion =
+    hasQuick && !reboteModel
+      ? (shownMeter?.medicion ?? lastRun?.params?.medicion ?? null)
+      : null
 
   // --- Explorar con VectorBT ---
   // VectorBT only explores rules: Qwen and Kronos never ask for it.
@@ -1096,7 +1127,9 @@ export default function StrategyRunView({
                     .sort(
                       (a, b) =>
                         Number(b.kind === 'formula') -
-                        Number(a.kind === 'formula'),
+                          Number(a.kind === 'formula') ||
+                        Number(b.kind === 'rebote') -
+                          Number(a.kind === 'rebote'),
                     )
                     .map((variant) => (
                       <button
@@ -1108,14 +1141,19 @@ export default function StrategyRunView({
                         }}
                         disabled={quickRunning}
                         title={
-                          variant.kind === 'formula'
-                            ? 'Lee velas guardadas, tarda poco y no calienta la Mac.'
+                          variant.kind === 'formula' ||
+                          variant.kind === 'rebote'
+                            ? variant.kind === 'rebote'
+                              ? 'Lee velas guardadas, tarda poco y no calienta la Mac. No usa el maestro, el portero ni los controles de exigencia.'
+                              : 'Lee velas guardadas, tarda poco y no calienta la Mac.'
                             : 'Le pregunta a Qwen sobre unas 150 fotos del pasado. Es orientativa: no es el Examen.'
                         }
                       >
                         {variant.kind === 'formula'
                           ? 'Solo la fórmula (rápida, por defecto)'
-                          : `Con Qwen · ${variantLabel(variant as QuickVariant)} (25-40 min, calienta la Mac)`}
+                          : variant.kind === 'rebote'
+                            ? 'Analista de rebote (caídas de ETH, rápido)'
+                            : `Con Qwen · ${variantLabel(variant as QuickVariant)} (25-40 min, calienta la Mac)`}
                       </button>
                     ))}
                 <button
@@ -1314,7 +1352,9 @@ export default function StrategyRunView({
         data-testid="run-results"
         data-previous={busyQuick && formulaShown ? 'true' : undefined}
       >
-        {gatePanel ? (
+        {reboteModel && reboteShown ? (
+          <ReboteView rebote={reboteShown} model={reboteModel} />
+        ) : gatePanel ? (
           <RunVerdict
             trades={data.trades}
             product={data.product}
@@ -1329,8 +1369,8 @@ export default function StrategyRunView({
             closes={formulaModel.closes}
           />
         ) : null}
-        {kpiRow}
-        {gatePanel ? (
+        {reboteModel ? null : kpiRow}
+        {reboteModel ? null : gatePanel ? (
           <MarketTradesChart
             product={data.product}
             candles={data.candles?.candles ?? []}
@@ -1711,7 +1751,10 @@ const variantLabel = (variant: QuickVariant) =>
 /** The finished variants side by side: the same photos, so the numbers compare. */
 function QuickComparison({ variants }: { variants: QuickVariant[] }) {
   const done = variants.filter(
-    (variant) => variant.summary && variant.kind !== 'formula',
+    (variant) =>
+      variant.summary &&
+      variant.kind !== 'formula' &&
+      variant.kind !== 'rebote',
   )
   if (done.length < 2) return null
   return (
@@ -1848,6 +1891,7 @@ function QuickResult({ state }: { state: QuickState }) {
   if (!summary)
     return <p>Prueba rápida terminada, pero no alcanzó para una lectura.</p>
   if (summary.formula) return <FormulaResult formula={summary.formula} />
+  if (summary.rebote) return <p className={RUN.hint}>{summary.note}</p>
   const curvas = summary.operacion?.curvas
   return (
     <div>

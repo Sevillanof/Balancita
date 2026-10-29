@@ -1846,10 +1846,10 @@ def main(argv=None):
                                                   log=lambda *a: print(*a, flush=True))))
                 return 0
             variant = variants.get_variant(args.variant) if args.variant or args.quick is not None else None
-            if args.version == "live" and variant is not None and variant["kind"] not in ("control", "memory", "formula"):
+            if args.version == "live" and variant is not None and variant["kind"] not in ("control", "memory", "formula", "rebote"):
                 raise TraderError("con --version live se pregunta lo que pregunta Qwen en vivo (variante «actual» o «memoria»): "
                                   "las otras variantes se aplican sobre la v3")
-            if variant is not None and variant.get("model") is None and variant["kind"] != "formula":
+            if variant is not None and variant.get("model") is None and variant["kind"] not in ("formula", "rebote"):
                 cfg = variants.apply_variant(cfg, variant)       # its own questions / state: hashed in the identity
             if args.quick is not None:                          # los niveles de exigencia llegan por entorno (solo pruebas)
                 from .futures_qwen_analista import apply_env as analista_env
@@ -1862,6 +1862,12 @@ def main(argv=None):
                 cfg = dict(cfg, positioning_db=os.path.abspath(args.positioning_db))
             from .futures_qwen_analista import extra_days as analista_days
             history = History(args.cache_dir, holdout_ms, offline=args.offline)
+            if args.quick is not None and variant["kind"] == "rebote":     # no Qwen, no fotos: su propia regla sobre velas de 5 min
+                from .futures_qwen_rebote import run_rebote
+                base = os.path.dirname(os.path.abspath(args.exam_db))
+                state = run_rebote(history, holdout_ms, os.path.join(base, variants.state_name(variant["id"])), variant)
+                print("prueba rápida {}: {}".format(variant["id"], state["state"]))
+                return
             if not history.offline:
                 for product in dict.fromkeys(list(cfg["exam"]["products"]) + list(cfg.get("state_context") or ())):
                     print("candles {}: {} a {}".format(product, cfg["practice"]["from"], stamp(holdout_ms)))
