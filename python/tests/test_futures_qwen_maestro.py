@@ -123,11 +123,9 @@ class FitTests(unittest.TestCase):
 
     def test_the_logistic_fit_matches_a_closed_form_check_and_refuses_too_few_rows(self):
         # one feature, perfectly balanced: with a strong L2 the solution is small and has the sign of the correlation
-        import numpy as np
-
-        Z = np.array([[1.0], [-1.0]] * 500)
-        y = np.array([1.0, 0.0] * 500)
-        w = maestro.logistic_no_intercept(Z, y, l2=1000.0)
+        z_cols = [[1.0, -1.0] * 500]
+        y = [1.0, 0.0] * 500
+        w = maestro.logistic_no_intercept_cols(z_cols, y, l2=1000.0)
         self.assertGreater(w[0], 0.0)
         self.assertLess(w[0], 1.0)
         few = self.rows(n=50)
