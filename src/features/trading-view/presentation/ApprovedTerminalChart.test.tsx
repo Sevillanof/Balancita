@@ -34,6 +34,7 @@ const chartMocks = vi.hoisted(() => {
   const chart = {
     addSeries: vi.fn((series: string, options?: unknown) => {
       void options
+      if (series === 'line') return { applyOptions: vi.fn(), setData: vi.fn() }
       return series === 'candles' ? candles : volume
     }),
     timeScale: vi.fn(() => timeScale),
@@ -61,6 +62,7 @@ vi.mock('lightweight-charts', () => ({
   ColorType: { Solid: 'solid' },
   CandlestickSeries: 'candles',
   HistogramSeries: 'volume',
+  LineSeries: 'line',
   createChart: chartMocks.createChart,
   createSeriesMarkers: chartMocks.createSeriesMarkers,
 }))
@@ -76,6 +78,30 @@ const candles = Array.from({ length: 100 }, (_, index) => ({
 
 describe('approved connected terminal chart', () => {
   beforeEach(() => vi.clearAllMocks())
+
+  it('keeps indicator lines out of the price scale so far levels cannot squash the candles', () => {
+    render(
+      <ApprovedTerminalChart
+        candles={candles}
+        markers={[]}
+        selectedId=""
+        intervalSeconds={60}
+        initialViewport="approved-terminal"
+        onSelect={vi.fn()}
+        overlays={[
+          {
+            id: 'va-vah',
+            color: '#d9a066',
+            points: [{ time: candles[0]!.time, value: 5_000 }],
+          },
+        ]}
+      />,
+    )
+    const lineOptions = chartMocks.chart.addSeries.mock.calls.find(
+      ([kind]) => kind === 'line',
+    )?.[1] as { autoscaleInfoProvider: () => unknown }
+    expect(lineOptions.autoscaleInfoProvider()).toBeNull()
+  })
 
   it('restores the exported chart appearance and a compact initial view', () => {
     render(

@@ -730,6 +730,9 @@ export default function ApprovedTerminalChart({
           priceLineVisible: false,
           lastValueVisible: false,
           crosshairMarkerVisible: false,
+          // The candles alone set the price scale: a level far from the price
+          // (value area of a day the market has left) must not squash them.
+          autoscaleInfoProvider: () => null,
         })
         live.set(overlay.id, series)
       }
