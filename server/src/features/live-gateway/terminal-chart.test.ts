@@ -137,6 +137,54 @@ describe('terminal chart series', () => {
     expect(tickerStats({ type: 'ticker', rawJson: 'nope' })).toBeNull()
   })
 
+  it('reads trader-facing ticker stats from REST-polled ticker events (PF_ETHUSD)', () => {
+    const stats = tickerStats({
+      type: 'ticker',
+      productId: 'PF_ETHUSD',
+      eventTime: BASE,
+      receivedAt: BASE + 10,
+      last: '2220.5',
+      bid: '2220.4',
+      ask: '2220.5',
+      mark: '2220.41',
+      index: '2220.7',
+      suspended: false,
+      raw: {
+        feed: 'ticker',
+        source: 'rest',
+        product_id: 'PF_ETHUSD',
+        bid_size: '4.852',
+        ask_size: '16.367',
+        funding_rate: '-0.0165',
+        relative_funding_rate: '-0.0000074',
+        open_24h: '2317.7',
+        high_24h: '2377.2',
+        low_24h: '2169',
+        change_24h_pct: '-4.19',
+        volume_24h_base: '116570.745',
+        volume_24h_quote: '265016777.39',
+        open_interest: '32455.346',
+      },
+    })!
+    expect(stats).toMatchObject({
+      last: 2220.5,
+      mark: 2220.41,
+      index: 2220.7,
+      bid: 2220.4,
+      ask: 2220.5,
+      bid_size: 4.852,
+      ask_size: 16.367,
+      open_24h: 2317.7,
+      high_24h: 2377.2,
+      low_24h: 2169,
+      change_24h_pct: -4.19,
+      open_interest: 32455.346,
+      relative_funding_rate: -0.0000074,
+      suspended: false,
+    })
+    expect(stats.spread).toBeCloseTo(0.1, 6)
+  })
+
   it('folds finer candles into provisional buckets', () => {
     const candle = (
       time_ms: number,

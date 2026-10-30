@@ -86,6 +86,21 @@ export function parseRestTickers(
     if (bid === undefined || ask === undefined || mark === undefined) continue
     if (!(Number(bid) > 0 && Number(bid) < Number(ask))) continue
     const funding = decimalText(ticker.fundingRate)
+    const optFields: Record<string, string> = {}
+    for (const [outKey, srcKey] of [
+      ['open_24h', 'open24h'],
+      ['high_24h', 'high24h'],
+      ['low_24h', 'low24h'],
+      ['change_24h_pct', 'change24h'],
+      ['volume_24h_base', 'vol24h'],
+      ['volume_24h_quote', 'volumeQuote'],
+      ['open_interest', 'openInterest'],
+      ['funding_rate_prediction', 'fundingRatePrediction'],
+      ['relative_funding_rate_prediction', 'relativeFundingRatePrediction'],
+    ] as const) {
+      const val = decimalText(ticker[srcKey])
+      if (val !== undefined) optFields[outKey] = val
+    }
     events.push({
       type: 'ticker',
       productId: symbol,
@@ -114,6 +129,7 @@ export function parseRestTickers(
         relative_funding_rate: decimalText(ticker.relativeFundingRate) ?? null,
         server_time: serverTime,
         last_time: typeof ticker.lastTime === 'string' ? ticker.lastTime : null,
+        ...optFields,
       },
     })
   }
