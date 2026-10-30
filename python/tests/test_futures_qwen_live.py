@@ -25,6 +25,9 @@ REAL_CFG = qt.load_config(qt.CONFIG_PATH_LIVE)
 LIVE_CFG = copy.deepcopy(REAL_CFG)
 LIVE_CFG["products"] = ["PF_XBTUSD", "PF_ETHUSD"]        # live runs ETH only since 27-oct; the tests keep two products to cover several at once
 LIVE_CFG["exam"]["products"] = ["PF_XBTUSD", "PF_ETHUSD"]
+LIVE_CFG["notional_usd"] = "100"
+LIVE_CFG.pop("cuenta", None)
+LIVE_CFG.pop("analista", None)
 PRODUCTS = tuple(LIVE_CFG["products"])
 START = BASE + 7 * MIN                           # the candle that ended at BASE + 5 min is 2 minutes old
 
@@ -407,9 +410,28 @@ class RestartTests(unittest.TestCase):
 class SizeLeverageProductsTests(unittest.TestCase):
     def test_defaults_are_100_usd_1x_btc_and_eth(self):
         cfg = live.apply_overrides(REAL_CFG, {})
-        self.assertEqual((cfg["notional_usd"], cfg["leverage"], cfg["products"]), ("100", "1", ["PF_ETHUSD"]))      # ETH only since 27-oct
+        self.assertEqual((cfg["notional_usd"], cfg["leverage"], cfg["products"]), ("1000", "1", ["PF_ETHUSD"]))
+        self.assertEqual(cfg.get("cuenta"), "entera")
+        self.assertEqual(cfg.get("analista"), {"modo": "fuerte"})
         self.assertEqual(REAL_CFG["exam"]["products"], ["PF_ETHUSD"])
         self.assertIn("PF_XBTUSD", REAL_CFG["state_context"])         # BTC stays as context of the sheet
+
+    def test_whole_account_uses_available_balance_after_closed_trades(self):
+        cfg = copy.deepcopy(LIVE_CFG)
+        cfg["notional_usd"] = "1000"
+        cfg["cuenta"] = "entera"
+        cfg["products"] = ["PF_ETHUSD"]
+        env = make(self, cfg=cfg, policy=Policy(flat="LARGO"))
+        env.op.start()
+        env.advance(30)
+        first_open = env.rows("SELECT * FROM trades WHERE product='PF_ETHUSD'")[0]
+        self.assertEqual(first_open["notional_usd"], "1000")
+        env.policy.position = "CERRAR"
+        env.advance(30)
+        closed = env.rows("SELECT * FROM trades WHERE product='PF_ETHUSD' AND status='closed'")[0]
+        expected_avail = D("1000") + D(closed["net_usd"])
+        self.assertEqual(env.store.available_balance_usd("1000"), expected_avail)
+        self.assertEqual(env.op.traders["PF_ETHUSD"].notional, expected_avail)
 
     def test_environment_changes_them_with_no_caps(self):
         cfg = live.apply_overrides(LIVE_CFG, {"QWEN_LIVE_NOTIONAL_USD": "250000", "QWEN_LIVE_LEVERAGE": "50",

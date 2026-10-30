@@ -232,11 +232,12 @@ class GateApi:
             return {}
         if strategy_id != strategy_gate_models.QWEN_LIVE_ID:
             raise GateApiError("invalid_exigencia", "La exigencia solo existe para Qwen en vivo.")
-        if not isinstance(asked, dict) or set(asked) - {"maestro", "portero", "analista", "medicion"}:
+        from . import futures_qwen_rebote as rebote
+        if not isinstance(asked, dict) or set(asked) - {"maestro", "portero", "analista", "medicion", "entrada", "cuenta"}:
             raise GateApiError("invalid_exigencia", "La exigencia lleva 'maestro' y 'portero' (de 0 a 10), 'analista' y 'medicion'.")
         try:
             return dict(exigencia.env_for(asked.get("maestro"), asked.get("portero")), **analista.env_for(asked.get("analista")),
-                        **walkforward.env_for(asked.get("medicion")))
+                        **walkforward.env_for(asked.get("medicion")), **rebote.env_for(asked.get("entrada")))
         except ValueError as error:
             raise GateApiError("invalid_exigencia", str(error)) from error
 

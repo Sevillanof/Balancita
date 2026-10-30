@@ -943,7 +943,8 @@ class Trader:
 
     def _close(self, t_ms, ref_price, cost_reason, closed_by, exit_reason):
         position = self.position
-        done = settle(self.product, position, ref_price, cost_reason, t_ms, self.funding, self.notional)
+        done = settle(self.product, position, ref_price, cost_reason, t_ms, self.funding,
+                      position.notional_usd or self.notional)
         trade = {"trade_no": position.trade_no, "product": self.product, "side": position.side,
                  "entry_ms": position.entry_ms, "exit_ms": t_ms, "entry_px": float(position.entry_px),
                  "exit_px": float(done["exit_px"]), "net_bp": done["net_bp"], "gross_bp": done["gross_bp"],
@@ -1126,7 +1127,7 @@ class Trader:
         kind = "position" if in_position else "flat"
         snapshot = self.position.snapshot() if in_position else None
         net_now = settle(self.product, self.position, self.c[-1], "strategy_exit", t_ms, self.funding,
-                         self.notional)["net_bp"] if in_position else None
+                         self.position.notional_usd or self.notional)["net_bp"] if in_position else None
         return {"type": "decision", "kind": kind, "t_ms": t_ms, "wake": list(reasons), "state_text": state,
                 "state_hash": llm.text_hash(state)[:16], "position": snapshot, "net_bp_now": net_now,
                 "threshold": None if in_position else self.threshold, "answer": None, "model_action": None,
@@ -1939,9 +1940,12 @@ def _prepare_exam_variant(args, cfg, variants):
     if args.quick is not None:
         from .futures_qwen_analista import apply_env as analista_env
         from .futures_qwen_exigencia import apply_env
-        cfg = analista_env(apply_env(cfg))
+        from . import futures_qwen_rebote as rebote
         from . import futures_walkforward as walkforward
-        if variant["kind"] == "formula" and walkforward.medicion_from_env() == "honesta":
+        cfg = analista_env(apply_env(cfg))
+        if rebote.from_env() == "formula_eth":
+            cfg = dict(cfg, entrada="formula_eth")
+        elif variant["kind"] == "formula" and walkforward.medicion_from_env() == "honesta":
             cfg = walkforward.with_pairs(cfg)
     if args.positioning_db:
         cfg = dict(cfg, positioning_db=os.path.abspath(args.positioning_db))

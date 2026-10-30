@@ -65,8 +65,9 @@ def _day(ms):
 # --------------------------------------------------------------------------- the formulas of each quarter
 
 
-def facts_file(cache_dir, product, from_day, to_day, out):
+def facts_file(cache_dir, product, from_day, to_day, out, *, extra_eth=False, on_progress=None):
     """Una foto cada 15 min de ``product`` con los números de la ficha (sin futuro) y los movimientos a 12 / 24 / 48 h (solo caché)."""
+    from . import positioning_data
     from .futures_qwen_live import apply_overrides
 
     cfg = apply_overrides(qt.load_config(qt.CONFIG_PATH_LIVE))
@@ -78,20 +79,25 @@ def facts_file(cache_dir, product, from_day, to_day, out):
     warm = start - cfg["practice"]["warmup_days"] * qt.DAY_MS
     bars = history.bars(product, warm, to_ms)
     trader = qt.Trader(cfg, product, None, qt.FundingLine(history.funding(product)), key="destila", entry_threshold=cfg["practice_entry_threshold"])
+    if extra_eth:
+        trader.positioning = positioning_data.PositioningFeed(positioning_data.default_path(), product)
     for other in cfg.get("state_context") or ():
         if other != product:
             trader.context[other] = {int(b["bucket_start"]) + qt.BAR_MS: float(b["close"]) for b in history.bars(other, warm, to_ms)}
     closes, found = {}, []
     cost = float(round_trip_cost_bps(product))
+    total_wakes = max(1, (to_ms - start) // (15 * qt.MINUTE_MS))
     for bar in bars:
         trader.feed(bar, trade=False)
         t_ms = int(bar["bucket_start"]) + qt.BAR_MS
         closes[t_ms] = float(bar["close"])
         if t_ms < start or len(trader.c) < qt.MIN_BARS or t_ms % (15 * qt.MINUTE_MS):
             continue
-        row = maestro.flat_facts(fficha.facts(trader, t_ms))
+        row = maestro.flat_facts(fficha.facts(trader, t_ms), extra_eth=extra_eth)
         row["hour"] = (t_ms // qt.HOUR_MS) % 24
         found.append((t_ms, row))
+        if on_progress is not None and len(found) % 1000 == 0:
+            on_progress(len(found), total_wakes)
     n = 0
     with open(out, "w", encoding="utf-8") as handle:
         for t_ms, row in found:

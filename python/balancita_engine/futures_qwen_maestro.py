@@ -156,29 +156,70 @@ def read_facts(path, from_day=None, to_day=None, products=None):
     return out
 
 
-def _matrix(rows, sd=None, features=DIRECTIONAL):
-    import numpy as np
-
-    X = np.array([[row.get(f) or 0.0 for f in features] for row in rows], dtype=float)
-    if sd is None:
-        sd = X.std(axis=0)
-        sd[sd == 0] = 1.0
-    return X / sd, sd
+def _quantile(values, q):
+    ordered = sorted(values)
+    pos = q * (len(ordered) - 1)
+    lo, hi = int(math.floor(pos)), int(math.ceil(pos))
+    return ordered[lo] + (ordered[hi] - ordered[lo]) * (pos - lo)
 
 
-def logistic_no_intercept(z_mat, y, l2=L2, iters=100):
-    """Regresión logística sin intercepto con penalización L2 (Newton). Minimiza sum(log(1 + exp(-t z·w))) + l2/2 |w|²
-    con t = ±1: lo mismo que scikit-learn ``LogisticRegression(C=1/l2, fit_intercept=False)``."""
-    import numpy as np
+def _solve_linear(mat, rhs):
+    n = len(rhs)
+    aug = [list(mat[i]) + [float(rhs[i])] for i in range(n)]
+    for i in range(n):
+        piv = max(range(i, n), key=lambda r: abs(aug[r][i]))
+        aug[i], aug[piv] = aug[piv], aug[i]
+        div = aug[i][i] if abs(aug[i][i]) > 1e-12 else 1e-12
+        for j in range(i, n + 1):
+            aug[i][j] /= div
+        for r in range(n):
+            if r != i and aug[r][i]:
+                f = aug[r][i]
+                for j in range(i, n + 1):
+                    aug[r][j] -= f * aug[i][j]
+    return [aug[i][n] for i in range(n)]
 
-    w = np.zeros(z_mat.shape[1])
+
+def _cols_and_sd(rows, features=DIRECTIONAL):
+    import operator
+
+    n = len(rows)
+    cols = [[float(row.get(f) or 0.0) for row in rows] for f in features]
+    sds, z_cols = [], []
+    for col in cols:
+        m = math.fsum(col) / n
+        centered = [x - m for x in col]
+        var = sum(map(operator.mul, centered, centered)) / n
+        s = math.sqrt(var) if var > 0 else 1.0
+        sds.append(s)
+        inv = 1.0 / s
+        z_cols.append([x * inv for x in col])
+    return z_cols, sds
+
+
+def logistic_no_intercept_cols(z_cols, y, l2=L2, iters=30):
+    """Regresión logística sin intercepto con penalización L2 en Python puro (mayorización cuadrática exacta de Böhning)."""
+    import operator
+
+    k, n = len(z_cols), len(y)
+    h0 = [[0.0] * k for _ in range(k)]
+    for i in range(k):
+        ci = z_cols[i]
+        for j in range(i, k):
+            val = 0.25 * sum(map(operator.mul, ci, z_cols[j]))
+            h0[i][j] = h0[j][i] = val
+        h0[i][i] += l2
+    w = [0.0] * k
     for _ in range(iters):
-        p = 1.0 / (1.0 + np.exp(-(z_mat @ w)))
-        grad = z_mat.T @ (p - y) + l2 * w
-        hess = (z_mat * (p * (1 - p))[:, None]).T @ z_mat + l2 * np.eye(z_mat.shape[1])
-        step = np.linalg.solve(hess, grad)
-        w = w - step
-        if np.max(np.abs(step)) < 1e-10:
+        scores = [0.0] * n
+        for wj, col in zip(w, z_cols):
+            if wj:
+                scores = [s + wj * x for s, x in zip(scores, col)]
+        diff = [(1.0 / (1.0 + math.exp(-s)) if s > -50.0 else 0.0) - yi for s, yi in zip(scores, y)]
+        grad = [sum(map(operator.mul, col, diff)) + l2 * wj for col, wj in zip(z_cols, w)]
+        step = _solve_linear(h0, grad)
+        w = [wj - sj for wj, sj in zip(w, step)]
+        if max(abs(sj) for sj in step) < 1e-7:
             break
     return w
 
@@ -186,22 +227,26 @@ def logistic_no_intercept(z_mat, y, l2=L2, iters=100):
 def fit(rows, horizon_min=DEFAULT_HORIZON_MIN, *, strong_share=STRONG_SHARE, weak_share=WEAK_SHARE, l2=L2, note=None,
         extra_eth=False):
     """El maestro ajustado con estas filas: etiqueta = signo del movimiento a ``horizon_min``; umbrales = cuantiles del |puntaje|."""
-    import numpy as np
-
     features = ALL_DIRECTIONAL if extra_eth else DIRECTIONAL
     key = "move_{}".format(horizon_min)
     rows = [r for r in rows if r.get(key) is not None and r[key] != 0]
     if len(rows) < 1000:
         raise qt.TraderError("maestro: hacen falta al menos 1.000 fotos con movimiento a {} min, hay {}".format(horizon_min, len(rows)))
-    Z, sd = _matrix(rows, features=features)
-    y = np.array([1.0 if r[key] > 0 else 0.0 for r in rows])
-    w = logistic_no_intercept(Z, y, l2=l2)
-    s = np.abs(Z @ w)
+    z_cols, sd = _cols_and_sd(rows, features=features)
+    y = [1.0 if r[key] > 0 else 0.0 for r in rows]
+    w = logistic_no_intercept_cols(z_cols, y, l2=l2)
+    scores = [0.0] * len(rows)
+    for wj, col in zip(w, z_cols):
+        if wj:
+            scores = [s + wj * x for s, x in zip(scores, col)]
+    abs_s = [abs(s) for s in scores]
+    hits = sum(1 for s, yi in zip(scores, y) if (s > 0) == (yi > 0)) / len(rows)
     teacher = {"schema": "balancita-qwen-lora-maestro.v1", "plazo_min": horizon_min,
                "ajuste": {"fotos": len(rows), "desde": qt.stamp(min(r["t_ms"] for r in rows)), "hasta": qt.stamp(max(r["t_ms"] for r in rows)),
-                          "productos": sorted({r["product"] for r in rows}), "l2": l2, "acierto_signo": round(float(((Z @ w > 0) == (y > 0)).mean()), 4),
+                          "productos": sorted({r["product"] for r in rows}), "l2": l2, "acierto_signo": round(float(hits), 4),
                           "fuerte_share": strong_share, "flojo_share": weak_share},
-               "umbrales": {"flojo": round(float(np.quantile(s, 1 - weak_share)), 6), "fuerte": round(float(np.quantile(s, 1 - strong_share)), 6)},
+               "umbrales": {"flojo": round(float(_quantile(abs_s, 1 - weak_share)), 6),
+                            "fuerte": round(float(_quantile(abs_s, 1 - strong_share)), 6)},
                "sd": {f: round(float(v), 8) for f, v in zip(features, sd)},
                "coeficientes": {f: round(float(v), 6) for f, v in zip(features, w)},
                "regla_paper": {"entra": "veredicto fuerte (±2)", "sale": "veredicto al menos flojo del lado opuesto, o 48 h", "stop": "ninguno"},

@@ -154,54 +154,75 @@ def labelled(rows, teacher, history):
 # --------------------------------------------------------------------------- fitting (numpy only here)
 
 
-def _design(items, feature_names=FEATURES, *, extra_eth=False):
-    import numpy as np
-
-    X = np.array([[features(r, -1 if s < 0 else 1, s, extra_eth=extra_eth)[f] for f in feature_names] for r, s, _ in items])
-    return X
+def _design_cols(items, feature_names=FEATURES, *, extra_eth=False):
+    rows = [features(r, -1 if s < 0 else 1, s, extra_eth=extra_eth) for r, s, _ in items]
+    return [[float(row[f]) for row in rows] for f in feature_names]
 
 
-def logistic(X, y, l2=L2, iters=100):
-    """Logística con intercepto (sin penalizar) y L2 sobre los coeficientes, por Newton. Devuelve ``(w, b)``."""
-    import numpy as np
+def logistic_cols(z_cols, y, l2=L2, iters=30):
+    """Logística con intercepto (sin penalizar) y L2 sobre los coeficientes en Python puro. Devuelve ``(w, b)``."""
+    import operator
 
-    n, k = X.shape
-    Z = np.column_stack([np.ones(n), X])
-    w = np.zeros(k + 1)
-    pen = np.full(k + 1, l2)
-    pen[0] = 0.0
+    n = len(y)
+    cols = [[1.0] * n] + z_cols
+    k = len(cols)
+    pen = [0.0] + [l2] * len(z_cols)
+    h0 = [[0.0] * k for _ in range(k)]
+    for i in range(k):
+        ci = cols[i]
+        for j in range(i, k):
+            val = 0.25 * sum(map(operator.mul, ci, cols[j]))
+            h0[i][j] = h0[j][i] = val
+        h0[i][i] += pen[i]
+    w = [0.0] * k
     for _ in range(iters):
-        p = 1.0 / (1.0 + np.exp(-(Z @ w)))
-        grad = Z.T @ (p - y) + pen * w
-        H = (Z * (p * (1 - p))[:, None]).T @ Z + np.diag(pen)
-        step = np.linalg.solve(H, grad)
-        w -= step
-        if np.max(np.abs(step)) < 1e-8:
+        scores = [w[0]] * n
+        for wj, col in zip(w[1:], z_cols):
+            if wj:
+                scores = [s + wj * x for s, x in zip(scores, col)]
+        diff = [(1.0 / (1.0 + math.exp(-s)) if s > -50.0 else 0.0) - yi for s, yi in zip(scores, y)]
+        grad = [math.fsum(diff)] + [sum(map(operator.mul, col, diff)) + l2 * wj for col, wj in zip(z_cols, w[1:])]
+        step = maestro._solve_linear(h0, grad)
+        w = [wj - sj for wj, sj in zip(w, step)]
+        if max(abs(sj) for sj in step) < 1e-7:
             break
     return w[1:], w[0]
 
 
 def fit(items, teacher, *, yes_share=YES_SHARE, l2=L2, note=None, extra_eth=False):
     """El portero ajustado con ``items`` (de ``labelled``): etiqueta = la operación del maestro ganó tras costos."""
-    import numpy as np
+    import operator
 
     if len(items) < 1000:
         raise qt.TraderError("portero: hacen falta al menos 1.000 fotos juzgadas, hay {}".format(len(items)))
     feature_names = ALL_FEATURES if extra_eth else FEATURES
-    X = _design(items, feature_names, extra_eth=extra_eth)
-    y = np.array([1.0 if n > 0 else 0.0 for _, _, n in items])
-    mean, sd = X.mean(axis=0), X.std(axis=0)
-    sd[sd == 0] = 1.0
-    w, b = logistic((X - mean) / sd, y, l2=l2)
-    p = 1.0 / (1.0 + np.exp(-(((X - mean) / sd) @ w + b)))
-    strong = np.array([abs(s) >= teacher["umbrales"]["fuerte"] for _, s, _ in items])
-    threshold = float(np.quantile(p[strong], 1 - yes_share)) if strong.any() else float(np.quantile(p, 1 - yes_share))
+    cols = _design_cols(items, feature_names, extra_eth=extra_eth)
+    n = len(items)
+    y = [1.0 if net > 0 else 0.0 for _, _, net in items]
+    mean, sd, z_cols = [], [], []
+    for col in cols:
+        m = math.fsum(col) / n
+        centered = [x - m for x in col]
+        var = sum(map(operator.mul, centered, centered)) / n
+        s = math.sqrt(var) if var > 0 else 1.0
+        mean.append(m)
+        sd.append(s)
+        inv = 1.0 / s
+        z_cols.append([c * inv for c in centered])
+    w, b = logistic_cols(z_cols, y, l2=l2)
+    scores = [b] * n
+    for wj, col in zip(w, z_cols):
+        if wj:
+            scores = [s + wj * x for s, x in zip(scores, col)]
+    probs = [1.0 / (1.0 + math.exp(-s)) if s > -50.0 else 0.0 for s in scores]
+    strong_probs = [p for p, (_, s, _) in zip(probs, items) if abs(s) >= teacher["umbrales"]["fuerte"]]
+    threshold = float(maestro._quantile(strong_probs or probs, 1 - yes_share))
     t_values = [r["t_ms"] for r, _, _ in items]
     return {"schema": SCHEMA, "tipo": "logistica",
             "etiqueta": "la operación en el lado del maestro gana tras costos saliendo cuando el maestro se da vuelta (flojo) o a las 48 h, sin stop",
             "maestro_hash": maestro.teacher_hash(teacher),
             "ajuste": {"fotos": len(items), "desde": qt.stamp(min(t_values)), "hasta": qt.stamp(max(t_values)),
-                       "productos": sorted({r["product"] for r, _, _ in items}), "l2": l2, "ganadoras": round(float(y.mean()), 4),
+                       "productos": sorted({r["product"] for r, _, _ in items}), "l2": l2, "ganadoras": round(sum(y) / n, 4),
                        "si_share_fuertes": yes_share},
             "media": {f: round(float(v), 8) for f, v in zip(feature_names, mean)}, "sd": {f: round(float(v), 8) for f, v in zip(feature_names, sd)},
             "coeficientes": {f: round(float(v), 6) for f, v in zip(feature_names, w)}, "intercepto": round(float(b), 6),

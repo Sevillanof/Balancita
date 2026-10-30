@@ -64,7 +64,7 @@ def _setup_photo_trader(history, cfg, product, start, holdout_ms, texts, bars):
     practice = cfg["practice"]
     trader = qt.Trader(cfg, product, None, history.funding(product), key="exam", entry_threshold=cfg["practice_entry_threshold"])
     ficha, short = bool(cfg.get("state_ficha")) and texts, bool(cfg.get("state_corta"))
-    if ficha:
+    if ficha or short:
         trader.positioning = positioning_data.PositioningFeed(positioning_path(cfg), product)
     if short:
         trader.news = noticias.NewsFeed(news_path(cfg))
@@ -149,7 +149,7 @@ def make_photos(history, cfg, product, holdout_ms, texts=True, market=None, star
             photo["ficha"] = numbers
             photo["hechos"] = facts
         if short:
-            operation = _operation(cfg, t_ms, readings, closes, cost, weak)
+            operation = _operation(cfg, t_ms, readings, closes, cost, weak, trader.funding if moves else None)
             if operation is None:
                 continue
             photo["operacion"] = analista.sized(cfg, operation, movement, t_ms)
@@ -157,7 +157,7 @@ def make_photos(history, cfg, product, holdout_ms, texts=True, market=None, star
     return out
 
 
-def _v8_exit(cfg, t_ms, side, readings, closes, cost, weak):
+def _v8_exit(cfg, t_ms, side, readings, closes, cost, weak, funding=None):
     """The version 8 / 9 operation opened at ``t_ms`` on ``side`` (+1 long, -1 short): out at the first later wake where the
     maestro says at least flojo against it, or at ``guardrails.max_hold_min`` when there is a time limit. Without one
     (``max_hold_min`` null, version 9) the operation lasts as long as the maestro does not turn: ``None`` when it never turns
@@ -179,16 +179,20 @@ def _v8_exit(cfg, t_ms, side, readings, closes, cost, weak):
     c0, c1 = closes.get(t_ms), closes.get(exit_ms)
     if c0 is None or c1 is None:
         return None
-    return {"salida_ms": exit_ms, "motivo": why, "horas": (exit_ms - t_ms) / qt.HOUR_MS, "neto_bp": side * (c1 / c0 - 1) * 1e4 - cost,
+    paid, _ = (funding.accrue(t_ms, exit_ms, qt.D(100), side > 0)
+               if funding is not None and cfg.get("entrada") == "formula_eth" else (0.0, 0))
+    funding_bp = float(paid) / 100.0 * 1e4
+    return {"salida_ms": exit_ms, "motivo": why, "horas": (exit_ms - t_ms) / qt.HOUR_MS,
+            "neto_bp": side * (c1 / c0 - 1) * 1e4 - cost - funding_bp,
             "entrada_px": c0, "salida_px": c1}
 
 
-def _operation(cfg, t_ms, readings, closes, cost, weak):
+def _operation(cfg, t_ms, readings, closes, cost, weak, funding=None):
     """What the formulas said at the photo and the result of the version 8 operation on each side."""
     r = readings.get(t_ms)
     if r is None:
         return None
-    sides = {name: _v8_exit(cfg, t_ms, side, readings, closes, cost, weak) for name, side in (("largo", 1), ("corto", -1))}
+    sides = {name: _v8_exit(cfg, t_ms, side, readings, closes, cost, weak, funding) for name, side in (("largo", 1), ("corto", -1))}
     if None in sides.values():
         return None
     return {"maestro": r["veredicto"], "puntaje": r["puntaje"], "portero_si": bool(r["portero_si"]), "portero_p": r["portero_p"],
@@ -794,8 +798,9 @@ def analyse_formula(photos, cfg):
     formula = _one_at_a_time([(r, s) for r, s in strong if _formula_says_yes(r["operacion"])])
     maestro = _one_at_a_time(strong)
     hold = cfg["guardrails"]["max_hold_min"]
-    return {"fotos": len(rows), "desde_ms": min(r["t_ms"] for r in rows), "hasta_ms": max(r["t_ms"] for r in rows),
-            "max_horas": (hold or 0) / 60.0, "nocional_usd": float(cfg.get("notional_usd") or 0),
+    return {"entrada": cfg.get("entrada", "formula"), "fotos": len(rows), "desde_ms": min(r["t_ms"] for r in rows),
+            "hasta_ms": max(r["t_ms"] for r in rows), "max_horas": (hold or 0) / 60.0,
+            "nocional_usd": float(cfg.get("notional_usd") or 0),
             "productos": sorted({r["product"] for r in rows}), "exigencia": exigencia_used(cfg),
             "analista": analista.describe(cfg), "por_movimiento": analista.split(formula, _op_side) if analista.sizes_of(cfg) else None,
             "formula": _per_week(_op_stats(formula, draws, seed), rows),
@@ -871,6 +876,18 @@ def run_formula(history, cfg, holdout_ms, state_path, variant, *, log=print):
              "phase": "fotos", "updated_ms": started, "summary": None, "error": None, "variant": variant["id"]}
     _write_state(state_path, state)
     try:
+        from . import futures_qwen_rebote as rebote
+        from . import futures_walkforward as walkforward
+        if rebote.from_env() == "formula_eth" or cfg.get("entrada") == "formula_eth":
+            def on_eth_progress(done, total):
+                now = int(time.time() * 1000)
+                state.update(phase="preguntando", asking_ms=state.get("asking_ms") or started,
+                             answered=done, total=total, updated_ms=now)
+                _write_state(state_path, state)
+            pares = walkforward.ensure_eth_pairs(history.cache_dir, log=log, on_progress=on_eth_progress)
+            cfg = walkforward.with_eth_formulas(cfg, walkforward.medicion_from_env(), pares=pares)
+            state.update(phase="fotos", answered=0, total=len(products), updated_ms=int(time.time() * 1000))
+            _write_state(state_path, state)
         photos, market = [], {}
         for product in products:
             log("fórmula: leyendo las velas de {} (sin modelo)…".format(product))

@@ -49,6 +49,9 @@ VERSION = 1
 RUN_SCHEMA = "balancita-walkforward-run.v1"
 CONFIG_DIR = os.path.join(qt.ROOT, "config", "walkforward")
 PARES_PATH = os.path.join(CONFIG_DIR, "pares.json")
+ETH_CONFIG_DIR = os.path.join(qt.DATA_DIR, "walkforward-eth", "pares")
+ETH_PARES_PATH = os.path.join(ETH_CONFIG_DIR, "pares.json")
+ETH_WORK_DIR = os.path.join(qt.DATA_DIR, "walkforward-eth")
 BASE_REGISTRY_PATH = os.path.join(CONFIG_DIR, "intentos.json")
 FACTS_FROM = destila.FACTS_FROM                  # primer día con velas para ajustar (2022-04-01)
 FIRST_DAY = "2023-01-01"                         # primer día que se opera con fórmulas reajustadas
@@ -97,13 +100,36 @@ def test_spec(cfg, env=None):
     """La hipótesis que prueba un «Testear»: producto(s), tope, tamaño y exigencia de esa config y de las variables de la prueba (sin
     fechas ni resultados: el mismo ajuste en otra etapa no es una variante nueva)."""
     got = exigencia.from_env(env)
-    return variant(cfg["products"], cfg["guardrails"]["max_hold_min"], analista.from_env(env), (got["maestro"], got["portero"]))
+    spec = variant(cfg["products"], cfg["guardrails"]["max_hold_min"], analista.from_env(env), (got["maestro"], got["portero"]))
+    entrada = cfg.get("entrada") or (os.environ if env is None else env).get("QWEN_ENTRADA")
+    if entrada == "formula_eth":
+        spec["entrada"] = "formula_eth"
+    return spec
 
 
 def with_pairs(cfg, pares=None):
     """La misma config pero con las fórmulas de cada trimestre (``corta.pares``); fechas, productos y tope no cambian."""
     out = copy.deepcopy(cfg)
     out["corta"] = dict(out["corta"], pares=os.path.abspath(pares or PARES_PATH))
+    return out
+
+
+def with_eth_formulas(cfg, medicion_mode=None, pares=None):
+    """La config con las fórmulas de ETH enriquecido (``extra_eth=True``): por trimestre en modo ``honesta``, o el par 2025Q4 (ajustado hasta 2025-09-29) en ``vigente``."""
+    mode = medicion(medicion_mode)
+    pares_path = os.path.abspath(pares or ETH_PARES_PATH)
+    out = copy.deepcopy(cfg)
+    out["entrada"] = "formula_eth"
+    if mode == "honesta":
+        out["corta"] = dict(out["corta"], pares=pares_path)
+        return out
+    table = load_pairs(pares_path)
+    folder = os.path.dirname(pares_path)
+    pair = table["trimestres"].get("2025Q4") or table["trimestres"][sorted(table["trimestres"])[-1]]
+    corta_cfg = dict(out["corta"], maestro=os.path.join(folder, pair["maestro"]), maestro_hash=pair["maestro_hash"],
+                     portero=os.path.join(folder, pair["portero"]), portero_hash=pair["portero_hash"])
+    corta_cfg.pop("pares", None)
+    out["corta"] = corta_cfg
     return out
 
 
@@ -131,19 +157,20 @@ def year_of(t_ms):
 # --------------------------------------------------------------------------- 1. the formulas of each quarter
 
 
-def facts_path(work_dir, product):
-    return os.path.join(work_dir, "hechos-{}.jsonl".format(product))
+def facts_path(work_dir, product, *, extra_eth=False):
+    return os.path.join(work_dir, "hechos{}-{}.jsonl".format("-eth" if extra_eth else "", product))
 
 
-def ensure_facts(cache_dir, work_dir, log=print, *, fit_products=FIT_PRODUCTS):
+def ensure_facts(cache_dir, work_dir, log=print, *, fit_products=FIT_PRODUCTS, extra_eth=False, on_progress=None):
     """Las fotos con los números de la ficha de los productos de ajuste (solo caché). Se arman una vez por carpeta de trabajo."""
     os.makedirs(work_dir, exist_ok=True)
     paths = []
     for product in fit_products:
-        path = facts_path(work_dir, product)
+        path = facts_path(work_dir, product, extra_eth=extra_eth)
         if not os.path.exists(path):
             log("hechos de {}…".format(product))
-            n = destila.facts_file(cache_dir, product, FACTS_FROM, PRACTICE_TO, path + ".tmp")
+            n = destila.facts_file(cache_dir, product, FACTS_FROM, PRACTICE_TO, path + ".tmp",
+                                   extra_eth=extra_eth, on_progress=on_progress)
             os.replace(path + ".tmp", path)
             log("{}: {} fotos".format(product, n))
         paths.append(path)
@@ -156,10 +183,10 @@ def _dump(path, obj):
         handle.write("\n")
 
 
-def fit_pairs(cache_dir, work_dir, out_dir, log=print, *, fit_products=FIT_PRODUCTS):
+def fit_pairs(cache_dir, work_dir, out_dir, log=print, *, fit_products=FIT_PRODUCTS, extra_eth=False, on_progress=None):
     """El par (maestro, portero) de cada trimestre, ajustado con ``fit_products`` solo hasta 48 h antes de que empiece. Escribe los archivos y
     ``pares.json`` en ``out_dir`` (nombres relativos: la tabla se puede mover) y devuelve la tabla."""
-    paths = ensure_facts(cache_dir, work_dir, log, fit_products=fit_products)
+    paths = ensure_facts(cache_dir, work_dir, log, fit_products=fit_products, extra_eth=extra_eth, on_progress=on_progress)
     holdout = qt.load_holdout_ms()
     rows = []
     for path in paths:
@@ -167,18 +194,18 @@ def fit_pairs(cache_dir, work_dir, out_dir, log=print, *, fit_products=FIT_PRODU
     history = qt.History(cache_dir, holdout, offline=True)
     os.makedirs(out_dir, exist_ok=True)
     table = {"schema": corta.PARES_SCHEMA, "motor": VERSION, "ajuste_desde": FACTS_FROM, "retardo_h": FIT_LAG_MS // qt.HOUR_MS,
-             "productos_de_ajuste": list(fit_products), "trimestres": {}}
+             "productos_de_ajuste": list(fit_products), "extra_eth": bool(extra_eth), "trimestres": {}}
     label = "+".join({"PF_XBTUSD": "BTC", "PF_ETHUSD": "ETH"}.get(p, p) for p in fit_products)
     for y, q in quarters(holdout):
         name = destila.qname(y, q)
         cutoff = destila.qstart_ms(y, q) - FIT_LAG_MS
         part = [r for r in rows if r["t_ms"] < cutoff]
         note = "Reajuste trimestral: solo fotos de {} hasta {} (48 h antes de {}).".format(label, qt.stamp(cutoff), name)
-        teacher = maestro.fit(part, note=note)
+        teacher = maestro.fit(part, note=note, extra_eth=extra_eth)
         m_file, p_file = "maestro-{}.json".format(name), "portero-{}.json".format(name)
         _dump(os.path.join(out_dir, m_file), teacher)
         teacher = maestro.load(os.path.join(out_dir, m_file))
-        keeper = portero.fit(portero.labelled(part, teacher, history), teacher, note=note)
+        keeper = portero.fit(portero.labelled(part, teacher, history), teacher, note=note, extra_eth=extra_eth)
         _dump(os.path.join(out_dir, p_file), keeper)
         table["trimestres"][name] = {"maestro": m_file, "maestro_hash": maestro.teacher_hash(teacher),
                                      "portero": p_file, "portero_hash": portero.portero_hash(keeper)[:12],
@@ -188,6 +215,16 @@ def fit_pairs(cache_dir, work_dir, out_dir, log=print, *, fit_products=FIT_PRODU
             name, qt.stamp(cutoff), len(part), table["trimestres"][name]["maestro_hash"], table["trimestres"][name]["portero_hash"]))
     _dump(os.path.join(out_dir, "pares.json"), table)
     return table
+
+
+def ensure_eth_pairs(cache_dir=None, work_dir=None, out_dir=None, log=print, on_progress=None):
+    """Asegura los pares trimestrales de ETH enriquecido (``extra_eth=True``) y devuelve la ruta de ``pares.json``."""
+    out_dir = out_dir or ETH_CONFIG_DIR
+    pares = os.path.join(out_dir, "pares.json")
+    if not os.path.exists(pares):
+        fit_pairs(cache_dir or qt.DEFAULT_CACHE, work_dir or ETH_WORK_DIR, out_dir, log=log,
+                  fit_products=("PF_ETHUSD",), extra_eth=True, on_progress=on_progress)
+    return pares
 
 
 def load_pairs(path=PARES_PATH):

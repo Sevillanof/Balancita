@@ -48,7 +48,7 @@ export default function ExigenciaControl({ value, onChange, disabled }: Props) {
   const entrada = value.entrada ?? 'formula'
   const cuenta = value.cuenta ?? 'fija'
   // A rebound entry does not use the maestro, the portero, the movement analyst or the way of measuring
-  const rebote = entrada !== 'formula'
+  const rebote = entrada.startsWith('rebote')
   const changed =
     value.maestro !== EXIGENCIA_PAPER ||
     value.portero !== EXIGENCIA_PAPER ||

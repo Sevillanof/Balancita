@@ -84,7 +84,10 @@ class ExigenciaWiringTest(unittest.TestCase):
 
     def test_gate_levels_only_for_qwen_live(self):
         env = GateApi.exigencia_env({"exigencia": {"maestro": 3}}, models.QWEN_LIVE_ID)
-        self.assertEqual(env, {ex.ENV_MAESTRO: "3", ex.ENV_PORTERO: "5", "QWEN_ANALISTA": "apagado", "QWEN_MEDICION": "honesta"})
+        self.assertEqual(
+            env,
+            {ex.ENV_MAESTRO: "3", ex.ENV_PORTERO: "5", "QWEN_ANALISTA": "apagado", "QWEN_MEDICION": "honesta", "QWEN_ENTRADA": "formula"},
+        )
         self.assertEqual(GateApi.exigencia_env({}, models.QWEN_LIVE_ID), {})
         with self.assertRaises(GateApiError):
             GateApi.exigencia_env({"exigencia": {"maestro": 3}}, "c25-pullback-perp-v1")

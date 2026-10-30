@@ -678,4 +678,23 @@ describe('live market gateway', () => {
     )
     expect(failure).toMatch(/403/)
   })
+
+  it('reports funding as known_current_interval when the latest ticker carries a funding rate', async () => {
+    const path = dbPath()
+    const writer = seedWriter(path, 1)
+    closers.push(() => writer.close())
+    const receivedAt = BASE + 2 * MINUTE
+    writer.append({
+      ...ticker(2, receivedAt, '90100'),
+      rawJson: JSON.stringify({
+        feed: 'ticker',
+        funding_rate: -0.0007,
+        relative_funding_rate: -0.0000003,
+      }),
+    })
+    const { app } = await start(path, { clock: () => receivedAt + 1_000 })
+    const body = (await app.inject('/api/terminal/bootstrap')).json() as any
+    expect(body.market.funding).toBe('known_current_interval')
+    expect(body.market.funding_known_at).toBe(receivedAt)
+  })
 })

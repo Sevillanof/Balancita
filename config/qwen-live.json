@@ -5,7 +5,11 @@
   "products": [
     "PF_ETHUSD"
   ],
-  "notional_usd": "100",
+  "notional_usd": "1000",
+  "cuenta": "entera",
+  "analista": {
+    "modo": "fuerte"
+  },
   "leverage": "1",
   "timeframe_min": 5,
   "prompt": {

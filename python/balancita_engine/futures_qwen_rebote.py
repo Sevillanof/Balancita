@@ -32,7 +32,7 @@ COOLDOWN_MIN = 60
 TAKER_BP = 5.19                          # por pata
 NOTIONAL_USD = 100.0                     # el nominal de paper
 ENV = "QWEN_ENTRADA"
-ENTRADAS = ("formula", "rebote", "rebote_btc")     # qué decide la entrada de la prueba; ``formula`` es el maestro con el portero (paper)
+ENTRADAS = ("formula", "formula_eth", "rebote", "rebote_btc")  # qué decide la entrada de la prueba; ``formula`` es el maestro con el portero (paper)
 DEFAULT = "formula"
 BEFORE_MS, AFTER_MS = 4 * HOUR_MS, 3 * HOUR_MS     # precios de 5 min que se guardan alrededor de cada operación (para el zoom)
 REASON = "tiempo"
@@ -53,6 +53,11 @@ def entrada(value, name="entrada"):
     if value not in ENTRADAS:
         raise ValueError("{}: tiene que ser {}".format(name, ", ".join(ENTRADAS)))
     return value
+
+
+def is_rebote(value):
+    """True cuando la entrada elegida es una de las variantes de rebote."""
+    return entrada(value) in RULES
 
 
 def from_env(env=None):
