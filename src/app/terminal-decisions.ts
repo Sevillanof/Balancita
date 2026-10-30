@@ -6,6 +6,10 @@ export type DecisionRow = {
   strategy: string
   reason: string
   time: string
+  /** Optional formatted date + time (e.g. `30/10 10:15`) for display and search. */
+  dateTime?: string
+  /** Optional ISO date/time string (e.g. `2026-10-30 10:15`) for search matching. */
+  searchText?: string
   /** Qwen's probability of each option, shown under the reason. */
   detail?: string
   /** A wait with its own reason (Qwen's): never collapsed into «WAIT ×N». */

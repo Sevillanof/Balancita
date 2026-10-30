@@ -9,6 +9,7 @@ import { LiveMarketFollower } from './market-follower.ts'
 import { PaperEngineFollower } from './paper-engine-follower.ts'
 import { qwenScoresOff, type QwenScores } from './qwen-scores.ts'
 import { qwenDecisionsOff, type QwenDecisions } from './qwen-decisions.ts'
+import { newsItemsOff, type NewsItems } from './news-items.ts'
 import { createMovements, type Movements } from './movements.ts'
 import { CHART_INTERVALS_MS } from './terminal-chart.ts'
 import type { SystemUsage } from './system-usage.ts'
@@ -48,6 +49,8 @@ export interface LiveGatewayOptions {
   readonly qwenScores?: QwenScores
   /** Qwen operador en vivo: decisiones y operaciones para la Terminal (solo lectura). Absent: off. */
   readonly qwenDecisions?: QwenDecisions
+  /** Public news items analyzed by the local model (`futures-news.sqlite`, read-only). Absent: off. */
+  readonly newsItems?: NewsItems
   /** Kronos' forward paper decisions in Qwen's shape. Absent: reported `off`. */
   readonly kronosScores?: QwenScores
   /** Read-only list of Qwen's and Kronos' paper movements. Absent: both reported `off`. */
@@ -385,6 +388,18 @@ export async function buildLiveGateway(
     },
   )
   app.get('/api/qwen/account', () => qwenDecisions.account())
+  const newsItems = options.newsItems ?? newsItemsOff('news_not_configured')
+  app.get<{ Querystring: { limit?: string } }>(
+    '/api/news',
+    (request, reply) => {
+      const result = newsItems.list(
+        request.query.limit === undefined
+          ? undefined
+          : Number(request.query.limit),
+      )
+      return result.status === 'error' ? reply.code(400).send(result) : result
+    },
+  )
   const kronosScores =
     options.kronosScores ?? qwenScoresOff('kronos_not_configured')
   app.get<{ Querystring: { product?: string } }>(

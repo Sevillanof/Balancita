@@ -7,7 +7,7 @@ import {
   waitFor,
   within,
 } from '@testing-library/react'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import FuturesTerminal from './FuturesTerminal.tsx'
 import type {
   TerminalBootstrap,
@@ -299,7 +299,6 @@ describe('FuturesTerminal presentation', () => {
       screen.getByText(/Evento .* UTC · recibido .* UTC · hace \d+ s/),
     ).toBeTruthy()
     expect(screen.getByText(/Financiación: desconocida/)).toBeTruthy()
-    expect(screen.getByText('Incompleto')).toBeTruthy()
   })
 
   it('renders candles and the live price with the engine off, without fake account or analysis', async () => {
@@ -486,7 +485,7 @@ describe('FuturesTerminal presentation', () => {
     }
     expect(parseTerminalEnvelope(snapshot)).not.toBeNull()
     TerminalSocket.latest!.publish(snapshot)
-    expect(await screen.findByText('Incompleto')).toBeTruthy()
+    expect(await screen.findByText('Operaciones')).toBeTruthy()
     expect(
       screen.queryByText('El snapshot no contiene velas BTC/USD verificables.'),
     ).toBeNull()
@@ -647,7 +646,7 @@ describe('FuturesTerminal on the live gateway with paper execution', () => {
     TerminalSocket.latest!.publish(
       live(0, 'snapshot', { watermark: 0, state: snapshotState }),
     )
-    await screen.findByText('Saldo USD')
+    await screen.findByText('Operaciones')
   }
 
   afterEach(() => {
@@ -658,16 +657,23 @@ describe('FuturesTerminal on the live gateway with paper execution', () => {
     vi.unstubAllGlobals()
   })
 
-  it('shows account, position, orders, fills and analyses instead of the engine-off notice', async () => {
+  it('shows the Operaciones right panel and omits the removed bottom sections', async () => {
     await renderLive()
     expect(screen.queryByText(/Motor de decisiones apagado/)).toBeNull()
-    expect(screen.getByText('long · 0.0099 BTC')).toBeTruthy()
-    expect(screen.getByText(/10\.000,49/)).toBeTruthy()
-    expect(screen.getByText('Posiciones y operaciones')).toBeTruthy()
-    expect(screen.getAllByText(/0\.0099 · o1/).length).toBeGreaterThan(0)
-    expect(screen.getByText(/Ejecución buy/)).toBeTruthy()
+    expect(screen.getByRole('region', { name: 'Operaciones' })).toBeTruthy()
+    expect(screen.getByTestId('qwen-glance')).toBeTruthy()
+    expect(screen.getByText('Historial de señales')).toBeTruthy()
+    expect(screen.getByText('Últimas 3 noticias')).toBeTruthy()
     expect(screen.getByText('Decisiones del motor')).toBeTruthy()
     expect(screen.getByLabelText('Decisión seleccionada')).toBeTruthy()
+    expect(screen.queryByTestId('terminal-secondary')).toBeNull()
+    expect(screen.queryByRole('region', { name: 'Posición actual' })).toBeNull()
+    expect(
+      screen.queryByRole('group', { name: 'Historial del gateway' }),
+    ).toBeNull()
+    expect(
+      screen.queryByRole('region', { name: 'Operaciones de Qwen' }),
+    ).toBeNull()
     openStatus()
     expect(screen.getByText(/Libro D \(histórico, solo lectura\)/)).toBeTruthy()
     // The retired book is history: its status never reads as a healthy signal.
@@ -676,14 +682,6 @@ describe('FuturesTerminal on the live gateway with paper execution', () => {
         .getByText(/Libro D \(histórico, solo lectura\)/)
         .getAttribute('data-tone'),
     ).toBe('nodata')
-    // The rejected order says why; the filled one is in Spanish.
-    expect(
-      screen.getByText(
-        /Cantidad no disponible · o0 · target does not clear cost buffer/,
-      ),
-    ).toBeTruthy()
-    expect(screen.getByText('Ejecutada')).toBeTruthy()
-    expect(screen.getByText('Rechazada')).toBeTruthy()
   })
 
   it('draws verdict markers (proposals as arrows, WAIT as a grey circle), none before the first candle or rebuilt from a backfill', async () => {
@@ -788,10 +786,7 @@ describe('FuturesTerminal on the live gateway with paper execution', () => {
         }),
       )
     })
-    expect(await screen.findByText('long · 0.01 BTC')).toBeTruthy()
-    expect(screen.getAllByText(/0\.01 · o9/).length).toBe(1)
-    expect(screen.getByText(/Ejecución buy/)).toBeTruthy()
-    expect(screen.getByLabelText('Decisión seleccionada')).toBeTruthy()
+    expect(await screen.findByLabelText('Decisión seleccionada')).toBeTruthy()
     expect(screen.queryByText(/Se detectó un salto/)).toBeNull()
   })
 
@@ -1255,54 +1250,19 @@ describe('FuturesTerminal on the live gateway with paper execution', () => {
   })
 
   describe('provenance and separation (Fase 2.4)', () => {
-    const history = () =>
-      within(screen.getByRole('group', { name: 'Historial del gateway' }))
-    const current = () =>
-      within(screen.getByRole('region', { name: 'Posición actual' }))
-
-    it('shows the current position as «No disponible» and keeps D-book data only inside the labelled history', async () => {
+    it('omits Posición actual, Operaciones de Qwen and Historial del gateway below the chart', async () => {
       await renderLive()
-      expect(current().getByText('Posición actual: No disponible')).toBeTruthy()
-      // The D-book position, account and orders live in the history section.
-      expect(history().getByText('Histórico')).toBeTruthy()
-      expect(history().getByText('long · 0.0099 BTC')).toBeTruthy()
-      expect(history().getByText('Saldo USD')).toBeTruthy()
-      expect(history().getByText('Posiciones y operaciones')).toBeTruthy()
-      // ...and never inside the current-position block.
-      expect(current().queryByText(/long/)).toBeNull()
-      expect(current().queryByText('Saldo USD')).toBeNull()
-    })
-
-    it('does not confuse «No disponible» with «Sin posición abierta»', async () => {
-      await renderLive({ ...state, position: null })
-      expect(current().getByText('Posición actual: No disponible')).toBeTruthy()
-      expect(current().queryByText(/^Sin posición abierta/)).toBeNull()
-      // The empty D book is stated as such, inside the history only.
+      expect(screen.queryByTestId('terminal-secondary')).toBeNull()
       expect(
-        history().getAllByText(/Sin posición abierta en el libro D/).length,
-      ).toBeGreaterThan(0)
-      expect(screen.queryByText('Sin posición abierta')).toBeNull()
-      expect(screen.queryByText('Sin posición abierta.')).toBeNull()
-    })
-
-    it('states origin and run, and never invents the times or the experiment', async () => {
-      await renderLive()
-      const provenance = within(
-        screen.getByRole('group', { name: 'Historial del gateway' }),
-      ).getByLabelText('Procedencia de los datos')
-      const rows = Object.fromEntries(
-        [...provenance.querySelectorAll('div')].map((row) => [
-          row.querySelector('dt')!.textContent,
-          row.querySelector('dd')!.textContent,
-        ]),
-      )
-      expect(rows).toEqual({
-        Origen: 'Gateway · libro D retirado (lectura)',
-        Experimento: 'No disponible',
-        Run: 'live-market-view',
-        'Hora del evento': 'No disponible',
-        'Última actualización recibida': 'No disponible',
-      })
+        screen.queryByRole('region', { name: 'Posición actual' }),
+      ).toBeNull()
+      expect(
+        screen.queryByRole('group', { name: 'Historial del gateway' }),
+      ).toBeNull()
+      expect(
+        screen.queryByRole('region', { name: 'Operaciones de Qwen' }),
+      ).toBeNull()
+      expect(screen.queryByText('Herramientas de simulación')).toBeNull()
     })
 
     it('ignores account, position, order and verdict events of another run', async () => {
@@ -1336,11 +1296,7 @@ describe('FuturesTerminal on the live gateway with paper execution', () => {
           foreign(4, 'analysis.completed', { analysis: analysis(9, 'SHORT') }),
         )
       })
-      expect(history().getByText('long · 0.0099 BTC')).toBeTruthy()
-      expect(history().queryByText(/short/)).toBeNull()
-      expect(history().queryByText(/foreign-order/)).toBeNull()
       expect(screen.queryByText(/verdict-hash-9/)).toBeNull()
-      expect(screen.getByText(/10\.000,49/)).toBeTruthy()
     })
 
     it('marks each decision with its action so the list can colour it', async () => {
@@ -1352,33 +1308,6 @@ describe('FuturesTerminal on the live gateway with paper execution', () => {
             .getAllByText(action)
             .some((node) => node.getAttribute('data-action') === action),
         ).toBe(true)
-    })
-
-    it('puts the position in a secondary row below the chart, without paper controls', async () => {
-      await renderLive()
-      const secondary = screen.getByTestId('terminal-secondary')
-      const layout = screen.getByTestId('approved-terminal-layout')
-      expect(
-        layout.compareDocumentPosition(secondary) &
-          Node.DOCUMENT_POSITION_FOLLOWING,
-      ).toBeTruthy()
-      expect(
-        within(secondary).getByRole('region', { name: 'Posición actual' }),
-      ).toBeTruthy()
-      expect(screen.queryByText('Herramientas de simulación')).toBeNull()
-    })
-
-    it('collapses the history at first and keeps its provenance once expanded', async () => {
-      await renderLive()
-      const details = screen.getByRole('group', {
-        name: 'Historial del gateway',
-      }) as HTMLDetailsElement
-      expect(details.open).toBe(false)
-      details.open = true
-      expect(history().getByText('Histórico')).toBeTruthy()
-      expect(
-        history().getByText('Gateway · libro D retirado (lectura)'),
-      ).toBeTruthy()
     })
 
     describe('chart', () => {
@@ -1436,7 +1365,7 @@ describe('FuturesTerminal on the live gateway with paper execution', () => {
         TerminalSocket.latest!.publish(
           live(0, 'snapshot', { watermark: 0, state: mixed }),
         )
-        await screen.findByText('Saldo USD')
+        await screen.findByText('Operaciones')
         // The chart paints lines and markers in effects after the render.
         await waitFor(() => {
           expect(chartHarness.priceLines.length).toBeGreaterThan(0)
@@ -1648,7 +1577,8 @@ describe('FuturesTerminal on the live gateway with paper execution', () => {
         }),
       )
     }
-    const open = async (publishedAt = AT) => {
+    it('re-reads B1 health on reconnection and renders the compact Operaciones sections', async () => {
+      stubFetch()
       vi.stubGlobal('WebSocket', TerminalSocket)
       render(
         <FuturesTerminal bootstrap={liveBootstrap()} product="PF_XBTUSD" />,
@@ -1659,43 +1589,15 @@ describe('FuturesTerminal on the live gateway with paper execution', () => {
           'snapshot',
           0,
           { watermark: 0, state: ahoraState },
-          publishedAt,
+          AT,
           'live-market-view',
         ),
       )
-      await screen.findByText('Saldo USD')
-    }
-    const label = () => screen.getByTestId('last-decision')
-
-    beforeEach(() => {
-      // Only the clock is faked: the sockets, timers and fetch stay real.
-      vi.useFakeTimers({ toFake: ['Date'], now: AT })
-      stubFetch()
-      TerminalSocket.latest = undefined
-    })
-    afterEach(() => vi.useRealTimers())
-
-    it('is current when connected, the clock is valid and B1 reads the same bucket', async () => {
-      await open()
-      expect(await screen.findByTestId('now-action')).toHaveTextContent('SHORT')
-      expect(label()).not.toHaveTextContent('Sin confirmar')
-    })
-
-    it('falls back to «Sin confirmar» on disconnection and evaluates again from scratch on recovery', async () => {
-      await open()
-      await screen.findByTestId('now-action')
+      await screen.findByText('Operaciones')
       const readsBefore = healthCalls
       const first = TerminalSocket.latest!
       act(() => first.onclose?.())
-      await waitFor(() => expect(label()).toHaveTextContent('Sin confirmar'))
-      expect(screen.queryByTestId('now-action')).toBeNull()
-      expect(screen.getByTestId('now-blockers')).toHaveTextContent(
-        'sin conexión WebSocket',
-      )
-      // The stream reconnects by itself: until it delivers a message of the
-      // new connection there is no valid gateway clock, hence no «actual».
       await waitFor(() => expect(TerminalSocket.latest).not.toBe(first))
-      expect(screen.queryByTestId('now-action')).toBeNull()
       await act(async () => {
         TerminalSocket.latest!.publish(
           envelope(
@@ -1707,39 +1609,9 @@ describe('FuturesTerminal on the live gateway with paper execution', () => {
           ),
         )
       })
-      // B1 was read again for the new connection, not reused.
       await waitFor(() => expect(healthCalls).toBeGreaterThan(readsBefore))
-      expect(await screen.findByTestId('now-action')).toHaveTextContent('SHORT')
-    })
-
-    it('goes back to «Sin confirmar» when the gateway goes silent and its clock gets old', async () => {
-      await open()
-      await screen.findByTestId('now-action')
-      // A minute and a half of silence: no heartbeat, B1 not refreshed.
-      vi.setSystemTime(AT + 90_000)
-      await waitFor(() => expect(label()).toHaveTextContent('Sin confirmar'), {
-        timeout: 4_000,
-      })
-      expect(screen.getByTestId('now-blockers')).toHaveTextContent(
-        'reloj del gateway',
-      )
-    })
-
-    it('does not trust a gateway clock stamped in the future', async () => {
-      await open(AT + 600_000)
-      await waitFor(() => expect(healthCalls).toBeGreaterThan(0))
-      await waitFor(() => expect(label()).toHaveTextContent('Sin confirmar'))
-      expect(screen.queryByTestId('now-action')).toBeNull()
-    })
-
-    it('stays unconfirmed when B1 reads another bucket', async () => {
-      healthBucket = BUCKET - 60_000
-      await open()
-      await waitFor(() => expect(healthCalls).toBeGreaterThan(0))
-      await waitFor(() => expect(label()).toHaveTextContent('Sin confirmar'))
-      expect(screen.getByTestId('now-blockers')).toHaveTextContent(
-        'B1 no confirma',
-      )
+      expect(screen.getByTestId('qwen-glance')).toBeTruthy()
+      expect(screen.getByTestId('terminal-news-panel')).toBeTruthy()
     })
   })
 })

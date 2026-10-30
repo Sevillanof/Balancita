@@ -5,17 +5,11 @@ import {
 } from '../features/trading-view/domain/product-label.ts'
 import { utcDateTime } from '../shared/finance/format.ts'
 import ApprovedTerminalLayout from '../features/trading-view/presentation/ApprovedTerminalLayout.tsx'
-import { AppShell, DataState } from '../shared/mission-control/index.ts'
-import GatewayHistory from './GatewayHistory.tsx'
+import { AppShell } from '../shared/mission-control/index.ts'
 import MarketStrip from './MarketStrip.tsx'
 import TerminalNotices from './TerminalNotices.tsx'
-import {
-  TERMINAL_FRAME,
-  TERMINAL_PANEL,
-} from '../shared/design-system/terminal-styles.ts'
-import PaperAccountPanel from './PaperAccountPanel.tsx'
+import { TERMINAL_FRAME } from '../shared/design-system/terminal-styles.ts'
 import { appNavigation } from './app-navigation.ts'
-import ApprovedPortfolioTables from '../features/trading-view/presentation/ApprovedPortfolioTables.tsx'
 import type { TerminalTickerStats } from '../features/trading-view/infrastructure/terminal-chart-client.ts'
 import type { TerminalBootstrap } from '../features/connected-trading/infrastructure/terminal-stream-client.ts'
 import { useTerminalStream } from './useTerminalStream.ts'
@@ -35,15 +29,14 @@ import {
   useQwenDecisions,
 } from './useQwenDecisions.ts'
 import QwenGlance from './QwenGlance.tsx'
-import QwenTradesPanel from './QwenTradesPanel.tsx'
+import TerminalNewsPanel from './TerminalNewsPanel.tsx'
+import { formatShortDateTime } from './news-format.ts'
+import { useTerminalNews } from './useTerminalNews.ts'
 import {
   analysesNotice,
   analysisAction,
   analysisReason,
   marketStatusLabel,
-  money,
-  quantity,
-  reasonLabel,
   shortTime,
   strategyLabel,
   utcTime,
@@ -86,9 +79,11 @@ export default function FuturesTerminal({
   > | null>(null)
   const liveGateway = bootstrap.mode === 'paper_live'
   const health = useHealth(liveGateway)
+  const { items: newsItems, loaded: newsLoaded } = useTerminalNews(
+    apiBase,
+    liveGateway,
+  )
 
-  const account = record(state?.account)
-  const netValue = account.net_usd ?? account.net_complete
   const position = record(state?.position)
   const positions = Array.isArray(state?.positions)
     ? state.positions
@@ -151,7 +146,6 @@ export default function FuturesTerminal({
     record(state?.engine).status ?? bootstrap.engine?.status
   const gatewayEngineReason =
     record(state?.engine).reason ?? bootstrap.engine?.reason
-  const showAnalysisTime = gatewayEngine
   const change24h = (
     (marketState.ticker_stats ?? record(bootstrap.market).ticker_stats) as {
       change_24h_pct?: unknown
@@ -180,6 +174,8 @@ export default function FuturesTerminal({
         analysis.qwen_skipped === true
           ? decisionView(analysis)
           : null
+      const ts = Number(analysis.decision_time_ms)
+      const dt = Number.isFinite(ts) && ts > 0 ? formatShortDateTime(ts) : null
       return {
         id: String(analysis.analysis_id ?? index),
         action: analysisAction(analysis),
@@ -188,6 +184,7 @@ export default function FuturesTerminal({
         ).split(' · ')[0]!,
         reason: analysisReason(analysis),
         time: shortTime(analysis.decision_time_ms),
+        ...(dt ? { dateTime: dt.display, searchText: dt.search } : {}),
         ...(typeof analysis.qwen_probabilities === 'string' &&
         analysis.qwen_probabilities
           ? { detail: analysis.qwen_probabilities }
@@ -431,7 +428,7 @@ export default function FuturesTerminal({
           <ApprovedTerminalLayout
             chart={
               <section
-                className={TERMINAL_FRAME}
+                className={`${TERMINAL_FRAME} observer-height flex flex-col`}
                 aria-label={`Gráfico ${productPair(product)}`}
               >
                 <TerminalMarketChart
@@ -472,12 +469,6 @@ export default function FuturesTerminal({
                     gatewayEngine ? 'Histórico · Gateway D' : undefined
                   }
                 />
-                {!engineOff && (
-                  <p>
-                    Las cifras de cuenta y decisiones siguientes provienen del
-                    snapshot/eventos durables.
-                  </p>
-                )}
               </section>
             }
             decisions={
@@ -498,10 +489,16 @@ export default function FuturesTerminal({
                     liveGateway ? (
                       <QwenGlance
                         product={qwenProduct}
-                        latest={
-                          analyses.length > 0 ? record(analyses.at(-1)) : null
-                        }
+                        latest={selectedAnalysis}
                         nowMs={displayClock}
+                      />
+                    ) : undefined
+                  }
+                  news={
+                    liveGateway ? (
+                      <TerminalNewsPanel
+                        items={newsItems}
+                        loaded={newsLoaded}
                       />
                     ) : undefined
                   }
@@ -523,7 +520,9 @@ export default function FuturesTerminal({
                           : qwenNotice(qwenSource, analyses.length)
                     }
                     selected={
-                      selectedAnalysis ? (
+                      selectedAnalysis &&
+                      (!selectedAnalysis.formula_action ||
+                        selectedNotes.length > 0) ? (
                         <SelectedDecision
                           analysis={selectedAnalysis}
                           id={selectedId}
@@ -566,118 +565,6 @@ export default function FuturesTerminal({
               )
             }
           />
-          <QwenTradesPanel product={qwenProduct} enabled={liveGateway} />
-          {!engineOff && (
-            <div
-              className="mt-4 grid grid-cols-1 items-start gap-4"
-              data-testid="terminal-secondary"
-            >
-              <div className="grid min-w-0 gap-4">
-                {gatewayEngine && (
-                  <section
-                    className={TERMINAL_PANEL}
-                    aria-label="Posición actual"
-                  >
-                    <h2>Posición actual</h2>
-                    <DataState
-                      kind="unavailable"
-                      title="Posición actual: No disponible"
-                      detail="Todavía no hay una fuente verificable de las posiciones de los experimentos forward (endpoint B5 pendiente). No significa «Sin posición abierta». Lo que sigue es historial del libro D."
-                    />
-                  </section>
-                )}
-                <GatewayHistory enabled={gatewayEngine} runId={activeRunId}>
-                  <PaperAccountPanel
-                    account={account}
-                    netValue={netValue}
-                    position={position}
-                    showAnalysisTime={showAnalysisTime}
-                    historical={gatewayEngine}
-                    base={quoteBase}
-                  />
-                  <ApprovedPortfolioTables
-                    label={`CARTERA PAPER · USD / ${productBase(product)}`}
-                    title="Posiciones y operaciones"
-                    ariaLabel="Posiciones paper"
-                    open={{
-                      title: gatewayEngine
-                        ? 'Posición registrada en el libro D'
-                        : 'Posición abierta',
-                      columns: [
-                        'Estrategia',
-                        'Dirección',
-                        `Cantidad ${productBase(product)}`,
-                        'Entrada USD',
-                        'Stop USD',
-                        'Objetivo USD',
-                      ],
-                      emptyLabel: gatewayEngine
-                        ? 'Sin posición abierta en el libro D.'
-                        : 'Sin posición abierta.',
-                      rows: position.side
-                        ? [
-                            {
-                              id: String(state.run_id),
-                              cells: [
-                                strategyLabel(position.strategy_id).split(
-                                  ' · ',
-                                )[0]!,
-                                String(position.side),
-                                quantity(position.quantity_btc, quoteBase),
-                                money(position.entry_price_usd_per_btc),
-                                money(position.stop),
-                                money(position.target),
-                              ],
-                            },
-                          ]
-                        : [],
-                    }}
-                    closed={{
-                      title: 'Órdenes y ejecuciones',
-                      columns: ['Tipo', 'Estado', 'Referencia'],
-                      emptyLabel: 'No hay órdenes registradas.',
-                      rows: [
-                        ...orders.slice(-100).map((value, index) => {
-                          const order = record(value)
-                          return {
-                            id: String(order.order_id ?? index),
-                            cells: [
-                              String(
-                                order.side ??
-                                  order.action ??
-                                  order.order_type ??
-                                  'Orden paper',
-                              ),
-                              reasonLabel(order.status ?? order.type),
-                              `${String(order.quantity_btc ?? 'Cantidad no disponible')} · ${String(order.order_id ?? 'ID no disponible')}${
-                                gatewayEngine &&
-                                typeof order.reason_code === 'string'
-                                  ? ` · ${reasonLabel(order.reason_code)}`
-                                  : ''
-                              }`,
-                            ],
-                          }
-                        }),
-                        ...(Array.isArray(state.fills) ? state.fills : [])
-                          .slice(-100)
-                          .map((value, index) => {
-                            const fill = record(value)
-                            return {
-                              id: String(fill.fill_id ?? `fill-${index}`),
-                              cells: [
-                                `Ejecución ${String(fill.action ?? fill.side ?? 'paper')}`,
-                                `${quantity(fill.quantity_btc, quoteBase)} @ ${money(fill.price_usd_per_btc)}`,
-                                String(fill.fill_id ?? 'Fill registrado'),
-                              ],
-                            }
-                          }),
-                      ],
-                    }}
-                  />
-                </GatewayHistory>
-              </div>
-            </div>
-          )}
         </>
       )}
     </AppShell>

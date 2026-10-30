@@ -403,10 +403,7 @@
 }
 
 @utility observer-height {
-  height: calc(var(--terminal-chart-height, 560px) + 60px);
-  @media (width >= 901px) {
-    height: calc(100vh - 160px);
-  }
+  height: calc(100vh - 160px);
 }
 
 @utility grid-cols-analyzer {
@@ -522,7 +519,7 @@
     --terminal-chart-height: 500px;
   }
   @media (min-width: 1200px) {
-    --terminal-chart-height: clamp(520px, calc(100vh - 270px), 840px);
+    --terminal-chart-height: clamp(520px, calc(100vh - 330px), 840px);
   }
 }
 
@@ -547,11 +544,11 @@
 }
 
 @utility w-shell-content {
-  width: min(calc(100% - --spacing(14)), var(--container-shell));
-}
-
-@utility w-shell-content-compact {
-  width: calc(100% - --spacing(8));
+  width: 100%;
+  padding-top: 0px;
+  padding-right: 30px;
+  padding-bottom: 20px;
+  padding-left: 30px;
 }
 
 @utility content-colon {

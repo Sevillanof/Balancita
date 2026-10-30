@@ -834,14 +834,7 @@ export default function ApprovedTerminalChart({
         data-candle-count={candles.length}
         data-marker-count={markers.length}
         data-selected-marker={selectedId}
-        className="chart-height h-terminal-chart w-full"
-        style={
-          panes.length > 0
-            ? {
-                height: `calc(var(--terminal-chart-height, 440px) + ${panes.length * PANE_HEIGHT_PX}px)`,
-              }
-            : undefined
-        }
+        className="chart-height h-terminal-chart min-h-0 flex-1 w-full"
         role="img"
         aria-label={
           ariaLabel ??

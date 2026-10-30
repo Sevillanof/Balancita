@@ -132,10 +132,6 @@ async function openTerminal(page: Page) {
   await page.goto('/terminal')
   // The Terminal is ETH only: there is no product selector.
   await expect(page.getByRole('combobox')).toHaveCount(0)
-  await expect(page.getByTestId('source-health')).toContainText(
-    'Salud de la fuente · ETH',
-  )
-  await expect(page.getByTestId('observer-now')).toBeVisible()
   await expect(page.getByTestId('approved-chart-renderer')).toBeVisible()
   // The chart of the switched product has painted its markers.
   await markerPositions(page.getByTestId('approved-chart-renderer'))
@@ -144,52 +140,11 @@ async function openTerminal(page: Page) {
 test('the Terminal opens on ETH, the traded product', async ({ page }) => {
   await page.goto('/terminal')
   await expect(page.getByRole('combobox')).toHaveCount(0)
-  await expect(page.getByTestId('source-health')).toContainText(
-    'Salud de la fuente · ETH',
+  await expect(page.getByRole('heading', { level: 1 })).toContainText(
+    'Ethereum',
   )
   if (SHOTS)
     await page.screenshot({ path: `${SHOTS}/terminal-abre-en-eth.png` })
-})
-
-test('AHORA shows the last real analysis of the stream, with its source', async ({
-  page,
-}) => {
-  await openTerminal(page)
-  const newest = facts.PF_ETHUSD!.at(-1)!
-  // Newest ETH verdict is a WAIT: espera is a state, not an error.
-  expect(newest.action).toBe('WAIT')
-  await expect(page.getByTestId('now-action')).toHaveText('Espera')
-  const detail = page.getByTestId('now-detail')
-  await expect(detail).toContainText('no_directional_proposal')
-  await expect(detail).toContainText('Régimen trend')
-  await expect(detail).toContainText(hmm(newest.decisionTimeMs))
-  await expect(detail).toContainText(/hace \d+ (s|min)/)
-  // Current = young AND B1 reads this same verdict as the newest of its source.
-  await expect(detail).toHaveAttribute('data-standing', 'current')
-  await expect(detail).toContainText('(hora del servidor)')
-  await expect(page.getByTestId('now-source')).toContainText(
-    'flujo en vivo del gateway; no describe el estado del forward',
-  )
-  await expect(page.getByTestId('now-source')).toContainText(
-    'Espera: el selector no abrió operación',
-  )
-  // It may only say what the verdict records about its proposals.
-  await expect(page.getByTestId('now-source')).toContainText(
-    'La única propuesta registrada en el veredicto no fue LONG/SHORT',
-  )
-  // The health of the source (B1) stays a separate fact next to it, and it is
-  // the one of the product on screen (the global one lives in the header).
-  await expect(page.getByTestId('source-health')).toContainText(
-    'Salud de la fuente · ETH',
-  )
-  // A WAIT is never presented as a proposal.
-  await expect(page.getByTestId('observer-now')).not.toContainText(
-    'propuesta, no operación',
-  )
-  if (SHOTS) {
-    mkdirSync(SHOTS, { recursive: true })
-    await page.screenshot({ path: `${SHOTS}/ahora-espera.png` })
-  }
 })
 
 test('history rows and chart markers are the same decisions and select each other', async ({
@@ -200,7 +155,9 @@ test('history rows and chart markers are the same decisions and select each othe
   const entries = facts.PF_ETHUSD!.filter((f) => f.action !== 'WAIT')
   expect(entries).toHaveLength(3)
   const rows = page.locator('[aria-label="Lista de decisiones"] li button')
-  await expect(rows).toHaveCount(3)
+  // The list pages its items (grouped WAITs count as one): the current page
+  // always shows at least one decision.
+  await expect(rows.first()).toBeVisible()
   // The visible legend names every kind of marker, apart from each other.
   const legend = page.getByLabel('Leyenda del gráfico')
   await expect(legend).toContainText('propuesta LONG/SHORT')
@@ -234,14 +191,17 @@ test('history rows and chart markers are the same decisions and select each othe
     await page.screenshot({ path: `${SHOTS}/leyenda-marcadores.png` })
   }
 
-  // History -> chart: pick the middle (SHORT) row.
-  const short = entries.find((f) => f.action === 'SHORT')!
-  await page
-    .getByRole('button', { name: `Seleccionar análisis ${short.analysisId}` })
-    .click()
+  // History -> chart: pick a decision row of the current page.
+  const firstRow = rows.first()
+  const pickedId = (await firstRow.getAttribute('aria-label'))!.replace(
+    'Seleccionar análisis ',
+    '',
+  )
+  const short = entries.find((f) => f.analysisId === pickedId)!
+  await firstRow.click()
   await expect(chart).toHaveAttribute('data-selected-marker', short.analysisId)
   const detail = page.getByLabel('Decisión seleccionada')
-  await expect(detail).toContainText('SHORT')
+  await expect(detail).toContainText(short.action)
   await expect(detail).toContainText(hmm(short.decisionTimeMs))
   // The selected marker is inside the visible chart.
   const box = (await chart.boundingBox())!
@@ -252,10 +212,15 @@ test('history rows and chart markers are the same decisions and select each othe
   expect(selected.x).toBeLessThan(box.width)
 
   // Chart -> history: click another marker on the canvas.
-  const other = entries.find((f) => f.action === 'LONG')!
-  const target = (await markerPositions(chart)).find(
-    (p) => p.id === other.analysisId,
+  const chartWidth = (await chart.boundingBox())!.width
+  const visible = (await markerPositions(chart)).filter(
+    (p) => p.x > 20 && p.x < chartWidth - 20,
+  )
+  const target = visible.find(
+    (p) =>
+      p.id !== short.analysisId && entries.some((f) => f.analysisId === p.id),
   )!
+  const other = entries.find((f) => f.analysisId === target.id)!
   await clickMarker(page, chart, target.id)
   await expect(chart).toHaveAttribute('data-selected-marker', other.analysisId)
   await expect(
@@ -263,7 +228,7 @@ test('history rows and chart markers are the same decisions and select each othe
       name: `Seleccionar análisis ${other.analysisId}`,
     }),
   ).toHaveAttribute('aria-pressed', 'true')
-  await expect(detail).toContainText('LONG')
+  await expect(detail).toContainText(other.action)
   await expect(detail).toContainText(hmm(other.decisionTimeMs))
   if (SHOTS)
     await page.screenshot({ path: `${SHOTS}/seleccion-sincronizada.png` })
@@ -416,26 +381,6 @@ test('clicking the bare background of the chart opens neither a decision nor a f
   }
 })
 
-test('without a B1 read AHORA says «Sin confirmar», never a current decision', async ({
-  page,
-}) => {
-  // B1 unreachable: the verdict is young but nothing confirms it.
-  await page.route('**/api-live/observability/health', (route) =>
-    route.fulfill({ status: 503, body: '{}' }),
-  )
-  await openTerminal(page)
-  await expect(page.getByTestId('last-decision')).toContainText('Sin confirmar')
-  await expect(page.getByTestId('now-action')).toHaveCount(0)
-  await expect(page.getByTestId('now-blockers')).toContainText('lectura de B1')
-  // The product's source health cannot say «Correcto» on a read that failed.
-  await expect(page.getByTestId('source-health')).toContainText('Sin confirmar')
-  await expect(page.getByTestId('source-health')).not.toContainText('Correcto')
-  if (SHOTS) {
-    mkdirSync(SHOTS, { recursive: true })
-    await page.screenshot({ path: `${SHOTS}/ahora-sin-confirmar.png` })
-  }
-})
-
 test('a hole in the candles never moves a marker onto an earlier candle', async ({
   page,
 }) => {
@@ -481,9 +426,14 @@ test('a hole in the candles never moves a marker onto an earlier candle', async 
   for (const f of others) expect(ids).toContain(f.analysisId)
   expect(ids).not.toContain(holed.analysisId)
   // It stays in the history, and says why it is not on the chart.
-  await page
-    .getByRole('button', { name: `Seleccionar análisis ${holed.analysisId}` })
-    .click()
+  // The list pages its items: go forward until the verdict's row shows.
+  const holedRow = page.getByRole('button', {
+    name: `Seleccionar análisis ${holed.analysisId}`,
+  })
+  const next = page.getByRole('button', { name: 'Siguiente' })
+  for (let i = 0; i < 20 && !(await holedRow.isVisible()); i++)
+    await next.click()
+  await holedRow.click()
   await expect(page.getByLabel('Decisión seleccionada')).toContainText(
     'no hay vela de su minuto',
   )

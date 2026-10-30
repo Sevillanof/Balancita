@@ -118,16 +118,18 @@ test('terminal decisions list keeps its height whatever the number of verdicts',
 }) => {
   await openTerminal(page, 5)
   const panel = page.getByRole('region', { name: 'Decisiones del motor' })
-  const small = await panel.boundingBox()
+  const frame = page.getByTestId('activity-panel')
+  const small = await frame.boundingBox()
   const smallPage = await page.evaluate(() => document.body.scrollHeight)
   await shot(page, 'terminal-5')
 
   await openTerminal(page, 400)
-  const large = await panel.boundingBox()
+  const large = await frame.boundingBox()
   const largePage = await page.evaluate(() => document.body.scrollHeight)
   await shot(page, 'terminal-400')
 
-  // The list itself is visible and scrolls inside the panel.
+  // The list itself is visible and scrolls inside the panel; the frame that
+  // holds it keeps the same height.
   const list = panel.locator('[aria-label="Lista de decisiones"]')
   expect((await list.boundingBox())!.height).toBeGreaterThan(100)
   expect(large!.height).toBe(small!.height)
@@ -348,15 +350,17 @@ test('terminal chart with two sub-panes takes the available height', async ({
   // Open interest is not a default pane any more: the test turns it on.
   await page.getByRole('checkbox', { name: 'Interés abierto' }).check()
   const { width, height } = page.viewportSize()!
-  const base =
-    width >= 1200
-      ? Math.min(840, Math.max(520, height - 270))
-      : width >= 901
-        ? 500
-        : 440
-  // Price area plus 110 px for each of the two sub-panes.
+  // The chart (price area plus the two sub-panes) fills its frame, which has
+  // the height of the decisions column next to it.
   const box = await chart.boundingBox()
-  expect(Math.abs(box!.height - (base + 2 * 110))).toBeLessThanOrEqual(1)
+  expect(box!.height).toBeGreaterThanOrEqual(300)
+  const frame = await page
+    .locator('section[aria-label^="Gráfico"]')
+    .first()
+    .boundingBox()
+  const side = await page.getByTestId('activity-panel').boundingBox()
+  if (Math.abs(frame!.y - side!.y) < 2)
+    expect(Math.abs(frame!.height - side!.height)).toBeLessThanOrEqual(1)
   // Compact metrics: on a phone the chart starts well inside the first screen.
   if (width <= 600) expect(box!.y).toBeLessThan(height * 0.55)
   await noHorizontalScroll(page)

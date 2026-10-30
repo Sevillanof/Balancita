@@ -670,7 +670,7 @@ export default function TerminalChartPanel({
   const change = stats?.change_24h_pct ?? null
 
   return (
-    <div className="grid gap-chart-gap chart-desktop:gap-chart-tight">
+    <div className="flex min-h-0 flex-1 flex-col gap-chart-gap chart-desktop:gap-chart-tight">
       <div className="flex flex-wrap items-center gap-x-4 gap-y-2 px-3 py-0 chart-phone:flex-nowrap chart-phone:gap-x-3 chart-phone:overflow-x-auto chart-phone:pb-1 chart-desktop:gap-x-3 chart-desktop:gap-y-1 chart-desktop:px-2">
         <div
           className="inline-flex gap-0.5 rounded-lg border border-solid border-line p-0.75 chart-phone:flex-none chart-desktop:p-0.5"

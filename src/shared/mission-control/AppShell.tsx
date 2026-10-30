@@ -31,7 +31,7 @@ export default function AppShell({
         status={status}
         center={center}
       />
-      <main className="mx-auto min-w-0 w-shell-content overflow-x-clip pt-2 pb-12 header-stack:w-shell-content-compact header-stack:pt-5">
+      <main className="min-w-0 w-shell-content overflow-x-clip pt-0 px-7.5 pb-5">
         {children}
       </main>
     </div>
