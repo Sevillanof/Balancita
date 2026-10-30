@@ -135,11 +135,11 @@ def facts_path(work_dir, product):
     return os.path.join(work_dir, "hechos-{}.jsonl".format(product))
 
 
-def ensure_facts(cache_dir, work_dir, log=print):
-    """Las fotos con los números de la ficha de BTC y ETH (solo caché). Se arman una vez por carpeta de trabajo."""
+def ensure_facts(cache_dir, work_dir, log=print, *, fit_products=FIT_PRODUCTS):
+    """Las fotos con los números de la ficha de los productos de ajuste (solo caché). Se arman una vez por carpeta de trabajo."""
     os.makedirs(work_dir, exist_ok=True)
     paths = []
-    for product in FIT_PRODUCTS:
+    for product in fit_products:
         path = facts_path(work_dir, product)
         if not os.path.exists(path):
             log("hechos de {}…".format(product))
@@ -156,23 +156,24 @@ def _dump(path, obj):
         handle.write("\n")
 
 
-def fit_pairs(cache_dir, work_dir, out_dir, log=print):
-    """El par (maestro, portero) de cada trimestre, ajustado con BTC+ETH solo hasta 48 h antes de que empiece. Escribe los archivos y
+def fit_pairs(cache_dir, work_dir, out_dir, log=print, *, fit_products=FIT_PRODUCTS):
+    """El par (maestro, portero) de cada trimestre, ajustado con ``fit_products`` solo hasta 48 h antes de que empiece. Escribe los archivos y
     ``pares.json`` en ``out_dir`` (nombres relativos: la tabla se puede mover) y devuelve la tabla."""
-    paths = ensure_facts(cache_dir, work_dir, log)
+    paths = ensure_facts(cache_dir, work_dir, log, fit_products=fit_products)
     holdout = qt.load_holdout_ms()
     rows = []
     for path in paths:
-        rows += maestro.read_facts(path, FACTS_FROM, None)
+        rows += maestro.read_facts(path, FACTS_FROM, None, products=fit_products)
     history = qt.History(cache_dir, holdout, offline=True)
     os.makedirs(out_dir, exist_ok=True)
     table = {"schema": corta.PARES_SCHEMA, "motor": VERSION, "ajuste_desde": FACTS_FROM, "retardo_h": FIT_LAG_MS // qt.HOUR_MS,
-             "productos_de_ajuste": list(FIT_PRODUCTS), "trimestres": {}}
+             "productos_de_ajuste": list(fit_products), "trimestres": {}}
+    label = "+".join({"PF_XBTUSD": "BTC", "PF_ETHUSD": "ETH"}.get(p, p) for p in fit_products)
     for y, q in quarters(holdout):
         name = destila.qname(y, q)
         cutoff = destila.qstart_ms(y, q) - FIT_LAG_MS
         part = [r for r in rows if r["t_ms"] < cutoff]
-        note = "Reajuste trimestral: solo fotos de BTC+ETH hasta {} (48 h antes de {}).".format(qt.stamp(cutoff), name)
+        note = "Reajuste trimestral: solo fotos de {} hasta {} (48 h antes de {}).".format(label, qt.stamp(cutoff), name)
         teacher = maestro.fit(part, note=note)
         m_file, p_file = "maestro-{}.json".format(name), "portero-{}.json".format(name)
         _dump(os.path.join(out_dir, m_file), teacher)
@@ -711,6 +712,7 @@ def _parser():
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--cache-dir", default=qt.DEFAULT_CACHE)
     common.add_argument("--work-dir", required=True, help="carpeta de trabajo (hechos y fotos en caché)")
+    common.add_argument("--fit-products", default=None, help="productos para ajustar los pares (p. ej. PF_ETHUSD; default PF_XBTUSD,PF_ETHUSD)")
     pairs = sub.add_parser("pares", parents=[common], help="ajusta las fórmulas de cada trimestre")
     pairs.add_argument("--out", default=CONFIG_DIR)
     r = sub.add_parser("run", parents=[common], help="la medición completa")
@@ -724,8 +726,9 @@ def _parser():
 
 def main(argv=None):
     args = _parser().parse_args(argv)
+    fit_products = tuple(p.strip() for p in args.fit_products.split(",") if p.strip()) if getattr(args, "fit_products", None) else FIT_PRODUCTS
     if args.command == "pares":
-        fit_pairs(args.cache_dir, args.work_dir, args.out)
+        fit_pairs(args.cache_dir, args.work_dir, args.out, fit_products=fit_products)
     elif args.command == "run":
         result = run(args.cache_dir, args.work_dir, args.out, pares=args.pares, jobs=args.jobs, register_base=args.registrar_base)
         print(json.dumps({k: result[k] for k in ("pares", "intentos", "congelado", "medidor")}, ensure_ascii=False, indent=1))

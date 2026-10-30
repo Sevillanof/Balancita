@@ -1384,6 +1384,75 @@ describe('live capture process core', () => {
     store.close()
   })
 
+  it('captures chartCandleIntervals for PF_ETHUSD alongside PF_XBTUSD when configured', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'balancita-capture-'))
+    dirs.push(dir)
+    const store = new FuturesMarketStore(join(dir, 'market.sqlite'))
+    const M = 60_000
+    const H = 60 * M
+    const now = 1_791_356_400_000 + 3 * H + 10_000
+    const candleRequests: string[] = []
+    const capture = createLiveCapture({
+      store,
+      clock: () => now,
+      makeSocket: () => fakeSocket().socket,
+      fetchCatalog: async () => catalog,
+      fundingFetch: async () => {
+        throw new Error('offline')
+      },
+      products: [
+        { productId: 'PF_XBTUSD', tickSize: '1' },
+        { productId: 'PF_ETHUSD', tickSize: '0.1' },
+      ],
+      chartCandleIntervals: [H],
+      chartCandleProducts: ['PF_ETHUSD'],
+      officialCandleLookbackMs: {
+        60_000: 5 * M,
+        300_000: 30 * M,
+        3_600_000: 3 * H,
+      },
+      officialPollMs: 60_000,
+      officialRequestGapMs: 0,
+      officialCandlesFetch: async (input) => {
+        const url = new URL(String(input))
+        const resolution = url.pathname.split('/').at(-1)!
+        candleRequests.push(`${url.pathname.split('/').at(-2)} ${resolution}`)
+        const step = { '1m': M, '5m': 5 * M, '1h': H }[resolution]!
+        const from = Number(url.searchParams.get('from')) * 1000
+        const to = Number(url.searchParams.get('to')) * 1000
+        const candles = []
+        for (let time = Math.ceil(from / step) * step; time <= to; time += step)
+          candles.push({
+            time,
+            open: '2500',
+            high: '2510',
+            low: '2490',
+            close: '2505',
+            volume: '10',
+          })
+        return new Response(JSON.stringify({ candles, more_candles: false }))
+      },
+      log: () => undefined,
+    })
+    await capture.start()
+    await until(
+      () =>
+        candleRequests.length >= 6 &&
+        store.latestOfficialBucket('PF_ETHUSD', H) !== undefined,
+    )
+    await capture.stop()
+    expect(candleRequests.slice(0, 6)).toEqual([
+      'PF_XBTUSD 5m',
+      'PF_XBTUSD 1m',
+      'PF_ETHUSD 5m',
+      'PF_ETHUSD 1m',
+      'PF_XBTUSD 1h',
+      'PF_ETHUSD 1h',
+    ])
+    expect(store.latestOfficialBucket('PF_ETHUSD', H)).toBe(now - 10_000 - H)
+    store.close()
+  })
+
   it('polls the REST tickers of the non-BTC pinned products into the market store', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'balancita-capture-'))
     dirs.push(dir)

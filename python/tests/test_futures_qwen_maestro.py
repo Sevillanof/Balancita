@@ -50,6 +50,26 @@ class FactsTests(unittest.TestCase):
         # the sheet of the opposite market gives exactly the mirror
         self.assertEqual(maestro.flat_facts(facts(-1.0)), {k: (-v if k in maestro.DIRECTIONAL else v) for k, v in maestro.flat_facts(facts()).items()})
 
+    def test_extra_eth_facts_include_eth_btc_strength_and_f6_derivatives_and_flip_in_mirror(self):
+        f = facts()
+        f["strength_btc"] = 1.4
+        f["strength_btc_24h"] = -2.1
+        f["pos"] = {"long": 58.0, "top": 44.0, "premium": 3.5}
+        f["funding_rate"] = 0.00012
+        row = maestro.flat_facts(f, extra_eth=True)
+        self.assertEqual(set(row), set(maestro.ALL_DIRECTIONAL) | set(maestro.SYMMETRIC))
+        self.assertAlmostEqual(row["strength_btc"], 1.4)
+        self.assertAlmostEqual(row["strength_btc_24h"], -2.1)
+        self.assertAlmostEqual(row["premium_bp"], 3.5)
+        self.assertAlmostEqual(row["long_bias"], 8.0)
+        self.assertAlmostEqual(row["top_long_bias"], -6.0)
+        self.assertAlmostEqual(row["funding_bp"], 1.2)
+        m = maestro.mirror_facts(row)
+        for k in maestro.ETH_EXTRA_DIRECTIONAL:
+            self.assertAlmostEqual(m[k], -row[k])
+        for k in maestro.SYMMETRIC:
+            self.assertEqual(m[k], row[k])
+
 
 class VerdictTests(unittest.TestCase):
     def test_the_score_is_antisymmetric_and_the_verdict_follows_the_thresholds(self):
@@ -110,8 +130,9 @@ class FitTests(unittest.TestCase):
         w = maestro.logistic_no_intercept(Z, y, l2=1000.0)
         self.assertGreater(w[0], 0.0)
         self.assertLess(w[0], 1.0)
+        few = self.rows(n=50)
         with self.assertRaises(qt.TraderError):
-            maestro.fit(self.rows(n=50), 720)
+            maestro.fit(few, 720)
 
     def test_the_cli_fits_measures_and_the_file_round_trips(self):
         rows = self.rows()
@@ -124,12 +145,17 @@ class FitTests(unittest.TestCase):
             maestro.main(["fit", "--facts", path, "--plazo", "720", "--out", out, "--to", "2025-01-20"])
             t = maestro.load(out)
             self.assertEqual(t["_path"], out)
-            self.assertEqual(t["ajuste"]["hasta"][:10] <= "2025-01-19", True)
+            self.assertLessEqual(t["ajuste"]["hasta"][:10], "2025-01-19")
             self.assertEqual(len(maestro.teacher_hash(t)), 12)
             maestro.main(["medir", "--facts", path, "--maestro", out])
+            eth_out = os.path.join(tmp, "maestro-eth.json")
+            maestro.main(["fit", "--facts", path, "--plazo", "720", "--products", "PF_ETHUSD", "--eth-features", "--out", eth_out])
+            t_eth = maestro.load(eth_out)
+            self.assertEqual(t_eth["ajuste"]["productos"], ["PF_ETHUSD"])
+            self.assertEqual(set(t_eth["coeficientes"]), set(maestro.ALL_DIRECTIONAL))
+            with open(out, "w", encoding="utf-8") as handle:
+                json.dump({"schema": "otro"}, handle)
             with self.assertRaises(qt.TraderError):
-                with open(out, "w", encoding="utf-8") as handle:
-                    json.dump({"schema": "otro"}, handle)
                 maestro.load(out)
 
 

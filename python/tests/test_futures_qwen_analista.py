@@ -74,6 +74,32 @@ class AnalistaTest(unittest.TestCase):
         self.assertEqual((got["calma"]["n"], got["calma"]["neto_propio_bp"]), (1, -40.0))
         self.assertEqual((got["sin_dato"]["n"], got["sin_dato"]["neto_propio_bp"]), (1, 5.0))
 
+    def test_multiplier_returns_1_when_off_and_scales_live_trader_open_when_enabled(self):
+        class Fixed:
+            def __init__(self, value):
+                self.value = value
+
+            def active(self, _):
+                return self.value
+
+        self.assertEqual(an.multiplier({}, Fixed(True), 0), 1.0)
+        self.assertEqual(an.multiplier({"analista": {"modo": "suave"}}, Fixed(True), 0), 1.25)
+        self.assertEqual(an.multiplier({"analista": {"modo": "suave"}}, Fixed(False), 0), 0.75)
+        self.assertEqual(an.multiplier({"analista": {"modo": "suave"}}, Fixed(None), 0), 1.0)
+
+    def test_movement_updates_incrementally_as_new_bars_arrive_in_live_mode(self):
+        def vol(hour):
+            return 0.001 if hour < 24 * 60 else 0.004
+
+        all_bars = bars(24 * 80, vol)
+        cutoff = 24 * 60 * 12
+        incremental = an.Movement(all_bars[:cutoff])
+        for bar in all_bars[cutoff:]:
+            incremental.add_bar(bar)
+        batch = an.Movement(all_bars)
+        self.assertEqual(incremental.active(75 * 24 * HOUR), batch.active(75 * 24 * HOUR))
+        self.assertAlmostEqual(incremental.at(75 * 24 * HOUR), batch.at(75 * 24 * HOUR))
+
 
 if __name__ == "__main__":
     unittest.main()

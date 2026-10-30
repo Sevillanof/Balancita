@@ -136,17 +136,18 @@ const PANES: ReadonlyArray<{ id: Pane; label: string; live: boolean }> = [
 /** How long a pane without data still reads «Cargando» (the collector may be downloading). */
 const PANE_LOAD_MS = 90_000
 
-const BTC_ONLY_PANES: readonly Pane[] = [
+const CAPTURED_PANE_PRODUCTS: readonly string[] = ['PF_XBTUSD', 'PF_ETHUSD']
+const CAPTURED_ONLY_PANES: readonly Pane[] = [
   'flow',
   'oi',
   'liquidations',
   'positioning',
 ]
-function btcOnlyPane(id: Pane, product: string | undefined): boolean {
+function uncapturedPane(id: Pane, product: string | undefined): boolean {
   return (
-    BTC_ONLY_PANES.includes(id) &&
+    CAPTURED_ONLY_PANES.includes(id) &&
     product !== undefined &&
-    product !== 'PF_XBTUSD'
+    !CAPTURED_PANE_PRODUCTS.includes(product)
   )
 }
 
@@ -558,11 +559,11 @@ export default function TerminalChartPanel({
     .map((id) => {
       const label = PANES.find((pane) => pane.id === id)!.label
       // The capture of order flow, open interest, liquidations and long/short
-      // is BTC only: for another product it never arrives, so no «Cargando».
-      if (remote !== null && btcOnlyPane(id, product))
+      // is for ETH and BTC only: for another product it never arrives, so no «Cargando».
+      if (remote !== null && uncapturedPane(id, product))
         return {
           id,
-          text: `${label} solo se captura para BTC: no hay datos de ${productBase(product)}`,
+          text: `${label} solo se captura para ETH y BTC: no hay datos de ${productBase(product)}`,
         }
       const loading =
         remote === null || now - (askedAt[askKey(id)] ?? now) < PANE_LOAD_MS
@@ -576,7 +577,7 @@ export default function TerminalChartPanel({
   const stats = ticker ?? remote?.ticker ?? null
   const mark = stats?.mark ?? null
   const lines = useMemo(() => {
-    const open = chartPositions(positions, position, product ?? 'PF_XBTUSD')
+    const open = chartPositions(positions, position, product ?? 'PF_ETHUSD')
     const out = open.flatMap((item, index) => {
       const strategyId =
         typeof item.strategy_id === 'string' ? item.strategy_id : undefined

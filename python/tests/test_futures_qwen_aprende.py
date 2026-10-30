@@ -1,5 +1,6 @@
 """Que Qwen aprenda junto al maestro (versión 9): las etiquetas por resultado neto, el puntaje de una opinión, el dataset con la
 pregunta real y las dos órdenes de letras, y la etiqueta de las miradas guardadas en vivo. Sin modelo, velas inventadas."""
+import copy
 import json
 import os
 import sqlite3
@@ -256,10 +257,28 @@ class LiveLabelTests(unittest.TestCase):
             store.put_trade("PF_XBTUSD", 1, status="open", side="LONG", entry_ms=t0 - 3600_000)
         self.assertEqual(ap.resolve_live(store.db, lambda *a: {}, cfg, t0 + 1), 0)
         with store.db:
-            store.put_trade("PF_XBTUSD", 1, status="closed", side="LONG", entry_ms=t0 - 3600_000, net_bp=50.0)
+            store.put_trade("PF_XBTUSD", 1, status="closed", side="LONG", entry_ms=t0 - 3600_000, net_bp=50.0, closed_by="tiempo")
         self.assertEqual(ap.resolve_live(store.db, lambda *a: {}, cfg, t0 + 2), 1)
-        row = store.db.execute("SELECT label FROM examples").fetchone()
+        row = store.db.execute("SELECT label, label_json FROM examples").fetchone()
         self.assertEqual(row["label"], "CERRAR")                                    # closing at +120 kept more than the final +50
+        self.assertTrue(json.loads(row["label_json"])["por_tiempo"])
+
+    def test_live_operator_in_formula_mode_resolves_examples_automatically_on_close(self):
+        cfg = copy.deepcopy(CFG)
+        cfg["products"] = ["PF_ETHUSD"]
+        env = make(self, cfg=cfg, policy=Policy(flat="ESPERAR", position="MANTENER"), formula=True)
+        answers = iter(
+            [("LARGO", "maestro fuerte y portero a favor")]
+            + [("MANTENER", "x")] * 2
+            + [("CERRAR", "el maestro se dio vuelta en contra")]
+            + [("ESPERAR", "x")] * 500
+        )
+        with mock.patch.object(corta, "formula_action", side_effect=lambda r, side, *rest: next(answers)):
+            env.op.start()
+            env.advance(90)
+        examples = env.rows("SELECT * FROM examples WHERE kind='position'")
+        self.assertGreaterEqual(len(examples), 1)
+        self.assertTrue(all(e["label"] in ("MANTENER", "CERRAR") for e in examples))
 
 
 class FormulaDecidesTests(unittest.TestCase):

@@ -40,6 +40,8 @@ import time
 from decimal import Decimal
 
 from . import futures_llm_decisions as llm
+from . import futures_qwen_analista as analista
+from . import futures_qwen_aprende as aprende
 from . import futures_qwen_factors as fq
 from . import futures_qwen_noticias as noticias
 from . import futures_qwen_trader as qt
@@ -133,7 +135,7 @@ def apply_overrides(cfg, env=None):
     if products:
         out["products"] = [p.strip() for p in products.split(",") if p.strip()]
     _validate_products(out["products"])
-    return out
+    return analista.apply_env(out, env)
 
 
 def copy_config(cfg):
@@ -150,7 +152,7 @@ def _try_lock(fd):
     except ImportError:                                   # Windows
         import msvcrt
         os.lseek(fd, 0, os.SEEK_SET)
-        msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+        getattr(msvcrt, "locking")(fd, getattr(msvcrt, "LK_NBLCK"), 1)
 
 
 class ProcessLock:
@@ -244,16 +246,21 @@ _TRADE_COLUMNS = ("status", "side", "entry_ms", "exit_ms", "entry_px", "exit_px"
 
 
 def position_to_json(position):
-    return json.dumps({"side": position.side, "entry_ms": position.entry_ms, "entry_ref": position.entry_ref,
-                       "entry_px": str(position.entry_px), "qty": str(position.qty), "stop_px": position.stop_px,
-                       "stop_pct": position.stop_pct, "max_hold_ms": position.max_hold_ms, "entry_p": position.entry_p,
-                       "entry_reason": position.entry_reason, "trade_no": position.trade_no, "mfe_bp": position.mfe_bp,
-                       "mae_bp": position.mae_bp}, sort_keys=True)
+    body = {"side": position.side, "entry_ms": position.entry_ms, "entry_ref": position.entry_ref,
+            "entry_px": str(position.entry_px), "qty": str(position.qty), "stop_px": position.stop_px,
+            "stop_pct": position.stop_pct, "max_hold_ms": position.max_hold_ms, "entry_p": position.entry_p,
+            "entry_reason": position.entry_reason, "trade_no": position.trade_no, "mfe_bp": position.mfe_bp,
+            "mae_bp": position.mae_bp}
+    if position.notional_usd is not None:
+        body["notional_usd"] = str(position.notional_usd)
+    return json.dumps(body, sort_keys=True)
 
 
 def position_from_json(text):
     raw = json.loads(text)
     raw["entry_px"], raw["qty"] = D(raw["entry_px"]), D(raw["qty"])
+    if raw.get("notional_usd") is not None:
+        raw["notional_usd"] = D(str(raw["notional_usd"]))
     return qt.Position(**raw)
 
 
@@ -482,10 +489,12 @@ class WakeGate:
 
 def closed_fields(trade, notional, leverage, margin, now):
     """The columns of a closed trade (``trade``: the dict ``Trader`` returns in a ``trade`` event)."""
+    trade_notional = D(str(trade["notional_usd"])) if trade.get("notional_usd") else D(str(notional))
+    trade_margin = trade_notional / D(str(leverage)) if trade.get("notional_usd") else margin
     return {
         "status": "closed", "side": trade["side"], "entry_ms": trade["entry_ms"], "exit_ms": trade["exit_ms"],
         "entry_px": trade["entry_fill"], "exit_px": repr(trade["exit_px"]), "qty": trade["qty"],
-        "notional_usd": str(notional), "leverage": str(leverage), "margin_usd": str(margin),
+        "notional_usd": str(trade_notional), "leverage": str(leverage), "margin_usd": str(trade_margin),
         "gross_usd": trade["gross_usd"], "fees_usd": trade["fees_usd"], "funding_usd": trade["funding_usd"],
         "net_usd": trade["net_usd"], "net_bp": trade["net_bp"], "funding_status": trade["funding_status"],
         "closed_by": trade["closed_by"], "exit_reason": trade["exit_reason"], "entry_reason": trade["entry_reason"],
@@ -594,20 +603,29 @@ class LiveOperator:
         trader.last_open_ms = last_open
         trader.idle_since_ms = now                    # no opening on record: counted from this start
         self.traders[product] = trader
-        self._load_context(product, trader, (now // BAR_MS) * BAR_MS - self.warmup_ms, now)
-        bars = fill_gaps(self.feed.bars(product, (now // BAR_MS) * BAR_MS - self.warmup_ms, now), BAR_MS)
-        bars = [b for b in bars if b["bucket_start"] + BAR_MS <= now]
-        warm = [b for b in bars if (b["bucket_start"] <= last_fed if last_fed is not None
-                                    else now - (b["bucket_start"] + BAR_MS) > self.max_late_ms)]
-        for bar in warm:
-            trader.feed(bar, trade=False)
+        warm, fresh = self._warm_product_bars(product, trader, now, last_fed)
         pos_note = ""
         if trader.position is not None:
             side_label = "LARGO" if trader.position.side == "LONG" else "CORTO"
             pos_note = " (posición {} recuperada, abierta desde {})".format(side_label, _hhmm(trader.position.entry_ms))
         self.log("Qwen en vivo: {} calentado con {} velas de 5 min{}.".format(product, len(warm), pos_note))
-        for bar in bars[len(warm):]:
+        for bar in fresh:
             self._process(product, bar)
+
+    def _warm_product_bars(self, product, trader, now, last_fed):
+        warm_start = (now // BAR_MS) * BAR_MS - self.warmup_ms
+        self._load_context(product, trader, warm_start, now)
+        extra_ms = analista.extra_days(self.cfg) * DAY_MS
+        all_bars = fill_gaps(self.feed.bars(product, warm_start - extra_ms, now), BAR_MS)
+        all_bars = [b for b in all_bars if b["bucket_start"] + BAR_MS <= now]
+        if extra_ms > 0:
+            trader.movement = analista.Movement(all_bars)
+        bars = [b for b in all_bars if b["bucket_start"] >= warm_start]
+        warm = [b for b in bars if (b["bucket_start"] <= last_fed if last_fed is not None
+                                    else now - (b["bucket_start"] + BAR_MS) > self.max_late_ms)]
+        for bar in warm:
+            trader.feed(bar, trade=False)
+        return warm, bars[len(warm):]
 
     # ---- one poll
 
@@ -894,6 +912,16 @@ class LiveOperator:
             if position is not None:
                 self._write_open(product, trader, position, t_ms, now)
             self.store.save_state(product, trader, t_ms - BAR_MS, now)
+        if events and self.cfg.get("decide_by") == "formula":
+            self._resolve_examples(product, trader, now)
+
+    def _resolve_examples(self, product, trader, now):
+        """Labels resolved flat and position looks in ``examples`` as soon as their outcome is known."""
+        try:
+            closes_of = lambda _p, _a, _b: {int(t) + BAR_MS: float(c) for t, c in zip(trader.t, trader.c)}
+            aprende.resolve_live(self.store.db, closes_of, dict(self.cfg, products=[product]), now)
+        except Exception as error:                        # noqa: BLE001 - learning labels never block live operation
+            self._failure("ejemplos", product, error)
 
     @staticmethod
     def _formula_decision_line(head, event):
@@ -938,10 +966,12 @@ class LiveOperator:
 
     def _write_open(self, product, trader, position, t_ms, now):
         mark = qt.settle(product, position, trader.c[-1], "strategy_exit", t_ms, trader.funding, self.notional)
+        pos_notional = position.notional_usd or self.notional
+        pos_margin = pos_notional / self.leverage
         self.store.put_trade(
             product, position.trade_no, status="open", side=position.side, entry_ms=position.entry_ms,
-            entry_px=str(position.entry_px), qty=str(position.qty), notional_usd=str(self.notional),
-            leverage=str(self.leverage), margin_usd=str(self.margin), entry_reason=position.entry_reason, entry_p=position.entry_p, mfe_bp=round(position.mfe_bp, 2),
+            entry_px=str(position.entry_px), qty=str(position.qty), notional_usd=str(pos_notional),
+            leverage=str(self.leverage), margin_usd=str(pos_margin), entry_reason=position.entry_reason, entry_p=position.entry_p, mfe_bp=round(position.mfe_bp, 2),
             mae_bp=round(position.mae_bp, 2), stop_px=position.stop_px, max_hold_ms=position.max_hold_ms,
             mark_px=trader.c[-1], mark_ms=t_ms, net_now_usd=str(mark["net_usd"]), opened_at_ms=now)
 

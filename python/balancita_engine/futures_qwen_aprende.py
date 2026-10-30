@@ -430,11 +430,11 @@ def _resolve_position_look(trades, pos_json, net_now):
     trade = trades.get(json.loads(pos_json)["trade_no"]) if pos_json else None
     if trade is None or trade[5] != "closed" or trade[4] is None:
         return None
-    return position_label(net_now, trade[4]), {"net_now_bp": net_now, "final_bp": trade[4]}
+    por_tiempo = len(trade) > 6 and trade[6] == "tiempo"
+    return position_label(net_now, trade[4]), {"net_now_bp": net_now, "final_bp": trade[4], "por_tiempo": por_tiempo}
 
 
-def _resolve_flat_look(cfg, t_ms, scores, closes, cost, weak):
-    readings = {at: {"puntaje": score} for at, score in scores.items()}
+def _resolve_flat_look(cfg, t_ms, readings, closes, cost, weak):
     nets = {}
     for name, side in (("largo", 1), ("corto", -1)):
         out = ex._v8_exit(cfg, t_ms, side, readings, closes, cost, weak)
@@ -446,13 +446,13 @@ def _resolve_flat_look(cfg, t_ms, scores, closes, cost, weak):
 
 def resolve_live(db, closes_of, cfg, now_ms):
     """Pone la etiqueta a las miradas guardadas cuyo resultado ya se conoce y no la tienen (tabla ``examples``)."""
-    weak = corta.formulas(cfg)[0]["umbrales"]["flojo"]
     done = 0
     closes_all = {}
     for product in cfg["products"]:
         cost = float(round_trip_cost_bps(product))
         scores = _scores_by_time(db, product)
-        trades = {r[0]: r for r in db.execute("SELECT trade_no, side, entry_ms, exit_ms, net_bp, status FROM trades WHERE product=?", (product,))}
+        readings = {at: {"puntaje": score} for at, score in scores.items()}
+        trades = {r[0]: r for r in db.execute("SELECT trade_no, side, entry_ms, exit_ms, net_bp, status, closed_by FROM trades WHERE product=?", (product,))}
         pending = db.execute(
             "SELECT d.bucket_ms, d.t_ms, d.kind, d.net_bp_now, d.position_json FROM decisions d LEFT JOIN examples e "
             "ON e.product=d.product AND e.bucket_ms=d.bucket_ms WHERE d.product=? AND e.bucket_ms IS NULL AND d.formula_json IS NOT NULL",
@@ -463,7 +463,8 @@ def resolve_live(db, closes_of, cfg, now_ms):
             else:
                 if closes_all.get(product) is None:
                     closes_all[product] = closes_of(product, min(r[1] for r in pending) - qt.BAR_MS, now_ms)
-                resolved = _resolve_flat_look(cfg, t_ms, scores, closes_all[product], cost, weak)
+                weak = corta.formulas(cfg, t_ms)[0]["umbrales"]["flojo"]
+                resolved = _resolve_flat_look(cfg, t_ms, readings, closes_all[product], cost, weak)
             if resolved is None:
                 continue
             label, detail = resolved

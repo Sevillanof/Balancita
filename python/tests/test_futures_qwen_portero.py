@@ -32,6 +32,26 @@ class FeatureTests(unittest.TestCase):
         self.assertEqual((long_["vol24"], short["vol24"]), (0.9, 0.9))
         self.assertEqual((long_["claridad"], short["claridad"]), (0.4, 0.4))
 
+    def test_extra_eth_features_are_oriented_by_side_and_keep_mirror_invariance(self):
+        f = facts()
+        f["strength_btc"], f["strength_btc_24h"] = 1.2, -0.8
+        f["pos"] = {"long": 60.0, "top": 55.0, "premium": 4.0}
+        f["funding_rate"] = 0.0001
+        row = maestro.flat_facts(f, extra_eth=True)
+        long_ = portero.features(row, 1, 0.5, extra_eth=True)
+        short = portero.features(row, -1, -0.5, extra_eth=True)
+        self.assertEqual(set(long_), set(portero.ALL_FEATURES))
+        self.assertAlmostEqual(long_["lado_x_strength_btc"], 1.2)
+        self.assertAlmostEqual(short["lado_x_strength_btc"], -1.2)
+        k = {"schema": portero.SCHEMA, "media": {k_: 0.0 for k_ in portero.ALL_FEATURES},
+             "sd": {k_: 1.0 for k_ in portero.ALL_FEATURES},
+             "coeficientes": {k_: 0.1 for k_ in portero.ALL_FEATURES}, "intercepto": 0.2, "umbral": 0.55}
+        self.assertAlmostEqual(
+            portero.probability(k, row, 1, 0.5),
+            portero.probability(k, maestro.mirror_facts(row), -1, -0.5),
+            places=12,
+        )
+
     def test_the_probability_is_exactly_the_same_in_the_mirror(self):
         rng = random.Random(5)
         k = keeper({f: rng.uniform(-1, 1) for f in portero.FEATURES}, intercept=0.3)
@@ -108,8 +128,12 @@ class FitTests(unittest.TestCase):
         t = teacher({**{f: 0.0 for f in maestro.DIRECTIONAL}, "z_24h": 1.0}, weak=0.3, strong=0.8)
         items = []
         for i in range(3000):
-            row = {f: rng.gauss(0, 1) for f in maestro.DIRECTIONAL} | {f: abs(rng.gauss(1, 0.3)) for f in maestro.SYMMETRIC}
-            row["t_ms"], row["product"] = qt.date_ms("2025-01-01") + i * 15 * MIN, "PF_XBTUSD"
+            row = {
+                **{f: rng.gauss(0, 1) for f in maestro.DIRECTIONAL},
+                **{f: abs(rng.gauss(1, 0.3)) for f in maestro.SYMMETRIC},
+                "t_ms": qt.date_ms("2025-01-01") + i * 15 * MIN,
+                "product": "PF_XBTUSD",
+            }
             s = maestro.score(t, row)
             side = -1 if s < 0 else 1
             net = 30.0 * side * row["z_7d"] + rng.gauss(0, 20)              # the trade wins when the week's trend goes with it
@@ -126,8 +150,9 @@ class FitTests(unittest.TestCase):
         self.assertGreater(report["con_portero_neto_pb"], report["fuertes_neto_pb"])
 
     def test_fit_refuses_too_few_rows(self):
+        t = teacher()
         with self.assertRaises(qt.TraderError):
-            portero.fit([], teacher())
+            portero.fit([], t)
 
 
 class RepoFileTests(unittest.TestCase):

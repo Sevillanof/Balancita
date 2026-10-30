@@ -145,12 +145,17 @@ describe('terminal chart panes still loading', () => {
     ).toBeTruthy()
   })
 
-  it('says at once that the BTC-only panes have no data for ETH', () => {
+  it('keeps «Cargando» for ETH panes (captured alongside BTC) and says at once when another product has no capture', () => {
     state.remote = { candles: [], flow: [], depth: null, ticker: null }
-    render(panel(true, 'PF_ETHUSD'))
+    const { unmount } = render(panel(true, 'PF_ETHUSD'))
+    expect(screen.getByText('Cargando Long/short…')).toBeTruthy()
+    expect(screen.queryByText(/no hay datos de ETH/)).toBeNull()
+    unmount()
+
+    render(panel(true, 'PF_SOLUSD'))
     expect(
       screen.getByText(
-        'Long/short solo se captura para BTC: no hay datos de ETH',
+        'Long/short solo se captura para ETH y BTC: no hay datos de SOL',
       ),
     ).toBeTruthy()
     expect(screen.queryByText('Cargando Long/short…')).toBeNull()

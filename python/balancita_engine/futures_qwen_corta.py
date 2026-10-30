@@ -116,12 +116,14 @@ def readings(trader, t_ms, f=None):
     ``f``: los hechos de la ficha ya calculados (``ficha.facts``), para no repetirlos."""
     teacher, keeper = formulas(trader.cfg, t_ms)
     f = ficha.facts(trader, t_ms) if f is None else f
-    row = maestro.flat_facts(f)
+    extra = maestro.uses_extra_eth(teacher) or portero.uses_extra_eth(keeper)
+    row = maestro.flat_facts(f, extra_eth=extra)
     s = maestro.score(teacher, row)
     v = maestro.verdict_of(teacher, s)
     yes, p = portero.verdict(keeper, row, s)
     news_yes, news_info = noticias.verdict(getattr(trader, "news", None), t_ms, -1 if s < 0 else 1)
-    ratio = f["range24"] / f["range7"] if f["range7"] > 0 else 1.0
+    r24, r7 = float(f["range24"]), float(f["range7"])
+    ratio = r24 / r7 if r7 > 0 else 1.0
     if ratio >= VOL_HIGH:
         regime = "ALTA"
     elif ratio <= VOL_LOW:
@@ -130,7 +132,7 @@ def readings(trader, t_ms, f=None):
         regime = "NORMAL"
     return {"hechos": row, "puntaje": s, "flojo": teacher["umbrales"]["flojo"], "veredicto": v, "portero_p": p, "portero_si": yes,
             "noticias_si": news_yes, "noticias": news_info, "vol_ratio": ratio, "volatilidad": regime,
-            "sigma24": trader._sigma5() * math.sqrt(qt.H24), "range24": f["range24"], "range7": f["range7"]}
+            "sigma24": trader._sigma5() * math.sqrt(qt.H24), "range24": r24, "range7": r7}
 
 
 def _flat_action(r):
@@ -166,7 +168,7 @@ def formula_json(r, why):
 
 def lines(trader, t_ms, sg, reasons):
     """Los renglones de la ficha corta (orientación real con ``sg`` = 1, espejo con -1), sin la cola de reglas y posición."""
-    teacher, keeper = formulas(trader.cfg)
+    teacher, keeper = formulas(trader.cfg, t_ms)
     r = readings(trader, t_ms)
     v, s = int(sg) * r["veredicto"], sg * r["puntaje"]
     hit = teacher["ajuste"].get("acierto_signo")

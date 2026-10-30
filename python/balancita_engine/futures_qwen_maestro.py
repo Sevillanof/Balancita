@@ -35,13 +35,33 @@ L2 = 10.0                                    # penalización L2 (equivale a C = 
 # Los números direccionales de la ficha: cambian de signo en el espejo (``futures_qwen_ficha.facts``).
 DIRECTIONAL = ("ret_7d", "z_7d", "ret_24h", "z_24h", "ret_4h", "z_4h", "ret_1h", "z_1h", "move15_n", "pos24", "pos7",
                "since_diff", "area_signed", "area_out", "strength")
+# Señales direccionales específicas para el enriquecimiento de ETH (fuerza contra BTC a 4h/24h y derivados F6).
+ETH_EXTRA_DIRECTIONAL = ("strength_btc", "strength_btc_24h", "premium_bp", "long_bias", "top_long_bias", "funding_bp")
+ALL_DIRECTIONAL = DIRECTIONAL + ETH_EXTRA_DIRECTIONAL
 # Tamaños sin dirección (no entran en el veredicto; se guardan en los hechos para estudios y filtros).
 SYMMETRIC = ("vol1h", "vol24", "realized", "range24", "range7")
 
 
-def flat_facts(f):
-    """Los hechos de la ficha aplanados: una clave por número. ``None`` (sin área, sin otros activos) vale 0."""
-    row = {}
+def _num(val, offset=0.0, scale=1.0):
+    return 0.0 if val is None else (float(val) + offset) * scale
+
+
+def _extra_eth_facts(f):
+    pos = f.get("pos") or {}
+    return {
+        "strength_btc": _num(f.get("strength_btc")),
+        "strength_btc_24h": _num(f.get("strength_btc_24h")),
+        "premium_bp": _num(pos.get("premium")),
+        "long_bias": _num(pos.get("long"), offset=-50.0),
+        "top_long_bias": _num(pos.get("top"), offset=-50.0),
+        "funding_bp": _num(f.get("funding_rate"), scale=1e4),
+    }
+
+
+def flat_facts(f, *, extra_eth=False):
+    """Los hechos de la ficha aplanados: una clave por número. ``None`` (sin área, sin otros activos) vale 0.
+    Con ``extra_eth=True`` incluye además ``ETH_EXTRA_DIRECTIONAL`` (fuerza ETH/BTC 4h y 24h, prima, sesgo long/top y funding)."""
+    row: dict = {}
     for k in ("1h", "4h", "24h", "7d"):
         row["ret_" + k] = float(f["ret"][k])
         row["z_" + k] = float(f["z"][k])
@@ -51,15 +71,17 @@ def flat_facts(f):
     area = f.get("area")
     row["area_signed"] = 0.0 if area is None else float(area["signed"])
     row["area_out"] = 0.0 if area is None else float(area["above"] - area["below"])
-    row["strength"] = 0.0 if f.get("strength") is None else float(f["strength"])
+    row["strength"] = _num(f.get("strength"))
     for k in SYMMETRIC:
         row[k] = float(f[k])
+    if extra_eth:
+        row.update(_extra_eth_facts(f))
     return row
 
 
 def mirror_facts(row):
     """Los hechos del espejo: los direccionales cambian de signo, los tamaños quedan."""
-    return {k: (-v if k in DIRECTIONAL else v) for k, v in row.items()}
+    return {k: (-v if k in ALL_DIRECTIONAL else v) for k, v in row.items()}
 
 
 # --------------------------------------------------------------------------- the teacher
@@ -70,11 +92,18 @@ def load(path=DEFAULT_PATH):
         teacher = json.load(handle)
     if teacher.get("schema") != "balancita-qwen-lora-maestro.v1":
         raise qt.TraderError("maestro {}: formato desconocido ({})".format(path, teacher.get("schema")))
-    missing = [f for f in DIRECTIONAL if f not in teacher["coeficientes"] or f not in teacher["sd"]]
+    coef, sd = teacher.get("coeficientes") or {}, teacher.get("sd") or {}
+    missing = [f for f in DIRECTIONAL if f not in coef or f not in sd] + [f for f in coef if f not in sd]
     if missing:
         raise qt.TraderError("maestro {}: faltan {}".format(path, missing))
     teacher["_path"] = path
     return teacher
+
+
+def uses_extra_eth(teacher):
+    """True cuando el maestro usa alguna señal de ``ETH_EXTRA_DIRECTIONAL``."""
+    coef = (teacher or {}).get("coeficientes") or {}
+    return any(f in coef for f in ETH_EXTRA_DIRECTIONAL)
 
 
 def teacher_hash(teacher):
@@ -85,7 +114,8 @@ def teacher_hash(teacher):
 def score(teacher, row):
     """El puntaje (logit) del maestro: suma de coeficiente x número / desvío. Exactamente opuesto en el espejo."""
     coef, sd = teacher["coeficientes"], teacher["sd"]
-    return math.fsum(coef[f] * (row.get(f) or 0.0) / sd[f] for f in DIRECTIONAL)
+    keys = [f for f in ALL_DIRECTIONAL if f in coef and sd.get(f, 0) > 0]
+    return math.fsum(coef[f] * (row.get(f) or 0.0) / sd[f] for f in keys)
 
 
 def verdict_of(teacher, s):
@@ -126,27 +156,26 @@ def read_facts(path, from_day=None, to_day=None, products=None):
     return out
 
 
-def _matrix(rows, sd=None):
+def _matrix(rows, sd=None, features=DIRECTIONAL):
     import numpy as np
 
-    X = np.array([[row.get(f) or 0.0 for f in DIRECTIONAL] for row in rows], dtype=float)
+    X = np.array([[row.get(f) or 0.0 for f in features] for row in rows], dtype=float)
     if sd is None:
         sd = X.std(axis=0)
         sd[sd == 0] = 1.0
     return X / sd, sd
 
 
-def logistic_no_intercept(Z, y, l2=L2, iters=100):
+def logistic_no_intercept(z_mat, y, l2=L2, iters=100):
     """Regresión logística sin intercepto con penalización L2 (Newton). Minimiza sum(log(1 + exp(-t z·w))) + l2/2 |w|²
     con t = ±1: lo mismo que scikit-learn ``LogisticRegression(C=1/l2, fit_intercept=False)``."""
     import numpy as np
 
-    t = 2.0 * y - 1.0
-    w = np.zeros(Z.shape[1])
+    w = np.zeros(z_mat.shape[1])
     for _ in range(iters):
-        p = 1.0 / (1.0 + np.exp(-(Z @ w)))
-        grad = Z.T @ (p - y) + l2 * w
-        hess = (Z * (p * (1 - p))[:, None]).T @ Z + l2 * np.eye(Z.shape[1])
+        p = 1.0 / (1.0 + np.exp(-(z_mat @ w)))
+        grad = z_mat.T @ (p - y) + l2 * w
+        hess = (z_mat * (p * (1 - p))[:, None]).T @ z_mat + l2 * np.eye(z_mat.shape[1])
         step = np.linalg.solve(hess, grad)
         w = w - step
         if np.max(np.abs(step)) < 1e-10:
@@ -154,15 +183,17 @@ def logistic_no_intercept(Z, y, l2=L2, iters=100):
     return w
 
 
-def fit(rows, horizon_min=DEFAULT_HORIZON_MIN, *, strong_share=STRONG_SHARE, weak_share=WEAK_SHARE, l2=L2, note=None):
+def fit(rows, horizon_min=DEFAULT_HORIZON_MIN, *, strong_share=STRONG_SHARE, weak_share=WEAK_SHARE, l2=L2, note=None,
+        extra_eth=False):
     """El maestro ajustado con estas filas: etiqueta = signo del movimiento a ``horizon_min``; umbrales = cuantiles del |puntaje|."""
     import numpy as np
 
+    features = ALL_DIRECTIONAL if extra_eth else DIRECTIONAL
     key = "move_{}".format(horizon_min)
     rows = [r for r in rows if r.get(key) is not None and r[key] != 0]
     if len(rows) < 1000:
         raise qt.TraderError("maestro: hacen falta al menos 1.000 fotos con movimiento a {} min, hay {}".format(horizon_min, len(rows)))
-    Z, sd = _matrix(rows)
+    Z, sd = _matrix(rows, features=features)
     y = np.array([1.0 if r[key] > 0 else 0.0 for r in rows])
     w = logistic_no_intercept(Z, y, l2=l2)
     s = np.abs(Z @ w)
@@ -171,8 +202,8 @@ def fit(rows, horizon_min=DEFAULT_HORIZON_MIN, *, strong_share=STRONG_SHARE, wea
                           "productos": sorted({r["product"] for r in rows}), "l2": l2, "acierto_signo": round(float(((Z @ w > 0) == (y > 0)).mean()), 4),
                           "fuerte_share": strong_share, "flojo_share": weak_share},
                "umbrales": {"flojo": round(float(np.quantile(s, 1 - weak_share)), 6), "fuerte": round(float(np.quantile(s, 1 - strong_share)), 6)},
-               "sd": {f: round(float(v), 8) for f, v in zip(DIRECTIONAL, sd)},
-               "coeficientes": {f: round(float(v), 6) for f, v in zip(DIRECTIONAL, w)},
+               "sd": {f: round(float(v), 8) for f, v in zip(features, sd)},
+               "coeficientes": {f: round(float(v), 6) for f, v in zip(features, w)},
                "regla_paper": {"entra": "veredicto fuerte (±2)", "sale": "veredicto al menos flojo del lado opuesto, o 48 h", "stop": "ninguno"},
                "nota": note or "Ajustado con `futures_qwen_maestro fit`; medición en analisis/qwen-lora/informe-maestro-operacion-27oct.md."}
     return teacher
@@ -202,6 +233,8 @@ def _parser():
     p.add_argument("--plazo", type=int, default=DEFAULT_HORIZON_MIN, help="minutos (default %(default)s)")
     p.add_argument("--from", dest="from_day", default=None)
     p.add_argument("--to", dest="to_day", default=None, help="exclusivo")
+    p.add_argument("--products", default=None, help="productos separados por coma (p. ej. PF_ETHUSD)")
+    p.add_argument("--eth-features", action="store_true", help="incluye señales específicas de ETH (ETH/BTC 4h/24h y derivados F6)")
     p.add_argument("--out", default=DEFAULT_PATH)
     p.add_argument("--nota", default=None)
     m = sub.add_parser("medir", help="acierto y reparto de veredictos de un maestro sobre un archivo de hechos")
@@ -209,14 +242,16 @@ def _parser():
     m.add_argument("--maestro", default=DEFAULT_PATH)
     m.add_argument("--from", dest="from_day", default=None)
     m.add_argument("--to", dest="to_day", default=None)
+    m.add_argument("--products", default=None, help="productos separados por coma (p. ej. PF_ETHUSD)")
     return parser
 
 
 def main(argv=None):
     args = _parser().parse_args(argv)
-    rows = read_facts(args.facts, args.from_day, args.to_day)
+    products = [p.strip() for p in args.products.split(",") if p.strip()] if args.products else None
+    rows = read_facts(args.facts, args.from_day, args.to_day, products=products)
     if args.command == "fit":
-        teacher = fit(rows, args.plazo, note=args.nota)
+        teacher = fit(rows, args.plazo, note=args.nota, extra_eth=bool(args.eth_features))
         os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
         with open(args.out, "w", encoding="utf-8") as handle:
             json.dump(teacher, handle, indent=1, ensure_ascii=False)

@@ -29,17 +29,21 @@ from . import futures_qwen_trader as qt
 SCHEMA = "balancita-qwen-portero.v1"
 DEFAULT_PATH = os.path.join(qt.ROOT, "config", "qwen-portero.json")
 ORIENTED = maestro.DIRECTIONAL                   # cada uno multiplicado por el lado del maestro (+1 largo, -1 corto)
+ETH_EXTRA_ORIENTED = maestro.ETH_EXTRA_DIRECTIONAL
 SYMMETRIC = maestro.SYMMETRIC
 FEATURES = tuple("lado_x_" + f for f in ORIENTED) + tuple(SYMMETRIC) + ("claridad",)
+ETH_EXTRA_FEATURES = tuple("lado_x_" + f for f in ETH_EXTRA_ORIENTED)
+ALL_FEATURES = FEATURES + ETH_EXTRA_FEATURES
 L2 = 10.0
 YES_SHARE = 0.20                                 # «conviene» = el 20 % de señales fuertes con más probabilidad, en el ajuste
 MAX_HOLD_MIN = 2880                              # la salida de la versión 8: 48 h como máximo
 STEP_MIN = 15                                    # las fotos van cada 15 min
 
 
-def features(row, side, s):
+def features(row, side, s, *, extra_eth=False):
     """Los números del portero para una foto: los direccionales orientados por ``side`` (+1 / -1), los tamaños y |puntaje|."""
-    out = {"lado_x_" + f: side * float(row.get(f) or 0.0) for f in ORIENTED}
+    oriented = ORIENTED + ETH_EXTRA_ORIENTED if extra_eth else ORIENTED
+    out = {"lado_x_" + f: side * float(row.get(f) or 0.0) for f in oriented}
     for f in SYMMETRIC:
         out[f] = float(row.get(f) or 0.0)
     out["claridad"] = abs(float(s))
@@ -54,8 +58,20 @@ def load(path=DEFAULT_PATH):
     for key in ("media", "sd", "coeficientes", "intercepto", "umbral"):
         if key not in portero:
             raise qt.TraderError("{}: al portero le falta {!r}".format(path, key))
+    coef, mean, sd = portero["coeficientes"], portero["media"], portero["sd"]
+    missing = [f for f in FEATURES if f not in coef or f not in mean or f not in sd] + [
+        f for f in coef if f not in mean or f not in sd
+    ]
+    if missing:
+        raise qt.TraderError("{}: al portero le faltan {}".format(path, missing))
     portero["_path"] = path
     return portero
+
+
+def uses_extra_eth(portero):
+    """True cuando el portero usa alguna señal de ``ETH_EXTRA_FEATURES``."""
+    coef = (portero or {}).get("coeficientes") or {}
+    return any(f in coef for f in ETH_EXTRA_FEATURES)
 
 
 def portero_hash(portero):
@@ -65,9 +81,11 @@ def portero_hash(portero):
 
 
 def logit(portero, row, side, s):
-    x = features(row, side, s)
     coef, mean, sd = portero["coeficientes"], portero["media"], portero["sd"]
-    return portero["intercepto"] + math.fsum(coef[f] * (x[f] - mean[f]) / sd[f] for f in FEATURES if sd[f] > 0)
+    has_extra = any(f in coef for f in ETH_EXTRA_FEATURES)
+    x = features(row, side, s, extra_eth=has_extra)
+    keys = [f for f in ALL_FEATURES if f in coef and sd.get(f, 0) > 0]
+    return portero["intercepto"] + math.fsum(coef[f] * (x[f] - mean[f]) / sd[f] for f in keys)
 
 
 def probability(portero, row, side, s):
@@ -136,10 +154,10 @@ def labelled(rows, teacher, history):
 # --------------------------------------------------------------------------- fitting (numpy only here)
 
 
-def _design(items):
+def _design(items, feature_names=FEATURES, *, extra_eth=False):
     import numpy as np
 
-    X = np.array([[features(r, -1 if s < 0 else 1, s)[f] for f in FEATURES] for r, s, _ in items])
+    X = np.array([[features(r, -1 if s < 0 else 1, s, extra_eth=extra_eth)[f] for f in feature_names] for r, s, _ in items])
     return X
 
 
@@ -163,13 +181,14 @@ def logistic(X, y, l2=L2, iters=100):
     return w[1:], w[0]
 
 
-def fit(items, teacher, *, yes_share=YES_SHARE, l2=L2, note=None):
+def fit(items, teacher, *, yes_share=YES_SHARE, l2=L2, note=None, extra_eth=False):
     """El portero ajustado con ``items`` (de ``labelled``): etiqueta = la operación del maestro ganó tras costos."""
     import numpy as np
 
     if len(items) < 1000:
         raise qt.TraderError("portero: hacen falta al menos 1.000 fotos juzgadas, hay {}".format(len(items)))
-    X = _design(items)
+    feature_names = ALL_FEATURES if extra_eth else FEATURES
+    X = _design(items, feature_names, extra_eth=extra_eth)
     y = np.array([1.0 if n > 0 else 0.0 for _, _, n in items])
     mean, sd = X.mean(axis=0), X.std(axis=0)
     sd[sd == 0] = 1.0
@@ -184,8 +203,8 @@ def fit(items, teacher, *, yes_share=YES_SHARE, l2=L2, note=None):
             "ajuste": {"fotos": len(items), "desde": qt.stamp(min(t_values)), "hasta": qt.stamp(max(t_values)),
                        "productos": sorted({r["product"] for r, _, _ in items}), "l2": l2, "ganadoras": round(float(y.mean()), 4),
                        "si_share_fuertes": yes_share},
-            "media": {f: round(float(v), 8) for f, v in zip(FEATURES, mean)}, "sd": {f: round(float(v), 8) for f, v in zip(FEATURES, sd)},
-            "coeficientes": {f: round(float(v), 6) for f, v in zip(FEATURES, w)}, "intercepto": round(float(b), 6),
+            "media": {f: round(float(v), 8) for f, v in zip(feature_names, mean)}, "sd": {f: round(float(v), 8) for f, v in zip(feature_names, sd)},
+            "coeficientes": {f: round(float(v), 6) for f, v in zip(feature_names, w)}, "intercepto": round(float(b), 6),
             "umbral": round(threshold, 6),
             "nota": note or "Ajustado con `futures_qwen_portero fit`; medición hacia adelante en analisis/qwen-v8/informe.md."}
 
@@ -218,6 +237,7 @@ def _parser():
         p.add_argument("--to", dest="to_day")
         p.add_argument("--products")
         if name == "fit":
+            p.add_argument("--eth-features", action="store_true", help="incluye señales específicas de ETH (ETH/BTC 4h/24h y derivados F6)")
             p.add_argument("--out", default=DEFAULT_PATH)
             p.add_argument("--note")
         else:
@@ -232,7 +252,7 @@ def main(argv=None):
     history = qt.History(args.cache_dir, qt.load_holdout_ms(), offline=True)
     items = labelled(rows, teacher, history)
     if args.command == "fit":
-        portero = fit(items, teacher, note=args.note)
+        portero = fit(items, teacher, note=args.note, extra_eth=bool(args.eth_features))
         with open(args.out, "w", encoding="utf-8") as handle:
             json.dump(portero, handle, ensure_ascii=False, indent=2)
             handle.write("\n")
