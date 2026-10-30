@@ -174,17 +174,7 @@ test('Terminal on the real gateway: every interaction answers without 404', asyn
   await page.goto('/terminal')
   await expect(page.getByTestId('activity-panel')).toBeVisible()
   await expect(page.getByTestId('health-indicator')).toBeVisible()
-  // B2 really arrived (not the error state of a failed read).
-  await expect(page.getByTestId('window-summary')).toContainText('evaluaciones')
   await expect(page.getByText('No se pudo leer la actividad')).toHaveCount(0)
-
-  // Window 24 h.
-  await page.getByRole('button', { name: '24 h' }).click()
-  await expect(page.getByRole('button', { name: '24 h' })).toHaveAttribute(
-    'aria-pressed',
-    'true',
-  )
-  await expect(page.getByTestId('activity-panel')).toContainText('ETH')
 
   // Health inspector: open and close.
   await page.getByTestId('health-indicator').click()
@@ -230,9 +220,7 @@ test('Terminal on the real gateway: every interaction answers without 404', asyn
   expect(
     log.some((e) => e.url.startsWith('/api-live/observability/health')),
   ).toBe(true)
-  expect(
-    log.some((e) => e.url.includes('/observability/activity?window=24h')),
-  ).toBe(true)
+  expect(log.some((e) => e.url.includes('/observability/activity'))).toBe(true)
 })
 
 test('Estrategias on the real registry S: list of names and last test', async ({

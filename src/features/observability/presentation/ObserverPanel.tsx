@@ -323,6 +323,7 @@ export default function ObserverPanel({
   clock,
   localNowMs,
   glance,
+  news,
   children,
 }: {
   product: string | null
@@ -339,6 +340,8 @@ export default function ObserverPanel({
   localNowMs: number
   /** The at-a-glance strip (position, last look); shown first, outside the folded detail. */
   glance?: ReactNode
+  /** Latest analyzed news items with relevance, pagination and search. */
+  news?: ReactNode
   /** The decisions history the Terminal already renders. */
   children?: ReactNode
 }) {
@@ -352,44 +355,49 @@ export default function ObserverPanel({
   // older read of something else and must not be shown as this one.
   const current =
     data && data.window === window && data.product === product ? data : null
+  const compactOperations = Boolean(glance || news)
   return (
     <section
       className={`${TERMINAL_FRAME} ${OBS.observer}`}
-      aria-label="Decisiones de Qwen"
+      aria-label="Operaciones"
       data-testid="activity-panel"
     >
       <div className={OBS.observerHead}>
-        <h2>Decisiones de Qwen</h2>
-        <div
-          role="group"
-          aria-label="Ventana de tiempo"
-          className={OBS.segment}
-        >
-          {ACTIVITY_WINDOWS.map((w) => (
-            <button
-              key={w}
-              type="button"
-              aria-pressed={w === window}
-              onClick={() => setWindow(w)}
-            >
-              {WINDOW_LABELS[w]}
-            </button>
-          ))}
-        </div>
+        <h2>Operaciones</h2>
+        {!compactOperations && (
+          <div
+            role="group"
+            aria-label="Ventana de tiempo"
+            className={OBS.segment}
+          >
+            {ACTIVITY_WINDOWS.map((w) => (
+              <button
+                key={w}
+                type="button"
+                aria-pressed={w === window}
+                onClick={() => setWindow(w)}
+              >
+                {WINDOW_LABELS[w]}
+              </button>
+            ))}
+          </div>
+        )}
       </div>
       {glance}
-      <Now
-        report={current}
-        health={health}
-        product={product}
-        latest={latest}
-        connected={connected}
-        connectedAtMs={connectedAtMs}
-        clock={clock}
-        localNowMs={localNowMs}
-      />
+      {!compactOperations && (
+        <Now
+          report={current}
+          health={health}
+          product={product}
+          latest={latest}
+          connected={connected}
+          connectedAtMs={connectedAtMs}
+          clock={clock}
+          localNowMs={localNowMs}
+        />
+      )}
       <div className={OBS.observerBody}>
-        {error !== null && (
+        {!compactOperations && error !== null && (
           <DataState
             kind="error"
             title="No se pudo leer la actividad"
@@ -400,43 +408,52 @@ export default function ObserverPanel({
             }
           />
         )}
-        {current ? (
-          <Results report={current} />
-        ) : (
-          error === null && <DataState kind="loading" />
-        )}
+        {!compactOperations &&
+          (current ? (
+            <Results report={current} />
+          ) : (
+            error === null && <DataState kind="loading" />
+          ))}
         <section
           className={`${OBS.card} group/observer-history`}
           aria-label="Historial"
         >
-          <p className={OBS.cardLabel}>Historial · decisiones del terminal</p>
+          <p className={OBS.cardLabel}>Historial de señales</p>
           {children}
         </section>
-        <details className={OBS.panelDetails}>
-          <summary>Limitaciones de esta lectura</summary>
-          <ul>
-            <li>
-              Una ventana sin propuestas ni operaciones no es un error: las
-              estrategias pueden no encontrar nada que hacer.
-            </li>
-            <li>
-              Los minutos sin veredicto son la diferencia con la cadencia
-              nominal de uno por minuto, no un diagnóstico de salud.
-            </li>
-            <li>
-              Cada experimento tiene su propio ciclo: uno al día no prueba que
-              los demás lo estén.
-            </li>
-            <li>
-              Posiciones actuales: No disponible (B5); los registros abiertos
-              del forward no son posiciones verificadas.
-            </li>
-            {current?.discards.state === 'ok' &&
-              current.discards.notRecorded.map((text) => (
-                <li key={text}>No se registra: {text}.</li>
-              ))}
-          </ul>
-        </details>
+        {news && (
+          <section className={OBS.card} aria-label="Noticias relevantes">
+            <p className={OBS.cardLabel}>Últimas 3 noticias</p>
+            {news}
+          </section>
+        )}
+        {!compactOperations && (
+          <details className={OBS.panelDetails}>
+            <summary>Limitaciones de esta lectura</summary>
+            <ul>
+              <li>
+                Una ventana sin propuestas ni operaciones no es un error: las
+                estrategias pueden no encontrar nada que hacer.
+              </li>
+              <li>
+                Los minutos sin veredicto son la diferencia con la cadencia
+                nominal de uno por minuto, no un diagnóstico de salud.
+              </li>
+              <li>
+                Cada experimento tiene su propio ciclo: uno al día no prueba que
+                los demás lo estén.
+              </li>
+              <li>
+                Posiciones actuales: No disponible (B5); los registros abiertos
+                del forward no son posiciones verificadas.
+              </li>
+              {current?.discards.state === 'ok' &&
+                current.discards.notRecorded.map((text) => (
+                  <li key={text}>No se registra: {text}.</li>
+                ))}
+            </ul>
+          </details>
+        )}
       </div>
     </section>
   )

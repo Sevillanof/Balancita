@@ -45,8 +45,7 @@ export const OBS = {
     'mt-2 mr-0 mb-0 ml-0 grid gap-1 modal-dt:font-medium modal-dt:text-ink modal-dd:m-0',
   limitations: 'mt-2 modal-ul:m-0 modal-ul:pl-4.5',
   limitationsTitle: 'mt-0 mr-0 mb-1 ml-0 font-medium text-ink',
-  observer:
-    'observer-height flex min-h-140 flex-col chart-desktop:sticky chart-desktop:top-2 chart-desktop:min-h-120 chart-desktop:self-start',
+  observer: 'observer-height flex h-full min-h-0 flex-col',
   observerHead:
     'flex flex-none items-center justify-between gap-2 border-b border-b-solid border-b-line px-3 py-2 modal-h2:m-0 modal-h2:text-observer-heading modal-h2:leading-normal',
   now: 'flex-none border-b border-b-solid border-b-line-strong bg-surface-2 px-3 py-2 observer-long:text-long observer-short:text-short',

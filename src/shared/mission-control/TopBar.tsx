@@ -29,7 +29,7 @@ export default function TopBar({
       className="border-b border-b-solid border-line bg-canvas"
       data-testid="approved-trading-header"
     >
-      <div className="mx-auto flex min-h-13 w-full max-w-shell items-center gap-7 px-6 py-1 header-wrap:flex-wrap header-wrap:gap-x-4.5 header-wrap:gap-y-2 header-stack:px-4 header-stack:pt-2 header-stack:pb-0 header-compact:gap-x-3">
+      <div className="flex min-h-26 w-full items-center gap-7 px-7.5 py-0 header-wrap:flex-wrap header-wrap:gap-x-4.5 header-wrap:gap-y-2 header-stack:pt-2 header-stack:pb-0 header-compact:gap-x-3">
         <a
           className="inline-flex flex-none items-center gap-2.5 text-value leading-normal font-semibold tracking-brand header-compact:text-brand-compact"
           href={brandHref}

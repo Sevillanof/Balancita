@@ -6,6 +6,7 @@ import {
   qwenScoresOff,
 } from '../features/live-gateway/qwen-scores.ts'
 import { createQwenDecisions } from '../features/live-gateway/qwen-decisions.ts'
+import { createNewsItems } from '../features/live-gateway/news-items.ts'
 import { createKronosScores } from '../features/live-gateway/kronos-scores.ts'
 import { createObservabilityHealth } from '../features/live-gateway/observability-health.ts'
 import { createObservabilityActivity } from '../features/live-gateway/observability-activity.ts'
@@ -105,6 +106,11 @@ async function main(): Promise<void> {
     qwenDecisions: createQwenDecisions({
       liveDbPath: process.env.QWEN_LIVE_DB_PATH || undefined,
       startUsd: positiveNumber(process.env.QWEN_ACCOUNT_START_USD),
+    }),
+    newsItems: createNewsItems({
+      newsDbPath:
+        process.env.FUTURES_NEWS_DB_PATH?.trim() ||
+        join(dirname(config.futuresMarketDbPath), 'futures-news.sqlite'),
     }),
     kronosScores: kronosScoresFrom(process.env),
     movements: movementsFrom(process.env),

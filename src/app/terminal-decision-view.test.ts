@@ -47,6 +47,19 @@ describe('decisionView', () => {
     expect(view.relevant).toBe(true)
   })
 
+  it('keeps the reason of the formulas as motivo, and none without a formula', () => {
+    const withFormula = decisionView({
+      formula: {
+        maestro: 2,
+        portero_si: true,
+        motivo: 'maestro fuerte y portero a favor',
+      },
+      formula_action: 'LARGO',
+    })
+    expect(withFormula.motivo).toBe('maestro fuerte y portero a favor')
+    expect(decisionView({ action: 'WAIT' }).motivo).toBeUndefined()
+  })
+
   it('tells a stopped entry from a quiet wait', () => {
     const blocked = decisionView({
       formula: {

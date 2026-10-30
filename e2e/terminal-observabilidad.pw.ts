@@ -201,9 +201,6 @@ async function measure(page: Page) {
     header: await box('header'),
     chart_canvas: await box('canvas'),
     observer: await box('[data-testid="activity-panel"]'),
-    ahora: await box('[data-testid="observer-now"]'),
-    resultados: await box('[aria-label="Operaciones almacenadas"]'),
-    historial: await box('[aria-label="Historial"]'),
   }
   mkdirSync('playwright-artifacts/terminal-observabilidad', { recursive: true })
   writeFileSync(
@@ -226,13 +223,9 @@ async function expectChartProtagonist(page: Page) {
   expect(chart!.width).toBeGreaterThan(side!.width * 1.8)
   // Large useful area: the chart is not pushed down by rows of cards.
   const canvas = await page.locator('canvas').first().boundingBox()
-  // Stitch starts its chart around 145 px; allow up to 175.
-  expect(canvas!.y).toBeLessThanOrEqual(175)
-  expect(canvas!.height).toBeGreaterThanOrEqual(viewport.height * 0.5)
-  // AHORA is inside the first screen.
-  const now = await page.getByTestId('observer-now').boundingBox()
-  expect(now!.y + now!.height).toBeLessThanOrEqual(viewport.height)
-  expect(now!.y).toBeGreaterThanOrEqual(0)
+  // The chart sits under the header and the range bar; allow up to 215.
+  expect(canvas!.y).toBeLessThanOrEqual(215)
+  expect(canvas!.height).toBeGreaterThanOrEqual(viewport.height * 0.4)
 }
 
 test('waiting state: health in the header, one observer column, chart protagonist', async ({
@@ -243,15 +236,9 @@ test('waiting state: health in the header, one observer column, chart protagonis
   await expect(page.getByTestId('health-indicator')).toContainText(
     '5 con problemas',
   )
-  await expect(page.getByTestId('window-summary')).toContainText(
-    '180 evaluaciones · 0 propuestas direccionales',
-  )
-  // No source gives the last decision: it is not deduced from the totals.
-  await expect(page.getByTestId('last-decision')).toContainText('No disponible')
   await expect(page.getByTestId('activity-panel')).not.toContainText(
     'Esperando',
   )
-  await expect(page.getByTestId('stored-total')).toHaveText('0')
   await expectChartProtagonist(page)
   await measure(page)
   await shot(page, 'espera-3h')
@@ -268,7 +255,6 @@ test('a registered directional signal never shows as an engine proposal in the T
   )
   const panel = page.getByTestId('activity-panel')
   // The Terminal shows only Qwen and approved strategies: no engine card.
-  await expect(page.getByTestId('stored-total')).toBeVisible()
   await expect(panel).not.toContainText('Propuestas direccionales')
   await expect(page.getByTestId('last-proposal')).toHaveCount(0)
   await expectChartProtagonist(page)
@@ -322,9 +308,6 @@ test('terminal with no readable observability source says «Sin datos», never h
   )
   await expect(page.getByTestId('health-indicator')).not.toContainText(
     'correcta',
-  )
-  await expect(page.getByTestId('activity-panel')).toContainText(
-    'No disponible',
   )
   await shot(page, 'sin-datos')
 })

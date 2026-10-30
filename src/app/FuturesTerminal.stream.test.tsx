@@ -14,8 +14,27 @@ import type {
  * it. Reconnection timing runs on fake timers.
  */
 
-// The chart is irrelevant to protocol handling and heavy to mock.
-vi.mock('./TerminalMarketChart.tsx', () => ({ default: () => null }))
+vi.mock('./terminal-approved.ts', () => ({
+  isApprovedAnalysis: () => true,
+  approvedChartData: <T,>(input: T) => input,
+}))
+
+// The chart is irrelevant to protocol handling and heavy to mock; expose order IDs received by the chart props.
+vi.mock('./TerminalMarketChart.tsx', () => ({
+  default: ({
+    orders = [],
+  }: {
+    orders?: Array<{ order_id?: string; quantity_btc?: string }>
+  }) => (
+    <div>
+      {orders.map((o, i) => (
+        <span key={o.order_id ?? i}>
+          {o.quantity_btc} · {o.order_id}
+        </span>
+      ))}
+    </div>
+  ),
+}))
 
 class FakeSocket {
   static readonly OPEN = 1

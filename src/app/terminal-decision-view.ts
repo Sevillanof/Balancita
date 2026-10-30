@@ -21,6 +21,8 @@ export type DecisionView = {
   gate: boolean | null
   /** The news analyst enabled the entry (true), did not (false), or is unknown. */
   news?: boolean | null
+  /** Why the formulas decided what they did, in their own words (empty when the look has no formula). */
+  motivo?: string
   /** Qwen's opinion next to the formulas; null before version 9 or on a skipped look. */
   opinion: {
     state: 'agrees' | 'differs' | 'none'
@@ -77,6 +79,10 @@ export function decisionView(analysis: Record<string, unknown>): DecisionView {
     typeof formula.portero_si === 'boolean' ? formula.portero_si : null
   const news =
     typeof formula.noticias_si === 'boolean' ? formula.noticias_si : null
+  const motivo =
+    typeof formula.motivo === 'string' && formula.motivo
+      ? formula.motivo
+      : undefined
   const opinion = opinionOf(analysis)
   const make = (kind: DecisionKind): DecisionView => ({
     kind,
@@ -84,6 +90,7 @@ export function decisionView(analysis: Record<string, unknown>): DecisionView {
     master,
     gate,
     news,
+    ...(motivo === undefined ? {} : { motivo }),
     opinion,
     relevant:
       kind === 'enter-long' ||

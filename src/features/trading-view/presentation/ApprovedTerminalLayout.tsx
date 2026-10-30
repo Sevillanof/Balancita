@@ -11,7 +11,7 @@ export default function ApprovedTerminalLayout({
 }: ApprovedTerminalLayoutProps) {
   return (
     <div
-      className="grid grid-cols-terminal items-start gap-4 terminal-stack:grid-cols-1 terminal-wide:grid-cols-terminal-wide terminal-wide:terminal-last:sticky! terminal-wide:terminal-last:top-4!"
+      className="grid grid-cols-terminal items-stretch gap-4 terminal-stack:grid-cols-1 terminal-wide:grid-cols-terminal-wide"
       data-testid="approved-terminal-layout"
     >
       {chart}

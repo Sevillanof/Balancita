@@ -167,4 +167,76 @@ describe('Terminal decision presentation', () => {
     expect(list.scrollTop).toBe(60)
     expect(pageScroll).not.toHaveBeenCalled()
   })
+
+  it('paginates signals 3 per page and filters by specific date and time', () => {
+    const fiveRows: DecisionRow[] = [
+      {
+        id: 's1',
+        action: 'LONG',
+        strategy: 'Qwen',
+        reason: 'r1',
+        time: '10:45',
+        dateTime: '30/10 10:45',
+        searchText: '30/10/2026 2026-10-30 10:45',
+        explained: true,
+      },
+      {
+        id: 's2',
+        action: 'WAIT',
+        strategy: 'Qwen',
+        reason: 'r2',
+        time: '10:30',
+        dateTime: '30/10 10:30',
+        searchText: '30/10/2026 2026-10-30 10:30',
+        explained: true,
+      },
+      {
+        id: 's3',
+        action: 'SHORT',
+        strategy: 'Qwen',
+        reason: 'r3',
+        time: '10:15',
+        dateTime: '30/10 10:15',
+        searchText: '30/10/2026 2026-10-30 10:15',
+        explained: true,
+      },
+      {
+        id: 's4',
+        action: 'LONG',
+        strategy: 'Qwen',
+        reason: 'r4',
+        time: '10:00',
+        dateTime: '30/10 10:00',
+        searchText: '30/10/2026 2026-10-30 10:00',
+        explained: true,
+      },
+      {
+        id: 's5',
+        action: 'SHORT',
+        strategy: 'Qwen',
+        reason: 'r5',
+        time: '09:45',
+        dateTime: '29/10 09:45',
+        searchText: '29/10/2026 2026-10-29 09:45',
+        explained: true,
+      },
+    ]
+    render(
+      <TerminalDecisions rows={fiveRows} selectedId="s1" onSelect={() => {}} />,
+    )
+    const list = screen.getByRole('list', { name: 'Lista de decisiones' })
+    expect(within(list).getAllByRole('listitem')).toHaveLength(3)
+    expect(screen.getByText('1 / 2')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Siguiente' }))
+    expect(within(list).getAllByRole('listitem')).toHaveLength(2)
+    expect(screen.getByText('2 / 2')).toBeTruthy()
+    expect(screen.getByText('29/10 09:45')).toBeTruthy()
+
+    const search = screen.getByRole('searchbox', {
+      name: 'Buscar señal por fecha u hora',
+    })
+    fireEvent.change(search, { target: { value: '29/10 09:45' } })
+    expect(within(list).getAllByRole('listitem')).toHaveLength(1)
+    expect(screen.getByText('29/10 09:45')).toBeTruthy()
+  })
 })
