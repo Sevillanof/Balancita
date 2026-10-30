@@ -63,12 +63,16 @@ export function DecisionChips({ view }: { view: DecisionView }) {
           Portero {gate ? '✓' : '✕'}
         </span>
       )}
-      {news === true && (
+      {news !== null && news !== undefined && (
         <span
-          className={`${CHIP} text-long`}
-          title="Analista de noticias: noticias frescas a favor"
+          className={`${CHIP} ${news ? 'text-long' : 'text-ink-2'}`}
+          title={
+            news
+              ? 'Analista de noticias: noticias frescas a favor'
+              : 'Analista de noticias: sin aval de noticias frescas'
+          }
         >
-          Noticias ✓
+          Noticias {news ? '✓' : '✕'}
         </span>
       )}
       {opinion &&

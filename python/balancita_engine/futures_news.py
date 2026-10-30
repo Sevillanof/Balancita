@@ -53,6 +53,7 @@ from email.utils import parsedate_to_datetime
 from datetime import datetime, timedelta, timezone
 from html import unescape
 
+from . import system_trust
 from .futures_llm_decisions import (
     LOOPBACK_HOSTS,
     SOURCE_MODES,
@@ -367,7 +368,8 @@ class UrlFetcher:
         # Only http(s) handlers (no file:, ftp:), proxies from the environment: the feeds are public.
         self._opener = urllib.request.OpenerDirector()
         for handler in (
-            urllib.request.ProxyHandler(), urllib.request.HTTPHandler(), urllib.request.HTTPSHandler(),
+            urllib.request.ProxyHandler(), urllib.request.HTTPHandler(),
+            urllib.request.HTTPSHandler(context=system_trust.build_context()),
             urllib.request.HTTPRedirectHandler(), urllib.request.HTTPDefaultErrorHandler(),
             urllib.request.HTTPErrorProcessor(),
         ):

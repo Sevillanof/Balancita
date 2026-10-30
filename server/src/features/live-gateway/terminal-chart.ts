@@ -79,40 +79,54 @@ const finite = (value: unknown): number | null =>
       ? Number(value)
       : null
 
-/** Ticker stats from a stored ticker event (its `rawJson` provider message). */
+/** Ticker stats from a stored ticker event (its `rawJson` WS message or `raw` REST payload). */
 export function tickerStats(event: Row): TickerStats | null {
-  if (event.type !== 'ticker' || typeof event.rawJson !== 'string') return null
+  if (event.type !== 'ticker') return null
   let raw: Row
-  try {
-    const parsed: unknown = JSON.parse(event.rawJson)
-    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed))
+  if (typeof event.rawJson === 'string') {
+    try {
+      const parsed: unknown = JSON.parse(event.rawJson)
+      if (
+        typeof parsed !== 'object' ||
+        parsed === null ||
+        Array.isArray(parsed)
+      )
+        return null
+      raw = parsed as Row
+    } catch {
       return null
-    raw = parsed as Row
-  } catch {
+    }
+  } else if (
+    typeof event.raw === 'object' &&
+    event.raw !== null &&
+    !Array.isArray(event.raw)
+  ) {
+    raw = event.raw as Row
+  } else {
     return null
   }
-  const bid = finite(raw.bid)
-  const ask = finite(raw.ask)
+  const bid = finite(raw.bid ?? event.bid)
+  const ask = finite(raw.ask ?? event.ask)
   const next = finite(raw.next_funding_rate_time)
   return {
     event_time: finite(event.eventTime),
     received_at: finite(event.receivedAt),
-    last: finite(raw.last),
-    mark: finite(raw.markPrice),
-    index: finite(raw.index),
+    last: finite(raw.last ?? event.last),
+    mark: finite(raw.markPrice ?? event.mark),
+    index: finite(raw.index ?? event.index),
     premium: finite(raw.premium),
     bid,
     ask,
     bid_size: finite(raw.bid_size),
     ask_size: finite(raw.ask_size),
     spread: bid !== null && ask !== null ? ask - bid : null,
-    open_24h: finite(raw.open),
-    high_24h: finite(raw.high),
-    low_24h: finite(raw.low),
-    change_24h_pct: finite(raw.change),
-    volume_24h_base: finite(raw.volume),
-    volume_24h_quote: finite(raw.volumeQuote),
-    open_interest: finite(raw.openInterest),
+    open_24h: finite(raw.open ?? raw.open_24h),
+    high_24h: finite(raw.high ?? raw.high_24h),
+    low_24h: finite(raw.low ?? raw.low_24h),
+    change_24h_pct: finite(raw.change ?? raw.change_24h_pct),
+    volume_24h_base: finite(raw.volume ?? raw.volume_24h_base),
+    volume_24h_quote: finite(raw.volumeQuote ?? raw.volume_24h_quote),
+    open_interest: finite(raw.openInterest ?? raw.open_interest),
     funding_rate: finite(raw.funding_rate),
     funding_rate_prediction: finite(raw.funding_rate_prediction),
     relative_funding_rate: finite(raw.relative_funding_rate),
@@ -121,7 +135,12 @@ export function tickerStats(event: Row): TickerStats | null {
     ),
     next_funding_time_ms:
       next !== null && Number.isSafeInteger(next) ? next : null,
-    suspended: typeof raw.suspended === 'boolean' ? raw.suspended : null,
+    suspended:
+      typeof raw.suspended === 'boolean'
+        ? raw.suspended
+        : typeof event.suspended === 'boolean'
+          ? event.suspended
+          : null,
   }
 }
 
