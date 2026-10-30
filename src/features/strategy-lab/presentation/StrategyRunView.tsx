@@ -655,17 +655,22 @@ export default function StrategyRunView({
   const [asking, setAsking] = useState<string | null>(null)
   // The test of the formula alone has no run: its operations and hourly prices come in its saved result.
   // (the rebound entries have their own variant but the same result shape: the one started last is the one on screen)
+  const latestFormulaVariant = quickVariants
+    .filter(
+      (variant) =>
+        (variant.kind === 'formula' || variant.kind === 'rebote') &&
+        variant.summary?.formula,
+    )
+    .sort((a, b) => (b.started_ms ?? 0) - (a.started_ms ?? 0))[0]
   const formulaOf =
-    quickVariants
-      .filter(
-        (variant) =>
-          (variant.kind === 'formula' || variant.kind === 'rebote') &&
-          variant.summary?.formula,
-      )
-      .sort((a, b) => (b.started_ms ?? 0) - (a.started_ms ?? 0))[0]?.summary
-      ?.formula ??
+    latestFormulaVariant?.summary?.formula ??
     (quickState?.state === 'done' ? quickState.summary?.formula : undefined) ??
     null
+  const formulaStartedMs =
+    latestFormulaVariant?.started_ms ??
+    (quickState?.state === 'done' && quickState.summary?.formula
+      ? (quickState.started_ms ?? 0)
+      : 0)
   // While a test runs its own state has no result yet: the panel keeps the previous formula result instead of falling back
   // to the old practice view (scope text, stage tabs and the candles of an older run).
   const [keptFormula, setKeptFormula] = useState<QuickFormula | null>(null)
@@ -674,11 +679,6 @@ export default function StrategyRunView({
   }, [formulaOf])
   const busyQuick = hasQuick && (quickRunning || running != null || testing)
   const formulaShown = formulaOf ?? (busyQuick ? keptFormula : null)
-  // The honesty meter of the result on screen: the formula test's own, else the one of the last practice run
-  const shownMeter =
-    formulaShown?.honestidad ??
-    (formulaShown == null ? lastRun?.params?.honestidad : null) ??
-    null
   // Qwen en vivo only has the new panel: the old practice view is for the other strategies
   const legacyView = !hasQuick
   useEffect(() => {
@@ -769,10 +769,6 @@ export default function StrategyRunView({
   }
   // Retired strategies of the old engine are not in the gate's registry.
   const unknownToGate = overviewError?.startsWith('No existe') ?? false
-  const usedMedicion =
-    hasQuick && !formulaShown?.entrada?.startsWith('rebote')
-      ? (shownMeter?.medicion ?? lastRun?.params?.medicion ?? null)
-      : null
 
   // --- Explorar con VectorBT ---
   // VectorBT only explores rules: Qwen and Kronos never ask for it.
@@ -871,12 +867,28 @@ export default function StrategyRunView({
       .catch(() => setCopied(false))
   }
 
+  const gatePreferred =
+    formulaShown === null ||
+    (lastRun != null &&
+      lastRun.same_version !== false &&
+      (lastRun.started_at ?? 0) > formulaStartedMs)
   const gatePanel =
+    gatePreferred &&
     data !== null &&
     data.tradesDone &&
     data.trades.length > 0 &&
     (data.candles?.candles.length ?? 0) > 1 &&
     !busyQuick
+  // The honesty meter of the result on screen: the formula test's own when shown, else the one of the practice run on screen
+  const shownMeter = gatePanel
+    ? (lastRun?.params?.honestidad ?? null)
+    : (formulaShown?.honestidad ??
+      (formulaShown == null ? lastRun?.params?.honestidad : null) ??
+      null)
+  const usedMedicion =
+    hasQuick && (gatePanel || !formulaShown?.entrada?.startsWith('rebote'))
+      ? (shownMeter?.medicion ?? lastRun?.params?.medicion ?? null)
+      : null
   const formulaModel = useFormulaModel(
     gatePanel ? null : formulaShown,
     exigencia.cuenta ?? 'fija',
@@ -884,7 +896,9 @@ export default function StrategyRunView({
   const figs = formulaModel?.figures ?? null
   const sourceLabel = formulaShown?.entrada?.startsWith('rebote')
     ? 'Rebote de ETH'
-    : 'Solo la fórmula'
+    : formulaShown?.entrada === 'formula_eth'
+      ? 'Fórmula + datos de ETH'
+      : 'Solo la fórmula'
   // The levels the shown test ran with (the formula test keeps them in its result, a run in its params)
   const usedLevels = formulaModel
     ? (formulaShown?.exigencia ?? null)
@@ -1174,7 +1188,7 @@ export default function StrategyRunView({
                 void startQuick(variant)
               }}
             >
-              {(exigencia.entrada ?? 'formula') === 'formula'
+              {!(exigencia.entrada ?? 'formula').startsWith('rebote')
                 ? 'Probar'
                 : 'Probar el rebote de ETH'}
             </button>
@@ -1186,7 +1200,10 @@ export default function StrategyRunView({
           meter={shownMeter}
           stale={busyQuick}
           missing={
-            shownMeter == null && (formulaShown != null || lastRun != null)
+            shownMeter == null &&
+            (gatePanel
+              ? lastRun != null
+              : formulaShown != null || lastRun != null)
           }
         />
       )}

@@ -279,6 +279,24 @@ export class LiveMarketFollower {
     this.store = undefined
   }
 
+  /** Whether the latest ticker carries the current interval's funding rate. */
+  private fundingStatus(): {
+    funding: 'known_current_interval' | 'unknown'
+    funding_known_at: number | null
+  } {
+    const known =
+      this.latestTicker?.funding_rate !== null &&
+      this.latestTicker?.funding_rate !== undefined
+    return {
+      funding: known ? 'known_current_interval' : 'unknown',
+      funding_known_at: known
+        ? (this.latestTicker?.received_at ??
+          this.latestPrice?.received_at ??
+          null)
+        : null,
+    }
+  }
+
   /** Market block shared by bootstrap and snapshot. */
   marketView(): Row {
     const status = this.status()
@@ -302,8 +320,7 @@ export class LiveMarketFollower {
       book_status: 'not_reported',
       book_quality: 'not_reported',
       source_guarantee: 'undocumented',
-      funding: 'unknown',
-      funding_known_at: null,
+      ...this.fundingStatus(),
     }
   }
 
@@ -514,7 +531,9 @@ export class LiveMarketFollower {
       last_received_at: status.lastReceivedAt,
       market_status: status.status,
       reason: status.reason,
-      ...(tickered ? { ticker_stats: this.latestTicker } : {}),
+      ...(tickered
+        ? { ticker_stats: this.latestTicker, ...this.fundingStatus() }
+        : {}),
     }
     const ordered = [...candles.values()].sort(
       (left, right) => left.bucket_start_ms - right.bucket_start_ms,

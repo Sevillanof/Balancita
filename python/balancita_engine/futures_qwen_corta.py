@@ -226,7 +226,8 @@ def _position_line(trader, t_ms, verdict_now):
     if position is None:
         return "4. Posición: ninguna."
     last = trader.c[-1]
-    now = qt.settle(trader.product, position, last, "strategy_exit", t_ms, trader.funding, trader.notional)
+    pos_notional = position.notional_usd or trader.notional
+    now = qt.settle(trader.product, position, last, "strategy_exit", t_ms, trader.funding, pos_notional)
     side = 1 if position.side == "LONG" else -1
     aligned = side * verdict_now
     if aligned == 0:
@@ -239,7 +240,7 @@ def _position_line(trader, t_ms, verdict_now):
     left = position.entry_ms + position.max_hold_ms - t_ms if position.max_hold_ms else None
     return ("4. Posición: {} abierta hace {}. Resultado si cerrás ahora, ya con todos los costos: {} % ({} USD). El maestro ahora "
             "{}.{}").format("LARGO" if side > 0 else "CORTO", qt._hm((t_ms - position.entry_ms) / qt.MINUTE_MS),
-                           qt.es(now["net_bp"] / 100.0, 2, True), qt.es(now["net_bp"] / 100.0 * float(trader.notional) / 100.0, 2, True),
+                           qt.es(now["net_bp"] / 100.0, 2, True), qt.es(now["net_bp"] / 100.0 * float(pos_notional) / 100.0, 2, True),
                            says, "" if left is None else " Cierre obligatorio dentro de {}.".format(qt._hm(left / qt.MINUTE_MS)))
 
 

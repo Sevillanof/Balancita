@@ -84,6 +84,15 @@ class QuickApiTests(unittest.TestCase):
             json.dump({"state": "running", "pid": 2 ** 22 + 12345}, handle)
         self.assertEqual(self.api.status(models.QWEN_LIVE_ID)["state"], "failed")
 
+    def test_formula_eth_entry_launches_formula_variant_with_env(self):
+        res = self.api.launch(models.QWEN_LIVE_ID, variant="formula", exigencia_levels={
+            "maestro": 5, "portero": 5, "analista": "apagado", "medicion": "honesta", "entrada": "formula_eth"
+        })
+        self.assertEqual(res, {"started": True, "variant": "formula"})
+        args, env, _, _ = self.spawned[-1]
+        self.assertIn("formula", args)
+        self.assertEqual(env.get("QWEN_ENTRADA"), "formula_eth")
+
 
 if __name__ == "__main__":
     unittest.main()

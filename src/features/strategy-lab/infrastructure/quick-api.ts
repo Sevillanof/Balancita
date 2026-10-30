@@ -111,7 +111,7 @@ export type ExigenciaLevels = {
   cuenta?: Cuenta
 }
 
-export type Entrada = 'formula' | 'rebote' | 'rebote_btc'
+export type Entrada = 'formula' | 'formula_eth' | 'rebote' | 'rebote_btc'
 export type Cuenta = 'fija' | 'entera'
 
 /** One row of the operation table (version 8): operations closed by the fixed exit rule, net after costs. */

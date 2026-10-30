@@ -93,7 +93,7 @@ class QuickTestApi:
         except ValueError as error:
             raise GateApiError("invalid_exigencia", str(error), 422) from error
         # a rebound entry has its own variant (no maestro, no portero, no Qwen)
-        chosen = self._variant("rebote" if rebote.from_env(levels_env) != rebote.DEFAULT else variant)
+        chosen = self._variant("rebote" if rebote.is_rebote(rebote.from_env(levels_env)) else variant)
         with self._lock:
             if any(v["state"] == "running" for v in self._catalog()):
                 raise GateApiError("busy", "Ya hay una prueba rápida en curso.", 409)

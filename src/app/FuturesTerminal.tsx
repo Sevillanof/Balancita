@@ -159,7 +159,8 @@ export default function FuturesTerminal({
   const lastReceivedAt =
     marketState.last_received_at ?? record(bootstrap.market).last_received_at
   const fundingKnown =
-    record(bootstrap.market).funding === 'known_current_interval'
+    (marketState.funding ?? record(bootstrap.market).funding) ===
+    'known_current_interval'
   const warmupCandles = Array.isArray(market.candles)
     ? market.candles.length
     : 0

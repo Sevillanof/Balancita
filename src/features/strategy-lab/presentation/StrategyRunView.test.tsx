@@ -1182,6 +1182,67 @@ describe('StrategyRunView panel of the formula test (Qwen en vivo)', () => {
     expect(compare).toHaveTextContent('Perdimos')
     expect(compare).toHaveTextContent('Se podía ganar')
   })
+
+  it('prefers the formula result over an older or previous-version gate run and offers the ETH-enriched formula in the modal', async () => {
+    const user = userEvent.setup()
+    const quick = {
+      status: vi.fn(async () => ({
+        state: 'done',
+        snapshots: 100,
+        note: 'n',
+        started_ms: T0 + 10_000,
+        summary: formulaSummary,
+        variants: [
+          {
+            id: 'formula',
+            label: 'La fórmula sola',
+            kind: 'formula',
+            state: 'done',
+            started_ms: T0 + 10_000,
+            summary: formulaSummary,
+          },
+        ],
+      })),
+      start: vi.fn(async () => undefined),
+    } as unknown as import('../infrastructure/quick-api.ts').QuickApi
+    render(
+      <StrategyRunView
+        strategyId="qwen-live"
+        strategyName="Qwen en vivo"
+        version={1}
+        kind="qwen_live"
+        gate={gateWith(
+          overview([run(24, { same_version: false, started_at: T0 })]),
+        )}
+        visual={visualWith()}
+        quick={quick}
+      />,
+    )
+    const verdict = await screen.findByTestId('run-verdict')
+    expect(verdict).toHaveTextContent('3 operaciones')
+    expect(screen.getByTestId('stage-where')).toHaveTextContent(
+      'Hay una prueba rápida de la fórmula',
+    )
+    await user.click(
+      screen.getByRole('button', {
+        name: 'Sin Qwen: la fórmula o el rebote de ETH (rápida)',
+      }),
+    )
+    const dialog = await screen.findByRole('dialog', {
+      name: 'Exigencia de la prueba',
+    })
+    await user.click(
+      within(dialog).getByRole('radio', {
+        name: 'Maestro + portero + datos de ETH',
+      }),
+    )
+    await user.click(within(dialog).getByRole('button', { name: 'Probar' }))
+    expect(quick.start).toHaveBeenCalledWith(
+      'qwen-live',
+      'formula',
+      expect.objectContaining({ entrada: 'formula_eth' }),
+    )
+  })
 })
 
 describe('StrategyRunView rebote de ETH en los paneles de siempre', () => {

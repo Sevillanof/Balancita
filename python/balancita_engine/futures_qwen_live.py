@@ -404,6 +404,17 @@ class LiveStore:
         return [dict(r) for r in self.db.execute(
             "SELECT * FROM trades WHERE product=? AND status='closed' AND funding_status != 'complete'", (product,))]
 
+    def available_balance_usd(self, start_usd):
+        """Saldo disponible de la cuenta: capital inicial más el neto realizado de las operaciones cerradas."""
+        rows = self.db.execute("SELECT net_usd FROM trades WHERE status='closed' AND net_usd IS NOT NULL").fetchall()
+        total = D(str(start_usd))
+        for (val,) in rows:
+            try:
+                total += D(str(val))
+            except Exception:
+                continue
+        return max(D("0"), total)
+
 
 # --------------------------------------------------------------------------- the public feed
 
@@ -602,6 +613,8 @@ class LiveOperator:
         last_open = self.store.last_entry_ms(product)
         trader.last_open_ms = last_open
         trader.idle_since_ms = now                    # no opening on record: counted from this start
+        if self.cfg.get("cuenta") == "entera":
+            trader.notional = self.store.available_balance_usd(self.notional)
         self.traders[product] = trader
         warm, fresh = self._warm_product_bars(product, trader, now, last_fed)
         pos_note = ""
@@ -877,6 +890,8 @@ class LiveOperator:
 
     def _process(self, product, bar):
         trader = self.traders[product]
+        if self.cfg.get("cuenta") == "entera" and trader.position is None:
+            trader.notional = self.store.available_balance_usd(self.notional)
         t_ms = int(bar["bucket_start"]) + BAR_MS
         now = self.now_ms()
         if self.store.bucket_done(product, t_ms):
@@ -885,6 +900,8 @@ class LiveOperator:
             self.gate.begin("late" if now - t_ms > self.max_late_ms else "live")
         events = trader.feed(bar)
         self._record(product, trader, t_ms, events, now)
+        if self.cfg.get("cuenta") == "entera" and trader.position is None:
+            trader.notional = self.store.available_balance_usd(self.notional)
 
     def _record(self, product, trader, t_ms, events, now):
         meta = {"prompt_version": self.cfg["prompt"]["version"], "model": self.model, "config_hash": self.config_hash}
@@ -965,8 +982,8 @@ class LiveOperator:
         )
 
     def _write_open(self, product, trader, position, t_ms, now):
-        mark = qt.settle(product, position, trader.c[-1], "strategy_exit", t_ms, trader.funding, self.notional)
-        pos_notional = position.notional_usd or self.notional
+        pos_notional = position.notional_usd or trader.notional
+        mark = qt.settle(product, position, trader.c[-1], "strategy_exit", t_ms, trader.funding, pos_notional)
         pos_margin = pos_notional / self.leverage
         self.store.put_trade(
             product, position.trade_no, status="open", side=position.side, entry_ms=position.entry_ms,

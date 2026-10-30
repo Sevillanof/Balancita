@@ -68,6 +68,12 @@ export const ENTRADAS: Array<{ modo: Entrada; label: string; detail: string }> =
         'La fórmula que opera en paper: entra cuando el maestro es fuerte y el portero está de acuerdo.',
     },
     {
+      modo: 'formula_eth',
+      label: 'Maestro + portero + datos de ETH',
+      detail:
+        'Suma los datos de ETH guardados en la Mac (qué hacen los grandes vs. cuentas chicas, comparación contra BTC, prima del perpetuo y funding) y descuenta el funding real en cada operación.',
+    },
+    {
       modo: 'rebote',
       label: 'Rebote de ETH',
       detail:
