@@ -77,43 +77,75 @@ def describe(cfg):
 class Movement:
     """Para cada hora completa: ¿la volatilidad de 24 h está en o sobre su mediana de 90 días? (``None``: sin historia)."""
 
-    def __init__(self, bars):
-        by_hour = {}
-        prev = None
-        for bar in bars:
-            close = float(bar["close"])
-            if prev is not None and prev > 0 and close > 0:
-                hour = int(bar["bucket_start"]) // HOUR_MS
-                by_hour[hour] = by_hour.get(hour, 0.0) + math.log(close / prev) ** 2
-            prev = close
+    def __init__(self, bars=()):
+        self.by_hour = {}
+        self._prev = None
+        self.first_hour = None
+        self.last_hour = None
+        self._cursor_hour = None
+        self._window = []
+        self._order = []
+        self._sums = []
         self.percentile = {}
-        if not by_hour:
+        for bar in bars:
+            self.add_bar(bar)
+        if self.last_hour is not None:
+            self._advance(self.last_hour)
+
+    def add_bar(self, bar):
+        """Agrega una vela cerrada de 5 min a la serie horaria."""
+        close = float(bar["close"])
+        if self._prev is not None and self._prev > 0 and close > 0:
+            hour = int(bar["bucket_start"]) // HOUR_MS
+            self.by_hour[hour] = self.by_hour.get(hour, 0.0) + math.log(close / self._prev) ** 2
+            if self.first_hour is None or hour < self.first_hour:
+                self.first_hour = hour
+            if self.last_hour is None or hour > self.last_hour:
+                self.last_hour = hour
+        self._prev = close
+
+    def _advance(self, target_hour):
+        if self.first_hour is None or self.last_hour is None:
             return
-        first, last = min(by_hour), max(by_hour)
-        window, order = [], []                 # los rv24 de las últimas 2160 horas, en orden de llegada y ordenados
-        sums = []
-        for hour in range(first, last + 1):
-            sums.append(by_hour.get(hour, 0.0))
-            if len(sums) < RV_H // 2:
+        limit = min(target_hour, self.last_hour)
+        start = self.first_hour if self._cursor_hour is None else self._cursor_hour + 1
+        for hour in range(start, limit + 1):
+            self._sums.append(self.by_hour.get(hour, 0.0))
+            self._cursor_hour = hour
+            if len(self._sums) < RV_H // 2:
                 continue
-            rv = math.sqrt(math.fsum(sums[-RV_H:]))
-            if len(order) == LOOKBACK_H:
-                old = order.pop(0)
-                del window[bisect.bisect_left(window, old)]
-            order.append(rv)
-            bisect.insort(window, rv)
-            if len(window) >= MIN_H:
-                below = bisect.bisect_left(window, rv)
-                equal = bisect.bisect_right(window, rv) - below
-                self.percentile[hour] = (below + (equal + 1) / 2.0) / len(window)
+            rv = math.sqrt(math.fsum(self._sums[-RV_H:]))
+            if len(self._order) == LOOKBACK_H:
+                old = self._order.pop(0)
+                del self._window[bisect.bisect_left(self._window, old)]
+            self._order.append(rv)
+            bisect.insort(self._window, rv)
+            if len(self._window) >= MIN_H:
+                below = bisect.bisect_left(self._window, rv)
+                equal = bisect.bisect_right(self._window, rv) - below
+                self.percentile[hour] = (below + (equal + 1) / 2.0) / len(self._window)
 
     def at(self, t_ms):
         """El percentil de la última hora completa antes de ``t_ms`` (``None`` sin historia)."""
-        return self.percentile.get(t_ms // HOUR_MS - 1)
+        target = t_ms // HOUR_MS - 1
+        if self._cursor_hour is None or target > self._cursor_hour:
+            self._advance(target)
+        return self.percentile.get(target)
 
     def active(self, t_ms):
         pct = self.at(t_ms)
         return None if pct is None else pct >= THRESHOLD
+
+
+def multiplier(cfg, movement, t_ms):
+    """El multiplicador de tamaño en ``t_ms`` (``1.0`` cuando el analista está apagado o no hay historia suficiente)."""
+    sizes = sizes_of(cfg)
+    if sizes is None or movement is None:
+        return 1.0
+    active = movement.active(t_ms)
+    if active is None:
+        return 1.0
+    return sizes[0] if active else sizes[1]
 
 
 def sized(cfg, operation, movement, t_ms):
@@ -122,10 +154,7 @@ def sized(cfg, operation, movement, t_ms):
     if sizes is None or operation is None:
         return operation
     active = movement.active(t_ms) if movement is not None else None
-    if active is None:
-        mult = 1.0
-    else:
-        mult = sizes[0] if active else sizes[1]
+    mult = multiplier(cfg, movement, t_ms)
     out = dict(operation, movimiento=active, tamano=mult)
     for side in ("largo", "corto"):
         inner = dict(operation[side])

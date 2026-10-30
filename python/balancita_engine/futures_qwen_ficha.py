@@ -59,13 +59,12 @@ def _area_facts(trader):
     closes = trader.c[-AREA_WINDOW:]
     above, below = sum(1 for x in closes if x > vah), sum(1 for x in closes if x < val)
     if last > vah:
-        place, distance = "arriba", (last - vah) / width
+        place, distance, signed = "arriba", (last - vah) / width, (last - vah) / width
     elif last < val:
-        place, distance = "abajo", (val - last) / width
+        place, distance, signed = "abajo", (val - last) / width, -(val - last) / width
     else:
-        place, distance = "dentro", 0.0
-    return {"place": place, "distance": distance, "above": above, "below": below,
-            "signed": distance if place == "arriba" else -distance if place == "abajo" else 0.0}
+        place, distance, signed = "dentro", 0.0, 0.0
+    return {"place": place, "distance": distance, "above": above, "below": below, "signed": signed}
 
 
 def _realized(trader):
@@ -105,6 +104,19 @@ def _relative_strength(trader, t_ms):
     return math.fsum(gaps) / len(gaps) if gaps else None
 
 
+def _pair_strength(trader, t_ms, other="PF_XBTUSD", bars=qt.H4):
+    """Diferencial de retorno (en puntos porcentuales) del producto contra ``other`` en ``bars`` velas de 5 min; ``None`` sin datos."""
+    if trader.product == other or len(trader.c) <= bars:
+        return None
+    closes = trader.context.get(other)
+    if not closes:
+        return None
+    now, before = closes.get(t_ms), closes.get(t_ms - bars * qt.BAR_MS)
+    if not now or not before:
+        return None
+    return (trader.c[-1] / trader.c[-1 - bars] - 1 - (now / before - 1)) * 100
+
+
 def facts(trader, t_ms):
     """Todo lo que la ficha necesita, en la orientación real (el espejo da vuelta lo que tiene dirección al escribir).
     Se guarda en el trader por foto: el texto real y el del espejo comparten el cálculo."""
@@ -114,7 +126,7 @@ def facts(trader, t_ms):
         return cached[1]
     c, last = trader.c, trader.c[-1]
     sigma5 = trader._sigma5()
-    out = {"ret": {}, "z": {}}
+    out: dict = {"ret": {}, "z": {}}
     for name, bars in (("1h", qt.H1), ("4h", qt.H4), ("24h", qt.H24), ("7d", qt.D7)):
         out["ret"][name] = last / c[-1 - bars] - 1
         out["z"][name] = trader._logret(bars) / (sigma5 * math.sqrt(bars)) if sigma5 > 0 else 0.0
@@ -135,6 +147,10 @@ def facts(trader, t_ms):
     out["area"] = _area_facts(trader)
     out["pos"] = _positioning(trader, t_ms)
     out["strength"] = _relative_strength(trader, t_ms)
+    out["strength_btc"] = _pair_strength(trader, t_ms, "PF_XBTUSD", qt.H4)
+    out["strength_btc_24h"] = _pair_strength(trader, t_ms, "PF_XBTUSD", qt.H24)
+    latest_funding = trader.funding.latest(t_ms) if getattr(trader, "funding", None) is not None else None
+    out["funding_rate"] = None if latest_funding is None else float(latest_funding[1])
     trader._ficha_cache = (key, out)
     return out
 
@@ -155,7 +171,12 @@ def _z_word(z):
     size = abs(z)
     if size < 0.5:
         return "lateral"
-    level = "suave" if size < 1 else "marcada" if size < 2 else "fuerte"
+    if size < 1:
+        level = "suave"
+    elif size < 2:
+        level = "marcada"
+    else:
+        level = "fuerte"
     return "{} {}".format("subida" if z > 0 else "caída", level)
 
 
@@ -167,24 +188,49 @@ def _move_word(move, normal):
 
 
 def _place_word(pos):
-    return ("pegado al máximo" if pos >= 0.8 else "en la mitad de arriba" if pos >= 0.3 else "en el medio" if pos > -0.3 else
-            "en la mitad de abajo" if pos > -0.8 else "pegado al mínimo")
+    if pos >= 0.8:
+        return "pegado al máximo"
+    if pos >= 0.3:
+        return "en la mitad de arriba"
+    if pos > -0.3:
+        return "en el medio"
+    if pos > -0.8:
+        return "en la mitad de abajo"
+    return "pegado al mínimo"
 
 
 def _volume_word(ratio):
-    return "muy alto" if ratio >= 2 else "alto" if ratio >= 1.3 else "bajo" if ratio < 0.7 else "normal"
+    if ratio >= 2:
+        return "muy alto"
+    if ratio >= 1.3:
+        return "alto"
+    if ratio < 0.7:
+        return "bajo"
+    return "normal"
 
 
 def _vol_word(ratio):
-    return "movido" if ratio >= 1.5 else "tranquilo" if ratio <= 0.67 else "normal"
+    if ratio >= 1.5:
+        return "movido"
+    if ratio <= 0.67:
+        return "tranquilo"
+    return "normal"
 
 
 def _long_word(percent):
-    return "mayoría larga" if percent >= 55 else "mayoría corta" if percent <= 45 else "parejo"
+    if percent >= 55:
+        return "mayoría larga"
+    if percent <= 45:
+        return "mayoría corta"
+    return "parejo"
 
 
 def _premium_word(bp):
-    return "perpetuo sobre el contado" if bp >= 1 else "perpetuo bajo el contado" if bp <= -1 else "parejo"
+    if bp >= 1:
+        return "perpetuo sobre el contado"
+    if bp <= -1:
+        return "perpetuo bajo el contado"
+    return "parejo"
 
 
 # --------------------------------------------------------------------------- the lines
@@ -213,6 +259,24 @@ def _f4(area, sg):
         AREA_WINDOW, verdict)
 
 
+def _funding_part(trader, t_ms, sg):
+    latest = trader.funding.latest(t_ms)
+    if latest is None:
+        return "funding n/d"
+    percent = trader.funding.percentile(t_ms)
+    rate = sg * latest[1]
+    if sg < 0 and percent is not None:
+        percent = 100.0 - percent
+    if rate > 0:
+        payer = "los largos pagan"
+    elif rate < 0:
+        payer = "los cortos pagan"
+    else:
+        payer = "nadie paga"
+    pct_str = "" if percent is None else ", percentil {} de los últimos 30 días".format(int(round(percent)))
+    return "funding por hora {} % ({}){}".format(qt.es(rate * 100, 4, True), payer, pct_str)
+
+
 def _f6(trader, f, t_ms, sg):
     pos = f["pos"]
 
@@ -227,17 +291,7 @@ def _f6(trader, f, t_ms, sg):
              share(pos["top"], pos["top_d"], "grandes operadores (20 % de mayor tamaño) largos")]
     parts.append("prima perpetuo menos contado n/d" if pos["premium"] is None else "prima perpetuo menos contado {} pb ({})".format(
         qt.es(sg * pos["premium"], 1, True), _premium_word(sg * pos["premium"])))
-    latest = trader.funding.latest(t_ms)
-    if latest is None:
-        parts.append("funding n/d")
-    else:
-        percent = trader.funding.percentile(t_ms)
-        rate = sg * latest[1]
-        if sg < 0 and percent is not None:
-            percent = 100.0 - percent
-        parts.append("funding por hora {} % ({}){}".format(
-            qt.es(rate * 100, 4, True), "los largos pagan" if rate > 0 else "los cortos pagan" if rate < 0 else "nadie paga",
-            "" if percent is None else ", percentil {} de los últimos 30 días".format(int(round(percent)))))
+    parts.append(_funding_part(trader, t_ms, sg))
     return "F6 Posicionamiento y prima: " + " | ".join(parts) + "."
 
 

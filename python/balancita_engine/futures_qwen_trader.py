@@ -312,7 +312,7 @@ class FundingLine:
 
 class Position:
     __slots__ = ("side", "entry_ms", "entry_ref", "entry_px", "qty", "stop_px", "stop_pct", "max_hold_ms", "entry_p",
-                 "entry_reason", "trade_no", "mfe_bp", "mae_bp")
+                 "entry_reason", "trade_no", "mfe_bp", "mae_bp", "notional_usd")
 
     def __init__(self, **kwargs):
         for name in self.__slots__:
@@ -559,6 +559,7 @@ class Trader:
         self.context = {}                 # other products' closes {product: {bar end ms: close}} (``state_extras``: otros_activos)
         self.positioning = None           # ``positioning_data.PositioningFeed`` of this product (``state_ficha``: renglón F6)
         self.news = None                  # ``futures_qwen_noticias.NewsFeed`` (analista de noticias, habilitador OR)
+        self.movement: object = None      # ``futures_qwen_analista.Movement`` (regulador de tamaño por volatilidad 24h vs 90d)
         self.position = None
         self.cooldown_until = 0
         self.last_call_ms = None
@@ -566,7 +567,7 @@ class Trader:
         self.hooks = [WAKE_HOOKS[name] for name in cfg["wake"].get("hooks", [])]
         self.skip_entry_reason = runtime_of(cfg)["skip_entry_reason"]
         # Live operator only (off in the practice): while flat the wake is an opportunity window (see ``_decide_window``).
-        self.force_idle_ms = None         # optional start delay (ms without opening) before the window; None / 0: no delay
+        self.force_idle_ms: object = None # optional start delay (ms without opening) before the window; None / 0: no delay
         self.window_on = False            # live exploration: while flat, the wake is the opportunity window
         self.idle_since_ms = None         # reference when nothing was opened yet (process start / last opening in the database)
         self.last_open_ms = None
@@ -583,6 +584,8 @@ class Trader:
         self.c.append(close)
         self.v.append(float(candle["volume_btc"]))
         self.lc.append(math.log(close) if close > 0 else 0.0)
+        if self.movement is not None and hasattr(self.movement, "add_bar"):
+            self.movement.add_bar(candle)
         if len(self.c) > MAX_KEEP:
             cut = len(self.c) - (D7 + 300)
             for series in (self.t, self.o, self.h, self.l, self.c, self.v, self.lc):
@@ -949,7 +952,8 @@ class Trader:
                  "entry_reason": position.entry_reason, "exit_reason": exit_reason,
                  "mfe_bp": round(position.mfe_bp, 2), "mae_bp": round(position.mae_bp, 2),
                 "net_usd": str(done["net_usd"]), "gross_usd": str(done["gross_usd"]), "fees_usd": str(done["fees_usd"]),
-                "funding_usd": str(done["funding_usd"]), "qty": str(position.qty), "entry_fill": str(position.entry_px)}
+                "funding_usd": str(done["funding_usd"]), "qty": str(position.qty), "entry_fill": str(position.entry_px),
+                "notional_usd": str(position.notional_usd or self.notional)}
         self.position = None
         self.cooldown_until = t_ms + self.cfg["guardrails"]["cooldown_min"] * MINUTE_MS
         events = []
@@ -960,6 +964,7 @@ class Trader:
         return events
 
     def _open(self, t_ms, side, probability, reason):
+        from . import futures_qwen_analista as analista
         guard = self.cfg["guardrails"]
         last = self.c[-1]
         stop_pct = None
@@ -969,13 +974,15 @@ class Trader:
             stop_pct = min(guard["max_stop_pct"], max(guard["min_stop_pct"], stop_pct))
             stop_px = last * (1 - stop_pct) if side == "LONG" else last * (1 + stop_pct)
         entry = entry_fill(D(repr(last)), side, self.product)
+        mult = D(str(analista.multiplier(self.cfg, self.movement, t_ms)))
+        notional = self.notional if mult == 1 else self.notional * mult      # size 1 keeps the exact stored text ("1000", not "1000.0")
         self.last_open_ms = t_ms
         self.trade_seq += 1
         self.position = Position(
-            side=side, entry_ms=t_ms, entry_ref=last, entry_px=entry, qty=self.notional / entry,
+            side=side, entry_ms=t_ms, entry_ref=last, entry_px=entry, qty=notional / entry,
             stop_px=stop_px,
             stop_pct=stop_pct, max_hold_ms=None if guard["max_hold_min"] is None else guard["max_hold_min"] * MINUTE_MS, entry_p=probability, entry_reason=reason,
-            trade_no=self.trade_seq, mfe_bp=0.0, mae_bp=0.0)
+            trade_no=self.trade_seq, mfe_bp=0.0, mae_bp=0.0, notional_usd=notional)
 
     def _passes_mirror(self, t_ms, reasons, action, event):
         """v3 mirror test: the same question about the mirrored STATE must give the opposite side. Anything else (the same

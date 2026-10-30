@@ -1455,10 +1455,10 @@ describe('FuturesTerminal on the live gateway with paper execution', () => {
         expect(prices()).not.toContain(1111)
       })
 
-      it('draws only the lines of the selected product, BTC by default', async () => {
+      it('draws only the lines of the selected product, ETH by default', async () => {
         await renderProduct()
-        expect(prices()).toContain(100011)
-        expect(prices()).not.toContain(3500)
+        expect(prices()).toContain(3500)
+        expect(prices()).not.toContain(100011)
       })
 
       it('labels every historical line and exit as «Histórico · Gateway D»', async () => {

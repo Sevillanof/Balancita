@@ -196,10 +196,15 @@ export interface LiveCaptureOptions {
    */
   readonly officialRepairMs?: number
   /**
-   * Extra official timeframes captured for the terminal product only (chart
+   * Extra official timeframes captured for the terminal product(s) (chart
    * use; no verdict reads them). Default: none.
    */
   readonly chartCandleIntervals?: readonly number[]
+  /**
+   * Additional pinned products that also receive `chartCandleIntervals`
+   * (defaults to `analytics.alsoProducts`, e.g. `['PF_ETHUSD']`).
+   */
+  readonly chartCandleProducts?: readonly string[]
   /**
    * Public Kraken analytics series captured for the terminal product (order
    * flow, open interest, liquidations, positioning, depth). Default: none.
@@ -324,15 +329,25 @@ export function createLiveCapture(options: LiveCaptureOptions) {
     ...options.officialCandleLookbackMs,
   }
   // Verdict series for every product, then the chart-only timeframes of the
-  // terminal product (largest first: they are due least often).
+  // terminal products (largest first: they are due least often).
+  const chartProducts = [
+    FUTURES_PRODUCT,
+    ...(options.chartCandleProducts ?? options.analytics?.alsoProducts ?? []),
+  ].filter(
+    (id, index, list) =>
+      list.indexOf(id) === index &&
+      products.some((item) => item.productId === id),
+  )
   const officialSeries = [
     ...products.flatMap(({ productId }) =>
       OFFICIAL_CANDLE_INTERVALS.map((interval) => ({ productId, interval })),
     ),
-    ...(options.chartCandleIntervals ?? []).map((interval) => ({
-      productId: FUTURES_PRODUCT,
-      interval,
-    })),
+    ...chartProducts.flatMap((productId) =>
+      (options.chartCandleIntervals ?? []).map((interval) => ({
+        productId,
+        interval,
+      })),
+    ),
   ]
 
   // Official Kraken candles are the canonical series for verdicts: backfill
