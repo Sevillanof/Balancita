@@ -39,7 +39,10 @@ PUBLIC_FIELDS = ("id", "strategy_id", "family", "kind", "status", "verdict", "pr
 SPAWN_WAIT_S = 30.0
 ARTIFACT_SCHEMA = "balancita.gate-run-artifact.v1"
 MINUTE_MS = 60_000
-PRODUCT = re.compile(r"^[A-Za-z0-9_]{3,32}$")
+PRODUCT = re.compile(r"^\w{3,32}$", re.ASCII)
+RUN_QUERY = "SELECT * FROM runs WHERE id=?"
+RUN_NOT_FOUND = "No existe esa corrida."
+DECISION_ARTIFACT_UNREADABLE = "No se pudo leer el detalle de decisiones guardado."
 MAX_WINDOW_MS = 3 * 24 * 60 * MINUTE_MS      # at most 3 days of 1m candles (4320) per request
 DEFAULT_WINDOW_MS = 6 * 60 * MINUTE_MS
 RESOLUTIONS = {"1m": MINUTE_MS, "5m": 5 * MINUTE_MS, "15m": 15 * MINUTE_MS, "1h": 60 * MINUTE_MS,
@@ -172,34 +175,39 @@ class GateApi:
         if not isinstance(exam, bool):
             raise GateApiError("invalid_exam", "El campo 'exam' debe ser verdadero o falso.")
         start = body.get("from")
-        if start is not None:
-            if not isinstance(start, str) or not DATE.match(start):
-                raise GateApiError("invalid_from", "La fecha 'desde' debe tener el formato AAAA-MM-DD.")
-            try:
-                datetime.date.fromisoformat(start)
-            except ValueError:
-                raise GateApiError("invalid_from", "La fecha 'desde' no es válida.")
-            if exam and not own_window:
-                raise GateApiError("invalid_from", "El examen siempre usa los últimos meses: no lleva fecha 'desde'.")
+        self._validate_date(start, "from", exam, own_window)
         end = body.get("to")
-        if end is not None:
-            if not isinstance(end, str) or not DATE.match(end):
-                raise GateApiError("invalid_to", "La fecha 'hasta' debe tener el formato AAAA-MM-DD.")
-            try:
-                datetime.date.fromisoformat(end)
-            except ValueError:
-                raise GateApiError("invalid_to", "La fecha 'hasta' no es válida.")
-            if exam and not own_window:
-                raise GateApiError("invalid_to", "El examen no lleva fecha 'hasta'.")
+        self._validate_date(end, "to", exam, own_window)
         products = body.get("products")
-        if products is not None:
-            if (not isinstance(products, list) or not products or len(products) > 16
-                    or not all(isinstance(p, str) for p in products) or len(set(products)) != len(products)):
-                raise GateApiError("invalid_products", "Elegí al menos un producto, sin repetir.")
-            unknown = [p for p in products if p not in self._known_products()]
-            if unknown:
-                raise GateApiError("invalid_products", "Producto desconocido: {}.".format(", ".join(unknown)))
+        self._validate_products(products)
         return start, end, products, exam
+
+    @staticmethod
+    def _validate_date(value, field, exam, own_window):
+        if value is None:
+            return
+        label = "desde" if field == "from" else "hasta"
+        kind = "invalid_" + field
+        if not isinstance(value, str) or not DATE.match(value):
+            raise GateApiError(kind, "La fecha '{}' debe tener el formato AAAA-MM-DD.".format(label))
+        try:
+            datetime.date.fromisoformat(value)
+        except ValueError:
+            raise GateApiError(kind, "La fecha '{}' no es válida.".format(label))
+        if exam and not own_window:
+            detail = ("El examen siempre usa los últimos meses: no lleva fecha 'desde'." if field == "from"
+                      else "El examen no lleva fecha 'hasta'.")
+            raise GateApiError(kind, detail)
+
+    def _validate_products(self, products):
+        if products is None:
+            return
+        if (not isinstance(products, list) or not products or len(products) > 16
+                or not all(isinstance(product, str) for product in products) or len(set(products)) != len(products)):
+            raise GateApiError("invalid_products", "Elegí al menos un producto, sin repetir.")
+        unknown = [product for product in products if product not in self._known_products()]
+        if unknown:
+            raise GateApiError("invalid_products", "Producto desconocido: {}.".format(", ".join(unknown)))
 
     # ------------------------------------------------------------------ actions
 
@@ -246,6 +254,24 @@ class GateApi:
         levels_env = self.exigencia_env(body, strategy_id)
         preflight = self.preflight(strategy_id, body.get("evaluation_mode", evaluation_policy.BASELINE_MODE))
         scope = preflight["evaluation_policy"]
+        args = self._launch_args(strategy_id, start, end, products, exam, preflight)
+        env = dict(os.environ)
+        env.pop(exigencia.ENV_MAESTRO, None), env.pop(exigencia.ENV_PORTERO, None), env.pop(analista.ENV, None), env.pop(walkforward.ENV, None)
+        env.update(levels_env)
+        env["PYTHONPATH"] = os.pathsep.join(p for p in (os.path.join(ROOT, "python"), env.get("PYTHONPATH")) if p)
+        with self._launch_lock:
+            running = self._running()
+            if running is not None:
+                raise GateApiError("busy", "Ya hay una prueba en curso ({}). Esperá a que termine o cancelala."
+                                   .format(running["strategy_id"]), 409)
+            other = self.busy_hook() if self.busy_hook else None
+            if other:
+                raise GateApiError("busy", other, 409)
+            log_path = os.path.join(self.data_dir, "logs", "launch-{}.log".format(int(time.time() * 1000)))
+            child = self.spawn(args, env, ROOT, log_path)
+            return self._wait_for_run(child, strategy_id, scope, log_path)
+
+    def _launch_args(self, strategy_id, start, end, products, exam, preflight):
         args = [self.python, "-m", "balancita_engine.strategy_gate", "--data-dir", self.data_dir, "evaluate",
                 "--strategy", strategy_id, "--evaluation-mode", preflight["evaluation_mode"]]
         registry_db = getattr(self.registry, "path", None)
@@ -264,38 +290,27 @@ class GateApi:
             args += ["--products", ",".join(products)]
         if exam:
             args.append("--exam")
-        env = dict(os.environ)
-        env.pop(exigencia.ENV_MAESTRO, None), env.pop(exigencia.ENV_PORTERO, None), env.pop(analista.ENV, None), env.pop(walkforward.ENV, None)
-        env.update(levels_env)
-        env["PYTHONPATH"] = os.pathsep.join(p for p in (os.path.join(ROOT, "python"), env.get("PYTHONPATH")) if p)
-        with self._launch_lock:
-            running = self._running()
-            if running is not None:
-                raise GateApiError("busy", "Ya hay una prueba en curso ({}). Esperá a que termine o cancelala."
-                                   .format(running["strategy_id"]), 409)
-            other = self.busy_hook() if self.busy_hook else None
-            if other:
-                raise GateApiError("busy", other, 409)
-            log_path = os.path.join(self.data_dir, "logs", "launch-{}.log".format(int(time.time() * 1000)))
-            child = self.spawn(args, env, ROOT, log_path)
-            deadline = time.time() + self.wait_s
-            while True:
+        return args
+
+    def _wait_for_run(self, child, strategy_id, scope, log_path):
+        deadline = time.time() + self.wait_s
+        while True:
+            rows = self._query("SELECT * FROM runs WHERE pid=? AND strategy_id=? ORDER BY id DESC LIMIT 1",
+                               (child.pid, strategy_id))
+            if rows:
+                return {"run_id": rows[0]["id"], "pid": child.pid, "pending": False,
+                        "evaluation_policy": self._public(rows[0])["evaluation_policy"]}
+            code = child.poll()
+            if code is not None:
                 rows = self._query("SELECT * FROM runs WHERE pid=? AND strategy_id=? ORDER BY id DESC LIMIT 1",
                                    (child.pid, strategy_id))
                 if rows:
                     return {"run_id": rows[0]["id"], "pid": child.pid, "pending": False,
                             "evaluation_policy": self._public(rows[0])["evaluation_policy"]}
-                code = child.poll()
-                if code is not None:
-                    rows = self._query("SELECT * FROM runs WHERE pid=? AND strategy_id=? ORDER BY id DESC LIMIT 1",
-                                       (child.pid, strategy_id))
-                    if rows:
-                        return {"run_id": rows[0]["id"], "pid": child.pid, "pending": False,
-                                "evaluation_policy": self._public(rows[0])["evaluation_policy"]}
-                    raise GateApiError("gate_refused", self._refusal(log_path), 422)
-                if time.time() >= deadline:
-                    return {"run_id": None, "pid": child.pid, "pending": True, "evaluation_policy": scope}
-                time.sleep(0.1)
+                raise GateApiError("gate_refused", self._refusal(log_path), 422)
+            if time.time() >= deadline:
+                return {"run_id": None, "pid": child.pid, "pending": True, "evaluation_policy": scope}
+            time.sleep(0.1)
 
     @staticmethod
     def _refusal(log_path):
@@ -394,24 +409,24 @@ class GateApi:
                 "date": time.strftime("%Y-%m-%d", time.gmtime(lock["locked_at"] / 1000)), "run_id": lock["run_id"]}
 
     def run(self, run_id):
-        rows = self._query("SELECT * FROM runs WHERE id=?", (self._run_id(run_id),))
+        rows = self._query(RUN_QUERY, (self._run_id(run_id),))
         if not rows:
-            raise GateApiError("not_found", "No existe esa corrida.", 404)
+            raise GateApiError("not_found", RUN_NOT_FOUND, 404)
         return {"run": self._public(rows[0]), "running": self._running_public()}
 
     @staticmethod
     def _run_id(value):
-        if not isinstance(value, str) or not re.match(r"^[0-9]{1,9}$", value):
-            raise GateApiError("not_found", "No existe esa corrida.", 404)
+        if not isinstance(value, str) or not re.match(r"^\d{1,9}$", value, flags=re.ASCII):
+            raise GateApiError("not_found", RUN_NOT_FOUND, 404)
         return int(value)
 
     # ------------------------------------------------------------------ stored trades and candles (read-only)
 
     def _finished_run(self, run_id):
         """The row of a FINISHED run. An exam still running (or cancelled/failed) has revealed nothing yet."""
-        rows = self._query("SELECT * FROM runs WHERE id=?", (self._run_id(run_id),))
+        rows = self._query(RUN_QUERY, (self._run_id(run_id),))
         if not rows:
-            raise GateApiError("run_not_found", "No existe esa corrida.", 404)
+            raise GateApiError("run_not_found", RUN_NOT_FOUND, 404)
         row = rows[0]
         if row["status"] != "done":
             code = "exam_not_unlocked" if row["kind"] == "exam" else "artifact_not_ready"
@@ -457,7 +472,7 @@ class GateApi:
     def _ms(value, name):
         if value is None:
             return None
-        if not isinstance(value, str) or not re.match(r"^[0-9]{1,15}$", value):
+        if not isinstance(value, str) or not re.match(r"^\d{1,15}$", value, flags=re.ASCII):
             raise GateApiError("invalid_window", "El valor '{}' no es un instante válido.".format(name))
         return int(value)
 
@@ -607,19 +622,19 @@ class GateApi:
         """Lines of the run's ``trace.jsonl.gz``, checked against the checksum the manifest recorded."""
         name = manifest.get("trace_file")
         if not isinstance(name, str) or name != os.path.basename(name) or not name:
-            raise GateApiError("artifact_not_ready", "No se pudo leer el detalle de decisiones guardado.", 409)
+            raise GateApiError("artifact_not_ready", DECISION_ARTIFACT_UNREADABLE, 409)
         try:
             with open(os.path.join(folder, name), "rb") as handle:
                 raw = gzip.decompress(handle.read())
         except (OSError, EOFError, ValueError):
-            raise GateApiError("artifact_not_ready", "No se pudo leer el detalle de decisiones guardado.", 409)
+            raise GateApiError("artifact_not_ready", DECISION_ARTIFACT_UNREADABLE, 409)
         if hashlib.sha256(raw).hexdigest() != manifest.get("trace_sha256"):
             raise GateApiError("artifact_not_ready",
                                "El detalle de decisiones guardado no coincide con su suma de control.", 409)
         try:
             return [json.loads(line) for line in raw.decode("utf-8").splitlines() if line]
         except ValueError:
-            raise GateApiError("artifact_not_ready", "No se pudo leer el detalle de decisiones guardado.", 409)
+            raise GateApiError("artifact_not_ready", DECISION_ARTIFACT_UNREADABLE, 409)
 
     def decisions(self, run_id, product, start=None, end=None, only=None):
         """Signals (LONG/SHORT proposals) of a run for one product with what became of each, read from its trace.
@@ -659,9 +674,9 @@ class GateApi:
 
     def cancel(self, run_id):
         number = self._run_id(run_id)
-        rows = self._query("SELECT * FROM runs WHERE id=?", (number,))
+        rows = self._query(RUN_QUERY, (number,))
         if not rows:
-            raise GateApiError("not_found", "No existe esa corrida.", 404)
+            raise GateApiError("not_found", RUN_NOT_FOUND, 404)
         if rows[0]["status"] != "running":
             raise GateApiError("not_running", "Esa corrida ya no está en curso.", 409)
         from .strategy_gate import GateError, cancel_run
@@ -674,7 +689,7 @@ class GateApi:
 
     def report(self, run_id):
         """``(filename, bytes)``; the file must resolve inside ``<data>/reports``."""
-        rows = self._query("SELECT * FROM runs WHERE id=?", (self._run_id(run_id),))
+        rows = self._query(RUN_QUERY, (self._run_id(run_id),))
         if not rows or not rows[0].get("report_path"):
             raise GateApiError("not_found", "Esa corrida no tiene informe.", 404)
         row = rows[0]

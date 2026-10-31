@@ -44,13 +44,15 @@ from . import futures_qwen_portero as portero
 from . import futures_qwen_trader as qt
 from . import futures_qwen_trader_exam as exam
 from .futures_strategy_reliability import deflated_probability
+from typing import Optional, Sequence
 
 VERSION = 1
 RUN_SCHEMA = "balancita-walkforward-run.v1"
 CONFIG_DIR = os.path.join(qt.ROOT, "config", "walkforward")
-PARES_PATH = os.path.join(CONFIG_DIR, "pares.json")
+PAIRS_FILENAME = "pares.json"
+PARES_PATH = os.path.join(CONFIG_DIR, PAIRS_FILENAME)
 ETH_CONFIG_DIR = os.path.join(qt.DATA_DIR, "walkforward-eth", "pares")
-ETH_PARES_PATH = os.path.join(ETH_CONFIG_DIR, "pares.json")
+ETH_PARES_PATH = os.path.join(ETH_CONFIG_DIR, PAIRS_FILENAME)
 ETH_WORK_DIR = os.path.join(qt.DATA_DIR, "walkforward-eth")
 BASE_REGISTRY_PATH = os.path.join(CONFIG_DIR, "intentos.json")
 FACTS_FROM = destila.FACTS_FROM                  # primer día con velas para ajustar (2022-04-01)
@@ -125,7 +127,7 @@ def with_eth_formulas(cfg, medicion_mode=None, pares=None):
         return out
     table = load_pairs(pares_path)
     folder = os.path.dirname(pares_path)
-    pair = table["trimestres"].get("2025Q4") or table["trimestres"][sorted(table["trimestres"])[-1]]
+    pair = table["trimestres"].get("2025Q4") or table["trimestres"][max(table["trimestres"])]
     corta_cfg = dict(out["corta"], maestro=os.path.join(folder, pair["maestro"]), maestro_hash=pair["maestro_hash"],
                      portero=os.path.join(folder, pair["portero"]), portero_hash=pair["portero_hash"])
     corta_cfg.pop("pares", None)
@@ -183,7 +185,7 @@ def _dump(path, obj):
         handle.write("\n")
 
 
-def fit_pairs(cache_dir, work_dir, out_dir, log=print, *, fit_products=FIT_PRODUCTS, extra_eth=False, on_progress=None):
+def fit_pairs(cache_dir, work_dir, out_dir, log=print, *, fit_products: Sequence[str] = FIT_PRODUCTS, extra_eth=False, on_progress=None):
     """El par (maestro, portero) de cada trimestre, ajustado con ``fit_products`` solo hasta 48 h antes de que empiece. Escribe los archivos y
     ``pares.json`` en ``out_dir`` (nombres relativos: la tabla se puede mover) y devuelve la tabla."""
     paths = ensure_facts(cache_dir, work_dir, log, fit_products=fit_products, extra_eth=extra_eth, on_progress=on_progress)
@@ -213,14 +215,14 @@ def fit_pairs(cache_dir, work_dir, out_dir, log=print, *, fit_products=FIT_PRODU
                                      "acierto_signo_ajuste": teacher["ajuste"]["acierto_signo"], "umbral_portero": keeper["umbral"]}
         log("{}: ajustado hasta {} con {} fotos (maestro {}, portero {})".format(
             name, qt.stamp(cutoff), len(part), table["trimestres"][name]["maestro_hash"], table["trimestres"][name]["portero_hash"]))
-    _dump(os.path.join(out_dir, "pares.json"), table)
+    _dump(os.path.join(out_dir, PAIRS_FILENAME), table)
     return table
 
 
 def ensure_eth_pairs(cache_dir=None, work_dir=None, out_dir=None, log=print, on_progress=None):
     """Asegura los pares trimestrales de ETH enriquecido (``extra_eth=True``) y devuelve la ruta de ``pares.json``."""
     out_dir = out_dir or ETH_CONFIG_DIR
-    pares = os.path.join(out_dir, "pares.json")
+    pares = os.path.join(out_dir, PAIRS_FILENAME)
     if not os.path.exists(pares):
         fit_pairs(cache_dir or qt.DEFAULT_CACHE, work_dir or ETH_WORK_DIR, out_dir, log=log,
                   fit_products=("PF_ETHUSD",), extra_eth=True, on_progress=on_progress)
@@ -242,7 +244,7 @@ def pairs_hash(path=PARES_PATH):
 # --------------------------------------------------------------------------- 2. the photos (the same make_photos «Testear» uses)
 
 
-def honest_cfg(cfg=None, pares=PARES_PATH, products=("PF_ETHUSD",), cap_min=2160):
+def honest_cfg(cfg=None, pares=PARES_PATH, products=("PF_ETHUSD",), cap_min: Optional[int] = 2160) -> dict:
     """La config de la prueba en modo honesto: las fórmulas de cada trimestre (``corta.pares``), operando desde ``FIRST_DAY``."""
     from . import futures_qwen_live as live
 
@@ -324,7 +326,7 @@ def build_all_photos(cache_dir, work_dir, pares=PARES_PATH, jobs=1, log=print):
 # --------------------------------------------------------------------------- 3. a variant over the photos
 
 
-def variant(products=("PF_ETHUSD",), cap_min=2160, size="apagado", levels=(5, 5)):
+def variant(products: Sequence[str] = ("PF_ETHUSD",), cap_min: Optional[int] = 2160, size="apagado", levels=(5, 5)) -> dict:
     return {"productos": sorted(products), "tope_min": cap_min, "tamano": size, "exigencia": list(levels)}
 
 
@@ -335,7 +337,7 @@ def variant_id(v):
     return hashlib.sha256(json.dumps(v, sort_keys=True).encode("utf-8")).hexdigest()[:12]
 
 
-def variant_text(v):
+def variant_text(v: dict):
     names = {"PF_ETHUSD": "ETH", "PF_XBTUSD": "BTC"}
     return "{} · {} · tamaño {} · exigencia {}/{}".format(
         "+".join(names.get(p, p) for p in v["productos"]), "tope {} h".format(v["tope_min"] // 60) if v["tope_min"] else "sin tope",

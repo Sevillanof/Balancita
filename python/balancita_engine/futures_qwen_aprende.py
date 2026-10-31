@@ -28,6 +28,7 @@ import random
 import time
 
 from . import futures_qwen_corta as corta
+from . import futures_qwen_noticias as noticias
 from . import futures_qwen_ficha as fficha
 from . import futures_qwen_trader as qt
 from . import futures_qwen_trader_exam as ex
@@ -63,11 +64,12 @@ def position_label(net_now_bp, final_bp):
     return "CERRAR" if net_now_bp >= final_bp else "MANTENER"
 
 
-def formula_flat(maestro, portero_si, noticias_si=False):
+def formula_flat(maestro, portero_si, noticias_si=False, *, portero_direccion=None):
     """Lo que hacen las fórmulas sin posición (``futures_qwen_corta.formula_action`` con el portero o el analista de noticias)."""
-    if abs(maestro) == 2 and (portero_si or noticias_si):
-        return "LARGO" if maestro > 0 else "CORTO"
-    return "ESPERAR"
+    return corta.formula_action({
+        "veredicto": maestro, "portero_si": portero_si, "noticias_si": noticias_si,
+        "portero_direccion": portero_direccion,
+    }, None)[0]
 
 
 # --------------------------------------------------------------------------- collect (the past, as the formulas would live it)
@@ -80,6 +82,8 @@ def _month(t_ms):
 
 
 def _setup_aprende_trader(history, cfg, product, from_ms, end_ms, warmup):
+    if noticias.priority_enabled(cfg):
+        raise qt.TraderError("Este colector histórico solo reproduce fórmulas, no la prioridad de noticias.")
     funding = qt.FundingLine(history.funding(product))
     trader = qt.Trader(cfg, product, None, funding, key="aprende", entry_threshold=cfg["practice_entry_threshold"])
     for other in cfg.get("state_context") or ():
@@ -105,7 +109,9 @@ def _step_open_position_aprende(trader, t_ms, reasons, r, closes, hold_ms, open_
     held = t_ms - trader.position.entry_ms
     now = qt.settle(trader.product, trader.position, closes[t_ms], "strategy_exit", t_ms, trader.funding, trader.notional)["net_bp"]
     side = 1 if trader.position.side == "LONG" else -1
-    action, _ = corta.formula_action(r, side)
+    action, _ = corta.formula_action(
+        r, side, held_min=held // MINUTE_MS,
+        exhaust_min=trader.cfg["guardrails"].get("exhaust_hold_min"))
     timed_out = bool(hold_ms) and held >= hold_ms
     if timed_out or action == "CERRAR":
         open_trade["final_bp"] = now
@@ -135,7 +141,8 @@ def _step_window_aprende(trader, t_ms, reasons, r, closes, hold_ms, open_trade, 
         return open_trade
     if rng.random() < flat_rate:  # NOSONAR
         flat_found.append((t_ms, reasons, trader.state_text(t_ms, reasons), trader.state_text(t_ms, reasons, mirror=True)))
-    action = formula_flat(r["veredicto"], r["portero_si"], r.get("noticias_si", False))
+    action = formula_flat(r["veredicto"], r["portero_si"], r.get("noticias_si", False),
+                          portero_direccion=r.get("portero_direccion"))
     if action in ("LARGO", "CORTO"):
         trader._open(t_ms, "LONG" if action == "LARGO" else "SHORT", r["portero_p"], "formula")
         open_trade = {"trade_no": trader.position.trade_no, "rows": [], "entry_ms": t_ms, "side": action}
@@ -154,7 +161,8 @@ def _build_flat_rows_aprende(cfg, product, flat_found, readings, closes, cost, w
                           "portero_p": op["portero_p"], "largo_bp": op["largo"]["neto_bp"], "corto_bp": op["corto"]["neto_bp"],
                           "largo_h": op["largo"]["horas"], "corto_h": op["corto"]["horas"],
                           "label": flat_label(op["largo"]["neto_bp"], op["corto"]["neto_bp"]),
-                          "formula": formula_flat(op["maestro"], op["portero_si"], op.get("noticias_si", False))})
+                          "formula": formula_flat(op["maestro"], op["portero_si"], op.get("noticias_si", False),
+                                                  portero_direccion=op.get("portero_direccion"))})
     return rows_flat
 
 
@@ -204,13 +212,16 @@ def operation(cfg, t_ms, readings, closes, cost, weak):
     if None in sides.values():
         return None
     return {"maestro": r["veredicto"], "puntaje": r["puntaje"], "portero_si": bool(r["portero_si"]), "portero_p": r["portero_p"],
+            "portero_direccion": r.get("portero_direccion"),
             "noticias_si": bool(r.get("noticias_si")), "volatilidad": r["volatilidad"], **sides}
 
 
 def _position_row(trader, t_ms, reasons, r, net_now_bp, trade):
     position = trader.position
     side = 1 if position.side == "LONG" else -1
-    act = corta.formula_action(r, side)[0]
+    act = corta.formula_action(
+        r, side, held_min=(t_ms - position.entry_ms) // MINUTE_MS,
+        exhaust_min=trader.cfg["guardrails"].get("exhaust_hold_min"))[0]
     formula_label = "CERRAR" if act == "CERRAR" else "MANTENER"
     return {"kind": "position", "product": trader.product, "t_ms": t_ms, "month": _month(t_ms),
             "state_text": trader.state_text(t_ms, reasons), "maestro": r["veredicto"], "portero_si": bool(r["portero_si"]),

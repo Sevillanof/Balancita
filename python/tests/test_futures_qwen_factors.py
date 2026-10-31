@@ -283,8 +283,9 @@ class DeciderTests(unittest.TestCase):
     def test_a_bad_format_is_a_decision_error_stored_as_a_call_error(self):
         provider = ChatProvider(lambda body: completion(LINE_OK, finish="length"))
         pdb = self.pdb()
+        decider = self.decider(provider, pdb)
         with self.assertRaises(qt.DecisionError):
-            self.decider(provider, pdb).ask("exam:X:1", 5, "mirror", "estado")
+            decider.ask("exam:X:1", 5, "mirror", "estado")
         self.assertEqual(pdb.db.execute("SELECT block_id, step, kind FROM call_errors").fetchone()[:], ("exam:X:1", "mirror",
                                                                                                           "bad_format"))
         self.assertEqual(pdb.db.execute("SELECT COUNT(*) FROM exam_factors").fetchone()[0], 0)
@@ -292,8 +293,9 @@ class DeciderTests(unittest.TestCase):
     def test_three_unreachable_calls_in_a_row_mean_model_down_and_the_budget_is_respected(self):
         provider = ChatProvider(lambda body: completion(LINE_OK))
         provider.fail_with = llm.ModelUnavailable("down")
+        decider = self.decider(provider)
         with self.assertRaises(qt.ModelDown):
-            self.decider(provider).ask("k", 1, "action", "estado")
+            decider.ask("k", 1, "action", "estado")
         clock = [0.0]
         slow = ChatProvider(lambda body: completion(LINE_OK), clock=clock)
         decider = self.decider(slow, clock=lambda: clock[0], deadline=2.5)
@@ -527,8 +529,10 @@ class PositioningTests(unittest.TestCase):
     def test_the_database_is_opened_read_only_and_a_missing_file_or_product_is_not_available(self):
         positioning_db(self.path, first_ms=0, hours=5)
         feed = pd.PositioningFeed(self.path, "PF_XBTUSD")
+        connection = pd._connect(self.path)
+        self.addCleanup(connection.close)
         with self.assertRaises(sqlite3.OperationalError):
-            pd._connect(self.path).execute("INSERT INTO premium VALUES('x',1,1,1,1,1)")
+            connection.execute("INSERT INTO premium VALUES('x',1,1,1,1,1)")
         self.assertTrue(feed.available)
         missing = pd.PositioningFeed(os.path.join(self.dir.name, "no.sqlite"), "PF_XBTUSD")
         self.assertFalse(missing.available)
@@ -612,7 +616,7 @@ class VariantTests(unittest.TestCase):
         names = {qv.db_name(v["id"]) for v in qv.load_variants()}
         self.assertEqual(len(names), len(qv.load_variants()))
         with tempfile.TemporaryDirectory() as tmp:
-            api = quick_api.QuickTestApi(os.path.join(tmp, "exam-v3.sqlite"), python="py", spawn=lambda *a: None)
+            api = quick_api.QuickTestApi(os.path.join(tmp, "exam-v3.sqlite"), python="py", spawn=lambda *a: None, news_only=False)
             catalog = {v["id"]: v for v in api.status(models.QWEN_LIVE_ID)["variants"]}
             self.assertEqual(catalog["ficha"]["kind"], "factors")
             self.assertEqual(catalog["ficha-pista"]["label"], "Ficha de 8 factores con pista de reversión")
@@ -645,6 +649,7 @@ class QuickRunTests(unittest.TestCase):
         self.variant = qv.get_variant("ficha")
         self.cfg = qv.apply_variant(cfg3(), self.variant)
         self.cfg["state_context"] = ["PF_ETHUSD"]                      # the test series only has two assets
+        self.cfg["positioning_db"] = os.path.join(self.dir.name, "no-real-positioning.sqlite")
         self.db = os.path.join(self.dir.name, qv.db_name("ficha"))
         self.state_path = os.path.join(self.dir.name, qv.state_name("ficha"))
 

@@ -146,6 +146,7 @@
     "min_stop_pct": 0.005,
     "max_stop_pct": 0.03,
     "max_hold_min": 2160,
+    "exhaust_hold_min": 1440,
     "cooldown_min": 15
   },
   "entry_threshold": 0.5,
@@ -203,6 +204,11 @@
   },
   "state_variant": 3,
   "runtime": {
+    "opinion_enabled": false,
+    "pending_config": {
+      "path": "qwen-live-next.json",
+      "sha256": "56b7ebda2fbe415bc0be38d3fe90934fd4fe0681bec9c4c532e1b48af86c56dd"
+    },
     "concurrent_orders": true,
     "skip_entry_reason": true
   },

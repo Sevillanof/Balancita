@@ -50,6 +50,24 @@ class LabelTests(unittest.TestCase):
         self.assertEqual(ap.formula_flat(2, False), "ESPERAR")
         self.assertEqual(ap.formula_flat(1, True), "ESPERAR")
 
+    def test_historical_learning_respects_an_independent_keepers_direction(self):
+        self.assertEqual(ap.formula_flat(2, True, True, portero_direccion=-1), "ESPERAR")
+        self.assertEqual(ap.formula_flat(-2, True, True, portero_direccion=1), "ESPERAR")
+        self.assertEqual(ap.formula_flat(2, True, True, portero_direccion=0), "ESPERAR")
+        self.assertEqual(ap.formula_flat(2, True, False, portero_direccion=1), "LARGO")
+
+    def test_legacy_collectors_cannot_claim_to_replay_the_news_priority_policy(self):
+        cfg = copy.deepcopy(CFG)
+        cfg["noticias"]["policy"] = "priority_v2"
+        with self.assertRaises(qt.TraderError):
+            ap._setup_aprende_trader(None, cfg, "PF_ETHUSD", 0, 0, 0)
+        with tempfile.TemporaryDirectory() as folder:
+            cutoff = qt.load_holdout_ms()
+            output = os.path.join(folder, "result.json")
+            result = ap.ex.run_formula(None, cfg, cutoff, output, {"id": "formula"}, log=lambda *_: None)
+        self.assertEqual(result["state"], "failed")
+        self.assertIsNone(result["summary"])
+
     def test_the_formula_action_of_the_trader_is_the_same_rule_with_and_without_a_position(self):
         r = {"veredicto": 2, "portero_si": True}
         self.assertEqual(corta.formula_action(r, None)[0], "LARGO")
@@ -265,6 +283,9 @@ class LiveLabelTests(unittest.TestCase):
 
     def test_live_operator_in_formula_mode_resolves_examples_automatically_on_close(self):
         cfg = copy.deepcopy(CFG)
+        cfg["opinion_enabled"] = True
+        cfg["runtime"]["opinion_enabled"] = True
+        cfg["runtime"].pop("pending_config", None)
         cfg["products"] = ["PF_ETHUSD"]
         env = make(self, cfg=cfg, policy=Policy(flat="ESPERAR", position="MANTENER"), formula=True)
         answers = iter(
@@ -273,7 +294,7 @@ class LiveLabelTests(unittest.TestCase):
             + [("CERRAR", "el maestro se dio vuelta en contra")]
             + [("ESPERAR", "x")] * 500
         )
-        with mock.patch.object(corta, "formula_action", side_effect=lambda r, side, *rest: next(answers)):
+        with mock.patch.object(corta, "formula_action", side_effect=lambda r, side, **kwargs: next(answers)):
             env.op.start()
             env.advance(90)
         examples = env.rows("SELECT * FROM examples WHERE kind='position'")
@@ -299,7 +320,7 @@ class FormulaDecidesTests(unittest.TestCase):
     def test_the_formula_opens_and_closes_whatever_qwen_says(self):
         env = make(self, policy=Policy(flat="ESPERAR", position="MANTENER"), formula=True)
         answers = iter([("LARGO", "maestro fuerte y portero a favor")] + [("MANTENER", "x")] * 3 + [("CERRAR", "el maestro se dio vuelta en contra")] + [("ESPERAR", "x")] * 500)
-        with mock.patch.object(corta, "formula_action", side_effect=lambda r, side, *rest: next(answers)):
+        with mock.patch.object(corta, "formula_action", side_effect=lambda r, side, **kwargs: next(answers)):
             env.op.start()
             env.advance(120)
         trades = env.rows("SELECT * FROM trades")

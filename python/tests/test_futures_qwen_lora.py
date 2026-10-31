@@ -272,8 +272,15 @@ class ExamLoraSwitchTests(unittest.TestCase):
             def health(self):
                 return True
 
-        original_run, original_provider = ex.run_exam, qt._provider
-        ex.run_exam, qt._provider = fake_run, lambda url: Provider()
+        original_run, original_provider, original_load = ex.run_exam, qt._provider, qt.load_config
+
+        def legacy_opinions_config(*args, **kwargs):          # the live file answers about news only: this test is about candle opinions
+            cfg = original_load(*args, **kwargs)
+            cfg = dict(cfg, runtime=dict(cfg.get("runtime") or {}, opinion_enabled=True))
+            cfg.pop("opinion_enabled", None)
+            return cfg
+
+        ex.run_exam, qt._provider, qt.load_config = fake_run, lambda url: Provider(), legacy_opinions_config
         try:
             with tempfile.TemporaryDirectory() as tmp:
                 out = io.StringIO()
@@ -282,7 +289,7 @@ class ExamLoraSwitchTests(unittest.TestCase):
                     qt.main(["exam", "--version", "live", "--offline", "--cache-dir", tmp, "--exam-db",
                              os.path.join(tmp, "e.sqlite"), "--lora", "0", "--exam-from", "2025-10-16"])
         finally:
-            ex.run_exam, qt._provider = original_run, original_provider
+            ex.run_exam, qt._provider, qt.load_config = original_run, original_provider, original_load
         self.assertEqual(seen["cfg"]["practice"]["from"], "2025-10-16")
         self.assertEqual(seen["cfg"]["runtime"]["lora"], [{"id": 0, "scale": 1.0}])
         self.assertNotEqual(qt.config_hash(seen["cfg"]), qt.config_hash(LIVE))   # another period: another database

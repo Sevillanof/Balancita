@@ -89,12 +89,27 @@ function okSource(heartbeat: unknown): QwenSource {
     heartbeatMs:
       typeof beat.heartbeat_ms === 'number' ? beat.heartbeat_ms : null,
     modelOk: typeof beat.model_ok === 'boolean' ? beat.model_ok : null,
+    dataIssues: Object.entries(record(beat.data_health)).flatMap(
+      ([product, value]) => {
+        const health = record(value)
+        return health.status === 'ok'
+          ? []
+          : [`${product}: ${String(health.status ?? 'unknown')}`]
+      },
+    ),
+    pendingConfig: record(beat.pending_config),
   }
 }
 
 export type QwenSource =
   | { state: 'loading' }
-  | { state: 'ok'; heartbeatMs?: number | null; modelOk?: boolean | null }
+  | {
+      state: 'ok'
+      heartbeatMs?: number | null
+      modelOk?: boolean | null
+      dataIssues?: readonly string[]
+      pendingConfig?: Record<string, unknown>
+    }
   | { state: 'off'; reason: string }
   | { state: 'error' }
 
@@ -122,6 +137,10 @@ export function qwenHealthNotice(
   const beat = source.heartbeatMs
   if (typeof beat === 'number' && nowMs - beat >= STALE_HEARTBEAT_MS)
     return `Qwen sin latidos hace ${Math.floor((nowMs - beat) / 60_000)} min: el proceso no está escribiendo. Si pnpm dev sigue corriendo, se está relanzando solo.`
+  if (source.dataIssues?.length)
+    return `Datos de mercado sin confirmar: ${source.dataIssues.join(', ')}. Las entradas esperan datos observados; un latido no confirma los precios.`
+  if (source.pendingConfig?.state === 'error')
+    return `El flujo nuevo está pendiente y no puede activarse: ${String(source.pendingConfig.reason ?? 'configuración inválida')}. No se reinicia la cuenta.`
   if (source.modelOk === false)
     return 'El modelo local no responde. Qwen sigue vivo: anota cada despertar como omitido y retoma solo cuando el modelo vuelva.'
   return null

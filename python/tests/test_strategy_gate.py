@@ -112,7 +112,7 @@ class Base(unittest.TestCase):
         self.dir = self.tmp.name
         self.addCleanup(self.tmp.cleanup)
 
-    def db(self):
+    def _open_db(self):
         return g.open_db(os.path.join(self.dir, g.DB_NAME), readonly=True)
 
 
@@ -391,7 +391,7 @@ class CouplingTests(unittest.TestCase):
         for name in ("z_min", "sqrt_bars"):
             spec = copy.deepcopy(base)
             spec["params"][name] = str(float(spec["params"][name]) * 0.5)
-            out, _ = g.book_trades(spec, "PF_XBTUSD", "0.5", ONES, FIVES, [], FROM, HOLDOUT, lambda f: None)
+            out, _, _ = g.book_trades(spec, "PF_XBTUSD", "0.5", ONES, FIVES, [], FROM, HOLDOUT, lambda f: None)
             trades.append([(t["entry_time_ms"], t["exit_time_ms"], t["side"], str(t["net_bp"])) for t in out])
         self.assertGreater(len(trades[0]), 0)
         self.assertEqual(trades[0], trades[1])
@@ -446,9 +446,9 @@ class RegistrySpecTests(Base):
         self.assertIn("estrategia desconocida", str(refused.exception))
         out = run("c31-momentum-breakout-5m", self.dir, specs_dir=self.specs_dir, registry_db=path)
         self.assertEqual(out["status"], "done")
-        row = self.db().execute("SELECT version_key, code_hash FROM runs WHERE id=?", (out["run_id"],)).fetchone()
+        row = self._open_db().execute("SELECT version_key, code_hash FROM runs WHERE id=?", (out["run_id"],)).fetchone()
         self.assertEqual(row["code_hash"], entry["spec_hash"])           # the registry's own digest
-        self.assertEqual(row["version_key"], "c31-momentum-breakout-5m:" + entry["spec_hash"])
+        self.assertEqual(row["version_key"], "c31-momentum-breakout-5m:{}".format(entry["spec_hash"]))
         with open(out["report_path"], encoding="utf-8") as handle:
             self.assertIn("# Impulso Adaptativo 5m", handle.read())
 
@@ -679,7 +679,7 @@ class TemporalEvidenceTests(Base):
         self.assertEqual(evidence["embargo_source"], "legacy_longest_observed_closed_hold")
         self.assertEqual(out["temporal"], evidence)
         self.assertEqual(json.loads(stream.getvalue().splitlines()[-1])["temporal"], evidence)
-        with self.db() as db:
+        with self._open_db() as db:
             params = json.loads(db.execute("SELECT params FROM runs WHERE id=?", (out["run_id"],)).fetchone()[0])
         self.assertEqual(params["temporal"], evidence)
         from types import SimpleNamespace
@@ -724,7 +724,7 @@ class RepeatableModelTests(Base):
             first, second = self.exam(sid), self.exam(sid)
             self.assertEqual((first["status"], second["status"]), ("done", "done"))
             self.assertNotEqual(first["run_id"], second["run_id"])
-            locks = self.db().execute("SELECT run_id FROM exam_locks WHERE strategy_id=?", (sid,)).fetchall()
+            locks = self._open_db().execute("SELECT run_id FROM exam_locks WHERE strategy_id=?", (sid,)).fetchall()
             self.assertEqual([r[0] for r in locks], [second["run_id"]])
 
     def test_c31_and_rules_strategies_do_not_repeat(self):
@@ -754,7 +754,7 @@ class ExamLockTests(Base):
         out = run(sid, self.dir, spec=dict(SPECS["c25-pullback-perp-v1"], id=sid), trade_source=cheating_source,
                   kind="exam")
         self.assertEqual(out["status"], "done")
-        rows = self.db().execute("SELECT strategy_id FROM exam_locks ORDER BY strategy_id").fetchall()
+        rows = self._open_db().execute("SELECT strategy_id FROM exam_locks ORDER BY strategy_id").fetchall()
         self.assertEqual([r[0] for r in rows], ["lab-cheat-v1", "lab-else-v1"])
 
     def test_changed_content_with_the_same_id_is_refused_after_an_exam(self):
@@ -776,10 +776,11 @@ class ExamLockTests(Base):
         self.assertEqual(self.cheat(1, kind="exam")["status"], "done")
 
     def test_failure_before_any_outcome_keeps_the_lock_free(self):
+        provider = Provider(fail_prefetch=True)
         with self.assertRaises(g.HistoryError):
-            self.cheat(1, kind="exam", provider=Provider(fail_prefetch=True))
-        self.assertEqual(self.db().execute("SELECT COUNT(*) FROM exam_locks").fetchone()[0], 0)
-        self.assertEqual(self.db().execute("SELECT status FROM runs").fetchone()[0], "failed")
+            self.cheat(1, kind="exam", provider=provider)
+        self.assertEqual(self._open_db().execute("SELECT COUNT(*) FROM exam_locks").fetchone()[0], 0)
+        self.assertEqual(self._open_db().execute("SELECT status FROM runs").fetchone()[0], "failed")
         self.assertEqual(self.cheat(1, kind="exam")["status"], "done")
 
     def test_cancel_after_reading_the_cutoff_consumes_the_lock(self):
@@ -789,9 +790,9 @@ class ExamLockTests(Base):
                 open(os.path.join(self.dir, "cancel", str(event["run_id"])), "w").close()
         out = self.cheat(1, kind="exam", on_progress=cancel)
         self.assertEqual(out["status"], "cancelled")
-        row = self.db().execute("SELECT status, verdict FROM exam_locks").fetchone()
+        row = self._open_db().execute("SELECT status, verdict FROM exam_locks").fetchone()
         self.assertEqual(row["status"], "cancelled")
-        self.assertEqual(self.db().execute("SELECT holdout_read FROM runs").fetchone()[0], 1)
+        self.assertEqual(self._open_db().execute("SELECT holdout_read FROM runs").fetchone()[0], 1)
         with self.assertRaises(g.GateError) as caught:
             self.cheat(1, kind="exam")
         self.assertIn("ya se rindió", str(caught.exception))
@@ -803,7 +804,7 @@ class ExamLockTests(Base):
                 open(os.path.join(self.dir, "cancel", str(event["run_id"])), "w").close()
         out = self.cheat(1, kind="exam", on_progress=cancel)
         self.assertEqual(out["status"], "cancelled")
-        self.assertEqual(self.db().execute("SELECT COUNT(*) FROM exam_locks").fetchone()[0], 0)
+        self.assertEqual(self._open_db().execute("SELECT COUNT(*) FROM exam_locks").fetchone()[0], 0)
 
 
 class FamilyExamTests(Base):
@@ -824,7 +825,7 @@ class FamilyExamTests(Base):
                       "lab-cheat-v1, veredicto ", message)
         self.assertIn("Una versión sucesora no es un examen independiente de la misma reserva.", message)
         self.assertEqual(len(g.list_runs(os.path.join(self.dir, g.DB_NAME))), before)
-        self.assertEqual(self.db().execute("SELECT COUNT(*) FROM exam_locks").fetchone()[0], 1)
+        self.assertEqual(self._open_db().execute("SELECT COUNT(*) FROM exam_locks").fetchone()[0], 1)
 
     def test_another_family_is_unaffected(self):
         self.cheat(1, kind="exam")
@@ -838,31 +839,31 @@ class FamilyExamTests(Base):
         out = self.cheat(2, kind="exam", allow_contaminated=True)
         self.assertEqual(out["status"], "done")
         self.assertEqual(out["verdict"], "INCONCLUSO")   # the cheating source would PASS
-        self.assertEqual(out["result"]["overall"]["n"] > 100, True)
+        self.assertGreater(out["result"]["overall"]["n"], 100)
         self.assertTrue(all(c["ok"] for c in out["result"]["rules"]))
         text = open(out["report_path"], encoding="utf-8").read()
         self.assertIn("REUTILIZACIÓN CONTAMINADA: esta reserva ya fue usada por la familia; no es evidencia independiente",
                       text)
         self.assertLess(text.index("REUTILIZACIÓN CONTAMINADA"), text.index("### En pocas palabras"))
         self.assertIn("nunca puede dar PASA", text)
-        params = json.loads(self.db().execute("SELECT params FROM runs WHERE id=?", (out["run_id"],)).fetchone()[0])
+        params = json.loads(self._open_db().execute("SELECT params FROM runs WHERE id=?", (out["run_id"],)).fetchone()[0])
         self.assertTrue(params["contaminated"])
 
     def test_allow_contaminated_on_a_clean_family_is_not_marked(self):
         out = self.cheat(1, kind="exam", allow_contaminated=True)
         self.assertEqual(out["verdict"], "PASA")
-        params = json.loads(self.db().execute("SELECT params FROM runs").fetchone()[0])
+        params = json.loads(self._open_db().execute("SELECT params FROM runs").fetchone()[0])
         self.assertNotIn("contaminated", params)
 
     def test_deleting_the_first_version_does_not_free_the_window(self):
         self.cheat(1, kind="exam")
         g.purge_strategy("lab-cheat-v1", self.dir)
-        self.assertEqual(self.db().execute("SELECT COUNT(*) FROM exam_locks").fetchone()[0], 0)
+        self.assertEqual(self._open_db().execute("SELECT COUNT(*) FROM exam_locks").fetchone()[0], 0)
         with self.assertRaises(g.GateError) as caught:
             self.cheat(2, kind="exam")
         self.assertIn("La familia lab-cheat ya rindió su examen sobre esta reserva (desde 2025-01-21, versión ya borrada",
                       str(caught.exception))
-        dump = "\n".join(self.db().iterdump())
+        dump = "\n".join(self._open_db().iterdump())
         self.assertNotIn("lab-cheat", dump)
         self.assertEqual(self.cheat(2, kind="exam", allow_contaminated=True)["verdict"], "INCONCLUSO")
 
@@ -881,7 +882,7 @@ class AttemptsTests(Base):
         with open(out["report_path"], encoding="utf-8") as handle:
             self.assertIn("Intentos: 3", handle.read())
         run("c26-reversion-perp-v1", self.dir)
-        counts = dict(self.db().execute("SELECT family, COUNT(*) FROM attempts GROUP BY family").fetchall())
+        counts = dict(self._open_db().execute("SELECT family, COUNT(*) FROM attempts GROUP BY family").fetchall())
         self.assertEqual(counts, {"c25-pullback-perp": 3, "c26-reversion-perp": 1})
 
     def _ledger(self, variants):
@@ -906,7 +907,8 @@ class AttemptsTests(Base):
         with open(out["report_path"], encoding="utf-8") as handle:
             self.assertIn("Intentos: 1 (de la compuerta) + 3 (variantes del laboratorio)", handle.read())
         with open(path, "rb") as handle:
-            self.assertEqual((os.stat(path).st_mtime_ns, handle.read()), before)
+            after = (os.stat(path).st_mtime_ns, handle.read())
+            self.assertEqual(after, before)
 
     def test_without_ledger_file_the_lab_adds_zero(self):
         missing = os.path.join(self.dir, "nope", "ledger.sqlite")
@@ -920,7 +922,7 @@ class AttemptsTests(Base):
         path = os.path.join(self.dir, g.DB_NAME)
         if not os.path.exists(path):
             return
-        db = self.db()
+        db = self._open_db()
         for table in ("runs", "attempts", "exam_locks"):
             self.assertEqual(db.execute("SELECT COUNT(*) FROM " + table).fetchone()[0], 0, table)
 
@@ -960,7 +962,7 @@ class AttemptsTests(Base):
     def test_exam_is_not_an_attempt(self):
         run("lab-cheat-v1", self.dir, kind="exam", spec=dict(SPECS["c25-pullback-perp-v1"], id="lab-cheat-v1"),
             trade_source=cheating_source)
-        self.assertEqual(self.db().execute("SELECT COUNT(*) FROM attempts").fetchone()[0], 0)
+        self.assertEqual(self._open_db().execute("SELECT COUNT(*) FROM attempts").fetchone()[0], 0)
 
 
 class ProgressTests(Base):
@@ -977,7 +979,7 @@ class ProgressTests(Base):
                 phases.append(e["phase"])
         self.assertEqual(phases, ["generando señales", "simulando", "sorteos al azar", "informe"])
         self.assertTrue(all("started_at" in e and "eta_seconds" in e for e in events))
-        row = dict(self.db().execute("SELECT * FROM runs").fetchone())
+        row = dict(self._open_db().execute("SELECT * FROM runs").fetchone())
         self.assertEqual((row["status"], row["progress"], row["eta_s"]), ("done", 100.0, 0.0))
         self.assertEqual(row["kind"], "practice")
         self.assertTrue(row["report_path"].endswith(os.path.join("reports", "{}.md".format(row["id"]))))
@@ -998,7 +1000,7 @@ class ProgressTests(Base):
                 open(os.path.join(self.dir, "cancel", str(event["run_id"])), "w").close()
         out = run("c27-breakout-perp-v1", self.dir, on_progress=cancel)
         self.assertEqual(out["status"], "cancelled")
-        row = self.db().execute("SELECT status, phase, report_path FROM runs").fetchone()
+        row = self._open_db().execute("SELECT status, phase, report_path FROM runs").fetchone()
         self.assertEqual((row["status"], row["phase"], row["report_path"]), ("cancelled", "cancelada", None))
         self.assertFalse(os.path.exists(os.path.join(self.dir, "reports", "1.md")))
 
@@ -1012,9 +1014,10 @@ class ProgressTests(Base):
         self.assertEqual(out["status"], "done")
 
     def test_failed_run_is_recorded(self):
+        provider = Provider(fail_prefetch=True)
         with self.assertRaises(g.HistoryError):
-            run("c25-pullback-perp-v1", self.dir, provider=Provider(fail_prefetch=True))
-        row = self.db().execute("SELECT status, error FROM runs").fetchone()
+            run("c25-pullback-perp-v1", self.dir, provider=provider)
+        row = self._open_db().execute("SELECT status, error FROM runs").fetchone()
         self.assertEqual(row["status"], "failed")
         self.assertIn("sin red", row["error"])
 
@@ -1102,7 +1105,7 @@ class RandomBaselineTests(unittest.TestCase):
 
     def test_float_cost_matches_the_exact_horizon_net(self):
         exact = horizon_net_bp("LONG", "PF_ETHUSD", "100", "100")
-        self.assertAlmostEqual(-exact, g.trade_cost_bp("PF_ETHUSD", "time_stop"), places=3)
+        self.assertAlmostEqual(g.trade_cost_bp("PF_ETHUSD", "time_stop"), -exact, places=3)
 
 
 if __name__ == "__main__":

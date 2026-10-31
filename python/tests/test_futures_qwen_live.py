@@ -13,6 +13,7 @@ import unittest
 from decimal import Decimal
 
 from balancita_engine import futures_llm_decisions as llm
+from balancita_engine import futures_qwen_analista as analista
 from balancita_engine import futures_qwen_live as live
 from balancita_engine import futures_qwen_trader as qt
 
@@ -23,6 +24,8 @@ D = Decimal
 BASE = qt.date_ms("2026-10-20")                  # a day boundary: also a 15 minute boundary
 REAL_CFG = qt.load_config(qt.CONFIG_PATH_LIVE)
 LIVE_CFG = copy.deepcopy(REAL_CFG)
+LIVE_CFG["runtime"].pop("pending_config", None)
+LIVE_CFG["runtime"]["opinion_enabled"] = True
 LIVE_CFG["products"] = ["PF_XBTUSD", "PF_ETHUSD"]        # live runs ETH only since 27-oct; the tests keep two products to cover several at once
 LIVE_CFG["exam"]["products"] = ["PF_XBTUSD", "PF_ETHUSD"]
 LIVE_CFG["notional_usd"] = "100"
@@ -164,9 +167,8 @@ class VersionTests(unittest.TestCase):
         self.assertEqual(REAL_CFG["products"], ["PF_ETHUSD"])
         self.assertEqual((cfg["wake"]["flat_every_min"], cfg["wake"]["position_every_min"]), (15, 15))
         self.assertIs(cfg["wake"]["extra_wakes"], False)
-        # version 9: no stop (stops turn noise into losses) and NO time limit (Fran, 27-oct: the exit is decided at every look)
         self.assertEqual(cfg["guardrails"], {"stop_sigma_24h": None, "min_stop_pct": 0.005, "max_stop_pct": 0.03,
-                                             "max_hold_min": 2160, "cooldown_min": 15})
+                                             "max_hold_min": 2160, "exhaust_hold_min": 1440, "cooldown_min": 15})
         self.assertTrue(cfg["mirror"])
         self.assertTrue(cfg["state_corta"])
         self.assertEqual(qt.lora_of(cfg), [{"id": 0, "scale": 1.0}])      # the destillation adapter (28-oct): it only gives the opinion, the formulas decide
@@ -330,6 +332,44 @@ class ModelFailureTests(unittest.TestCase):
 
 
 class RestartTests(unittest.TestCase):
+    def test_movement_matches_batch_through_warmup_polls_and_open_position_restart(self):
+        cfg = copy.deepcopy(LIVE_CFG)
+        cfg["products"] = ["PF_ETHUSD"]
+        cfg["analista"] = {"modo": "fuerte"}
+        tmp = self.enterContext(tempfile.TemporaryDirectory())
+        env = make(self, cfg=cfg, db=tmp, policy=Policy(flat="LARGO"))
+        warm_start = START // BAR * BAR - env.op.warmup_ms
+        history_start = warm_start - analista.extra_days(cfg) * DAY
+        env.candles["PF_ETHUSD"] = walk(110 * 288, 41, history_start, price=2000)
+
+        def assert_movement_matches_batch():
+            seen = env.feed.bars("PF_ETHUSD", history_start, env.now[0])
+            batch = analista.Movement(seen)
+            incremental = env.op.traders["PF_ETHUSD"].movement
+            # Restart moves the lookback start; exclude that first, possibly partial hour.
+            first_common_hour = max(incremental.first_hour, batch.first_hour) + 1
+            self.assertEqual(
+                {h: v for h, v in incremental.by_hour.items() if h >= first_common_hour},
+                {h: v for h, v in batch.by_hour.items() if h >= first_common_hour},
+            )
+            self.assertEqual(incremental.at(env.now[0]), batch.at(env.now[0]))
+            self.assertEqual(incremental.active(env.now[0]), batch.active(env.now[0]))
+
+        env.op.start()
+        assert_movement_matches_batch()
+        env.advance(30)
+        assert_movement_matches_batch()
+        before = env.rows("SELECT * FROM trades WHERE status='open'")
+        self.assertEqual(len(before), 1)
+        decisions = env.rows("SELECT * FROM decisions")
+        env.restart().start()
+        self.addCleanup(env.store.close)
+        assert_movement_matches_batch()
+        self.assertEqual(env.rows("SELECT * FROM trades WHERE status='open'"), before)
+        self.assertEqual(env.rows("SELECT * FROM decisions"), decisions)
+        env.advance(30)
+        assert_movement_matches_batch()
+
     def test_the_first_start_decides_nothing_about_the_past(self):
         env = make(self)
         env.op.start()
@@ -425,12 +465,13 @@ class SizeLeverageProductsTests(unittest.TestCase):
         env.op.start()
         env.advance(30)
         first_open = env.rows("SELECT * FROM trades WHERE product='PF_ETHUSD'")[0]
-        self.assertEqual(first_open["notional_usd"], "1000")
+        self.assertLessEqual(D(first_open["notional_usd"]) * (1 + qt.fee_rate()), D("1000"))
+        self.assertGreater(D(first_open["notional_usd"]), D("999"))
         env.policy.position = "CERRAR"
         env.advance(30)
         closed = env.rows("SELECT * FROM trades WHERE product='PF_ETHUSD' AND status='closed'")[0]
         expected_avail = D("1000") + D(closed["net_usd"])
-        self.assertEqual(env.store.available_balance_usd("1000"), expected_avail)
+        self.assertEqual(env.store.available_balance_usd(excluding_product="PF_ETHUSD"), expected_avail)
         self.assertEqual(env.op.traders["PF_ETHUSD"].notional, expected_avail)
 
     def test_environment_changes_them_with_no_caps(self):

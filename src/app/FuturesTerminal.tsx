@@ -30,7 +30,7 @@ import {
 } from './useQwenDecisions.ts'
 import QwenGlance from './QwenGlance.tsx'
 import TerminalNewsPanel from './TerminalNewsPanel.tsx'
-import { formatShortDateTime } from './news-format.ts'
+import { formatShortDateTime } from './terminal-date.ts'
 import { useTerminalNews } from './useTerminalNews.ts'
 import {
   analysesNotice,
@@ -79,10 +79,11 @@ export default function FuturesTerminal({
   > | null>(null)
   const liveGateway = bootstrap.mode === 'paper_live'
   const health = useHealth(liveGateway)
-  const { items: newsItems, loaded: newsLoaded } = useTerminalNews(
-    apiBase,
-    liveGateway,
-  )
+  const {
+    items: newsItems,
+    loaded: newsLoaded,
+    source: newsSource,
+  } = useTerminalNews(apiBase, liveGateway)
 
   const position = record(state?.position)
   const positions = Array.isArray(state?.positions)
@@ -500,6 +501,8 @@ export default function FuturesTerminal({
                       <TerminalNewsPanel
                         items={newsItems}
                         loaded={newsLoaded}
+                        nowMs={displayClock}
+                        source={newsSource}
                       />
                     ) : undefined
                   }

@@ -21,6 +21,7 @@ KRONOS_ID = "kronos-small-1h-h4-v1"
 QWEN_ID = "c31-qwen-exit-perp-v1"
 QWEN_LIVE_ID = "qwen-live-perp-v1"
 ROOT = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", ".."))
+READONLY_DB_URI = "file:{}?mode=ro"
 KRONOS_CONFIG = os.path.join(ROOT, "config", "models", "kronos-small-1h-h4-v1.json")
 QWEN_CONFIG = os.path.join(ROOT, "config", "qwen-exit.json")
 QWEN_LIVE_CONFIG = os.path.join(ROOT, "config", "qwen-live.json")
@@ -66,7 +67,7 @@ def kronos_stages(db_path, now_ms, parts=KRONOS_STAGE_PARTS):
     newest tramo and runs to now. Empty when it has not traded."""
     entries = []
     if db_path and os.path.isfile(db_path):
-        db = sqlite3.connect("file:{}?mode=ro".format(db_path), uri=True, timeout=10)
+        db = sqlite3.connect(READONLY_DB_URI.format(db_path), uri=True, timeout=10)
         try:
             columns = {r[1] for r in db.execute("PRAGMA table_info(trade)")}
             only_forward = " WHERE mode<>'backtest'" if "mode" in columns else ""
@@ -119,7 +120,7 @@ def live_config_hash(qwen_live_dir=None):
     path = os.path.join(qwen_live_dir or QWEN_LIVE_DIR, "live.sqlite")
     if os.path.isfile(path):
         try:
-            db = sqlite3.connect("file:{}?mode=ro".format(path), uri=True, timeout=10)
+            db = sqlite3.connect(READONLY_DB_URI.format(path), uri=True, timeout=10)
             try:
                 row = db.execute("SELECT value FROM meta WHERE key='config_hash'").fetchone()
             finally:
@@ -163,7 +164,7 @@ class RecordedTrades:
     def __call__(self, spec, product_id, tick_size, ones, fives, funding, start_ms, end_ms, chunk):
         if not self.db_path or not os.path.isfile(self.db_path):
             return [], 0
-        db = sqlite3.connect("file:{}?mode=ro".format(self.db_path), uri=True, timeout=10)
+        db = sqlite3.connect(READONLY_DB_URI.format(self.db_path), uri=True, timeout=10)
         try:
             columns = {r[1] for r in db.execute("PRAGMA table_info({})".format(self.table))}
             # Kronos' backtest rows ran on history it was pre-trained on: they are never evidence.
@@ -200,7 +201,7 @@ def scheme_replay(product_id, funding, start_ms, end_ms):
     # niveles de la prueba (5 y 5: paper) y modo del analista de movimiento (apagado: paper)
     from . import futures_qwen_rebote as rebote
     from . import futures_walkforward as walkforward
-    cfg = analista.apply_env(exigencia.apply_env(live.apply_overrides(qt.load_config(qt.CONFIG_PATH_LIVE))))
+    cfg: dict = analista.apply_env(exigencia.apply_env(live.apply_overrides(qt.load_config(qt.CONFIG_PATH_LIVE))))
     if rebote.from_env() == "formula_eth":
         pares = walkforward.ensure_eth_pairs(qt.DEFAULT_CACHE, log=lambda *a: None)
         cfg = walkforward.with_eth_formulas(cfg, walkforward.medicion_from_env(), pares=pares)
@@ -238,6 +239,16 @@ class QwenLiveTrades:
         self.replay = replay or scheme_replay
 
 
+    @staticmethod
+    def _photo_pool(rows, share):
+        key = "lean_num" if any(row.get("lean_num") is not None for row in rows) else "lean"
+        pool = sorted((row for row in rows if row.get(key) not in (None, 0) and row["moves"].get("240") is not None),
+                      key=lambda row: row[key])
+        count = max(1, int(len(pool) * share)) if pool else 0
+        side_of = {row["snap_id"]: -1 for row in pool[:count]}
+        side_of.update({row["snap_id"]: 1 for row in pool[len(pool) - count:]})
+        return pool, side_of
+
     def photo_trades(self, product_id, funding):
         """The extremes of the lean (the exam's own criterion): long on the fifth of photos where the numbers lean most
         to LARGO, short on the fifth that lean most to CORTO. Qwen almost never answers LARGO/CORTO outright, so the
@@ -259,13 +270,8 @@ class QwenLiveTrades:
             return []
         # lean_num (the part that comes from the numbers) needs the mirrored question. While the photos have not been
         # mirrored, the plain lean (p LARGO - p CORTO on the real numbers) orders them: weaker, and said in the report.
-        key = "lean_num" if any(r.get("lean_num") is not None for r in rows) else "lean"
-        pool = sorted((r for r in rows if r.get(key) not in (None, 0) and r["moves"].get("240") is not None),
-                      key=lambda r: r[key])
-        k = max(1, int(len(pool) * share)) if pool else 0
-        side_of = {r["snap_id"]: -1 for r in pool[:k]}
-        side_of.update({r["snap_id"]: 1 for r in pool[len(pool) - k:]})
-        line = qt.FundingLine([(r[0], r[1]) for r in funding]) if funding else None
+        pool, side_of = self._photo_pool(rows, share)
+        line = qt.FundingLine([(row[0], row[1]) for row in (funding or ())])
         out, free_at = [], 0
         for row in sorted((r for r in pool if r["product"] == product_id and r["snap_id"] in side_of),
                           key=lambda r: r["t_ms"]):
@@ -275,9 +281,9 @@ class QwenLiveTrades:
             long = side_of[row["snap_id"]] > 0
             move = row["moves"]["240"]
             end = entry + LIVE_HOLD_MS
-            paid, covered = line.accrue(entry, end, qt.D(100), long) if line is not None else (0.0, 0)
+            paid, covered = line.accrue(entry, end, qt.D(100), long)
             funding_bp = float(paid) / 100.0 * 10_000
-            status = "complete" if covered >= LIVE_HOLD_MS else ("partial" if covered > 0 else "unknown")
+            status = qt.funding_status(LIVE_HOLD_MS, covered)
             out.append({"side": "LONG" if long else "SHORT", "entry_time_ms": entry, "exit_time_ms": end,
                         "net_bp": (move if long else -move) - row["cost_bp"] - funding_bp,
                         "funding_usd": float(paid), "funding_status": status, "exit_reason": "time",
@@ -288,7 +294,7 @@ class QwenLiveTrades:
     def live_trades(self, product_id):
         if not self.live_db_path or not os.path.isfile(self.live_db_path):
             return []
-        db = sqlite3.connect("file:{}?mode=ro".format(self.live_db_path), uri=True, timeout=10)
+        db = sqlite3.connect(READONLY_DB_URI.format(self.live_db_path), uri=True, timeout=10)
         db.row_factory = sqlite3.Row
         try:
             rows = db.execute("SELECT * FROM trades WHERE product=? AND status='closed' AND net_bp IS NOT NULL "
@@ -301,12 +307,17 @@ class QwenLiveTrades:
         for r in rows:
             held = int(r["exit_ms"]) - int(r["entry_ms"])
             status = r["funding_status"] or "unknown"
+            covered = None
+            if status == "complete":
+                covered = held
+            elif status == "unknown":
+                covered = 0
             out.append({"side": r["side"], "entry_time_ms": int(r["entry_ms"]), "exit_time_ms": int(r["exit_ms"]),
                         "net_bp": float(r["net_bp"]), "entry_price": r["entry_px"], "exit_price": r["exit_px"],
                         "quantity": r["qty"], "notional_usd": r["notional_usd"], "pnl_usd": r["net_usd"],
                         "funding_usd": r["funding_usd"] if status != "unknown" else None, "funding_status": status,
                         "funding_complete": status == "complete", "funding_held_ms": held,
-                        "funding_covered_ms": held if status == "complete" else (0 if status == "unknown" else None),
+                        "funding_covered_ms": covered,
                         "exit_reason": r["exit_reason"] or r["closed_by"] or "qwen", "source": "live"})
         return out
 

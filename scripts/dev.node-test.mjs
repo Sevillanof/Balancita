@@ -6,6 +6,7 @@ import {
   describeChildExit,
   devChildSpecs,
   qwenExitSwitch,
+  readQwenNewsOnly,
   devProxyConfig,
   findQwenModel,
   llamaPort,
@@ -22,6 +23,70 @@ const root = '/repo'
 const noFlags = new Set()
 
 describe('devChildSpecs', () => {
+  it('requires both explicit news priority and disabled candle opinions in the live config', () => {
+    const read = (config) => (path) => {
+      assert.equal(path, '/repo/config/qwen-live.json')
+      return JSON.stringify(config)
+    }
+    assert.equal(
+      readQwenNewsOnly(
+        root,
+        read({ noticias: { policy: 'priority_v2' }, opinion_enabled: false }),
+      ),
+      true,
+    )
+    assert.equal(
+      readQwenNewsOnly(root, read({ noticias: { version: 1 } })),
+      false,
+    )
+    assert.equal(
+      readQwenNewsOnly(
+        root,
+        read({ noticias: { policy: 'priority_v2' }, opinion_enabled: true }),
+      ),
+      false,
+    )
+    assert.throws(() => readQwenNewsOnly(root, () => '{'), SyntaxError)
+  })
+
+  it('news-only opinions also apply before the new trading flow is activated', () => {
+    assert.equal(
+      readQwenNewsOnly(root, () =>
+        JSON.stringify({
+          noticias: { version: 1 },
+          runtime: { opinion_enabled: false },
+        }),
+      ),
+      true,
+    )
+  })
+
+  it('news-only mode starts the deterministic operator without a model server', () => {
+    const specs = devChildSpecs({
+      root,
+      env: {},
+      allowedFlags: noFlags,
+      llm: null,
+      qwenNewsOnly: true,
+    })
+    assert.ok(specs.some((s) => s.name === 'qwenlive'))
+    assert.ok(!specs.some((s) => s.name === 'q'))
+  })
+
+  it('news-only mode leaves the local model to news and does not start candle opinions', () => {
+    const specs = devChildSpecs({
+      root,
+      env: { LLAMA_MODEL_PATH: '/models/test.gguf' },
+      allowedFlags: noFlags,
+      llm: { command: 'llama-server' },
+      qwenNewsOnly: true,
+    })
+    assert.ok(specs.some((s) => s.name === 'llm'))
+    assert.ok(specs.some((s) => s.name === 'qwenlive'))
+    assert.ok(!specs.some((s) => s.name === 'q'))
+    assert.equal(specs.filter((s) => s.name === 'qwenlive').length, 1)
+  })
+
   const specs = devChildSpecs({
     root,
     env: { FUTURES_MODE: 'paper_live', PORT: '9999', KEEP: 'yes' },
@@ -551,6 +616,7 @@ describe('optional LLM decision children (llm and q)', () => {
     root,
     allowedFlags: noFlags,
     python: { command: 'python3', prefixArgs: [] },
+    exists: () => false,
   }
   const llm = { command: 'llama-server' }
   const local = { LLAMA_MODEL_PATH: '/models/q.gguf' }
@@ -948,7 +1014,7 @@ describe('resolveLlamaServer', () => {
   it('is enabled when the binary runs and DECISIONS_ENABLED is not 0', () => {
     for (const env of [{}, { DECISIONS_ENABLED: '1' }])
       assert.equal(
-        resolveLlamaServer({ env, run: found }).command,
+        resolveLlamaServer({ env, run: found, platform: 'linux' }).command,
         'llama-server',
       )
   })

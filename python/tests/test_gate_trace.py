@@ -51,7 +51,8 @@ class EquivalenceTests(unittest.TestCase):
     def test_book_trades_with_trace_returns_the_same_trades(self):
         spec = SPECS[SPEC_IDS[0]]
         args = (spec, "PF_XBTUSD", "0.5", ONES, FIVES, [], FROM, HOLDOUT, lambda f: None)
-        plain, open_plain = g.book_trades(*args)
+        plain, open_plain, no_trace = g.book_trades(*args)
+        self.assertIsNone(no_trace)
         traced, open_traced, report = g.book_trades(*args, trace=True)
         self.assertEqual((plain, open_plain), (traced, open_traced))
         self.assertEqual(len(report["trades"]), len(plain))

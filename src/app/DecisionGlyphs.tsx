@@ -44,7 +44,15 @@ export function DecisionHead({ view }: { view: DecisionView }) {
 
 /** Master, keeper, news analyst and Qwen's opinion as small pills. */
 export function DecisionChips({ view }: { view: DecisionView }) {
-  const { opinion, gate, master, news } = view
+  const { opinion, gate, master, news, newsDirection, newsAvailable } = view
+  const newsLabel =
+    newsDirection === 'bullish'
+      ? 'alcistas'
+      : newsDirection === 'bearish'
+        ? 'bajistas'
+        : newsDirection === 'neutral'
+          ? 'neutrales'
+          : null
   return (
     <span className="flex flex-wrap items-center gap-1" data-testid="chips">
       {master !== null && (
@@ -63,16 +71,17 @@ export function DecisionChips({ view }: { view: DecisionView }) {
           Portero {gate ? '✓' : '✕'}
         </span>
       )}
-      {news !== null && news !== undefined && (
+      {((news !== null && news !== undefined) || newsAvailable === false) && (
         <span
-          className={`${CHIP} ${news ? 'text-long' : 'text-ink-2'}`}
+          className={`${CHIP} ${newsDirection === 'bullish' ? 'text-long' : newsDirection === 'bearish' ? 'text-short' : 'text-ink-2'}`}
           title={
-            news
-              ? 'Analista de noticias: noticias frescas a favor'
-              : 'Analista de noticias: sin aval de noticias frescas'
+            newsAvailable === false
+              ? 'Noticias: datos no disponibles; no se puede confirmar el aval'
+              : `Noticias: ${news ? 'avalan esta señal' : 'no avalan esta señal'}. El color indica dirección, no ganancias ni probabilidad de éxito.`
           }
         >
-          Noticias {news ? '✓' : '✕'}
+          Noticias {newsAvailable === false ? '?' : news ? '✓' : '✕'}
+          {newsLabel && <small>· {newsLabel}</small>}
         </span>
       )}
       {opinion &&

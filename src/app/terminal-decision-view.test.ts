@@ -10,6 +10,39 @@ const base = {
 }
 
 describe('decisionView', () => {
+  it('keeps actual news direction independent of whether it enables the Maestro signal', () => {
+    const view = decisionView({
+      formula_action: 'MANTENER',
+      formula: {
+        maestro: -2,
+        portero_si: false,
+        noticias_si: true,
+        noticias: { disponible: true, n: 2, sentimiento: -1 },
+      },
+    })
+    expect(view.news).toBe(true)
+    expect(view.newsDirection).toBe('bearish')
+  })
+
+  it('exposes the recorded reason without accepting malformed wire values', () => {
+    expect(decisionView(base).motivo).toBe(base.formula.motivo)
+    expect(decisionView({ formula: { motivo: 42 } }).motivo).toBeNull()
+    expect(decisionView({}).motivo).toBeNull()
+  })
+
+  it('does not report a model failure when candle opinions were intentionally disabled', () => {
+    expect(
+      decisionView({
+        formula_action: 'LARGO',
+        formula: {
+          authority: 'noticias',
+          opinion_enabled: false,
+          noticias_si: true,
+        },
+      }).opinion,
+    ).toBeNull()
+  })
+
   it('reads an entry the formula took and Qwen agreed with', () => {
     const view = decisionView({
       ...base,
@@ -45,19 +78,6 @@ describe('decisionView', () => {
     expect(view.gate).toBe(false)
     expect(view.news).toBe(true)
     expect(view.relevant).toBe(true)
-  })
-
-  it('keeps the reason of the formulas as motivo, and none without a formula', () => {
-    const withFormula = decisionView({
-      formula: {
-        maestro: 2,
-        portero_si: true,
-        motivo: 'maestro fuerte y portero a favor',
-      },
-      formula_action: 'LARGO',
-    })
-    expect(withFormula.motivo).toBe('maestro fuerte y portero a favor')
-    expect(decisionView({ action: 'WAIT' }).motivo).toBeUndefined()
   })
 
   it('tells a stopped entry from a quiet wait', () => {

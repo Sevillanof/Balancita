@@ -167,7 +167,7 @@ def _solve_linear(mat, rhs):
     n = len(rhs)
     aug = [list(mat[i]) + [float(rhs[i])] for i in range(n)]
     for i in range(n):
-        piv = max(range(i, n), key=lambda r: abs(aug[r][i]))
+        piv = max(range(i, n), key=lambda r, column=i: abs(aug[r][column]))
         aug[i], aug[piv] = aug[piv], aug[i]
         div = aug[i][i] if abs(aug[i][i]) > 1e-12 else 1e-12
         for j in range(i, n + 1):

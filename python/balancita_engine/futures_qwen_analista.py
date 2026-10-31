@@ -1,15 +1,16 @@
-"""El ANALISTA DE MOVIMIENTO: regula el TAMAÑO de cada operación del maestro y el portero, solo en las pruebas de /Estrategias.
+"""El ANALISTA DE MOVIMIENTO: regula el TAMAÑO de cada operación del maestro y el portero, en pruebas y en paper.
 
 No decide, no abre la puerta del portero y no cambia salidas: las mismas operaciones, con más peso cuando el mercado se mueve.
 «Con movimiento» = la volatilidad realizada de las últimas 24 h (raíz de la suma de los cuadrados de los retornos de 5 min) está
 en o por encima de la MEDIANA de sus últimos 90 días (percentil >= 0,5, medido hora a hora con lo que ya estaba publicado).
+Solo se consolidan horas completas; la carga inicial y las actualizaciones vela a vela dan el mismo resultado.
 
-- ``apagado``: tamaño 1 siempre. Es lo que opera en paper (``DEFAULT``): sin el modo, nada cambia, ni los números ni la identidad.
+- ``apagado``: tamaño 1 siempre. Es el valor por defecto sin ``analista``; la config de paper puede elegir otro modo.
 - ``suave``: tamaño 1,25 con movimiento y 0,75 en calma.
 - ``fuerte``: tamaño 1,5 con movimiento y 0,5 en calma.
 
-Medido en 4 años de ETH (informe ``analisis/analista-movimientos/acelerador/informe.md``): +14.146 pb la base, +19.247 con suave y
-+24.349 con fuerte. Sin dato suficiente de los 90 días la operación entra con tamaño 1 (y se marca «sin dato»).
+Los multiplicadores son reglas de tamaño, no pruebas de rentabilidad. Con cuenta entera el operador limita además
+la entrada al saldo disponible y reserva su comisión. Sin historia suficiente entra con tamaño 1 («sin dato»).
 """
 
 import bisect
@@ -50,9 +51,18 @@ def env_for(value=None):
 
 
 def apply_env(cfg, env=None):
-    """La config con ``analista`` si la variable pide otro modo que el de paper (si no, la misma: misma identidad)."""
+    """Un modo explícito reemplaza el de la config; sin variable se conserva el de paper."""
+    env = os.environ if env is None else env
+    if ENV not in env:
+        return cfg
     got = from_env(env)
-    return cfg if got == DEFAULT else dict(cfg, analista={"modo": got})
+    if got == DEFAULT:
+        if "analista" not in cfg:
+            return cfg
+        out = dict(cfg)
+        out.pop("analista")
+        return out
+    return dict(cfg, analista={"modo": got})
 
 
 def sizes_of(cfg):
@@ -82,6 +92,7 @@ class Movement:
         self._prev = None
         self.first_hour = None
         self.last_hour = None
+        self._closed_hour = None
         self._cursor_hour = None
         self._window = []
         self._order = []
@@ -95,8 +106,10 @@ class Movement:
     def add_bar(self, bar):
         """Agrega una vela cerrada de 5 min a la serie horaria."""
         close = float(bar["close"])
+        bucket = int(bar["bucket_start"])
+        self._closed_hour = (bucket + BAR_MS) // HOUR_MS - 1
         if self._prev is not None and self._prev > 0 and close > 0:
-            hour = int(bar["bucket_start"]) // HOUR_MS
+            hour = bucket // HOUR_MS
             self.by_hour[hour] = self.by_hour.get(hour, 0.0) + math.log(close / self._prev) ** 2
             if self.first_hour is None or hour < self.first_hour:
                 self.first_hour = hour
@@ -105,9 +118,9 @@ class Movement:
         self._prev = close
 
     def _advance(self, target_hour):
-        if self.first_hour is None or self.last_hour is None:
+        if self.first_hour is None or self.last_hour is None or self._closed_hour is None:
             return
-        limit = min(target_hour, self.last_hour)
+        limit = min(target_hour, self.last_hour, self._closed_hour)
         start = self.first_hour if self._cursor_hour is None else self._cursor_hour + 1
         for hour in range(start, limit + 1):
             self._sums.append(self.by_hour.get(hour, 0.0))

@@ -8,6 +8,7 @@ const CLOSED_BY: Record<string, string> = {
   stop: 'saltó el stop automático',
   tiempo: 'cierre obligatorio por tiempo (el límite de la versión)',
   fin_de_bloque: 'fin del periodo de prueba',
+  noticias: 'cierre por noticia fuerte contraria',
 }
 
 function hold(minutes: number | null): string {

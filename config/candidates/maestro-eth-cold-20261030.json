@@ -1,0 +1,67 @@
+{
+ "ajuste": {
+  "acierto_signo": 0.5584,
+  "desde": "2025-10-15",
+  "flojo_share": 0.5,
+  "fotos": 10171,
+  "fuerte_share": 0.2,
+  "hasta": "2026-01-31",
+  "l2": 10.0,
+  "productos": [
+   "PF_ETHUSD"
+  ]
+ },
+ "coeficientes": {
+  "area_out": -0.040097,
+  "area_signed": -0.059554,
+  "move15_n": -0.005159,
+  "pos24": -0.295786,
+  "pos7": -0.267869,
+  "ret_1h": 0.009499,
+  "ret_24h": -0.363065,
+  "ret_4h": 0.066476,
+  "ret_7d": -0.236483,
+  "since_diff": 0.024425,
+  "strength": -0.040578,
+  "z_1h": 0.040116,
+  "z_24h": 0.665534,
+  "z_4h": -0.050463,
+  "z_7d": 0.398662
+ },
+ "nota": "Candidato en fr\u00edo; historial explorado, no validaci\u00f3n a ciegas.",
+ "plazo_min": 720,
+ "provenance": {
+  "cold_start": true,
+  "fit_until_ms": 1769904000000,
+  "historical_exploration": true,
+  "independent_raw_features": true,
+  "last_label_end_ms": 1769903100000,
+  "target": "direction_12h"
+ },
+ "regla_paper": {
+  "ejecucion": "el coordinador aplica las reglas de entrada y salida; este archivo no las fija",
+  "rol": "solo predicci\u00f3n de direcci\u00f3n a 12 h"
+ },
+ "schema": "balancita-qwen-lora-maestro.v1",
+ "sd": {
+  "area_out": 3.45569384,
+  "area_signed": 0.3618084,
+  "move15_n": 1.04350021,
+  "pos24": 0.52078084,
+  "pos7": 0.52340358,
+  "ret_1h": 0.00697573,
+  "ret_24h": 0.03186113,
+  "ret_4h": 0.01426896,
+  "ret_7d": 0.07101611,
+  "since_diff": 13.03073734,
+  "strength": 0.55528801,
+  "z_1h": 1.03129065,
+  "z_24h": 0.90067356,
+  "z_4h": 1.02365452,
+  "z_7d": 0.95121456
+ },
+ "umbrales": {
+  "flojo": 0.212742,
+  "fuerte": 0.423286
+ }
+}

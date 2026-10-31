@@ -967,7 +967,7 @@ class ServiceTests(ServiceBase):
                 "--decisions-db", self.decisions_path]
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
-            code = q.main(argv, provider=again, questions=self.questions, calibration=self.calibration)
+            code = q.main(argv, provider=again, questions=self.questions, calibration=self.calibration, enabled=True)
         self.assertEqual(code, 0)
         self.assertEqual(again.calls, 0)
         self.assertIn("decisions written 0", out.getvalue())
@@ -976,7 +976,7 @@ class ServiceTests(ServiceBase):
         argv = ["--once", "--market-db", self.market_path, "--verdicts-db", self.verdicts_path,
                 "--decisions-db", self.decisions_path]
         with contextlib.redirect_stdout(io.StringIO()) as out:
-            q.main(argv, provider=self.provider, questions=self.questions, calibration=self.calibration)
+            q.main(argv, provider=self.provider, questions=self.questions, calibration=self.calibration, enabled=True)
         self.assertEqual(self.provider.calls, 1)
         self.assertIn("decisions written 1", out.getvalue())
 
@@ -1112,7 +1112,7 @@ class ProbeAndAskTests(unittest.TestCase):
         with contextlib.redirect_stdout(out):
             code = q.main(["--ask", "direction_1h", "--product", BTC, "--market-db", fixture.market_path,
                            "--verdicts-db", fixture.verdicts_path, "--decisions-db", decisions],
-                          provider=self.provider)
+                          provider=self.provider, enabled=True)
         self.assertEqual(code, 0)
         text = out.getvalue()
         for needle in ("chosen: up", "confidence:", "latency_ms:", "up=", "down=", "flat="):
@@ -1124,7 +1124,7 @@ class ProbeAndAskTests(unittest.TestCase):
         err = io.StringIO()
         with contextlib.redirect_stderr(err):
             code = q.main(["--ask", "nope", "--market-db", "m", "--verdicts-db", "v", "--decisions-db", "d"],
-                          provider=self.provider)
+                          provider=self.provider, enabled=True)
         self.assertEqual(code, 2)
         self.assertIn("unknown question", err.getvalue())
 
@@ -1433,7 +1433,7 @@ class AutoSourceTests(ServiceBase):
     def test_the_cli_rejects_a_remote_llama_url(self):
         err = io.StringIO()
         with contextlib.redirect_stderr(err):
-            code = q.main(["--probe", "--llama-url", "http://example.com:8088"])
+            code = q.main(["--probe", "--llama-url", "http://example.com:8088"], enabled=True)
         self.assertEqual(code, 2)
         self.assertIn("loopback", err.getvalue())
 
@@ -1442,7 +1442,7 @@ class AutoSourceTests(ServiceBase):
             err = io.StringIO()
             with contextlib.redirect_stderr(err), contextlib.redirect_stdout(io.StringIO()):
                 try:
-                    code = q.main(argv, provider=q.FakeProvider(entries=entries()))
+                    code = q.main(argv, provider=q.FakeProvider(entries=entries()), enabled=True)
                 except SystemExit as exit_:
                     code = exit_.code
             self.assertEqual(code, 2, argv)
@@ -1563,7 +1563,7 @@ class ProbeSourcesTests(unittest.TestCase):
         self.server.post_completion = self.post
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
-            code = q.main(["--probe-prompt-variants", "--llama-url", self.server.url])
+            code = q.main(["--probe-prompt-variants", "--llama-url", self.server.url], enabled=True)
         self.assertEqual(code, 0)
         self.assertIn("v3", out.getvalue())
 

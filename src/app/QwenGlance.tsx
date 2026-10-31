@@ -27,7 +27,8 @@ export default function QwenGlance({
   latest: Record<string, unknown> | null
   nowMs: number
 }) {
-  const { trades } = useQwenTrades(product, true)
+  const { trades, source } = useQwenTrades(product, true)
+  const confirmed = source.state === 'ok'
   const open = trades.find((trade) => trade.open) ?? null
   const view = latest ? decisionView(latest) : null
   const long = open?.side === 'LONG'
@@ -40,7 +41,7 @@ export default function QwenGlance({
     >
       <div
         className={`m-0 flex flex-wrap items-center justify-between gap-2 rounded-md px-2 py-1 text-hint font-semibold ${
-          open
+          open && confirmed
             ? long
               ? 'bg-long/15 text-long'
               : 'bg-short/15 text-short'
@@ -49,9 +50,15 @@ export default function QwenGlance({
         data-testid="glance-position"
       >
         <span>
-          {open
-            ? `Operación abierta: ${long ? '▲ Posición larga' : '▼ Posición corta'} · ${held(open.entryMs, nowMs)}`
-            : 'Operación abierta: ○ Sin posición abierta'}
+          {!confirmed
+            ? open
+              ? `Último dato, sin confirmar: ${long ? '▲ Posición larga' : '▼ Posición corta'}`
+              : source.state === 'loading'
+                ? 'Cargando operación abierta…'
+                : 'No se puede confirmar la operación abierta'
+            : open
+              ? `Operación abierta: ${long ? '▲ Posición larga' : '▼ Posición corta'} · ${held(open.entryMs, nowMs)}`
+              : 'Operación abierta: ○ Sin posición abierta'}
         </span>
         {open && <span>{signedUsd(open.netUsd)}</span>}
       </div>

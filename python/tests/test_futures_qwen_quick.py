@@ -62,7 +62,7 @@ class QuickApiTests(unittest.TestCase):
         self.addCleanup(self.dir.cleanup)
         self.spawned = []
         self.api = quick_api.QuickTestApi(os.path.join(self.dir.name, "exam-v3.sqlite"), python="py",
-                                          spawn=lambda *a: self.spawned.append(a))
+                                          spawn=lambda *a: self.spawned.append(a), news_only=False)
 
     def test_only_qwen_live_has_a_quick_test(self):
         with self.assertRaises(GateApiError):

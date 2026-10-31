@@ -18,6 +18,10 @@ export interface QwenTrade {
   feesUsd: number | null
   fundingUsd: number | null
   fundingComplete: boolean
+  fundingModel?: string | null
+  netCompleteUsd?: number | null
+  configHash?: string | null
+  markMs?: number | null
   closedBy: string | null
   holdMin: number | null
   markPrice: number | null
@@ -49,6 +53,7 @@ export function qwenTrades(payload: unknown): QwenTrade[] {
       typeof row.product !== 'string' ||
       entryMs === null ||
       tradeNo === null ||
+      (row.status !== 'open' && row.status !== 'closed') ||
       (row.side !== 'LONG' && row.side !== 'SHORT')
     )
       return []
@@ -66,6 +71,15 @@ export function qwenTrades(payload: unknown): QwenTrade[] {
         feesUsd: number(row.fees_usd),
         fundingUsd: number(row.funding_usd),
         fundingComplete: row.funding_status === 'complete',
+        fundingModel:
+          typeof row.funding_model === 'string' ? row.funding_model : null,
+        netCompleteUsd:
+          row.funding_status === 'complete'
+            ? number(row.net_complete_usd)
+            : null,
+        configHash:
+          typeof row.config_hash === 'string' ? row.config_hash : null,
+        markMs: number(row.mark_ms),
         closedBy: typeof row.closed_by === 'string' ? row.closed_by : null,
         holdMin: number(row.hold_min),
         markPrice: number(row.mark_price),
@@ -102,17 +116,33 @@ export function useQwenTrades(
         if (!response.ok) throw new Error(`HTTP ${response.status}`)
         const body = await response.json()
         const status = record(body).status
-        setRead({
+        const rows = record(body).trades
+        const parsed = qwenTrades(body)
+        if (
+          status === 'ok' &&
+          (!Array.isArray(rows) || parsed.length !== rows.length)
+        )
+          throw new Error('Invalid operations response')
+        setRead((previous) => ({
           product,
-          trades: qwenTrades(body),
+          trades:
+            status === 'ok'
+              ? parsed
+              : previous?.product === product
+                ? previous.trades
+                : NONE,
           source:
             status === 'ok'
               ? { state: 'ok' }
               : { state: 'off', reason: String(record(body).reason ?? '') },
-        })
+        }))
       } catch {
         if (!controller.signal.aborted)
-          setRead({ product, trades: NONE, source: { state: 'error' } })
+          setRead((previous) => ({
+            product,
+            trades: previous?.product === product ? previous.trades : NONE,
+            source: { state: 'error' },
+          }))
       }
     }
     void load()

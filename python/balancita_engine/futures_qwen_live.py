@@ -5,7 +5,13 @@ Sin claves, sin cuenta y sin órdenes reales: solo lee velas de 5 minutos y el f
 costos reales de Kraken (``futures_costs``: 0,02 % maker / 0,05 % taker) y el funding publicado, calculados con ``settle``,
 la misma cuenta que usa la práctica sobre historia (live == replay).
 
-Cómo decide (``config/qwen-live.json``)
+Con ``decide_by=formula`` deciden las fórmulas y Qwen solo opina; ``opinion_enabled=false`` apaga esa opinión.
+El modo opt-in ``noticias.policy=priority_v2`` usa Qwen solo para clasificar noticias: catalizadores verificados
+pueden abrir o girar en velas cerradas de 5 min, con un máximo de 24 h por posición de noticias. Sin noticia,
+el maestro y el portero autónomo deben coincidir. La prueba histórica de fórmulas no simula esta política.
+La cuenta entera limita entradas al saldo disponible, reservando la comisión de entrada; no redimensiona lo abierto.
+
+Diseño histórico de la versión 8 (``config/qwen-live-v7.json`` conserva la versión anterior)
     * Cada 15 minutos, con o sin posición, y NUNCA en otro momento: no hay despertares extra (movimiento fuerte, cerca del
       stop, funding, movimiento grande). La clave de cada despertar es (producto, ventana de 15 minutos).
     * Qwen abre y cierra. Guardrails que no puede cambiar (versión 8): sin stop, cierre obligatorio a las 48 h y espera de
@@ -21,9 +27,8 @@ Cómo decide (``config/qwen-live.json``)
 
 Una base propia (``data/qwen-live/live.sqlite`` o ``QWEN_LIVE_DB``) y UN solo proceso por base (candado de archivo). Si el
 proceso se reinicia, recupera la posición abierta y no repite un despertar ya decidido. Si la base es de OTRA configuración
-(cambió la versión del prompt, el tamaño, los productos...), al arrancar se ARCHIVA (se renombra a ``live-<hash>.sqlite`` en la
-misma carpeta, después de cerrar la posición abierta como ``fin_de_bloque`` / ``cambio_de_version``) y empieza una nueva: nada
-se borra y nada de lo viejo se mezcla con lo nuevo.
+(cambió la versión del prompt, el tamaño, los productos...), el arranque se rechaza sin cerrar ni renombrar nada.
+``--activate-flat-config`` cambia de versión sobre la misma cuenta solo si está sin posiciones; no archiva ni reinicia dinero.
 
     python -m balancita_engine.futures_qwen_live                      # corre hasta Ctrl+C
     python -m balancita_engine.futures_qwen_live --export datos.jsonl  # decisiones para reentrenar offline (sin modelo)
@@ -31,6 +36,8 @@ se borra y nada de lo viejo se mezcla con lo nuevo.
 """
 
 import argparse
+import copy
+import hashlib
 import json
 import os
 import signal
@@ -51,6 +58,8 @@ from .futures_history import (DAY_MS, HOUR_MS, MINUTE_MS, CandleCache, HistoryEr
                               fill_gaps)
 
 D = Decimal
+OPEN_TRADE_QUERY = "SELECT 1 FROM trades WHERE status='open' LIMIT 1"
+OPEN_POSITION_QUERY = "SELECT 1 FROM trader_state WHERE position_json IS NOT NULL LIMIT 1"
 BAR_MS = qt.BAR_MS
 BUCKET_MS = 15 * MINUTE_MS                      # one wake per product and bucket
 DB_ENV = "QWEN_LIVE_DB"
@@ -69,6 +78,7 @@ SKIP_TEXT = {
     "sin_respuesta": "el modelo contestó algo que no se pudo leer",
     "proceso_detenido": "el proceso estaba apagado a esa hora",
     "datos_incompletos": "la ficha estaba incompleta (faltaban datos), no se le preguntó",
+    "saldo_insuficiente": "no hay saldo disponible para abrir la operación",
 }
 
 
@@ -200,8 +210,28 @@ class ProcessLock:
 
 # --------------------------------------------------------------------------- the live database
 
+DEFAULT_ACCOUNT_START_USD = "1000"
+
 _SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS account(
+  id INTEGER PRIMARY KEY CHECK(id=1), initial_usd TEXT NOT NULL, created_ms INTEGER NOT NULL);
+CREATE TRIGGER IF NOT EXISTS account_no_update BEFORE UPDATE ON account
+BEGIN SELECT RAISE(ABORT,'account genesis is immutable'); END;
+CREATE TRIGGER IF NOT EXISTS account_no_delete BEFORE DELETE ON account
+BEGIN SELECT RAISE(ABORT,'account genesis is immutable'); END;
+CREATE TRIGGER IF NOT EXISTS account_no_replace BEFORE INSERT ON account WHEN EXISTS(SELECT 1 FROM account)
+BEGIN SELECT RAISE(ABORT,'account genesis already exists'); END;
+CREATE TABLE IF NOT EXISTS config_versions(
+  id INTEGER PRIMARY KEY AUTOINCREMENT, previous_hash TEXT, config_hash TEXT NOT NULL,
+  activated_ms INTEGER NOT NULL, config_json TEXT NOT NULL, cash_usd TEXT NOT NULL);
+CREATE TRIGGER IF NOT EXISTS config_versions_no_update BEFORE UPDATE ON config_versions
+BEGIN SELECT RAISE(ABORT,'configuration history is append-only'); END;
+CREATE TRIGGER IF NOT EXISTS config_versions_no_delete BEFORE DELETE ON config_versions
+BEGIN SELECT RAISE(ABORT,'configuration history is append-only'); END;
+CREATE TRIGGER IF NOT EXISTS config_versions_no_replace BEFORE INSERT ON config_versions
+WHEN EXISTS(SELECT 1 FROM config_versions WHERE id=NEW.id)
+BEGIN SELECT RAISE(ABORT,'configuration history is append-only'); END;
 CREATE TABLE IF NOT EXISTS decisions(
   product TEXT NOT NULL, bucket_ms INTEGER NOT NULL, t_ms INTEGER NOT NULL, decided_at_ms INTEGER NOT NULL,
   kind TEXT NOT NULL, action TEXT NOT NULL, model_action TEXT, p_action REAL, confidence REAL, probs_json TEXT,
@@ -227,6 +257,9 @@ CREATE TABLE IF NOT EXISTS trades(
 CREATE TABLE IF NOT EXISTS errors(
   id INTEGER PRIMARY KEY AUTOINCREMENT, at_ms INTEGER NOT NULL, place TEXT NOT NULL, product TEXT, kind TEXT NOT NULL,
   detail TEXT);
+CREATE TABLE IF NOT EXISTS news_actions(
+  product TEXT NOT NULL, event_id TEXT NOT NULL, consumed_ms INTEGER NOT NULL,
+  action TEXT NOT NULL, evidence_json TEXT NOT NULL, PRIMARY KEY(product,event_id));
 CREATE TABLE IF NOT EXISTS trader_state(
   product TEXT PRIMARY KEY, last_fed_ms INTEGER, trade_seq INTEGER NOT NULL, cooldown_until INTEGER NOT NULL,
   last_call_ms INTEGER, position_json TEXT, updated_ms INTEGER NOT NULL, window_json TEXT);
@@ -237,12 +270,14 @@ _ADDED_COLUMNS = {
                   ("look_n", "INTEGER"), ("mirror_ok", "INTEGER"), ("factors_json", "TEXT"),
                   ("formula_action", "TEXT"), ("formula_json", "TEXT"), ("opinion_agrees", "INTEGER"), ("opinion_error", "TEXT")),
     "trader_state": (("window_json", "TEXT"),),
+    "trades": (("funding_model", "TEXT"), ("net_complete_usd", "TEXT"), ("config_hash", "TEXT")),
 }
 
 _TRADE_COLUMNS = ("status", "side", "entry_ms", "exit_ms", "entry_px", "exit_px", "qty", "notional_usd", "gross_usd",
                   "fees_usd", "funding_usd", "net_usd", "net_bp", "funding_status", "closed_by", "exit_reason",
                   "entry_reason", "entry_p", "hold_min", "mfe_bp", "mae_bp", "stop_px", "max_hold_ms", "mark_px",
-                  "mark_ms", "net_now_usd", "opened_at_ms", "closed_at_ms", "leverage", "margin_usd")
+                  "mark_ms", "net_now_usd", "opened_at_ms", "closed_at_ms", "leverage", "margin_usd",
+                  "funding_model", "net_complete_usd", "config_hash")
 
 
 def position_to_json(position):
@@ -250,7 +285,7 @@ def position_to_json(position):
             "entry_px": str(position.entry_px), "qty": str(position.qty), "stop_px": position.stop_px,
             "stop_pct": position.stop_pct, "max_hold_ms": position.max_hold_ms, "entry_p": position.entry_p,
             "entry_reason": position.entry_reason, "trade_no": position.trade_no, "mfe_bp": position.mfe_bp,
-            "mae_bp": position.mae_bp}
+            "mae_bp": position.mae_bp, "funding_model": position.funding_model}
     if position.notional_usd is not None:
         body["notional_usd"] = str(position.notional_usd)
     return json.dumps(body, sort_keys=True)
@@ -265,7 +300,7 @@ def position_from_json(text):
 
 
 def identity_of(cfg):
-    """What a live database is made with: it keeps this in ``meta`` and refuses (or, in ``main``, archives itself) when it changes."""
+    """Active strategy version; the permanent account genesis and previous versions are independent of this pointer."""
     return {"schema_version": SCHEMA_VERSION, "config_hash": qt.config_hash(cfg), "prompt_version": cfg["prompt"]["version"],
             "products": list(cfg["products"])}
 
@@ -311,20 +346,67 @@ class LiveStore:
             self.db.execute("INSERT INTO errors(at_ms, place, product, kind, detail) VALUES(?,?,?,?,?)",
                             (at_ms, place, product, kind, str(detail)[:2000]))
 
-    def check_identity(self, cfg):
-        """A live database belongs to one config: a position opened under other rules must not be judged under these.
-        (``main`` archives a database of another config BEFORE getting here, see ``archive_other_config``; a caller that did
-        not is still refused.)"""
+    def check_identity(self, cfg, *, account_start_usd=DEFAULT_ACCOUNT_START_USD):
+        """Resume the active version; changing rules needs an explicit flat-only transition, never a new wallet."""
         wanted = identity_of(cfg)
         stored = self.meta()
         for key, value in wanted.items():
             if key in stored and stored[key] != value:
                 raise qt.TraderError(
-                    "Qwen en vivo: esta base se hizo con otra configuración ({} era {!r} y ahora es {!r}). Usá una base nueva "
-                    "con QWEN_LIVE_DB o --db; la actual no se toca.".format(key, stored[key], value))
-        for key, value in wanted.items():
-            if key not in stored:
-                self.set_meta(key, value)
+                    "Qwen en vivo: esta base se hizo con otra configuración ({} era {!r} y ahora es {!r}). "
+                    "Conservá esta cuenta y usá --activate-flat-config cuando no haya operaciones abiertas."
+                    .format(key, stored[key], value))
+        with self.db:
+            initial = (cfg["notional_usd"] if stored.get("config_hash") and cfg.get("cuenta") == "entera"
+                       else account_start_usd)
+            self._ensure_account(initial)
+            for key, value in wanted.items():
+                if key not in stored:
+                    self.db.execute("INSERT INTO meta VALUES(?,?)", (key, json.dumps(value)))
+            if self.db.execute("SELECT 1 FROM config_versions LIMIT 1").fetchone() is None:
+                self._record_config(cfg, None, int(time.time() * 1000))
+
+    def _ensure_account(self, initial_usd):
+        if self.db.execute("SELECT 1 FROM account WHERE id=1").fetchone() is None:
+            initial = _positive(initial_usd, "capital inicial de la cuenta")
+            self.db.execute("INSERT INTO account VALUES(1,?,?)", (format(initial, "f"), int(time.time() * 1000)))
+        self.initial_balance_usd()
+
+    def initial_balance_usd(self):
+        row = self.db.execute("SELECT initial_usd FROM account WHERE id=1").fetchone()
+        if row is None:
+            raise qt.TraderError("Cuenta paper sin inicializar; no se inventa ni reinicia el saldo.")
+        return _positive(row["initial_usd"], "capital guardado de la cuenta")
+
+    def _record_config(self, cfg, previous_hash, now_ms):
+        self.db.execute(
+            "INSERT INTO config_versions(previous_hash,config_hash,activated_ms,config_json,cash_usd) VALUES(?,?,?,?,?)",
+            (previous_hash, qt.config_hash(cfg), now_ms, json.dumps(cfg, sort_keys=True), str(self.cash_balance_usd())))
+
+    def activate_flat_config(self, cfg, *, now_ms=None, account_start_usd=DEFAULT_ACCOUNT_START_USD):
+        """Change only the active configuration pointer, atomically, on the same flat account and trade history."""
+        with self.db:
+            stored = self.meta()
+            wanted = identity_of(cfg)
+            if not stored.get("config_hash"):
+                raise qt.TraderError("No hay una cuenta de origen para cambiar de configuración.")
+            if self.db.execute("SELECT 1 FROM account WHERE id=1").fetchone() is None:
+                raise qt.TraderError(
+                    "Primero migrá la cuenta con su configuración vigente; no se toma capital de la configuración nueva.")
+            has_open = self.db.execute(OPEN_TRADE_QUERY).fetchone() is not None
+            has_position = self.db.execute(
+                OPEN_POSITION_QUERY).fetchone() is not None
+            if has_open or has_position:
+                raise qt.TraderError("Hay una operación abierta: no se corta ni se cambia su configuración.")
+            self._ensure_account(account_start_usd)
+            if all(stored.get(k) == v for k, v in wanted.items()):
+                return
+            before = self.cash_balance_usd()
+            self._record_config(cfg, stored["config_hash"], int(time.time() * 1000) if now_ms is None else now_ms)
+            for key, value in wanted.items():
+                self.db.execute("INSERT OR REPLACE INTO meta VALUES(?,?)", (key, json.dumps(value)))
+            if self.cash_balance_usd() != before:
+                raise qt.TraderError("La transición alteró el saldo; se revierte completa.")
 
     # ---- state of the trader
 
@@ -384,7 +466,10 @@ class LiveStore:
         """Insert or update one trade; a field given as ``None`` keeps what is already there."""
         values = {name: fields.get(name) for name in _TRADE_COLUMNS}
         names = ("product", "trade_no") + _TRADE_COLUMNS
-        sets = ", ".join("{0}=COALESCE(excluded.{0}, {0})".format(c) for c in _TRADE_COLUMNS)
+        sets = ", ".join(
+            "{0}=COALESCE({0}, excluded.{0})".format(c) if c == "opened_at_ms"
+            else "{0}=excluded.{0}".format(c) if c == "net_complete_usd"
+            else "{0}=COALESCE(excluded.{0}, {0})".format(c) for c in _TRADE_COLUMNS)
         self.db.execute(
             "INSERT INTO trades({}) VALUES({}) ON CONFLICT(product, trade_no) DO UPDATE SET {}".format(
                 ", ".join(names), ",".join("?" * len(names)), sets),
@@ -400,20 +485,40 @@ class LiveStore:
         row = self.db.execute("SELECT MAX(entry_ms) AS m FROM trades WHERE product=?", (product,)).fetchone()
         return row["m"]
 
+    def consumed_news(self, product):
+        return {r[0] for r in self.db.execute("SELECT event_id FROM news_actions WHERE product=?", (product,))}
+
+    def consume_news(self, product, signal, action, t_ms):
+        self.db.execute("INSERT OR IGNORE INTO news_actions VALUES(?,?,?,?,?)",
+                        (product, signal["event_id"], t_ms, action, json.dumps(signal, sort_keys=True)))
+
     def incomplete_funding(self, product):
         return [dict(r) for r in self.db.execute(
             "SELECT * FROM trades WHERE product=? AND status='closed' AND funding_status != 'complete'", (product,))]
 
-    def available_balance_usd(self, start_usd):
-        """Saldo disponible de la cuenta: capital inicial más el neto realizado de las operaciones cerradas."""
-        rows = self.db.execute("SELECT net_usd FROM trades WHERE status='closed' AND net_usd IS NOT NULL").fetchall()
-        total = D(str(start_usd))
-        for (val,) in rows:
-            try:
-                total += D(str(val))
-            except Exception:
-                continue
-        return max(D("0"), total)
+    @staticmethod
+    def _money(value, field):
+        try:
+            out = D(str(value))
+        except (ArithmeticError, TypeError, ValueError) as error:
+            raise qt.TraderError("Cuenta paper: {} inválido: {!r}".format(field, value)) from error
+        if not out.is_finite():
+            raise qt.TraderError("Cuenta paper: {} no es finito.".format(field))
+        return out
+
+    def cash_balance_usd(self):
+        total = self.initial_balance_usd()
+        for row in self.db.execute("SELECT net_usd FROM trades WHERE status='closed'"):
+            total += self._money(row["net_usd"], "neto realizado")
+        return total
+
+    def available_balance_usd(self, *, excluding_product=None):
+        """Persistent cash plus other marks minus reserved margins; configuration is never a capital source."""
+        total = self.cash_balance_usd()
+        for row in self.db.execute("SELECT product, margin_usd, net_now_usd FROM trades WHERE status='open'"):
+            if row["product"] != excluding_product:
+                total += self._money(row["net_now_usd"], "resultado abierto") - self._money(row["margin_usd"], "margen reservado")
+        return total
 
 
 # --------------------------------------------------------------------------- the public feed
@@ -425,20 +530,28 @@ class PublicFeed:
     The history layer of the practice refuses anything after the holdout; this feed lives in the present on purpose, so it
     uses the cache and the fetchers directly."""
 
-    def __init__(self, cache_dir, fetch=fetch_candles, fetch_funding_fn=fetch_funding):
-        self.cache_dir, self._fetch, self._fetch_funding = cache_dir, fetch, fetch_funding_fn
+    def __init__(self, cache_dir, fetch=fetch_candles, fetch_funding_fn=None):
+        from .futures_history import fetch_funding_records
+        self.cache_dir, self._fetch, self._fetch_funding = cache_dir, fetch, fetch_funding_fn or fetch_funding_records
+        self._next_gap_repair = {}
 
     def bars(self, product, from_ms, to_ms):
         """Closed 5m candles of ``[from_ms, to_ms)``; downloads only what the cache lacks."""
         cache = CandleCache(os.path.join(self.cache_dir, "candles-{}.sqlite".format(product)))
         try:
-            cache.ensure(product, "5m", from_ms, to_ms, fetch=self._fetch)
-            return cache.read(product, "5m", from_ms, to_ms)
+            repair = to_ms >= self._next_gap_repair.get(product, 0)
+            cache.ensure(product, "5m", from_ms, to_ms, fetch=self._fetch, repair_gaps=repair)
+            if repair:
+                self._next_gap_repair[product] = to_ms + BAR_MS
+            return cache.read("5m", from_ms, to_ms)
         finally:
             cache.close()
 
     def funding(self, product):
-        return [(int(s), float(r)) for s, r in self._fetch_funding(product)]
+        records = self._fetch_funding(product)
+        if isinstance(records, qt.exact_funding.FundingHistory):
+            return records
+        return [(int(s), float(r)) for s, r in records]
 
 
 # --------------------------------------------------------------------------- the decider the Trader sees
@@ -472,11 +585,14 @@ class WakeGate:
         except qt.BudgetExhausted:
             raise qt.WakeSkipped("modelo_lento", SKIP_TEXT["modelo_lento"]) from None
 
-    def _check(self):
+    def check_execution(self):
         if self.mode == "late":
             raise qt.WakeSkipped("proceso_detenido", SKIP_TEXT["proceso_detenido"])
         if self.mode == "done":
             raise qt.WakeSkipped("ya_decidido", "")
+
+    def _check(self):
+        self.check_execution()
         if self._healthy is None:
             self._healthy = bool(self.provider.health())
         if not self._healthy:
@@ -511,6 +627,8 @@ def closed_fields(trade, notional, leverage, margin, now):
         "closed_by": trade["closed_by"], "exit_reason": trade["exit_reason"], "entry_reason": trade["entry_reason"],
         "entry_p": trade["entry_p"], "hold_min": trade["hold_min"], "mfe_bp": trade["mfe_bp"],
         "mae_bp": trade["mae_bp"], "closed_at_ms": now,
+        "funding_model": trade.get("funding_model", qt.exact_funding.LEGACY_MODEL),
+        "net_complete_usd": trade.get("net_complete_usd"),
     }
 
 
@@ -527,6 +645,15 @@ def _flat_candle(close_text, bucket):
             "volume_btc": "0"}
 
 
+def validate_priority_config(cfg):
+    if noticias.priority_enabled(cfg) and (
+        qt.candle_opinions_enabled(cfg) or cfg.get("cuenta") != "entera"
+        or _positive(str(cfg.get("leverage", "1")), "apalancamiento") != 1
+        or cfg["products"] != ["PF_ETHUSD"]
+    ):
+        raise qt.TraderError("Prioridad de noticias requiere solo ETH, cuenta entera, apalancamiento 1 y opiniones de velas apagadas.")
+
+
 class LiveOperator:
     """Feeds one ``Trader`` per product with closed public candles and records what happens.
 
@@ -534,19 +661,28 @@ class LiveOperator:
     in milliseconds)."""
 
     def __init__(self, cfg, store, feed, provider, *, now_ms=lambda: int(time.time() * 1000), clock=time.monotonic,
-                 log=print, model=None):
+                 log=print, model=None, account_start_usd=DEFAULT_ACCOUNT_START_USD):
         self.cfg, self.store, self.feed, self.provider = cfg, store, feed, provider
         self.now_ms, self.clock, self.log = now_ms, clock, log
+        self.account_start_usd = account_start_usd
         live = cfg.get("live") or {}
         self.warmup_ms = int(live.get("warmup_days", 8)) * DAY_MS
         self.poll_s = float(live.get("poll_seconds", 30))
         self.max_late_ms = int(float(live.get("max_late_seconds", 240)) * 1000)
+        if noticias.priority_enabled(cfg):
+            self.max_late_ms = min(self.max_late_ms, 15_000)
+            self.poll_s = min(self.poll_s, 5.0)
         self.funding_every_ms = int(float(live.get("funding_refresh_minutes", 30)) * MINUTE_MS)
         self.notional = D(cfg["notional_usd"])
         self.leverage = D(str(cfg.get("leverage", "1")))
+        validate_priority_config(cfg)
         self.margin = self.notional / self.leverage           # money set aside; costs and funding run on the notional
         served = getattr(provider, "served_model", None)
-        self.model = model or (served() if callable(served) else None) or getattr(provider, "model_ref", None) or "unknown"
+        self.model = "news-only"
+        if qt.candle_opinions_enabled(cfg):
+            if not model and callable(served):
+                model = served()
+            self.model = model or getattr(provider, "model_ref", None) or "unknown"
         inner = qt.LlmDecider(provider, cfg, clock=clock, model=self.model)
         by_factors = fq.FactorsDecider(provider, cfg, clock=clock, model=self.model) if cfg.get("factors") else None
         self.gate = WakeGate(inner, provider, float(live.get("wake_budget_seconds", 240)), clock, factors=by_factors)
@@ -567,6 +703,8 @@ class LiveOperator:
         self.funding_checked_ms = 0
         self.ready = False
         self.model_ok = None                              # None: not probed yet
+        self.next_config = None
+        self._pending_error = None                              # None: not probed yet
         self._probe_failures, self._next_probe = 0, 0.0
         self._errors = {}
         self.failed_cycle = False
@@ -575,7 +713,10 @@ class LiveOperator:
 
     def start(self):
         """Warm up every product with ~8 days of candles (never traded) and restore the open position, if any."""
-        self.store.check_identity(self.cfg)
+        self.store.check_identity(self.cfg, account_start_usd=self.account_start_usd)
+        self.store.set_meta("model_scope", "candles" if qt.candle_opinions_enabled(self.cfg) else "news_only")
+        if not qt.candle_opinions_enabled(self.cfg):
+            self.store.set_meta("model_ok", None)
         now = self.now_ms()
         self._refresh_funding(now, first=True)
         for product in self.cfg["products"]:
@@ -595,6 +736,9 @@ class LiveOperator:
     def _start_product(self, product, now):
         trader = qt.Trader(self.cfg, product, self.gate, self._funding[product], key=product,
                            entry_threshold=self.cfg["entry_threshold"])
+        trader.execution_check = lambda: self._check_execution(trader)
+        trader.entry_check = self._check_pending_entry
+        trader.news_consumed = self.store.consumed_news(product)
         state = self.store.load_state(product)
         last_fed = None
         if state is not None:
@@ -614,7 +758,7 @@ class LiveOperator:
         trader.last_open_ms = last_open
         trader.idle_since_ms = now                    # no opening on record: counted from this start
         if self.cfg.get("cuenta") == "entera":
-            trader.notional = self.store.available_balance_usd(self.notional)
+            trader.notional = self.store.available_balance_usd(excluding_product=product)
         self.traders[product] = trader
         warm, fresh = self._warm_product_bars(product, trader, now, last_fed)
         pos_note = ""
@@ -624,15 +768,19 @@ class LiveOperator:
         self.log("Qwen en vivo: {} calentado con {} velas de 5 min{}.".format(product, len(warm), pos_note))
         for bar in fresh:
             self._process(product, bar)
+        self._data_health(product, trader)
 
     def _warm_product_bars(self, product, trader, now, last_fed):
         warm_start = (now // BAR_MS) * BAR_MS - self.warmup_ms
         self._load_context(product, trader, warm_start, now)
         extra_ms = analista.extra_days(self.cfg) * DAY_MS
-        all_bars = fill_gaps(self.feed.bars(product, warm_start - extra_ms, now), BAR_MS)
+        all_bars = fill_gaps(self.feed.bars(product, warm_start - extra_ms, now), BAR_MS, annotate=True)
         all_bars = [b for b in all_bars if b["bucket_start"] + BAR_MS <= now]
+        gaps = [b["bucket_start"] + BAR_MS for b in all_bars if b["observed"] is False]
+        trader.data_gap_ms = max(gaps) if gaps else None
         if extra_ms > 0:
-            trader.movement = analista.Movement(all_bars)
+            # Trader.feed adds the warm and fresh candles; seed only the earlier history.
+            trader.movement = analista.Movement(b for b in all_bars if b["bucket_start"] < warm_start and b["observed"])
         bars = [b for b in all_bars if b["bucket_start"] >= warm_start]
         warm = [b for b in bars if (b["bucket_start"] <= last_fed if last_fed is not None
                                     else now - (b["bucket_start"] + BAR_MS) > self.max_late_ms)]
@@ -648,6 +796,10 @@ class LiveOperator:
         (what was not written is asked again; what was written is never asked twice)."""
         now = self.now_ms()
         self.failed_cycle = False
+        self._try_pending_config()
+        if self.next_config is not None:
+            self._heartbeat()
+            return
         self._check_model()
         try:
             if now - self.funding_checked_ms >= self.funding_every_ms:
@@ -672,15 +824,60 @@ class LiveOperator:
             except Exception as error:                    # noqa: BLE001 - the process must stay alive
                 self.traders.pop(product, None)           # in-memory state may be ahead of the database: rebuild it
                 self._failure("ciclo", product, error)
+        self._try_pending_config()
         self._heartbeat()
+
+    def _check_pending_entry(self):
+        requested = (self.cfg.get("runtime") or {}).get("pending_config")
+        if requested and (not isinstance(requested, dict) or requested.get("sha256") != (self.cfg.get("runtime") or {}).get("activation_request_sha256")):
+            raise qt.WakeSkipped("cambio_pendiente", "No se abre otra operación del flujo anterior: espera el traspaso sin reiniciar la cuenta.")
+
+    def _try_pending_config(self):
+        spec = (self.cfg.get("runtime") or {}).get("pending_config")
+        if not spec:
+            return
+        if isinstance(spec, dict) and spec.get("sha256") == (self.cfg.get("runtime") or {}).get("activation_request_sha256"):
+            self._meta("pending_config", {"state": "active", "request_sha256": spec["sha256"], "target_hash": self.config_hash})
+            return
+        try:
+            target = pending_config(self.cfg, spec)
+            validate_activation(target, now_ms=self.now_ms())
+            flat = not any(trader.position is not None for trader in self.traders.values())
+            flat = flat and self.store.db.execute(OPEN_TRADE_QUERY).fetchone() is None
+            flat = flat and self.store.db.execute(OPEN_POSITION_QUERY).fetchone() is None
+            if not flat:
+                self._meta("pending_config", {"state": "waiting", "target_hash": qt.config_hash(target),
+                                              "reason": "Esperando el cierre normal de todas las operaciones."})
+                return
+            self.store.activate_flat_config(target, now_ms=self.now_ms())
+        except (qt.TraderError, OSError, ValueError, TypeError) as error:
+            message = str(error)
+            self._meta("pending_config", {"state": "error", "reason": message})
+            if self._pending_error != message:
+                self.log("Qwen en vivo: no se activa el flujo pendiente: " + message)
+                self._pending_error = message
+            return
+        self.next_config = target
+        self._meta("pending_config", {"state": "active", "request_sha256": target["runtime"]["activation_request_sha256"],
+                                      "target_hash": qt.config_hash(target), "cash_usd": str(self.store.cash_balance_usd())})
+        self.log("Qwen en vivo: traspaso plano confirmado; se conservan la cuenta, el saldo y las operaciones anteriores.")
 
     def _poll_product(self, product, now):
         trader = self.traders[product]
+        from_ms = trader.t[-1] + BAR_MS if trader.t else now - self.warmup_ms
+        if trader.data_gap_ms is not None:
+            from_ms = min(from_ms, trader.data_gap_ms - BAR_MS)
         try:
-            fresh = self.feed.bars(product, trader.t[-1] + BAR_MS if trader.t else now - self.warmup_ms, now)
+            fresh = self.feed.bars(product, from_ms, now)
         except (HistoryError, OSError, ValueError) as error:
-            self.log("Qwen en vivo: no se pudieron leer las velas de {} ({}); se reintenta en el próximo ciclo."
-                     .format(product, error))
+            self._failure("datos", product, error)
+            self._data_health(product, trader, status="error", reason=str(error))
+            return
+        self._recovered("datos", product)
+        if trader.data_gap_ms is not None and any(
+                bar["bucket_start"] + BAR_MS == trader.data_gap_ms and bar.get("observed", True) for bar in fresh):
+            self.log("Qwen en vivo: {} recuperó una vela ausente; reconstruyendo datos sin cambiar su operación.".format(product))
+            self._start_product(product, now)
             return
         if fresh:
             self._load_context(product, trader, fresh[0]["bucket_start"] - 3 * BAR_MS, now)
@@ -688,8 +885,22 @@ class LiveOperator:
             if bar["bucket_start"] + BAR_MS > now or (trader.t and bar["bucket_start"] <= trader.t[-1]):
                 continue
             while trader.t and bar["bucket_start"] > trader.t[-1] + BAR_MS:
-                self._process(product, _flat_candle(repr(trader.c[-1]), trader.t[-1] + BAR_MS))
+                self._process(product, dict(_flat_candle(repr(trader.c[-1]), trader.t[-1] + BAR_MS), observed=False))
             self._process(product, bar)
+        self._data_health(product, trader)
+
+    def _data_health(self, product, trader, *, status=None, reason=None):
+        now = self.now_ms()
+        if status is None:
+            if trader.data_gap_ms is not None:
+                status = "gap"
+            elif trader.last_observed_ms is None or now - trader.last_observed_ms > BAR_MS + self.max_late_ms:
+                status = "stale"
+            else:
+                status = "ok"
+        self._meta("data_health_" + product, {
+            "status": status, "checked_at_ms": now, "last_observed_ms": trader.last_observed_ms,
+            "gap_at_ms": trader.data_gap_ms, "reason": reason})
 
     # ---- what the sheet needs: other assets (F7) and positioning (F6)
 
@@ -697,7 +908,8 @@ class LiveOperator:
         """Row F6: the collector's database, read-only. Without the file (or without rows of this product) F6 says «n/d» and the
         process goes on; it is said once in the log, and again only when that changes."""
         if self.news is None:
-            self.news = noticias.NewsFeed(self.news_path, since_ms=now - POSITIONING_KEEP_MS)
+            policy = self.cfg["noticias"] if noticias.priority_enabled(self.cfg) else None
+            self.news = noticias.NewsFeed(self.news_path, since_ms=now - POSITIONING_KEEP_MS, priority_policy=policy)
             self.news_checked_ms = now
         trader.news = self.news
         if not self.cfg.get("state_ficha"):
@@ -751,14 +963,25 @@ class LiveOperator:
         self.news_checked_ms = now
         try:
             self.news.reload(since_ms=now - POSITIONING_KEEP_MS)
+            if self.news.last_error is not None:
+                raise qt.TraderError("No se pudieron leer las noticias: " + self.news.last_error)
         except Exception as error:                        # noqa: BLE001 - news is optional: never stop the process for it
+            self.news.available, self.news.last_error = False, str(error)
             self._failure("noticias", None, error)
             return
         self._recovered("noticias", None)
 
+    def _publish_news_lifecycle(self, now):
+        if self.news is None:
+            return
+        consumed = set().union(*(self.store.consumed_news(product) for product in self.cfg["products"]))
+        self._meta("news_lifecycle", self.news.lifecycle_at(now, consumed_event_ids=consumed))
+
     def _update_context_closes(self, trader, other, bars, to_ms):
         closes = trader.context.setdefault(other, {})
         for bar in bars:
+            if bar.get("observed") is False:
+                continue
             end = int(bar["bucket_start"]) + BAR_MS
             if end <= to_ms:
                 closes[end] = float(bar["close"])
@@ -773,7 +996,7 @@ class LiveOperator:
             if other == product:
                 continue
             try:
-                bars = fill_gaps(self.feed.bars(other, from_ms, to_ms), BAR_MS)
+                bars = fill_gaps(self.feed.bars(other, from_ms, to_ms), BAR_MS, annotate=True)
             except Exception as error:                    # noqa: BLE001
                 if (product, other) not in self._context_warned:
                     self._context_warned.add((product, other))
@@ -790,6 +1013,8 @@ class LiveOperator:
     def _check_model(self):
         """Tracks whether llama-server answers /health. One log line per change of state; while it is down the probe backs
         off (5 s, 10 s ... 60 s). Does not decide anything: each wake still asks for itself."""
+        if not qt.candle_opinions_enabled(self.cfg):
+            return
         now = self.clock()
         if self.model_ok is False and now < self._next_probe:
             return
@@ -844,7 +1069,9 @@ class LiveOperator:
     def _heartbeat(self):
         """Last sign of life: the gateway says «Qwen sin latidos hace X min» from it. Written every cycle, with or without
         a model, so a silent process is told apart from a model that is down."""
-        self._meta("heartbeat_ms", self.now_ms())
+        now = self.now_ms()
+        self._publish_news_lifecycle(now)
+        self._meta("heartbeat_ms", now)
 
     def _refresh_funding(self, now, first=False):
         self.funding_checked_ms = now
@@ -872,26 +1099,34 @@ class LiveOperator:
         with self.store.db:
             for row in self.store.incomplete_funding(product):
                 long = row["side"] == "LONG"
-                paid, covered = line.accrue(row["entry_ms"], row["exit_ms"], D(row["entry_px"]) * D(row["qty"]), long)
+                paid, covered = line.accrue_position(
+                    row["entry_ms"], row["exit_ms"], D(row["entry_px"]) * D(row["qty"]), D(row["qty"]), long,
+                    row["funding_model"] or qt.exact_funding.LEGACY_MODEL)
                 held = max(0, row["exit_ms"] - row["entry_ms"])
-                if held and covered >= held:
-                    status = "complete"
-                elif covered > 0:
-                    status = "partial"
-                else:
-                    status = "unknown"
+                status = qt.funding_status(held, covered)
                 if status == row["funding_status"] and str(paid) == row["funding_usd"]:
                     continue
                 net = D(row["gross_usd"]) - D(row["fees_usd"]) - paid
+                notional = D(row["notional_usd"]) if row["notional_usd"] is not None else D(row["entry_px"]) * D(row["qty"])
+                if not notional.is_finite() or notional <= 0:
+                    raise qt.TraderError("Funding: el nocional de la operación no es válido.")
                 self.store.update_trade(product, row["trade_no"], funding_usd=str(paid), funding_status=status,
-                                        net_usd=str(net), net_bp=float(net / self.notional * 10_000))
+                                        net_usd=str(net), net_bp=float(net / notional * 10_000),
+                                        net_complete_usd=str(net) if status == "complete" else None)
 
     # ---- one candle
 
+    def _check_execution(self, trader):
+        self.gate.check_execution()
+        now = self.now_ms()
+        if noticias.priority_enabled(self.cfg) and now - (trader.t[-1] + BAR_MS) > self.max_late_ms:
+            raise qt.WakeSkipped("proceso_detenido", SKIP_TEXT["proceso_detenido"])
+        return now
+
     def _process(self, product, bar):
         trader = self.traders[product]
-        if self.cfg.get("cuenta") == "entera" and trader.position is None:
-            trader.notional = self.store.available_balance_usd(self.notional)
+        if self.cfg.get("cuenta") == "entera":
+            trader.notional = self.store.available_balance_usd(excluding_product=product)
         t_ms = int(bar["bucket_start"]) + BAR_MS
         now = self.now_ms()
         if self.store.bucket_done(product, t_ms):
@@ -899,11 +1134,11 @@ class LiveOperator:
         else:
             self.gate.begin("late" if now - t_ms > self.max_late_ms else "live")
         events = trader.feed(bar)
-        self._record(product, trader, t_ms, events, now)
+        self._record(product, trader, t_ms, events, self.now_ms(), observed=bar.get("observed", True))
         if self.cfg.get("cuenta") == "entera" and trader.position is None:
-            trader.notional = self.store.available_balance_usd(self.notional)
+            trader.notional = self.store.available_balance_usd(excluding_product=product)
 
-    def _record(self, product, trader, t_ms, events, now):
+    def _record(self, product, trader, t_ms, events, now, *, observed=True):
         meta = {"prompt_version": self.cfg["prompt"]["version"], "model": self.model, "config_hash": self.config_hash}
         with self.store.db:
             for event in events:
@@ -917,20 +1152,24 @@ class LiveOperator:
                     self.log("{} {}: despertar omitido ({}); no se reintenta.".format(
                         _hhmm(event["t_ms"]), product, SKIP_TEXT.get(event["kind"], event["kind"])))
                 elif kind == "decision":
-                    if event.get("answer") is None and not event.get("formula_action"):   # DecisionError: nothing usable
-                        self.store.put_skipped(product, event["t_ms"], "sin_respuesta", SKIP_TEXT["sin_respuesta"],
-                                               event["wake"], now)
-                        self.log("{} {}: despertar omitido ({}); no se reintenta.".format(
-                            _hhmm(event["t_ms"]), product, SKIP_TEXT["sin_respuesta"]))
-                        continue
-                    self.store.put_decision(product, event, meta, now)
-                    self.log(self._decision_line(product, event))
+                    self._record_decision(product, event, meta, now)
             position = trader.position
-            if position is not None:
+            if position is not None and observed:
                 self._write_open(product, trader, position, t_ms, now)
             self.store.save_state(product, trader, t_ms - BAR_MS, now)
-        if events and self.cfg.get("decide_by") == "formula":
+        if events and self.cfg.get("decide_by") == "formula" and qt.candle_opinions_enabled(self.cfg):
             self._resolve_examples(product, trader, now)
+
+    def _record_decision(self, product, event, meta, now):
+        if event.get("answer") is None and not event.get("formula_action"):
+            self.store.put_skipped(product, event["t_ms"], "sin_respuesta", SKIP_TEXT["sin_respuesta"], event["wake"], now)
+            self.log("{} {}: despertar omitido ({}); no se reintenta.".format(
+                _hhmm(event["t_ms"]), product, SKIP_TEXT["sin_respuesta"]))
+            return
+        self.store.put_decision(product, event, meta, now)
+        if event.get("news_event") is not None:
+            self.store.consume_news(product, event["news_event"], event["action"], now)
+        self.log(self._decision_line(product, event))
 
     def _resolve_examples(self, product, trader, now):
         """Labels resolved flat and position looks in ``examples`` as soon as their outcome is known."""
@@ -942,6 +1181,9 @@ class LiveOperator:
 
     @staticmethod
     def _formula_decision_line(head, event):
+        if event["formula"].get("opinion_enabled") is False:
+            authority = "noticias verificadas" if event["formula"].get("authority") == "noticias" else "reglas"
+            return "{}: {} ({}: {})".format(head, event["action"], authority, event["formula"]["motivo"])
         opinion = event.get("model_action")
         if opinion is None:
             opinion_text = "nada (" + str(event.get("opinion_error")) + ")"
@@ -990,10 +1232,15 @@ class LiveOperator:
             entry_px=str(position.entry_px), qty=str(position.qty), notional_usd=str(pos_notional),
             leverage=str(self.leverage), margin_usd=str(pos_margin), entry_reason=position.entry_reason, entry_p=position.entry_p, mfe_bp=round(position.mfe_bp, 2),
             mae_bp=round(position.mae_bp, 2), stop_px=position.stop_px, max_hold_ms=position.max_hold_ms,
-            mark_px=trader.c[-1], mark_ms=t_ms, net_now_usd=str(mark["net_usd"]), opened_at_ms=now)
+            gross_usd=str(mark["gross_usd"]), fees_usd=str(mark["fees_usd"]),
+            funding_usd=str(mark["funding_usd"]), funding_status=mark["funding_status"],
+            mark_px=trader.c[-1], mark_ms=t_ms, net_now_usd=str(mark["net_usd"]), opened_at_ms=now,
+            funding_model=position.funding_model, config_hash=self.config_hash,
+            net_complete_usd=None if mark["net_complete_usd"] is None else str(mark["net_complete_usd"]))
 
     def _write_closed(self, product, trade, now):
-        self.store.put_trade(product, trade["trade_no"], **closed_fields(trade, self.notional, self.leverage, self.margin, now))
+        self.store.put_trade(product, trade["trade_no"], **closed_fields(trade, self.notional, self.leverage, self.margin, now),
+                             config_hash=self.config_hash)
         self.log("{} {}: cierre {} por {} — neto {} USD (costos {} USD, funding {} USD, {})".format(
             _hhmm(trade["exit_ms"]), product, "LARGO" if trade["side"] == "LONG" else "CORTO", trade["closed_by"],
             _usd(trade["net_usd"]), _usd(trade["fees_usd"]), _usd(trade["funding_usd"]), trade["funding_status"]))
@@ -1057,20 +1304,20 @@ def _close_open_trades(db_path, cfg, funding_for, now_ms, log):
         store.close()
 
 
-def archive_other_config(db_path, cfg, *, funding_for=None, now_ms=None, log=print):
-    """If ``db_path`` was made with ANOTHER configuration (``identity_of``: config hash, prompt version, products, schema), it
-    is archived and the live process starts a new database. NEVER deleted: the file is renamed, in the same folder, to
-    ``live-<first 12 characters of the old config hash>.sqlite`` (``-2``, ``-3``... if that name is taken), after closing its
-    open position, if any (``_close_open_trades``). Everything it recorded (decisions, skipped wakes, trades, errors) stays
-    readable in the archive. Returns ``{path, old_hash, closed}`` or ``None`` when there is nothing to archive (no file, an
-    empty one, or the same configuration)."""
+def archive_other_config(db_path, cfg, **_legacy_options):
+    """Deprecated guard; old funding/time/log options remain accepted but never recost or move an account."""
+    unknown = set(_legacy_options) - {"funding_for", "now_ms", "log"}
+    if unknown:
+        raise TypeError("Unexpected archive options: " + ", ".join(sorted(unknown)))
     if not os.path.isfile(db_path):
         return None
-    now_ms = int(time.time() * 1000) if now_ms is None else now_ms
     try:
         old = LiveStore(db_path, readonly=True)
         try:
             stored = old.meta()
+            has_open = old.db.execute(OPEN_TRADE_QUERY).fetchone() is not None
+            has_position = old.db.execute(
+                OPEN_POSITION_QUERY).fetchone() is not None
         finally:
             old.close()
     except sqlite3.Error:
@@ -1078,20 +1325,13 @@ def archive_other_config(db_path, cfg, *, funding_for=None, now_ms=None, log=pri
     wanted = identity_of(cfg)
     if not stored or all(stored.get(key, value) == value for key, value in wanted.items()):
         return None
-    old_hash = str(stored.get("config_hash") or "sin-hash")
-    closed = _close_open_trades(db_path, cfg, funding_for, now_ms, log)
-    base = os.path.join(os.path.dirname(os.path.abspath(db_path)), "live-{}".format(old_hash[:12]))
-    target, n = base + ".sqlite", 1
-    while os.path.exists(target):
-        n += 1
-        target = "{}-{}.sqlite".format(base, n)
-    for suffix in ("", "-wal", "-shm", "-journal"):
-        if os.path.exists(db_path + suffix):
-            os.replace(db_path + suffix, target + suffix)
-    log("Qwen en vivo: la base {} era de otra configuración (hash {}…, ahora {}…). Se ARCHIVÓ como {} (no se borró nada: decisiones, "
-        "operaciones y errores siguen ahí) y empieza una base nueva.".format(
-            db_path, old_hash[:12], wanted["config_hash"][:12], target))
-    return {"path": target, "old_hash": old_hash, "closed": closed}
+    if has_open or has_position:
+        raise qt.TraderError(
+            "Hay una operación abierta de otra configuración: no se cierra, no se redimensiona ni se archiva. "
+            "La nueva configuración requiere una transición explícita cuando el libro esté libre.")
+    raise qt.TraderError(
+        "La cuenta no se archiva ni se reinicia al cambiar Terminal. "
+        "Usá --activate-flat-config con el libro plano para conservar saldo e historial.")
 
 
 # --------------------------------------------------------------------------- learning data
@@ -1175,8 +1415,9 @@ def _wait_until_ready(operator, stop, sleep):
 def run(operator, *, stop=None, sleep=time.sleep, max_polls=None):
     """Start, then poll every ``poll_s`` seconds until ``stop()`` is true (or ``max_polls``)."""
     _wait_until_ready(operator, stop, sleep)
-    operator.log("Qwen en vivo: en marcha. Pregunta al modelo cada 15 minutos (productos: {}).".format(
-        ", ".join(operator.cfg["products"])))
+    role = ("Qwen solo clasifica noticias; decisiones de velas sin modelo" if not qt.candle_opinions_enabled(operator.cfg)
+            else "pregunta al modelo cada 15 minutos")
+    operator.log("Qwen en vivo: en marcha; {} (productos: {}).".format(role, ", ".join(operator.cfg["products"])))
     polls, failures = 0, 0
     while not (stop and stop()):
         try:
@@ -1187,15 +1428,76 @@ def run(operator, *, stop=None, sleep=time.sleep, max_polls=None):
             bad = True
         failures = failures + 1 if bad else 0
         polls += 1
+        if operator.next_config is not None:
+            operator = LiveOperator(
+                operator.next_config, operator.store, operator.feed, operator.provider,
+                now_ms=operator.now_ms, clock=operator.clock, log=operator.log)
+            _wait_until_ready(operator, stop, sleep)
         if max_polls is not None and polls >= max_polls:
             break
         sleep(min(60.0, operator.poll_s * 2 ** min(failures, 6)) if failures else operator.poll_s)
+
+
+def pending_config(cfg, spec) -> dict:
+    if not isinstance(spec, dict) or set(spec) != {"path", "sha256"} or not isinstance(spec["path"], str):
+        raise qt.TraderError("Traspaso: hacen falta una ruta y su SHA-256 aprobado.")
+    path = spec["path"]
+    if not os.path.isabs(path):
+        path = os.path.join(os.path.dirname(qt.CONFIG_PATH_LIVE), path)
+    with open(path, "rb") as handle:
+        raw = handle.read()
+    if hashlib.sha256(raw).hexdigest() != spec["sha256"]:
+        raise qt.TraderError("Traspaso: el archivo cambió o no coincide con el SHA-256 aprobado.")
+    overlay = json.loads(raw)
+    if (not isinstance(overlay, dict) or overlay.get("schema") != "balancita-qwen-flow-transition.v1"
+            or overlay.get("base_config_hash") != qt.config_hash(cfg)):
+        raise qt.TraderError("Traspaso: la configuración de origen no coincide.")
+    changes = overlay.get("changes")
+    allowed = {"note", "corta", "noticias", "funding_model", "opinion_enabled", "live", "decide_by", "mirror"}
+    if not isinstance(changes, dict) or not changes or set(changes) - allowed:
+        raise qt.TraderError("Traspaso: cambios inválidos; no se redefine la cuenta ni su capital.")
+    target = copy.deepcopy(cfg)
+    _apply_pending_changes(target, changes)
+    target.setdefault("runtime", {}).pop("pending_config", None)
+    target["runtime"]["activation_request_sha256"] = spec["sha256"]
+    return target
+
+
+def _apply_pending_changes(target, changes):
+    for key, value in changes.items():
+        if key == "live":
+            if not isinstance(value, dict):
+                raise qt.TraderError("Traspaso: parámetros de ciclo inválidos.")
+            target[key] = dict(target.get(key) or {}, **value)
+        else:
+            target[key] = value
+
+
+def active_config(store, requested) -> dict:
+    """Resume only a committed configuration descended from this known root, never an unknown override."""
+    stored_hash = store.meta().get("config_hash")
+    requested_hash = qt.config_hash(requested)
+    if not stored_hash or stored_hash == requested_hash:
+        return requested
+    known = store.db.execute("SELECT 1 FROM config_versions WHERE config_hash=? LIMIT 1", (requested_hash,)).fetchone()
+    last = store.db.execute("SELECT config_hash,config_json FROM config_versions ORDER BY id DESC LIMIT 1").fetchone()
+    if known is None or last is None or last["config_hash"] != stored_hash:
+        raise qt.TraderError("La configuración pedida no pertenece a la versión activa registrada; no se cambia la cuenta.")
+    resumed = json.loads(last["config_json"])
+    if qt.config_hash(resumed) != stored_hash:
+        raise qt.TraderError("La configuración activa registrada no pasa su hash.")
+    resumed["runtime"] = dict(resumed.get("runtime") or {}, **(requested.get("runtime") or {}))
+    return resumed
 
 
 def _parser():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--config", default=qt.CONFIG_PATH_LIVE, help="default: %(default)s")
     parser.add_argument("--db", default=None, help="base en vivo (default: $QWEN_LIVE_DB o data/qwen-live/live.sqlite)")
+    parser.add_argument("--archive-flat-book", action="store_true",
+                        help="obsoleto: no permite reiniciar la cuenta; usar --activate-flat-config")
+    parser.add_argument("--activate-flat-config", action="store_true",
+                        help="activar explícitamente esta configuración en la misma cuenta, solo con el libro plano")
     parser.add_argument("--cache-dir", default=None, help="caché de velas públicas (default: junto a la base)")
     parser.add_argument("--llama-url", default=None, help="default http://127.0.0.1:$LLAMA_PORT (solo loopback)")
     parser.add_argument("--positioning-db", default=None, metavar="RUTA",
@@ -1207,10 +1509,60 @@ def _parser():
     return parser
 
 
+def validate_activation(cfg, *, now_ms):
+    if not noticias.priority_enabled(cfg):
+        return
+    validate_priority_config(cfg)
+    spec = (cfg.get("corta") or {}).get("portero_autonomo")
+    if not isinstance(spec, dict):
+        raise qt.TraderError("No se activa el flujo nuevo: falta entrenar y declarar el Portero autónomo.")
+    from . import futures_qwen_corta as corta
+    from . import futures_qwen_independent_gate as independent
+    teacher, _ = corta.formulas(cfg, now_ms)
+    keeper = independent.load(spec)
+    provenance = teacher.get("provenance") or {}
+    cutoff = keeper["fit_until_ms"]
+    last_label = provenance.get("last_label_end_ms")
+    if (keeper.get("cold_start") is not True or provenance.get("cold_start") is not True
+            or provenance.get("fit_until_ms") != cutoff or cutoff > now_ms
+            or type(last_label) is not int or not 0 < last_label < cutoff):
+        raise qt.TraderError("No se activa el flujo nuevo: hacen falta los dos candidatos en frío con el mismo corte válido.")
+    if (cfg.get("funding_model") != qt.exact_funding.EXACT_MODEL
+            or keeper.get("funding_model") != qt.exact_funding.EXACT_MODEL
+            or provenance.get("funding_model") != qt.exact_funding.EXACT_MODEL):
+        raise qt.TraderError("No se activa el flujo nuevo sin el funding absoluto y las etiquetas corregidas.")
+
+
+def _run_live_owner(args, cfg, db_path, cache_dir, store, provider):
+    account_start = (os.environ.get("QWEN_ACCOUNT_START_USD") or DEFAULT_ACCOUNT_START_USD).strip()
+    if args.activate_flat_config:
+        validate_activation(cfg, now_ms=int(time.time() * 1000))
+        store.activate_flat_config(cfg, account_start_usd=account_start)
+    else:
+        cfg = active_config(store, cfg)
+    store.check_identity(cfg, account_start_usd=account_start)
+    if qt.candle_opinions_enabled(cfg) and not provider.health():
+        consequence = ("Las fórmulas siguen decidiendo; falta la opinión de Qwen."
+                       if cfg.get("decide_by") == "formula" else
+                       "Cada despertar quedará omitido; no se opera sin respuesta.")
+        print("Qwen en vivo: ATENCIÓN, el modelo local no responde en {}. {}".format(
+            provider.base_url, consequence), flush=True)
+    print("Qwen en vivo (paper, sin órdenes reales): config {}, base {}, modelo en {}".format(
+        args.config, db_path, provider.base_url), flush=True)
+    stopping = []
+    for name in ("SIGINT", "SIGTERM"):
+        signal.signal(getattr(signal, name), lambda *_: stopping.append(1))
+    run(LiveOperator(cfg, store, PublicFeed(cache_dir), provider, log=lambda m: print(m, flush=True),
+                     account_start_usd=account_start), stop=lambda: bool(stopping))
+    print("Qwen en vivo: detenido; lo hecho quedó guardado.", flush=True)
+
+
 def main(argv=None):
     args = _parser().parse_args(argv)
     db_path = resolve_db(args.db)
     try:
+        if args.archive_flat_book and args.activate_flat_config:
+            raise qt.TraderError("Elegí --activate-flat-config; la cuenta no se reinicia archivándola.")
         if args.export:
             if not os.path.exists(db_path):
                 raise qt.TraderError("no existe la base {}".format(db_path))
@@ -1222,20 +1574,11 @@ def main(argv=None):
         cache_dir = args.cache_dir or os.path.join(os.path.dirname(os.path.abspath(db_path)), "cache")
         with ProcessLock(db_path):
             provider = qt._provider(args.llama_url, timeout=float((cfg.get("live") or {}).get("model_timeout_seconds", 60)))
-            archive_other_config(db_path, cfg, funding_for=PublicFeed(cache_dir).funding, log=lambda m: print(m, flush=True))
+            if args.archive_flat_book:
+                archive_other_config(db_path, cfg, funding_for=PublicFeed(cache_dir).funding, log=lambda m: print(m, flush=True))
             store = LiveStore(db_path)
             try:
-                if not provider.health():
-                    print("Qwen en vivo: ATENCIÓN, el modelo local no responde en {}. Cada despertar quedará anotado como "
-                          "omitido hasta que vuelva; no se opera sin respuesta.".format(provider.base_url), flush=True)
-                print("Qwen en vivo (paper, sin órdenes reales): config {}, base {}, modelo en {}".format(
-                    args.config, db_path, provider.base_url), flush=True)
-                stopping = []
-                for name in ("SIGINT", "SIGTERM"):
-                    signal.signal(getattr(signal, name), lambda *_: stopping.append(1))
-                run(LiveOperator(cfg, store, PublicFeed(cache_dir), provider, log=lambda m: print(m, flush=True)),
-                    stop=lambda: bool(stopping))
-                print("Qwen en vivo: detenido; lo hecho quedó guardado.", flush=True)
+                _run_live_owner(args, cfg, db_path, cache_dir, store, provider)
             finally:
                 store.close()
         return 0

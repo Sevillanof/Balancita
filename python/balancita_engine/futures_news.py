@@ -484,9 +484,23 @@ class NewsStore:
               question_version INTEGER NOT NULL, kind TEXT NOT NULL, message TEXT NOT NULL,
               model_ref TEXT NOT NULL, written_at INTEGER NOT NULL
             ) STRICT;
+            CREATE TABLE IF NOT EXISTS paper_futures_news_source_sets(
+              source_set_id INTEGER PRIMARY KEY, recorded_at_ms INTEGER NOT NULL,
+              sources_json TEXT NOT NULL, interval_ms INTEGER NOT NULL,
+              retry_window_ms INTEGER NOT NULL, max_published_age_ms INTEGER NOT NULL,
+              max_analyses_per_poll INTEGER NOT NULL
+            ) STRICT;
+            CREATE TABLE IF NOT EXISTS paper_futures_news_polls(
+              poll_id INTEGER PRIMARY KEY, source_set_id INTEGER NOT NULL,
+              source_id TEXT NOT NULL, started_at_ms INTEGER NOT NULL, finished_at_ms INTEGER NOT NULL,
+              status TEXT NOT NULL CHECK(status IN ('ok','not_modified','error')),
+              ingested INTEGER NOT NULL, duplicates INTEGER NOT NULL, detail TEXT,
+              CHECK(finished_at_ms >= started_at_ms)
+            ) STRICT;
+            CREATE INDEX IF NOT EXISTS paper_futures_news_polls_source ON paper_futures_news_polls(source_set_id,source_id,poll_id);
             """
         )
-        for table in ("items", "analysis", "errors"):
+        for table in ("items", "analysis", "errors", "source_sets", "polls"):
             self.db.executescript(
                 """
                 CREATE TRIGGER IF NOT EXISTS paper_futures_news_{t}_no_update
@@ -495,6 +509,22 @@ class NewsStore:
                   BEFORE DELETE ON paper_futures_news_{t} BEGIN SELECT RAISE(ABORT, 'news is immutable'); END;
                 """.format(t=table)
             )
+
+    def register_sources(self, sources, now, interval_ms, retry_window_ms, max_published_age_ms, max_analyses_per_poll):
+        with self.db:
+            cursor = self.db.execute(
+                "INSERT INTO paper_futures_news_source_sets(recorded_at_ms,sources_json,interval_ms,"
+                "retry_window_ms,max_published_age_ms,max_analyses_per_poll) VALUES(?,?,?,?,?,?)",
+                (now, json.dumps(sources, sort_keys=True), interval_ms, retry_window_ms,
+                 max_published_age_ms, max_analyses_per_poll))
+        return cursor.lastrowid
+
+    def append_poll(self, source_set_id, source_id, started, finished, status, ingested=0, duplicates=0, detail=None):
+        with self.db:
+            self.db.execute(
+                "INSERT INTO paper_futures_news_polls(source_set_id,source_id,started_at_ms,finished_at_ms,status,"
+                "ingested,duplicates,detail) VALUES(?,?,?,?,?,?,?,?)",
+                (source_set_id, source_id, started, finished, status, ingested, duplicates, detail))
 
     def add_item(self, row):
         """Appends an item; returns its ``item_id`` or ``None`` when ``item_hash`` is already stored."""
@@ -666,6 +696,9 @@ class NewsService:
         self._identity = None
         self._model_up = None
         self._problems = {}
+        self.source_set_id = self.store.register_sources(
+            self.sources, self.clock(), self.interval_ms, self.retry_window_ms,
+            self.max_published_age_ms, self.max_analyses_per_poll)
 
     def _problem_once(self, key, message):
         if self._problems.get(key) != message:
@@ -677,22 +710,29 @@ class NewsService:
         state = self._feeds[source["id"]]
         if now < state["next_due"]:
             return
+        state["started_at_ms"] = self.clock()
         try:
             fetched = self.fetcher.fetch(source["url"], etag=state["etag"], last_modified=state["last_modified"])
+            received_at = self.clock()
             items = [] if fetched.status == 304 else parse_feed(fetched.body, source["url"])
         except (FetchError, FeedError) as error:
-            self._source_failed(source, state, now, result, str(error))
+            self._source_failed(source, state, self.clock(), result, str(error))
             return
         except Exception as error:  # a source must never stop the others
-            self._source_failed(source, state, now, result, "unexpected {}: {}".format(type(error).__name__, error))
+            self._source_failed(source, state, self.clock(), result, "unexpected {}: {}".format(type(error).__name__, error))
             return
         if state["problem"] is not None:
             self.log("source {} recovered".format(source["id"]))
-        state.update(fails=0, problem=None, next_due=now + self.interval_ms,
+        state.update(fails=0, problem=None, next_due=self.clock() + self.interval_ms,
                      etag=fetched.etag or state["etag"], last_modified=fetched.last_modified or state["last_modified"])
+        before = result["ingested"], result["duplicates"]
         for raw in items:
-            key = "ingested" if self._store_item(source, raw, now) else "duplicates"
+            key = "ingested" if self._store_item(source, raw, received_at) else "duplicates"
             result[key] += 1
+        self.store.append_poll(
+            self.source_set_id, source["id"], state["started_at_ms"], self.clock(),
+            "not_modified" if fetched.status == 304 else "ok",
+            result["ingested"] - before[0], result["duplicates"] - before[1])
 
     def _ingest(self, now, result):
         for source in self.sources:
@@ -703,6 +743,7 @@ class NewsService:
         state["problem"] = message
         state["next_due"] = now + self.interval_ms * min(2 ** state["fails"], MAX_BACKOFF_FACTOR)
         result["failed_sources"].append(source["id"])
+        self.store.append_poll(self.source_set_id, source["id"], state["started_at_ms"], now, "error", detail=message)
         self._problem_once("source " + source["id"], "source {} failed: {}".format(source["id"], message))
 
     def _store_item(self, source, raw, now):
@@ -811,7 +852,7 @@ class NewsService:
         try:
             now = self.clock()
             self._ingest(now, result)
-            self._analyze(now, result)
+            self._analyze(self.clock(), result)
         except sqlite3.Error as error:
             self._problem_once("db", "database error: {}".format(error))
         except Exception as error:  # a service must outlive any single failure

@@ -1,5 +1,247 @@
 # qwen-trader
 
+## Mantenimiento de calidad (Sonar)
+
+La simplificación de validadores, noticias, cuenta y replay no cambia reglas,
+coeficientes, comisiones, modelos de funding ni configuraciones activas. Los
+tests de opiniones de velas habilitan explícitamente su modo legacy; los tests
+del modo noticias siguen comprobando que no hay consultas de precios al modelo.
+
+La caché identifica el producto por su archivo: `CandleCache.read` recibe solo
+resolución y fechas. `book_trades` devuelve siempre operaciones, cantidad de
+posiciones abiertas y detalle de traza (o `None`), sin alterar su liquidación.
+Las fixtures de la API comparten una base explícita, no métodos copiados que
+ocultan sus atributos al comprobador de tipos.
+
+El azar de `random_entries_means` sigue siendo determinista y exclusivo de la
+comparación estadística. No genera claves, tokens ni identificadores de seguridad.
+Se conserva su semilla y distribución; su hotspot de Sonar requiere revisión,
+no cambiar las simulaciones para ocultar el aviso.
+
+## Ciclo de vida corregido (2026-10-31)
+
+**Qwen solo analiza noticias. La cuenta no se reinicia y el flujo nuevo espera el cierre normal
+de la posición abierta.** La recarga controlada conservó la operación SHORT #2, sus
+cantidades y entrada, el saldo realizado de 1.011,580721517012049534635019 USD,
+las 137 decisiones anteriores y cero errores nuevos del operador.
+
+| Superficie             | Comportamiento comprobado                                                                                                                                                                                                                                                                          |
+| ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Opiniones de velas     | El interruptor `runtime.opinion_enabled = false` no altera el hash de las reglas activas. No hay consultas de salud, opiniones ni ejemplos de aprendizaje de precios. El trabajador genérico existente queda inactivo; un supervisor nuevo ya no lo inicia.                                        |
+| Noticias en pantalla   | El color expresa alcista/bajista, no ganancias. El `✓` significa aval de la señal. Relevancia no se presenta como probabilidad de éxito. Se muestran pendientes, análisis incompletos, fallidos, descartados, vencidos y datos sin confirmar. Las fechas se etiquetan UTC.                         |
+| Procedencia y vigencia | La API solo usa clasificaciones ETH v2, informa tiempos de recepción y análisis y no inventa licencias `public_rss`. La vigencia y habilitación vienen de la política publicada por el operador, no de otra regla de entrada escrita en JavaScript.                                                |
+| Colector N             | Registra cada fuente y descarga en tablas append-only, incluidas respuestas sin novedades y fallos. La recepción se toma después de recibir el cuerpo HTTP; no al comenzar el poll. Las 1.438 clasificaciones anteriores quedaron intactas.                                                        |
+| Mercado                | Los huecos internos de caché se vuelven a pedir con reparaciones acotadas. Las velas generadas se marcan como no observadas: no abren, cierran ni marcan posiciones. Las velas reales siguen aplicando las salidas de seguridad. Los expertos esperan la reparación y reconstrucción de sus datos. |
+| Salud                  | Un latido no confirma precios. El operador publica último dato observado, huecos, retrasos y errores; la Terminal los muestra explícitamente.                                                                                                                                                      |
+| Estrategia             | Las pruebas nuevas de fórmula usan el mismo `Trader`, fills, comisiones, funding y límite de exposición. El modo de cuenta se envía al servidor; el navegador dibuja USD y precios ejecutados, sin volver a multiplicar los pb. Los resultados anteriores siguen identificados como aproximados.   |
+
+### Funding: importe exacto, no otra bolsa
+
+Las entradas nuevas del flujo pendiente usan `kraken-absolute-quantity.v2`: tasa absoluta
+de Kraken en USD por unidad del activo por hora, multiplicada por la cantidad y el tiempo
+real de tenencia. No se usa tasa relativa por nocional de entrada. Las operaciones
+heredadas mantienen `kraken-relative-entry-notional.v1`, sin recotizar resultados
+cerrados ni redimensionar la posición actual. Cada posición y operación guarda su modelo.
+Un resultado sin cobertura completa lleva `net_complete_usd = null`.
+
+El archivo público local de Kraken permite recuperar etiquetas desde 2025-10-29.
+Los 8.835 ejemplos del nuevo par tienen funding cubierto; sus 27.360 velas del período
+2025-10-29 a 2026-02-01 están observadas, sin huecos. Los intervalos anteriores sin
+tasa absoluta quedan explícitamente sin cobertura. Binance ETHUSDT es otro contrato:
+su funding no sustituye pagos de Kraken.
+
+Fuentes primarias: [API histórica de Kraken](https://docs.kraken.com/api-reference/historical-funding-rates/historical-funding-rates)
+y [ejemplos oficiales](https://support.mtf.kraken.com/hc/en-us/articles/29694821654685-Funding-Rate-Examples).
+
+### Traspaso pendiente, sobre la misma cuenta
+
+[qwen-live-next.json](../../config/qwen-live-next.json) es una superposición aprobada por
+SHA-256 sobre el hash de origen, no otra cuenta. Apunta al
+[Maestro funding-v2](../../config/candidates/maestro-eth-cold-funding-v2-20261031.json)
+y al [Portero funding-v2](../../config/candidates/portero-eth-cold-funding-v2-20261031.json).
+Ambos se entrenaron desde cero con corte exclusivo 2026-02-01; no se usó la reserva de
+2026-04-19. Los candidatos anteriores se conservan, pero no son los activables con
+funding-v2. Este historial ya se exploró: no es validación nueva a ciegas ni garantía de ganancias.
+
+El operador no permite otra entrada del flujo anterior mientras espera. Solo conmuta
+cuando no hay posiciones en memoria, operaciones ni estado guardado. La transición
+conserva saldo, génesis, historial y contadores, y registra la versión completa en
+`config_versions`. Tras reiniciar recupera esa versión comprometida si desciende del
+origen conocido; una configuración ajena o un archivo modificado produce un error visible.
+Una configuración pendiente inválida no fuerza el cierre ni permite reabrir silenciosamente
+con el flujo anterior.
+
+La prueba histórica del flujo mide **solo los expertos y la ejecución**: no inventa
+noticias, escudo ni giros del período reservado. La protección de capital tras pérdidas,
+la recuperación de estado corrupto y la ejecución con precios más recientes siguen
+fuera de este cambio, como acordó el usuario.
+
+## Contrato preparado para Terminal (2026-10-30)
+
+**Cuenta permanente y reparaciones cargadas; candidatos entrenados, flujo nuevo aún no activado.** Por petición
+del usuario se recargó solo el operador, con la misma configuración y modelos. Se verificaron
+la posición abierta sin cambios, las decisiones anteriores intactas y los demás servicios
+sin reinicios. No se redimensionaron posiciones ni se reescribieron sus identificadores o
+hashes. Tras la autorización posterior del usuario se entrenaron los dos candidatos en frío
+con 10.183 ejemplos financiados de 2025-10-15 a 2026-01-31, corte exclusivo 2026-02-01.
+No se usó la reserva desde 2026-04-19 ni se reemplazaron los modelos que operan la posición actual.
+Las secciones posteriores conservan las decisiones de versiones anteriores; este contrato
+describe el nuevo modo opt-in, no el comportamiento ya cargado en el proceso actual.
+
+### Decisión y cuenta
+
+| Pieza            | Contrato                                                                                                                                                                                                                                                                           |
+| ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Maestro          | Conserva su predicción propia sobre hechos de mercado. No recibe el voto del Portero.                                                                                                                                                                                              |
+| Portero autónomo | Clasifica LARGO / CORTO / ESPERAR a 12 h con sus propios coeficientes y solo variables de mercado. No recibe puntaje, claridad ni predicciones del Maestro.                                                                                                                        |
+| Coordinador      | Una noticia fuerte verificada tiene prioridad. Sin ella, exige Maestro fuerte y voto autónomo en el mismo lado. Sin modelo autónomo no inventa un voto ni consulta el Portero viejo.                                                                                               |
+| Cuenta entera    | El nocional nuevo no supera `saldo_disponible / (1 + comisión_de_entrada)`. Con 1.000 USD y taker de 0,05 %, el máximo es aproximadamente 999,50 USD. El pedido de movimiento de 1,5x se satura en ese límite; 0,5x en calma sigue usando 500 USD. Lo abierto no cambia de tamaño. |
+| Otros márgenes   | Se descuentan los márgenes de otras posiciones y se incluyen sus resultados marcados. Un saldo inválido, no finito o no positivo produce un error/rechazo explícito.                                                                                                               |
+| Resultados       | Los pb de cada operación usan su nocional guardado, no el capital inicial del libro. La conciliación de funding mantiene esa unidad. `unknown` y `partial` no significan financiación gratuita.                                                                                    |
+
+Autonomía del flujo de información **no** significa errores estadísticamente independientes.
+Que dos expertos coincidan tampoco demuestra que la operación vaya a ganar.
+El límite de tamaño rige para entradas nuevas: la operación heredada conserva su cantidad,
+incluso si se abrió con una asignación superior a ese límite.
+
+### El dinero pertenece a la cuenta, no a la configuración
+
+La tabla `account` guarda una sola vez el capital inicial, protegido contra cambios,
+borrados y reemplazos. El operador migra una cuenta legacy bajo su configuración vigente
+antes de permitir cambiarla: un importe nuevo del entorno o del flujo no se usa para
+redefinir el dinero anterior.
+
+- **Saldo realizado** = capital inicial guardado + resultados netos de operaciones cerradas.
+- **Valor con posiciones abiertas** = saldo realizado + su resultado provisional.
+- Reservar margen reduce lo disponible para abrir, pero no gasta el nominal de un futuro.
+
+Comisiones y funding forman parte del resultado de cada operación. Una conciliación de
+funding observado puede corregir ese resultado; cambiar modelos, tamaños, analistas,
+versiones, pantallas o reiniciar procesos no mueve dinero.
+
+El gateway lee el capital guardado e ignora cambios de `QWEN_ACCOUNT_START_USD` en cuentas
+ya inicializadas. Suma importes decimales exactamente y solo convierte a números para la
+presentación. Un importe dañado se informa como error, no se omite ni se reemplaza por cero.
+La migración real verificó el mismo saldo realizado antes/después, la misma posición y
+todas las decisiones anteriores intactas.
+
+### Noticias: entrada, giro y salida propia
+
+El modo requiere `noticias.policy = "priority_v2"`, `opinion_enabled = false`,
+`cuenta = "entera"`, apalancamiento 1 y solo `PF_ETHUSD`. Qwen queda para las noticias:
+el supervisor no inicia el proceso genérico `q` de opiniones sobre velas, y el operador
+determinista puede arrancar aunque el servidor del modelo no esté disponible. No se
+modifican C25-C31 ni Kronos.
+
+La evidencia debe cumplir todos estos requisitos:
+
+- Clasificación v2 de relevancia alta y dirección alcista/bajista, con distribuciones
+  finitas y normalizadas y apoyo de al menos 0,75 en ambas preguntas. Ese apoyo **no es
+  una probabilidad calibrada de ganar dinero**.
+- Catalizador de Ethereum o macro, no un resumen de precios. Fuente y URL HTTPS
+  verificadas contra el dominio permitido, sin credenciales en la URL.
+- Publicación, recepción y ambos análisis con orden temporal válido. El evento solo
+  existe cuando todos se conocen; vence 15 minutos después de su publicación. Se vuelve
+  a comprobar el vencimiento antes del cierre/giro y antes de abrir.
+- Licencia explícita en `noticias.source_licenses`, con `status` (`licensed` o
+  `public_domain`), `url` de las condiciones y `host`. Sin esa habilitación la fuente se
+  rechaza; no se atribuyen licencias a los medios comerciales por defecto.
+
+Los feeds existentes de la Reserva Federal son `fed` y `fed_monetary`; sus textos producidos
+por el Board se contrastan con su [disclaimer](https://www.federalreserve.gov/disclaimer.htm).
+La excepción para materiales de terceros sigue aplicando. No se agregó una fuente nueva
+ni se habilitó una lista de licencias en la configuración activa.
+
+Se comprueba el mercado al menos cada 5 s; las decisiones usan velas cerradas de 5 min,
+con demora máxima de ejecución de 15 s:
+
+1. Sin posición, una noticia habilitada puede abrir largo o corto.
+2. Con posición del mismo lado, mantiene: no suma tamaño ni reinicia el reloj.
+3. Con posición contraria, primero cierra; solo reabre con el saldo posterior y si siguen
+   vigentes la noticia y la ventana de ejecución. Si la reapertura falla, el cierre y el
+   rechazo quedan guardados, sin una posición ficticia.
+4. Cada posición originada por noticias tiene un máximo de **24 h desde su propia
+   entrada**, incluso después de reiniciar. No consulta al Maestro ni al Portero para
+   mantenerla o cerrarla por tiempo. Otra noticia fuerte vigente puede girarla antes.
+5. Noticias fuertes contradictorias frenan una entrada nueva; no frenan la gestión de
+   salida de una posición existente.
+
+Se conservan fuente, URL, licencia, hashes, horas, modelos y prompts de los análisis.
+`news_actions` registra cada evento/resultado en la misma transacción que decisiones,
+operaciones y estado. Un reinicio no repite eventos consumidos; un fallo de escritura no
+consume el evento sin guardar sus efectos. Las horas de finalización/consumo se toman
+después de decidir, no al empezar el poll. Los descartes tampoco revelan análisis futuros.
+La agrupación de titulares sindicados es heurística: no promete reconocer duplicados
+semánticos perfectamente. Si desaparece la base de noticias se vacía la evidencia
+en caché y se informa que no está disponible.
+
+### Volver a aprender sin usar la reserva
+
+Los dos expertos se preparan juntos con
+[`futures_qwen_independent_gate`](../../python/balancita_engine/futures_qwen_independent_gate.py).
+El comando usa el ajuste en frío del Maestro y el nuevo ajuste del Portero. No carga
+pesos anteriores y los dos reciben las mismas filas purgadas, sin compartir predicciones.
+El Portero exige convergencia. Se requiere NumPy solo para entrenar, no para votar en vivo.
+
+El procedimiento honesto es:
+
+1. Fijar primero el corte y las reglas. Un corte posible de desarrollo es 2026-02-01;
+   nada usa la reserva desde 2026-04-19.
+2. Preparar archivos nuevos para ambos expertos. Purgar cualquier ejemplo cuyo resultado
+   a 12 h alcance o supere el corte, también para el Maestro; filtrar solo por la fecha
+   de entrada no alcanza. El Portero exige además financiación observada completa y neto
+   tras costos para sus etiquetas de LARGO / CORTO / ESPERAR.
+3. Mantener el tramo posterior anterior a la reserva separado del ajuste. Como ese
+   historial ya se exploró, su comparación sigue siendo exploratoria, no un examen
+   nuevo a ciegas. Empezar de cero no borra los intentos ni convierte datos vistos en
+   datos nuevos.
+4. Registrar el candidato y sus hashes, sin sobrescribir los archivos vigentes ni
+   reiniciar el contador de variantes. Comparar después hacia adelante en paper.
+
+Comando para entrenar ambos candidatos (se ejecutó con el corte indicado, sin activar):
+
+```bash
+PYTHONPATH=python .venv-vectorbt/bin/python -m balancita_engine.futures_qwen_independent_gate \
+  --facts data/qwen-trader/walkforward-eth/hechos-eth-PF_ETHUSD.jsonl \
+  --cache-dir data/qwen-trader/cache --until 2026-02-01 \
+  --out config/candidates/portero-eth-cold-20261030.json \
+  --maestro-out config/candidates/maestro-eth-cold-20261030.json
+```
+
+Los candidatos generados son:
+
+- [Maestro en frío](../../config/candidates/maestro-eth-cold-20261030.json).
+- [Portero autónomo en frío](../../config/candidates/portero-eth-cold-20261030.json).
+
+Esos archivos ya existen: repetir el comando no los sobrescribe. Otro entrenamiento
+necesita nombres nuevos y sigue contando como intento; este historial ya fue explorado.
+
+La herramienta usa caché local, rechaza sobrescribir cualquiera de las dos salidas y registra
+el par como ajuste fijo/exploratorio (`vigente`); no activa nada. Informa el hash canónico
+del Maestro para `corta.maestro_hash` y el SHA-256 completo del Portero para
+`corta.portero_autonomo` (`path` y `sha256`). Un modelo ajustado después de la fecha de
+una decisión se rechaza. La prueba histórica identifica explícitamente las noticias
+como no evaluadas: no debe afirmar que simuló noticias y giros cuando solo midió velas.
+
+### Activación sin perder una operación
+
+El nuevo comportamiento no se habilita cambiando hashes históricos a mano. Con otra
+configuración ajena a la línea registrada, el arranque normal rechaza el cambio. `--activate-flat-config` permite
+una transición explícita solo si no hay posiciones abiertas, ni en operaciones ni en el
+estado guardado. Para el flujo nuevo también exige los dos candidatos en frío válidos.
+
+La transición ocurre dentro de la misma base, conserva cuenta, operaciones y contadores,
+y agrega un registro en `config_versions` con la versión anterior, la nueva y el saldo.
+Cambiar el puntero de configuración y guardar ese registro es una sola transacción:
+un fallo revierte ambos. Las versiones son append-only. `--archive-flat-book` queda
+obsoleto y ya no permite sustituir una cuenta por un libro vacío.
+
+Los candidatos ya están entrenados y comprobados técnicamente. La activación queda
+pendiente hasta que cierre la operación actual. No crea una cuenta nueva ni fija otro
+saldo de arranque. El historial intervenido anteriormente no se convierte en evidencia
+limpia por cambiar de versión. Las regresiones usan mercados inventados y bases temporales;
+el ajuste histórico de los candidatos tampoco demuestra mejora de rentabilidad.
+
 ## Objective
 
 "Qwen operador": the local Qwen decides by itself WHEN to enter and WHEN to exit, on BTC (`PF_XBTUSD`) and ETH (`PF_ETHUSD`) only for now. This task ships the engine, the historical practice, the report and the learning-data export. It changes no live process.
@@ -27,7 +269,7 @@
 - **Guardrails, not overridable**: hard stop at `1.5 x` the 24 h sigma measured at entry (clamped to 0.5 %..20 %; gaps fill at the candle open, never better than the stop), forced close after 24 h, 15 min cooldown after any close, 100 USD per trade, one position per product, no limit of trades per day. Every forced close is a `guardrail` event in the data.
 - **State shown** (Spanish, no dates, no absolute prices, no product name, never its own performance): returns 1h / 4h / 24h / 7d, trend as return over normal noise, daily volatility 24 h and 7 d, last 15 min vs normal, distance to the 24 h and 7 d high and low, volume vs mean, funding (last rate and 30-day percentile when Kraken's public history covers it), the round-trip cost, the fixed rules and, in a position, side, open time, unrealized result after costs, distance to the stop and time to the limit. The cost sentence is in the question: "entrar y salir cuesta ~0,10 %; solo vale la pena operar si esperás un movimiento claramente mayor".
 - Prompt `qwen-trader` v1. Any text change needs a new `prompt.version` (a test pins the text hash).
-- Accounting: `futures_costs` fills, taker fees on both legs, Kraken's public funding of the holding time (`settle`, the same formula as `Book._settle`); a trade with no funding data is flagged (`funding_status`), not charged zero silently. Public hourly funding only exists from 2025-10-15, so older blocks are flagged.
+- Accounting: `futures_costs` fills, taker fees on both legs, Kraken's public funding of the holding time (`settle`, the same formula as `Book._settle`); a trade with no funding data is flagged (`funding_status`), not charged zero silently. Coverage depends on the public provider's rolling history and the local cache; there is no universal fixed first date.
 
 ## Historical practice
 
@@ -98,7 +340,30 @@ Perturbations (value set to the 10th and 90th percentile of that number among th
 
 ## En vivo
 
-Qwen opera en papel con velas reales: `python -m balancita_engine.futures_qwen_live` (lo levanta `pnpm dev` junto con el modelo, siempre, también con `DEV_ONLY`; solo `DECISIONS_ENABLED=0` lo apaga). Es la MISMA clase `Trader` de la práctica; solo cambia quién le da las velas. Sin claves, sin cuenta, sin órdenes reales.
+El proceso de Terminal opera en papel con velas reales: `python -m balancita_engine.futures_qwen_live`.
+`pnpm dev` conserva el arranque legacy con el modelo; el modo nuevo de noticias puede levantar
+el operador sin él. Usa la clase `Trader` de la práctica, pero una prueba solo de fórmulas no
+reproduce la nueva política de noticias. Sin claves, cuenta privada ni órdenes reales.
+
+### Detector de movimiento: igualdad entre carga inicial y actualización
+
+El detector de [movimiento](../../python/balancita_engine/futures_qwen_analista.py) consolida una hora
+solo cuando recibió su última vela cerrada de 5 minutos. Arrancar a mitad de hora no fija un
+percentil incompleto, y consultar una hora futura devuelve `None` hasta tener sus velas.
+
+El [operador en vivo](../../python/balancita_engine/futures_qwen_live.py) carga en el detector
+solo la historia anterior al calentamiento. Las velas de calentamiento y las nuevas entran una
+sola vez mediante `Trader.feed`, sin sumar de nuevo datos ya precargados.
+
+No cambian las ventanas de 24 h / 90 días, los multiplicadores ni el tamaño de posiciones abiertas.
+La corrección no recalcula operaciones guardadas. Se verifica con velas sintéticas, incluidos
+arranques a mitad de hora, consultas sin futuro y reinicio con una posición abierta:
+
+```bash
+PYTHONPATH=python:python/tests python3 -m unittest test_futures_qwen_analista test_futures_qwen_live.RestartTests
+```
+
+### Historial de versiones y operación
 
 - **Config**: `config/qwen-live.json` (versión `live`, `prompt.version` 5 desde la ficha de factores —antes 4—, `state_variant` 3; las configs 1, 2, 2.1 y 3 y sus hashes no se tocaron). Parte de la v3 con el espejo. Consulta SOLO cada 15 minutos, con o sin posición, y `wake.extra_wakes = false` apaga todo despertar extra (movimiento fuerte, cerca del stop, funding, movimiento grande, ganchos); las configs viejas, sin esa clave, no cambian. Guardrails de explorador: stop 1,5 x sigma 24 h entre 0,5 % y 3 %, cierre a las 4 h, espera de 15 min. El texto del estado y de la pregunta dice que hay stop y límite de tiempo (en la v3 decía que no había).
 - **Tamaño, apalancamiento, productos**: `notional_usd` (100), `leverage` (1) y `products` (BTC y ETH) de la config, o `QWEN_LIVE_NOTIONAL_USD`, `QWEN_LIVE_LEVERAGE`, `QWEN_LIVE_PRODUCTS` (separados por coma) en el entorno de `pnpm dev`. Solo se valida que sean números positivos y ids de producto; no hay topes. La contabilidad usa el nocional (costos y funding sobre el nocional); el margen guardado es nocional / apalancamiento. No se simula liquidación. Cambiar cualquiera cambia la identidad de la config: hace falta otra base.
@@ -112,7 +377,7 @@ Qwen opera en papel con velas reales: `python -m balancita_engine.futures_qwen_l
 - **Versión 6 (la pregunta sin ejemplo copiable)**: `prompt.version` 6 en `config/qwen-live.json` y variantes `ficha` 6.2 / `ficha-pista` 6.3 de la Prueba rápida. La Prueba rápida «Actual» con 150 fotos mostró que Qwen contestaba EXACTAMENTE la línea de ejemplo de la pregunta (`F1:+1 F2:-2 F3:0 …`) en 127 de 150: la copiaba. Como la gramática GBNF ya obliga el formato `F1:v … F8:v`, el ejemplo se sacó y la pregunta pide voto en todo renglón con datos (0 solo para n/d o números en el medio). F5 (un tamaño sin signo que el espejo no da vuelta) deja de votar, igual que F8: `VOTING` = F1, F2, F3, F4, F6, F7 y `lean = suma de esos seis / 12` (se suma por la posición de cada votante en la ficha, no por los primeros N). Cambia el `config_hash`, así que la base en vivo de la versión 5 se archiva sola y arranca una nueva. La tabla «Lectura por renglón» separa votar de leer: por renglón `vote_share`/`vote_n` (fotos con |gradiente real| >= 0,25; F4 solo cuenta fotos con el precio fuera del área, y con menos de 5 dice «sin fotos fuera del área»), `flip_share`/`flip_n` (entre las que votó, el signo se da vuelta en el espejo), `habit` (media de (real + espejo) / 2) y `corr`/`corr_n` (Spearman con el número del renglón). Veredicto, en este orden: «no vota» (vota en menos de 20 % de las fotos o en menos de 5), «lee» (vuelta >= 80 % y |corr| >= 0,5), «sesgado» (|corr| >= 0,5 pero vuelta < 80 %: lee el tamaño y el hábito manda el signo), «no lee» (|corr| < 0,2 o vuelta < 60 %), si no «a medias».
 - **Versión 8 (la FICHA CORTA, 27-oct-2026, decisión de Fran: «me gusta, armémoslo así»)**: `config/qwen-live.json` con `prompt.version` 7, `state_corta` y `corta` (los archivos de las dos fórmulas y sus hashes). Qwen ya no lee los ocho renglones: dos fórmulas fijas en CPU los leen por él (`futures_qwen_corta`). 1) El **maestro** de dirección (`futures_qwen_maestro`, `config/qwen-lora-maestro.json`: logística sin intercepto sobre los 15 números direccionales de la ficha, plazo 12 h): SUBE/BAJA FUERTE/FLOJO o NADA CLARO, con su puntaje y los umbrales. 2) El **portero** (`futures_qwen_portero`, `config/qwen-portero.json`: logística con intercepto sobre los mismos números orientados hacia el lado del maestro, los tamaños y la claridad; etiqueta = «la operación en el lado del maestro ganó tras costos saliendo cuando el maestro se da vuelta o a las 48 h»): CONVIENE ENTRAR / NO CONVIENE, con la probabilidad y el umbral del archivo (el 20 % de señales fuertes más confiables del ajuste). Es exactamente igual en el espejo porque orientar por el lado deja los números iguales. 3) **Volatilidad** ALTA / NORMAL / BAJA (rango de 24 h contra el promedio de 7 días: ≥ 1,25 / ≤ 0,8) y el movimiento esperable en 24 h. 4) **Posición**: lado, horas, resultado con todos los costos, si el maestro ahora va a favor o en contra y cuánto falta para el cierre obligatorio. Preguntas de letras: sin posición LARGO / CORTO / ESPERAR con la prueba del espejo (en el espejo se da vuelta solo el maestro; el portero y la volatilidad quedan iguales); con posición MANTENER / CERRAR. Sin ventana de oportunidad (`live.force_window_h` 0), sin pregunta por factores y SIN adaptador LoRA (aprendió la ficha de 8 factores). Guardrails: sin stop (medido: los stops convierten ruido en pérdidas), cierre obligatorio a las 48 h (`max_hold_min` 2880; la salida es de Qwen, cuando el maestro se da vuelta), espera de 15 min. **Datos viejos o incompletos no se le muestran**: si faltan los otros activos (fuerza relativa), el área de valor o la volatilidad de la semana, `Trader._decide` levanta `WakeSkipped(datos_incompletos)` y el despertar queda en `skipped` con el motivo, sin pregunta (los despertares tarde ya se omitían). Cambia el `config_hash`: la base de la v7 se archiva sola; los resultados de la v8 se miran aparte, revisión a las 30 operaciones. La v7 (ficha de 8 factores, pregunta por factores, adaptador) queda congelada en `config/qwen-live-v7.json` (`qt.CONFIG_PATH_LIVE_V7`): es la config por defecto de `futures_qwen_lora` y la que prueban `test_futures_qwen_live_ficha` y `test_futures_qwen_lora`. Medición hacia adelante del portero (2024, 2025 y práctica, entrenando solo con años anteriores) en `analisis/qwen-v8/informe.md` (archivos del proyecto). Probar sin modelo: `test_futures_qwen_live_corta`, `test_futures_qwen_portero`.
 - **Por operación en el Examen y la Prueba rápida (versión 8)**: con `state_corta`, `make_photos` guarda por foto `operacion` (tabla `exam_operacion`): el maestro, el portero y la volatilidad en ese momento y, para cada lado, el resultado de la operación de la versión 8 mirada hacia atrás (entrar al cierre de la foto; salir en el primer despertar posterior donde el maestro dice al menos flojo en contra, o a las `guardrails.max_hold_min`; neto en pb con el costo de ida y vuelta; `motivo` vuelta / tiempo; un despertar omitido por datos incompletos no cierra nada). Los despertares con datos incompletos no son fotos (el operador en vivo no pregunta). `analyse_operation` mide las entradas que Qwen haría en vivo (LARGO / CORTO sobre el umbral y confirmadas por el espejo) con esa salida fija: neto medio, ganadoras, rango del 95 % por día, total, salidas por vuelta / por tiempo, horas, acuerdo con el maestro y el portero, percentil contra el azar (una moneda por día); y en las mismas fotos la fórmula sola (maestro fuerte con portero a favor), el maestro fuerte sin portero y siempre largo / siempre corto. La salida es la regla fija, no lo que Qwen habría contestado con la posición abierta (eso cuesta 192 llamadas por operación). Sale en `exam-report` («Por operación»), en el resumen de la Prueba rápida (`operacion`) y en /Estrategias (tabla «Por operación»). `exam.from` (2025-10-01, después del último día con que se ajustaron las dos fórmulas) es el primer día de las fotos de la v8, nunca antes de `practice.from` (`--exam-from`); `exam.products` son los dos productos en vivo (BTC y ETH); ninguno de los dos cambia la identidad en vivo. La Prueba rápida «Actual» con la v8 pregunta por letras (real y espejo, dos órdenes): 150 fotos son 600 llamadas.
-- **Cambio de configuración**: al arrancar, si `live.sqlite` es de OTRA configuración (hash, versión del prompt, productos o esquema), `archive_other_config` cierra la posición abierta (`closed_by = fin_de_bloque`, `exit_reason = cambio_de_version`, al último precio visto por el proceso viejo, con la misma cuenta de `settle`) y renombra la base a `live-<12 primeros caracteres del hash viejo>.sqlite` en la misma carpeta (`-2`, `-3`... si el nombre existe); nunca se borra nada. Empieza una base nueva, vacía.
+- **Cambio de configuración**: el arranque normal rechaza otra configuración sin cerrar ni renombrar nada. `--activate-flat-config` cambia la versión sobre la misma cuenta solo con el libro plano y registra la transición. No vacía operaciones, contadores ni saldo. `--archive-flat-book` ya no permite reiniciar la cuenta.
 - **Examen de la config en vivo**: `python -m balancita_engine.futures_qwen_trader exam --version live` (2000 fotos, pregunta por factores real y espejo, ficha, otros activos y posicionamiento; las fotos salen con las reglas de despertar de la config en vivo: una cada 15 minutos) en su propia base, `data/qwen-trader/exam-live.sqlite`. /Estrategias («Qwen en vivo», etapas antes del corte) lee de ahí el `lean_num` de cada foto, solo si la base se hizo con la misma configuración que la de la base en vivo. El Examen de la v3 (`exam-v3.sqlite`) no cambia. La Prueba rápida «Actual (Qwen en vivo)» corre `--version live`; las demás variantes siguen sobre la v3.
 - **Real y espejo juntas en el Examen con factores**: con la ficha (`state_ficha`) el `exam` (y la Prueba rápida) manda por foto el estado real y el espejo a la vez, un hilo por llamada, porque llama-server corre con `-np 2` (dos slots); `exam --sequential` las manda una detrás de otra, como antes. Solo la llamada HTTP corre en hilos: contadores, guardado en SQLite y errores los maneja el hilo principal, y las filas guardadas son las mismas en los dos modos. El `s por llamada` del progreso es tiempo de pared (la pareja cuenta una vez), así que baja a cerca de la mitad. `exam --check-parallel N` (con el examen parado: comparten los dos slots) pide las primeras N fotos de la base en serie y en paralelo (N x 4 llamadas, unos N x 4 x 2,5 s), no guarda nada y dice «sirve» si la línea `F1…F8` sale idéntica en al menos 95 % de las fotos, ningún gradiente se mueve 0,05 o más y el signo de `lean_num` no cambia nunca; si no, «revisar».
 - Probar sin modelo: `PYTHONPATH=python:python/tests python3 -m unittest test_futures_qwen_live`.
