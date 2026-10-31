@@ -399,7 +399,7 @@ class MemHistory(qt.History):
         self.series = series
         self.requests = []
 
-    def bars(self, product, from_ms, to_ms):
+    def bars(self, product, from_ms, to_ms, *, fill=True, annotate=False):
         self._check(to_ms)
         self.requests.append((product, from_ms, to_ms))
         return [b for b in self.series[product] if from_ms <= b["bucket_start"] < to_ms]

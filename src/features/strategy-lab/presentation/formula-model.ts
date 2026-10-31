@@ -82,26 +82,36 @@ export function useFormulaModel(
     return (formula.curvas.formula ?? [])
       .filter((trade) => trade.producto === product)
       .map((trade, index) => {
-        const nocional = cuenta === 'entera' ? account : formula.nocional_usd
-        const pnl = (trade.neto_bp / 1e4) * nocional
-        account += cuenta === 'entera' ? pnl : 0
+        const executed = formula.execution === 'terminal.v2'
+        const nocional = executed
+          ? Number(trade.notional_usd)
+          : cuenta === 'entera'
+            ? account
+            : formula.nocional_usd
+        const pnl = executed
+          ? Number(trade.pnl_usd)
+          : (trade.neto_bp / 1e4) * nocional
+        if (!executed) account += cuenta === 'entera' ? pnl : 0
         return {
           trade_id: `formula-${index}`,
           product_id: trade.producto,
           side: trade.lado === 1 ? ('LONG' as const) : ('SHORT' as const),
           entry_time_ms: trade.entrada_ms,
           entry_bucket_ms: null,
-          entry_price: String(priceAt(points, trade.entrada_ms)),
+          entry_price:
+            trade.entrada_px ?? String(priceAt(points, trade.entrada_ms)),
           exit_time_ms: trade.salida_ms,
           exit_bucket_ms: null,
-          exit_price: String(priceAt(points, trade.salida_ms)),
+          exit_price:
+            trade.salida_px ?? String(priceAt(points, trade.salida_ms)),
           exit_reason: trade.motivo,
           reason_code: null,
           net_bp: trade.neto_bp,
           pnl_usd: pnl,
-          funding_usd: null,
-          funding_status: 'unknown',
-          notional_usd: String(nocional),
+          funding_usd:
+            trade.funding_usd === undefined ? null : Number(trade.funding_usd),
+          funding_status: trade.funding_status ?? 'unknown',
+          notional_usd: trade.notional_usd ?? String(nocional),
           signal_time_ms: null,
           size_mult: trade.tamano ?? null,
           with_movement: trade.movimiento ?? null,
@@ -148,7 +158,14 @@ export function useFormulaModel(
     showAll: () => setSelectedId(null),
     figures: formulaFigures(trades, formula!.desde_ms, formula!.hasta_ms),
     ...periodOf(formula!),
-    accountUsd: cuenta === 'entera' ? ACCOUNT_USD : null,
+    accountUsd:
+      formula?.execution === 'terminal.v2'
+        ? formula.cuenta === 'entera'
+          ? Number(formula.capital_inicial_usd)
+          : null
+        : cuenta === 'entera'
+          ? ACCOUNT_USD
+          : null,
   }
 }
 

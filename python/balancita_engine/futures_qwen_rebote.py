@@ -16,6 +16,7 @@ el medidor sale rojo y cada variante mirada cuenta como un intento más. Lo úni
 """
 
 import json
+import math
 import os
 import time
 
@@ -126,6 +127,33 @@ class Minutes:
 # --------------------------------------------------------------------------- the rule
 
 
+def _drop_candidate(bar, ref, start_ms, end_ms):
+    if int(bar["bucket_start"]) - int(ref["bucket_start"]) != LOOK_BARS * BAR_MS:
+        return None
+    t_ms = int(bar["bucket_start"]) + BAR_MS
+    if t_ms < start_ms or t_ms > end_ms:
+        return None
+    close, before = float(bar["close"]), float(ref["close"])
+    if close <= 0 or before <= 0 or math.isnan(close) or math.isnan(before):
+        return None
+    ret = close / before - 1
+    if ret > -DROP_PCT / 100:
+        return None
+    return t_ms, close, before, ret
+
+
+def _btc_gap(variant, btc_close, bar, ref, ret):
+    if variant["gap_pct"] is None:
+        return True, None
+    now_b, then_b = btc_close.get(int(bar["bucket_start"])), btc_close.get(int(ref["bucket_start"]))
+    if not now_b or not then_b:
+        return False, None
+    btc_ret = now_b / then_b - 1
+    if ret - btc_ret > -variant["gap_pct"] / 100:
+        return False, btc_ret
+    return True, btc_ret
+
+
 def find_drops(eth, btc, variant, start_ms, end_ms):
     """Las caídas que disparan la regla, una posición por vez.
 
@@ -136,25 +164,13 @@ def find_drops(eth, btc, variant, start_ms, end_ms):
     out, free_ms = [], None
     for k in range(LOOK_BARS, len(eth)):
         bar, ref = eth[k], eth[k - LOOK_BARS]
-        if int(bar["bucket_start"]) - int(ref["bucket_start"]) != LOOK_BARS * BAR_MS:
+        candidate = _drop_candidate(bar, ref, start_ms, end_ms)
+        if candidate is None:
             continue
-        t_ms = int(bar["bucket_start"]) + BAR_MS
-        if t_ms < start_ms or t_ms > end_ms:
+        t_ms, close, before, ret = candidate
+        allowed, btc_ret = _btc_gap(variant, btc_close, bar, ref, ret)
+        if not allowed:
             continue
-        close, before = float(bar["close"]), float(ref["close"])
-        if not close > 0 or not before > 0:
-            continue
-        ret = close / before - 1
-        if ret > -DROP_PCT / 100:
-            continue
-        btc_ret = None
-        if variant["gap_pct"] is not None:
-            now_b, then_b = btc_close.get(int(bar["bucket_start"])), btc_close.get(int(ref["bucket_start"]))
-            if not now_b or not then_b:
-                continue
-            btc_ret = now_b / then_b - 1
-            if ret - btc_ret > -variant["gap_pct"] / 100:
-                continue
         if free_ms is not None and t_ms - MIN_MS < free_ms:
             continue                                     # ya hay una operación abierta (o en los 60 min de espera)
         free_ms = t_ms + (variant["hold_min"] + COOLDOWN_MIN) * MIN_MS

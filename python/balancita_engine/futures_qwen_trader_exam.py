@@ -148,13 +148,27 @@ def make_photos(history, cfg, product, holdout_ms, texts=True, market=None, star
         if numbers is not None:
             photo["ficha"] = numbers
             photo["hechos"] = facts
-        if short:
-            operation = _operation(cfg, t_ms, readings, closes, cost, weak, trader.funding if moves else None)
-            if operation is None:
-                continue
-            photo["operacion"] = analista.sized(cfg, operation, movement, t_ms)
+        if short and not _attach_photo_operation(photo, cfg, readings, closes, cost, weak, trader.funding if moves else None, movement):
+            continue
         out.append(photo)
     return out
+
+
+def _attach_photo_operation(photo, cfg, readings, closes, cost, weak, funding, movement):
+    t_ms = photo["t_ms"]
+    operation = _operation(cfg, t_ms, readings, closes, cost, weak, funding)
+    if operation is None:
+        return False
+    photo["operacion"] = analista.sized(cfg, operation, movement, t_ms)
+    return True
+
+
+def _v8_exit_reading(reading, side, weak, held_ms, exhaust_ms):
+    if reading is None:
+        return False
+    if side * reading["puntaje"] <= -reading.get("flojo", weak):
+        return True
+    return exhaust_ms is not None and held_ms >= exhaust_ms and side * reading["puntaje"] <= 0
 
 
 def _v8_exit(cfg, t_ms, side, readings, closes, cost, weak, funding=None):
@@ -163,6 +177,8 @@ def _v8_exit(cfg, t_ms, side, readings, closes, cost, weak, funding=None):
     (``max_hold_min`` null, version 9) the operation lasts as long as the maestro does not turn: ``None`` when it never turns
     within the data (nothing to measure yet). ``None`` also without a candle at the exit."""
     hold, step = cfg["guardrails"]["max_hold_min"], cfg["wake"]["position_every_min"]
+    exhaust = cfg["guardrails"].get("exhaust_hold_min")
+    exhaust_ms = exhaust * MINUTE_MS if exhaust else None
     step_ms = step * MINUTE_MS
     last = max(readings) if readings else t_ms
     limit = t_ms + hold * MINUTE_MS if hold else last
@@ -170,7 +186,7 @@ def _v8_exit(cfg, t_ms, side, readings, closes, cost, weak, funding=None):
     at = t_ms + step_ms
     while at <= limit:
         r = readings.get(at)
-        if r is not None and side * r["puntaje"] <= -r.get("flojo", weak):      # a skipped wake (incomplete data): the position goes on
+        if _v8_exit_reading(r, side, weak, at - t_ms, exhaust_ms):
             exit_ms, why = at, OP_WHY_FLIP
             break
         at += step_ms
@@ -196,6 +212,7 @@ def _operation(cfg, t_ms, readings, closes, cost, weak, funding=None):
     if None in sides.values():
         return None
     return {"maestro": r["veredicto"], "puntaje": r["puntaje"], "portero_si": bool(r["portero_si"]), "portero_p": r["portero_p"],
+            "portero_direccion": r.get("portero_direccion"),
             "noticias_si": bool(r.get("noticias_si")), "volatilidad": r["volatilidad"], **sides}
 
 
@@ -717,6 +734,8 @@ def _op_random_percentile(items, draws, seed, observed):
 
 
 def _formula_says_yes(op):
+    if op.get("portero_direccion") is not None:
+        return bool(op["maestro"] * op["portero_direccion"] > 0)
     return bool(op.get("portero_si") or op.get("noticias_si"))
 
 
@@ -868,6 +887,119 @@ def _honesty(cfg, op):
     return walkforward.meter(trades, medicion=medicion, trial_count=walkforward.trials())
 
 
+def _replay_config(cfg):
+    cfg = dict(cfg, decide_by="formula", opinion_enabled=False)
+    products = cfg["exam"]["products"]
+    if cfg.get("cuenta") == "entera" and len(products) != 1:
+        raise qt.TraderError("La prueba de cuenta entera necesita un único producto, como la Terminal actual.")
+    start = exam_start_ms(cfg)
+    if noticias.priority_enabled(cfg):
+        if cfg.get("exigencia"):
+            if any(value != 5 for value in cfg["exigencia"].values()):
+                raise qt.TraderError("La exigencia legacy no se aplica a los expertos autónomos.")
+            cfg = dict(cfg, exigencia=None)
+        teacher = corta.formulas(cfg)[0]
+        start = max(start, (teacher.get("provenance") or {}).get("fit_until_ms", start))
+    return cfg, start
+
+
+def _replay_context(history, cfg, product, warm_from, holdout_ms):
+    context = {}
+    for other in cfg.get("state_context") or ():
+        if other != product:
+            context[other] = {bar["bucket_start"] + BAR_MS: float(bar["close"])
+                              for bar in history.bars(other, warm_from, holdout_ms)}
+    return context
+
+
+def _setup_replay(history, cfg, product, start, holdout_ms):
+    if cfg.get("funding_model") == qt.exact_funding.EXACT_MODEL:
+        funding = qt.exact_funding.from_archive(
+            cfg.get("funding_archive") or os.path.join(qt.ROOT, "server", "data", "dev-live", "futures-market.sqlite"),
+            product, until_ms=holdout_ms)
+    else:
+        funding = history.funding(product)
+    trader = qt.Trader(cfg, product, None, funding, key="paper-replay", entry_threshold=cfg["entry_threshold"])
+    if cfg.get("cuenta") == "entera":
+        trader.notional = qt.D(1000)
+    warm_from = start - cfg["practice"]["warmup_days"] * DAY_MS
+    raw = history.bars(product, warm_from - analista.extra_days(cfg) * DAY_MS, holdout_ms, fill=False)
+    bars = qt.fill_gaps(raw, BAR_MS, annotate=True)
+    gaps = [bar["bucket_start"] + BAR_MS for bar in bars if not bar["observed"]]
+    trader.data_gap_ms = max(gaps) if gaps else None
+    if analista.sizes_of(cfg):
+        trader.movement = analista.Movement(bar for bar in bars if bar["bucket_start"] < warm_from and bar["observed"])
+    trader.context = _replay_context(history, cfg, product, warm_from, holdout_ms)
+    return trader, bars
+
+
+def _replay_market(bars, start, holdout_ms):
+    return [[bar["bucket_start"] + BAR_MS, float(bar["close"])] for bar in bars
+            if bar["observed"] and start <= bar["bucket_start"] + BAR_MS <= holdout_ms
+            and (bar["bucket_start"] + BAR_MS) % qt.HOUR_MS == 0]
+
+
+def _collect_replay_trades(trader, bars, start, holdout_ms):
+    trades, snapshots = [], 0
+    for bar in bars:
+        end = bar["bucket_start"] + BAR_MS
+        if end > holdout_ms:
+            continue
+        events = trader.feed(bar, trade=end >= start)
+        snapshots += sum(event["type"] == "decision" for event in events)
+        trades.extend(event["trade"] for event in events if event["type"] == "trade")
+    trades.extend(event["trade"] for event in trader.force_close("fin_examen") if event["type"] == "trade")
+    return trades, snapshots
+
+
+def _replay_stat_item(trade):
+    side = 1 if trade["side"] == "LONG" else -1
+    why = {"tiempo": OP_WHY_TIME, "maestro_vuelta": OP_WHY_FLIP}.get(trade["closed_by"], trade["closed_by"])
+    result = {"neto_bp": trade["net_bp"], "motivo": why, "horas": trade["hold_min"] / 60}
+    return {"t_ms": trade["entry_ms"], "operacion": {"largo" if side > 0 else "corto": result}}, side
+
+
+def _replay_curve(trade, product):
+    return {
+        "producto": product, "lado": 1 if trade["side"] == "LONG" else -1,
+        "entrada_ms": trade["entry_ms"], "salida_ms": trade["exit_ms"],
+        "neto_bp": trade["net_bp"], "motivo": trade["closed_by"], "pnl_usd": trade["net_usd"],
+        "notional_usd": trade["notional_usd"], "entrada_px": trade["entry_fill"], "salida_px": str(trade["exit_px"]),
+        "funding_usd": trade["funding_usd"], "funding_status": trade["funding_status"], "funding_model": trade["funding_model"],
+    }
+
+
+def replay_formula(history, cfg, holdout_ms):
+    """Actual paper engine; the historical result never fabricates contemporary news."""
+    cfg, start = _replay_config(cfg)
+    products = cfg["exam"]["products"]
+    curves, market, snapshots, all_items = [], {}, 0, []
+    final = qt.D(1000)
+    for product in products:
+        trader, bars = _setup_replay(history, cfg, product, start, holdout_ms)
+        market[product] = _replay_market(bars, start, holdout_ms)
+        trades, looks = _collect_replay_trades(trader, bars, start, holdout_ms)
+        snapshots += looks
+        for trade in trades:
+            all_items.append(_replay_stat_item(trade))
+            curves.append(_replay_curve(trade, product))
+        if cfg.get("cuenta") == "entera":
+            final = trader.notional
+        else:
+            final += sum((qt.D(trade["net_usd"]) for trade in trades), qt.D(0))
+    stats = _op_stats(all_items, cfg["exam_rules"]["random_draws"], cfg["exam"]["seed"])
+    stats = _per_week(stats, [{"t_ms": start}, {"t_ms": holdout_ms}])
+    return {
+        "execution": "terminal.v2", "news_evaluated": False, "cuenta": cfg.get("cuenta", "fija"),
+        "capital_inicial_usd": "1000", "saldo_final_usd": str(final),
+        "funding_complete": all(trade["funding_status"] == "complete" for trade in curves) if curves else None,
+        "entrada": cfg.get("entrada", "formula"), "fotos": snapshots, "desde_ms": start, "hasta_ms": holdout_ms,
+        "max_horas": cfg["guardrails"]["max_hold_min"] / 60, "nocional_usd": float(cfg["notional_usd"]),
+        "productos": products, "analista": analista.describe(cfg), "formula": stats,
+        "curvas": {"formula": curves}, "mercado": market,
+    }
+
+
 def run_formula(history, cfg, holdout_ms, state_path, variant, *, log=print):
     """The formula-only test: no Qwen, no llama-server, only stored candles. Leaves ``{state, summary}`` in ``state_path``."""
     started = int(time.time() * 1000)
@@ -888,22 +1020,20 @@ def run_formula(history, cfg, holdout_ms, state_path, variant, *, log=print):
             cfg = walkforward.with_eth_formulas(cfg, walkforward.medicion_from_env(), pares=pares)
             state.update(phase="fotos", answered=0, total=len(products), updated_ms=int(time.time() * 1000))
             _write_state(state_path, state)
-        photos, market = [], {}
-        for product in products:
-            log("fórmula: leyendo las velas de {} (sin modelo)…".format(product))
-            market[product] = []
-            photos += make_photos(history, cfg, product, holdout_ms, texts=False, market=market[product])
-            state.update(answered=state["answered"] + 1, updated_ms=int(time.time() * 1000))
-            _write_state(state_path, state)
-        op = analyse_formula(photos, cfg)
+        mode = os.environ.get("QWEN_CUENTA", "entera" if cfg.get("cuenta") == "entera" else "fija")
+        if mode not in ("fija", "entera"):
+            raise qt.TraderError("La cuenta de la prueba debe ser fija o entera.")
+        cfg = dict(cfg, cuenta=mode, notional_usd="1000" if mode == "entera" else "100")
+        op = replay_formula(history, cfg, holdout_ms)
+        state.update(answered=len(products), updated_ms=int(time.time() * 1000))
         if op is not None:
-            op["mercado"] = market                       # what the price really did: hourly closes by product
             op["honestidad"] = _honesty(cfg, op)
         h = cfg["exam_lean"]["decide_horizon_min"]
         state.update(state="done", summary=None if op is None else {
             "photos": op["fotos"], "horizon_min": h, "spearman": None, "spearman_ci": [None, None], "extremes_net_bp": None,
             "extremes_ci": [None, None], "vs_random_pct": None,
-            "signals": {"extremes": None, "random": None, "spearman": None}, "note": FORMULA_NOTE, "formula": op})
+            "signals": {"extremes": None, "random": None, "spearman": None},
+            "note": "Mismo motor paper, tamaños y costos. Solo expertos: las noticias históricas no se han evaluado.", "formula": op})
     except Exception as error:  # noqa: BLE001 - whatever went wrong must reach the screen
         state.update(state="failed", error=str(error))
     state["finished_ms"] = int(time.time() * 1000)

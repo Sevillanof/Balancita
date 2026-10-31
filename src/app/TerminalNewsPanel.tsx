@@ -1,8 +1,9 @@
 import { useState } from 'react'
-import { formatShortDateTime } from './news-format.ts'
+import { formatShortDateTime } from './terminal-date.ts'
 import type {
   NewsDirection,
   NewsRelevance,
+  NewsSource,
   TerminalNewsItem,
 } from './useTerminalNews.ts'
 
@@ -18,8 +19,8 @@ const RELEVANCE_LABEL: Record<NewsRelevance, string> = {
 }
 
 const RELEVANCE_STYLE: Record<NewsRelevance, string> = {
-  high: 'bg-long/15 text-long',
-  medium: 'bg-warn/15 text-warn',
+  high: 'bg-warn/15 text-warn',
+  medium: 'bg-info/15 text-info',
   low: 'bg-info/15 text-info',
   none: 'bg-line text-ink-2',
 }
@@ -33,7 +34,9 @@ const DIRECTION_LABEL: Record<NewsDirection, string> = {
 function matchesNewsQuery(item: TerminalNewsItem, needle: string): boolean {
   const ts = item.publishedAtMs ?? item.receivedAtMs
   const dt = formatShortDateTime(ts)
-  const relLabel = RELEVANCE_LABEL[item.relevance]
+  const relLabel = item.relevance
+    ? RELEVANCE_LABEL[item.relevance]
+    : 'Pendiente'
   const dirLabel = item.direction ? DIRECTION_LABEL[item.direction] : ''
   const haystack = [
     dt.display,
@@ -52,12 +55,39 @@ function matchesNewsQuery(item: TerminalNewsItem, needle: string): boolean {
     .every((part) => haystack.includes(part))
 }
 
+function lifecycleLabel(
+  item: TerminalNewsItem,
+  nowMs: number | undefined,
+): string {
+  if (item.analysisStatus === 'pending') return 'Pendiente'
+  if (item.analysisStatus === 'partial') return 'Análisis incompleto'
+  if (item.analysisStatus === 'failed') return 'Análisis fallido'
+  if (item.analysisStatus === 'stale') return 'Descartada por antigüedad'
+  if (item.eligibility === 'used') return 'Ya usada'
+  if (
+    item.expiresAtMs != null &&
+    nowMs !== undefined &&
+    nowMs >= item.expiresAtMs
+  )
+    return 'Vencida'
+  if (nowMs === undefined) return 'Vigencia sin confirmar'
+  if (item.eligibility === 'eligible') return 'Señal habilitada'
+  if (item.eligibility === 'conflict') return 'Noticias contradictorias'
+  if (item.eligibility === 'rejected') return 'No habilita una operación'
+  if (item.eligibility === 'legacy') return 'Flujo clásico'
+  return 'Vigencia sin confirmar'
+}
+
 export default function TerminalNewsPanel({
   items,
   loaded = true,
+  nowMs,
+  source,
 }: {
   items: readonly TerminalNewsItem[]
   loaded?: boolean
+  nowMs?: number
+  source?: NewsSource
 }) {
   const [query, setQuery] = useState('')
   const [page, setPage] = useState(0)
@@ -75,6 +105,32 @@ export default function TerminalNewsPanel({
       aria-label="Últimas noticias"
       data-testid="terminal-news-panel"
     >
+      {source && (source.state === 'error' || source.state === 'off') && (
+        <p
+          className="m-0 text-hint text-warn"
+          role="status"
+          title={source.reason}
+        >
+          No se pueden confirmar las noticias.{' '}
+          {items.length > 0 ? 'Último dato, sin confirmar.' : ''}
+        </p>
+      )}
+      {source?.state === 'ok' && source.collectorStatus !== 'ok' && (
+        <p
+          className="m-0 text-hint text-warn"
+          role="status"
+          title={source.collectorReason ?? undefined}
+        >
+          {source.collectorStatus === 'warning'
+            ? 'El colector de noticias tiene fuentes atrasadas o con errores.'
+            : 'Estado del colector de noticias sin confirmar.'}
+        </p>
+      )}
+      {source?.state === 'ok' && source.policy === 'legacy_v1' && (
+        <p className="m-0 text-hint text-ink-2">
+          Noticias como aval: el flujo de prioridad aún no está activo.
+        </p>
+      )}
       {items.length > 0 && (
         <input
           type="search"
@@ -92,7 +148,7 @@ export default function TerminalNewsPanel({
         <p className="m-0 text-hint text-ink-2">Cargando noticias…</p>
       ) : items.length === 0 ? (
         <p className="m-0 text-hint text-ink-2">
-          Aún no hay noticias analizadas.
+          Aún no hay noticias recibidas.
         </p>
       ) : (
         <>
@@ -106,10 +162,32 @@ export default function TerminalNewsPanel({
               const dt = formatShortDateTime(
                 item.publishedAtMs ?? item.receivedAtMs,
               )
-              const pct =
-                item.relevanceValue !== null
-                  ? ` ${Math.round(item.relevanceValue * 100)}%`
-                  : ''
+              const unconfirmed =
+                source?.state === 'error' || source?.state === 'off'
+              const expired =
+                item.expiresAtMs != null &&
+                nowMs !== undefined &&
+                nowMs >= item.expiresAtMs
+              const directionTone =
+                unconfirmed || expired
+                  ? 'text-ink-2'
+                  : item.direction === 'bullish'
+                    ? 'text-long'
+                    : item.direction === 'bearish'
+                      ? 'text-short'
+                      : 'text-ink-2'
+              const timeline = [
+                item.publishedAtMs == null
+                  ? 'Publicación sin fecha'
+                  : `Publicada ${formatShortDateTime(item.publishedAtMs).display} UTC`,
+                `Recibida ${formatShortDateTime(item.receivedAtMs).display} UTC`,
+                item.knownAtMs == null
+                  ? 'Análisis sin completar'
+                  : `Análisis completo ${formatShortDateTime(item.knownAtMs).display} UTC`,
+                item.expiresAtMs == null
+                  ? 'Vencimiento sin confirmar'
+                  : `Vence ${formatShortDateTime(item.expiresAtMs).display} UTC`,
+              ].join(' · ')
               return (
                 <li
                   key={item.id}
@@ -118,19 +196,21 @@ export default function TerminalNewsPanel({
                   <div className="flex flex-wrap items-center justify-between gap-1.5 text-hint">
                     <span className="inline-flex flex-wrap items-center gap-1">
                       <span
-                        className={`rounded-sm px-1.5 py-0.5 font-semibold ${RELEVANCE_STYLE[item.relevance]}`}
+                        className={`rounded-sm px-1.5 py-0.5 font-semibold ${item.relevance ? RELEVANCE_STYLE[item.relevance] : RELEVANCE_STYLE.none}`}
+                        title="Importancia estimada para Ethereum; no es una probabilidad de ganar."
                       >
-                        Relevancia {RELEVANCE_LABEL[item.relevance]}
-                        {pct}
+                        {item.relevance
+                          ? `Relevancia ${RELEVANCE_LABEL[item.relevance]}`
+                          : 'Sin clasificar'}
                       </span>
                       {item.direction && (
-                        <small className="text-ink-2">
+                        <small className={directionTone}>
                           {DIRECTION_LABEL[item.direction]}
                         </small>
                       )}
                     </span>
                     <small className="text-ink-2">
-                      {item.source} · <time>{dt.display}</time>
+                      {item.source} · <time>{dt.display}</time> UTC
                     </small>
                   </div>
                   <a
@@ -142,6 +222,18 @@ export default function TerminalNewsPanel({
                   >
                     {item.title}
                   </a>
+                  <small
+                    className="block text-ink-2"
+                    title={`${timeline}${item.eligibilityReason ? ` · ${item.eligibilityReason}` : ''}`}
+                  >
+                    {unconfirmed
+                      ? 'Sin confirmar'
+                      : lifecycleLabel(item, nowMs)}
+                    {item.licenseStatus &&
+                    !['licensed', 'public_domain'].includes(item.licenseStatus)
+                      ? ' · Permiso sin verificar'
+                      : ''}
+                  </small>
                 </li>
               )
             })}

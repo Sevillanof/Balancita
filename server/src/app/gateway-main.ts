@@ -108,6 +108,7 @@ async function main(): Promise<void> {
       startUsd: positiveNumber(process.env.QWEN_ACCOUNT_START_USD),
     }),
     newsItems: createNewsItems({
+      liveDbPath: process.env.QWEN_LIVE_DB_PATH || undefined,
       newsDbPath:
         process.env.FUTURES_NEWS_DB_PATH?.trim() ||
         join(dirname(config.futuresMarketDbPath), 'futures-news.sqlite'),

@@ -41,6 +41,7 @@ Design rules
 """
 
 import collections
+from abc import ABC, abstractmethod
 import hashlib
 import itertools
 import json
@@ -142,6 +143,10 @@ QUESTION_TYPES = ("choice", "bool", "score")
 # ``verdict`` (default, the only scope Q asks) questions describe a verdict STATE; ``news`` questions
 # are asked by the news process N about one news item (its text is the state), never by Q.
 QUESTION_SCOPES = ("verdict", "news", "exit", "signal")
+UNKNOWN_PROBABILITY_SOURCE = "unknown probability source {!r}"
+FIELD_VALUE_FORMAT = "{}={}"
+HTTP_ERROR_KIND = "http_{}"
+MODEL_NOT_HEALTHY = "model not healthy: {}"
 
 
 def question_hash(question):
@@ -168,6 +173,12 @@ def validate_question(question):
         raise ValueError("{}: scope must be one of {}".format(name, ", ".join(QUESTION_SCOPES)))
     if question.get("order_debias", "none") not in ORDER_DEBIAS:
         raise ValueError("{}: order_debias must be one of {}".format(name, ", ".join(ORDER_DEBIAS)))
+    _validate_question_fields(question, name, scope)
+    _validate_question_options(question, name, kind)
+    return question
+
+
+def _validate_question_fields(question, name, scope):
     fields = question.get("state_fields")
     if scope == "news":
         if fields:
@@ -178,27 +189,33 @@ def validate_question(question):
         for field in fields:
             if field not in STATE_FIELDS:
                 raise ValueError("{}: unknown state field {!r}".format(name, field))
+
+
+def _validate_question_options(question, name, kind):
     if kind == "bool":
         if question.get("options"):
             raise ValueError("{}: a bool question has no options (A) true B) false)".format(name))
-        return question
+        return
     options = question.get("options")
     if not isinstance(options, list) or not 2 <= len(options) <= len(LETTERS):
         raise ValueError("{}: needs 2 to {} options".format(name, len(LETTERS)))
     seen = set()
     for option in options:
-        if not isinstance(option, dict) or not _OPTION_ID.match(str(option.get("id", ""))):
-            raise ValueError("{}: invalid option id".format(name))
-        if option["id"] in seen:
-            raise ValueError("{}: duplicate option {}".format(name, option["id"]))
-        seen.add(option["id"])
-        if not isinstance(option.get("description"), str) or not option["description"].strip():
-            raise ValueError("{}: option {} needs a description".format(name, option["id"]))
-        if kind == "score":
-            value = option.get("value")
-            if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
-                raise ValueError("{}: score option {} needs a numeric value".format(name, option["id"]))
-    return question
+        _validate_option(option, name, kind, seen)
+
+
+def _validate_option(option, name, kind, seen):
+    if not isinstance(option, dict) or not _OPTION_ID.match(str(option.get("id", ""))):
+        raise ValueError("{}: invalid option id".format(name))
+    if option["id"] in seen:
+        raise ValueError("{}: duplicate option {}".format(name, option["id"]))
+    seen.add(option["id"])
+    if not isinstance(option.get("description"), str) or not option["description"].strip():
+        raise ValueError("{}: option {} needs a description".format(name, option["id"]))
+    if kind == "score":
+        value = option.get("value")
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+            raise ValueError("{}: score option {} needs a numeric value".format(name, option["id"]))
 
 
 def load_questions(path=None, scope="verdict"):
@@ -230,7 +247,7 @@ def load_calibration(path=None):
 
 def temperature_for(calibration, question_id, version):
     value = (calibration.get("temperatures") or {}).get("{}@{}".format(question_id, version), 1.0)
-    if isinstance(value, bool) or not isinstance(value, (int, float)) or not value > 0 or not math.isfinite(value):
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0 or not math.isfinite(value):
         raise ValueError("invalid calibration temperature for {}@{}".format(question_id, version))
     return float(value)
 
@@ -292,18 +309,22 @@ def validate_prompt_config(config):
     if not isinstance(versions, dict) or not versions:
         raise ValueError("prompt config needs versions")
     for key, template in versions.items():
-        if not re.match(r"^[1-9][0-9]{0,5}$", str(key)):
-            raise ValueError("invalid prompt version {!r}".format(key))
-        if not isinstance(template, dict):
-            raise ValueError("prompt version {} must be an object".format(key))
-        for field in _TEMPLATE_TEXT_FIELDS:
-            value = template.get(field)
-            if value is not None and not isinstance(value, str):
-                raise ValueError("prompt version {}: {} must be a string or null".format(key, field))
+        _validate_prompt_template(key, template)
     default = config.get("default_version")
     if isinstance(default, bool) or not isinstance(default, int) or str(default) not in versions:
         raise ValueError("default_version must name one of the versions")
     return config
+
+
+def _validate_prompt_template(key, template):
+    if not re.match(r"^[1-9]\d{0,5}$", str(key), flags=re.ASCII):
+        raise ValueError("invalid prompt version {!r}".format(key))
+    if not isinstance(template, dict):
+        raise ValueError("prompt version {} must be an object".format(key))
+    for field in _TEMPLATE_TEXT_FIELDS:
+        value = template.get(field)
+        if value is not None and not isinstance(value, str):
+            raise ValueError("prompt version {}: {} must be a string or null".format(key, field))
 
 
 def load_prompt_config(path=None):
@@ -373,7 +394,7 @@ def request_body(prompt, letters, template=None, source=RAW_SOURCE):
     probabilities are the model's distribution over the grammar-allowed letters.
     """
     if source not in PROBABILITY_SOURCES:
-        raise ValueError("unknown probability source {!r}".format(source))
+        raise ValueError(UNKNOWN_PROBABILITY_SOURCE.format(source))
     template = template or LEGACY_TEMPLATE
     messages = []
     if template.get("system"):
@@ -515,7 +536,7 @@ def _field_dist_atr(ctx):
     parts = []
     for name in ("ema9", "ema21", "sma50"):
         level = _dec(features.get(name))
-        parts.append("{}={}".format(name, _fmt(_ratio(None if close is None or level is None else close - level, atr), 2)))
+        parts.append(FIELD_VALUE_FORMAT.format(name, _fmt(_ratio(None if close is None or level is None else close - level, atr), 2)))
     return "dist_atr: " + " ".join(parts)
 
 
@@ -553,13 +574,13 @@ def _field_volume_rel(ctx):
 
 def _field_proposals(ctx):
     return "proposals: " + ", ".join(
-        "{}={}".format(sanitize_text(p.get("strategy_id", "?")), sanitize_text(p.get("action", "?")))
+        FIELD_VALUE_FORMAT.format(sanitize_text(p.get("strategy_id", "?")), sanitize_text(p.get("action", "?")))
         for p in ctx["verdict"].get("proposals", [])
     )
 
 
 def _probabilities(values):
-    return " ".join("{}={}".format(name, _fmt(_dec(values[name]), 2)) for name in SIGNAL_ACTIONS)
+    return " ".join(FIELD_VALUE_FORMAT.format(name, _fmt(_dec(values[name]), 2)) for name in SIGNAL_ACTIONS)
 
 
 def _signals(ctx):
@@ -718,7 +739,17 @@ def check_loopback_url(url):
     return url
 
 
-class FakeProvider:
+class LocalModelProvider(ABC):
+    @abstractmethod
+    def complete(self, prompt, letters, source=RAW_SOURCE, template=None):
+        """Return first-token evidence using the shared real/fake provider contract."""
+
+    @abstractmethod
+    def tokenize(self, text):
+        """Return the token ids for text."""
+
+
+class FakeProvider(LocalModelProvider):
     """Scripted provider for tests: no network."""
 
     def __init__(self, entries=None, healthy=True, model_ref="fake-model", info=None, post_entries=None):
@@ -776,7 +807,7 @@ class FakeProvider:
         return {"completion": script(body), "latency_ms": 0}
 
 
-class LlamaCppProvider:
+class LlamaCppProvider(LocalModelProvider):
     """llama-server over HTTP (``urllib``); every call has a timeout."""
 
     PROPS_KEYS = ("model_path", "model_alias", "build_info", "total_slots")
@@ -806,7 +837,7 @@ class LlamaCppProvider:
                 return error.code, error.read(MAX_RESPONSE_BYTES)
             finally:
                 error.close()
-        except (urllib.error.URLError, OSError, ValueError) as error:
+        except (OSError, ValueError) as error:
             raise ModelUnavailable("{} {}: {}".format(method, path, error)) from error
         except Exception as error:  # http.client errors (BadStatusLine, IncompleteRead, ...)
             raise ModelUnavailable("{} {}: {!r}".format(method, path, error)) from error
@@ -815,7 +846,7 @@ class LlamaCppProvider:
     def _json(data, what):
         try:
             return json.loads(data.decode("utf-8"))
-        except (ValueError, UnicodeDecodeError) as error:
+        except ValueError as error:
             raise ModelResponseError("bad_json", "{} is not JSON".format(what)) from error
 
     def health(self):
@@ -856,7 +887,7 @@ class LlamaCppProvider:
     def tokenize(self, text):
         status, data = self._request("POST", "/tokenize", self.health_timeout, {"content": text, "add_special": False})
         if status != 200:
-            raise ModelResponseError("http_{}".format(status), "/tokenize answered {}".format(status))
+            raise ModelResponseError(HTTP_ERROR_KIND.format(status), "/tokenize answered {}".format(status))
         tokens = self._json(data, "/tokenize").get("tokens")
         if not isinstance(tokens, list):
             raise ModelResponseError("malformed_response", "/tokenize has no tokens")
@@ -909,7 +940,7 @@ class LlamaCppProvider:
         if status == 503:
             raise ModelUnavailable("llama-server answered 503 (model loading or busy)")
         if status != 200:
-            raise ModelResponseError("http_{}".format(status), "llama-server answered {}".format(status))
+            raise ModelResponseError(HTTP_ERROR_KIND.format(status), "llama-server answered {}".format(status))
         answer = self._json(data, "completion")
         latency_ms = int((time.monotonic() - started) * 1000)
         self._account(answer.get("timings") if isinstance(answer, dict) else None, latency_ms)
@@ -917,26 +948,34 @@ class LlamaCppProvider:
             time.sleep(self.pause_s)
         return {"completion": answer, "latency_ms": latency_ms}
 
+    def _completion_answer(self, body):
+        status, data = self._request("POST", "/v1/chat/completions", self.timeout, body)
+        if status == 503:
+            raise ModelUnavailable("llama-server answered 503 (model loading or busy)")
+        if status != 200:
+            raise ModelResponseError(HTTP_ERROR_KIND.format(status), "llama-server answered {}".format(status))
+        return self._json(data, "completion")
+
+    def _completion_entries(self, answer, source):
+        if source != RAW_SOURCE:
+            choice, first = self._first_token(answer, "probabilities")
+            return choice, self._post_sampling_entries(first)
+        choice, first = self._first_token(answer, "logprobs")
+        listed = first.get("top_logprobs") or []
+        try:
+            entries = list(listed) if listed else [{"token": first["token"], "logprob": first["logprob"]}]
+        except KeyError as error:
+            raise ModelResponseError("malformed_response", "completion has no first-token logprobs") from error
+        return choice, entries
+
     def complete(self, prompt, letters, source=RAW_SOURCE, template=None):
         started = time.monotonic()
         body = request_body(prompt, letters, template, source)
-        for attempt in range(POST_SAMPLING_ATTEMPTS if source == POST_SOURCE else 1):
-            status, data = self._request("POST", "/v1/chat/completions", self.timeout, body)
-            if status == 503:
-                raise ModelUnavailable("llama-server answered 503 (model loading or busy)")
-            if status != 200:
-                raise ModelResponseError("http_{}".format(status), "llama-server answered {}".format(status))
-            answer = self._json(data, "completion")
+        for _ in range(POST_SAMPLING_ATTEMPTS if source == POST_SOURCE else 1):
+            answer = self._completion_answer(body)
+            choice, entries = self._completion_entries(answer, source)
             if source == RAW_SOURCE:
-                choice, first = self._first_token(answer, "logprobs")
-                listed = first.get("top_logprobs") or []
-                try:
-                    entries = list(listed) if listed else [{"token": first["token"], "logprob": first["logprob"]}]
-                except KeyError as error:
-                    raise ModelResponseError("malformed_response", "completion has no first-token logprobs") from error
                 break
-            choice, first = self._first_token(answer, "probabilities")
-            entries = self._post_sampling_entries(first)
             tokens = {str(entry["token"]).strip() for entry in entries}
             # Masked by the grammar: only letters. Otherwise the unconstrained first draw was allowed and
             # the candidates are the whole vocabulary: fine if every letter is there, else draw again.
@@ -1242,11 +1281,16 @@ class DecisionService:
 
     def __init__(self, market_db_path, verdicts_db_path, store, provider, questions, calibration,
                  products, log=print, clock=None, max_age_ms=DEFAULT_MAX_AGE_MS,
-                 template=None, probability_source=None, calm_skip=False):
+                 template=None, probability_source=None, **options):
+        calm_skip = options.pop("calm_skip", False)
+        enabled = options.pop("enabled", True)
+        if options:
+            raise TypeError("Unexpected decision-service options: " + ", ".join(options))
         self.market_db_path = market_db_path
         self.verdicts_db_path = verdicts_db_path
         self.store = store
         self.provider = provider
+        self.enabled = enabled
         self.questions = dict(questions)
         self.calibration = calibration
         self.products = list(products)
@@ -1257,7 +1301,7 @@ class DecisionService:
         self.template = template or defaults["templates"][defaults["default_version"]]
         self.probability_source = probability_source or defaults["probability_source"]
         if self.probability_source not in SOURCE_MODES:
-            raise ValueError("unknown probability source {!r}".format(self.probability_source))
+            raise ValueError(UNKNOWN_PROBABILITY_SOURCE.format(self.probability_source))
         self.max_lag_ms = store.config["max_verdict_lag_ms"]
         self.market = None
         self.verdicts = None
@@ -1363,6 +1407,8 @@ class DecisionService:
     # -- loop
     def poll(self):
         """Decides the new fresh buckets; returns the number of decisions written."""
+        if not self.enabled:
+            return 0
         try:
             written = self._poll()
         except sqlite3.Error as error:
@@ -1378,27 +1424,49 @@ class DecisionService:
     def _work(self, now):
         work = []
         for product_id in self.products:
-            cursor = self.cursors.get(product_id)
-            if cursor is None:
-                cursor = self.store.last_bucket(product_id)
-            while True:
-                rows = self.verdicts.pending(product_id, cursor)
-                for bucket, known_at, verdict_hash, written_at in rows:
-                    cursor = bucket
-                    if known_at - bucket - ONE_MINUTE_MS > self.max_lag_ms or now - written_at > self.max_age_ms:
-                        for question in self.questions.values():
-                            if not self.store.has(product_id, bucket, question["id"], question["version"]):
-                                self.store.append_skip(
-                                    product_id, bucket, question, "stale_verdict",
-                                    "veredicto demasiado viejo para decidir (llegó tarde o se escribió hace demasiado)")
-                        continue
-                    for question in self.questions.values():
-                        if not self.store.has(product_id, bucket, question["id"], question["version"]):
-                            work.append((product_id, bucket, verdict_hash, question))
-                if len(rows) < VERDICT_BATCH:
-                    break
-            self.cursors[product_id] = cursor
+            work.extend(self._product_work(product_id, now))
         return work
+
+    def _product_work(self, product_id, now):
+        work = []
+        cursor = self.cursors.get(product_id)
+        if cursor is None:
+            cursor = self.store.last_bucket(product_id)
+        while True:
+            rows = self.verdicts.pending(product_id, cursor)
+            for row in rows:
+                cursor = row[0]
+                work.extend(self._bucket_work(product_id, row, now))
+            if len(rows) < VERDICT_BATCH:
+                break
+        self.cursors[product_id] = cursor
+        return work
+
+    def _bucket_work(self, product_id, row, now):
+        bucket, known_at, verdict_hash, written_at = row
+        stale = known_at - bucket - ONE_MINUTE_MS > self.max_lag_ms or now - written_at > self.max_age_ms
+        work = []
+        for question in self.questions.values():
+            if self.store.has(product_id, bucket, question["id"], question["version"]):
+                continue
+            if stale:
+                self.store.append_skip(product_id, bucket, question, "stale_verdict",
+                                       "veredicto demasiado viejo para decidir (llegó tarde o se escribió hace demasiado)")
+            else:
+                work.append((product_id, bucket, verdict_hash, question))
+        return work
+
+    def _skip_calm(self, product_id, bucket, question, calm_at):
+        if not self.calm_skip:
+            return False
+        if (product_id, bucket) not in calm_at:
+            calm_at[(product_id, bucket)] = self._is_calm(product_id, bucket)
+        if not calm_at[(product_id, bucket)]:
+            return False
+        self.calm_skipped += 1
+        self.store.append_skip(product_id, bucket, question, "calm_skip",
+                               "tramo en calma: no se pregunta al modelo (filtro de volatilidad)")
+        return True
 
     def _poll(self):
         self._readers()
@@ -1418,14 +1486,8 @@ class DecisionService:
         written = 0
         calm_at = {}
         for index, (product_id, bucket, verdict_hash, question) in enumerate(work):
-            if self.calm_skip:
-                if (product_id, bucket) not in calm_at:
-                    calm_at[(product_id, bucket)] = self._is_calm(product_id, bucket)
-                if calm_at[(product_id, bucket)]:
-                    self.calm_skipped += 1
-                    self.store.append_skip(product_id, bucket, question, "calm_skip",
-                                           "tramo en calma: no se pregunta al modelo (filtro de volatilidad)")
-                    continue
+            if self._skip_calm(product_id, bucket, question, calm_at):
+                continue
             base = {"product_id": product_id, "bucket_start": bucket, "question_id": question["id"],
                     "question_version": question["version"], "model_ref": model_ref}
             try:
@@ -1445,22 +1507,25 @@ class DecisionService:
                 self.store.append_skip(product_id, bucket, question, "state_error",
                                        "estado no disponible: {}".format(error))
                 continue
-            result, output = done["result"], done["output"]
-            self.store.append_decision(dict(
-                base, verdict_hash=verdict_hash, question_type=question["type"], model_info=self._identity,
-                prompt_hash=prompt_hash(done["prompt"], self.template), prompt_version=self.template["version"],
-                probability_source=done["source"], state_text=done["state"], top_logprobs=output["top_logprobs"],
-                probabilities=result["probabilities"], temperature=result["temperature"], chosen=result["chosen"],
-                value=result["value"], confidence=result["confidence"], latency_ms=output.get("latency_ms", 0),
-                timings=output.get("timings", {}),
-            ))
-            memory = self._lessons.get((product_id, question["id"], question["version"]))
-            if memory is not None:
-                memory.record(bucket, result["chosen"], done["state"])
+            self._record_evaluation(base, verdict_hash, question, done)
             written += 1
         if written:
             self.log("decisions +{}".format(written))
         return written
+
+    def _record_evaluation(self, base, verdict_hash, question, done):
+        result, output = done["result"], done["output"]
+        self.store.append_decision(dict(
+            base, verdict_hash=verdict_hash, question_type=question["type"], model_info=self._identity,
+            prompt_hash=prompt_hash(done["prompt"], self.template), prompt_version=self.template["version"],
+            probability_source=done["source"], state_text=done["state"], top_logprobs=output["top_logprobs"],
+            probabilities=result["probabilities"], temperature=result["temperature"], chosen=result["chosen"],
+            value=result["value"], confidence=result["confidence"], latency_ms=output.get("latency_ms", 0),
+            timings=output.get("timings", {}),
+        ))
+        memory = self._lessons.get((base["product_id"], question["id"], question["version"]))
+        if memory is not None:
+            memory.record(base["bucket_start"], result["chosen"], done["state"])
 
     def close(self):
         self._drop_readers()
@@ -1573,6 +1638,71 @@ def _table(rows, out_say, letters):
         out_say("{:<15}{:<19}{:<44}{}".format(report["source"], _letters_cell(report, letters), probs, latency))
 
 
+def _probe_raw(report, letters, say):
+    if report is None:
+        return 0
+    say("== raw_logprobs (logprobs before the grammar) ==")
+    if report["output"] is None:
+        say("unusable response: {}".format(report["error"]))
+        return 0
+    entries = report["entries"]
+    say("top_logprobs ({} entries):".format(len(entries)))
+    for entry in entries:
+        say("  {!r}: {}".format(entry.get("token"), entry.get("logprob")))
+    for letter in letters:
+        found = report["found"]
+        say("letter {}: {}".format(letter, "token strings " + ", ".join(repr(t) for t in found[letter]) if letter in found else "NOT in top_logprobs"))
+    if report["missing"]:
+        say("missing: {}".format(", ".join(report["missing"])))
+    leaked = thinking_leaked(entries, report["output"].get("content", ""))
+    say("thinking leaked: {}".format("YES (enable_thinking is ignored: start llama-server with --reasoning off)" if leaked else "no"))
+    return 1 if leaked else 0
+
+
+def _probe_post(report, say):
+    if report is None:
+        return
+    say("== post_sampling (probabilities after the grammar and sampler chain) ==")
+    if report["output"] is None:
+        say("post_sampling: unavailable ({}: {})".format(report["error"].kind, report["error"]))
+        return
+    say("top_probs ({} entries, zero probabilities are not listed):".format(len(report["entries"])))
+    for entry in report["entries"]:
+        say("  {!r}: {:.6f}".format(entry.get("token"), math.exp(entry["logprob"])))
+    if report["missing"]:
+        say("missing: {}".format(", ".join(report["missing"])))
+
+
+def _probe_tokens(provider, letters, say):
+    problems = 0
+    for letter in letters:
+        try:
+            count = len(provider.tokenize(letter))
+        except (ModelUnavailable, ModelResponseError) as error:
+            say("tokenize {!r} failed: {}".format(letter, error))
+            problems += 1
+            continue
+        say("tokens for {!r}: {}".format(letter, count))
+        if count != 1:
+            problems += 1
+    return problems
+
+
+def _probe_statistics(reports, say):
+    for report in reports:
+        if report is None or report["output"] is None:
+            continue
+        timings = report["output"].get("timings", {})
+        say("{}: latency_ms: {} (prompt_ms={} predicted_ms={})".format(
+            report["source"], report["latency_ms"], timings.get("prompt_ms"), timings.get("predicted_ms")))
+        if report["result"] is not None:
+            say("{}: probabilities: {} (chosen {}, confidence {:.3f})".format(
+                report["source"], _fmt_probs(report["result"]["probabilities"]), report["result"]["chosen"],
+                report["result"]["confidence"]))
+        else:
+            say("{}: probabilities: none ({})".format(report["source"], report["error"].kind))
+
+
 def probe(provider, questions, out=None, source="auto", template=None):
     """Guide step 4: one request per probability source and what to check in them.
 
@@ -1594,63 +1724,16 @@ def probe(provider, questions, out=None, source="auto", template=None):
             if source in (name, "auto"):
                 reports[name] = _run_source(provider, prompt, letters, question, name, template)
     except ModelUnavailable as error:
-        say("model not healthy: {}".format(error))
+        say(MODEL_NOT_HEALTHY.format(error))
         return 2
-    problems = 0
     say("question: {} v{} | prompt v{} | probability_source={}".format(
         question["id"], question["version"], template["version"], source))
     raw = reports.get(RAW_SOURCE)
     post = reports.get(POST_SOURCE)
-    leaked = False
-    if raw is not None:
-        say("== raw_logprobs (logprobs before the grammar) ==")
-        if raw["output"] is None:
-            say("unusable response: {}".format(raw["error"]))
-        else:
-            entries = raw["entries"]
-            say("top_logprobs ({} entries):".format(len(entries)))
-            for entry in entries:
-                say("  {!r}: {}".format(entry.get("token"), entry.get("logprob")))
-            for letter in letters:
-                found = raw["found"]
-                say("letter {}: {}".format(letter, "token strings " + ", ".join(repr(t) for t in found[letter]) if letter in found else "NOT in top_logprobs"))
-            if raw["missing"]:
-                say("missing: {}".format(", ".join(raw["missing"])))
-            leaked = thinking_leaked(entries, raw["output"].get("content", ""))
-            say("thinking leaked: {}".format("YES (enable_thinking is ignored: start llama-server with --reasoning off)" if leaked else "no"))
-            problems += 1 if leaked else 0
-    if post is not None:
-        say("== post_sampling (probabilities after the grammar and sampler chain) ==")
-        if post["output"] is None:
-            say("post_sampling: unavailable ({}: {})".format(post["error"].kind, post["error"]))
-        else:
-            say("top_probs ({} entries, zero probabilities are not listed):".format(len(post["entries"])))
-            for entry in post["entries"]:
-                say("  {!r}: {:.6f}".format(entry.get("token"), math.exp(entry["logprob"])))
-            if post["missing"]:
-                say("missing: {}".format(", ".join(post["missing"])))
-    for letter in letters:
-        try:
-            count = len(provider.tokenize(letter))
-        except (ModelUnavailable, ModelResponseError) as error:
-            say("tokenize {!r} failed: {}".format(letter, error))
-            problems += 1
-            continue
-        say("tokens for {!r}: {}".format(letter, count))
-        if count != 1:
-            problems += 1
-    for report in (raw, post):
-        if report is None or report["output"] is None:
-            continue
-        timings = report["output"].get("timings", {})
-        say("{}: latency_ms: {} (prompt_ms={} predicted_ms={})".format(
-            report["source"], report["latency_ms"], timings.get("prompt_ms"), timings.get("predicted_ms")))
-        if report["result"] is not None:
-            say("{}: probabilities: {} (chosen {}, confidence {:.3f})".format(
-                report["source"], _fmt_probs(report["result"]["probabilities"]), report["result"]["chosen"],
-                report["result"]["confidence"]))
-        else:
-            say("{}: probabilities: none ({})".format(report["source"], report["error"].kind))
+    problems = _probe_raw(raw, letters, say)
+    _probe_post(post, say)
+    problems += _probe_tokens(provider, letters, say)
+    _probe_statistics((raw, post), say)
     say()
     _table([r for r in (raw, post) if r is not None], say, letters)
     chosen, note = _service_source(source, reports)
@@ -1660,6 +1743,33 @@ def probe(provider, questions, out=None, source="auto", template=None):
     say("RESULT: {}".format(
         "ok (probabilities from {})".format(chosen) if problems == 0 else "{} problem(s): do not continue".format(problems)))
     return 0 if problems == 0 else 1
+
+
+def _probe_versions(provider, question, letters, templates):
+    by_version = {}
+    for version, template in sorted(templates.items()):
+        prompt = build_prompt(PROBE_STATE, question, template)
+        by_version[version] = {}
+        for name in PROBABILITY_SOURCES:
+            by_version[version][name] = _run_source(provider, prompt, letters, question, name, template)
+    return by_version
+
+
+def _probe_probability_cell(report):
+    if report["result"] is not None:
+        return _fmt_probs(report["result"]["probabilities"])
+    return "-" if report["error"] is None else report["error"].kind
+
+
+def _print_probe_versions(by_version, config, letters, say):
+    for version in sorted(by_version):
+        for name in PROBABILITY_SOURCES:
+            report = by_version[version][name]
+            probs = _probe_probability_cell(report)
+            latency = "-" if report["latency_ms"] is None else str(report["latency_ms"])
+            say("{:<5}{:<15}{:<19}{:<44}{}{}".format(
+                "v{}".format(version), name, _letters_cell(report, letters), probs, latency,
+                "  (default prompt)" if version == config["default_version"] else ""))
 
 
 def probe_prompt_variants(provider, questions, out=None, source="auto", config=None):
@@ -1672,28 +1782,15 @@ def probe_prompt_variants(provider, questions, out=None, source="auto", config=N
     if not provider.health():
         say("model not healthy: GET /health did not answer 200 (still loading, or not running)")
         return 2
-    rows, by_version = [], {}
     try:
-        for version, template in sorted(config["templates"].items()):
-            prompt = build_prompt(PROBE_STATE, question, template)
-            by_version[version] = {}
-            for name in PROBABILITY_SOURCES:
-                by_version[version][name] = _run_source(provider, prompt, letters, question, name, template)
+        by_version = _probe_versions(provider, question, letters, config["templates"])
     except ModelUnavailable as error:
-        say("model not healthy: {}".format(error))
+        say(MODEL_NOT_HEALTHY.format(error))
         return 2
     say("question: {} v{} | prompt versions: {} | probability_source={}".format(
         question["id"], question["version"], ", ".join(str(v) for v in sorted(config["templates"])), source))
     say("{:<5}{:<15}{:<19}{:<44}{}".format("v", "source", "letters present", "probabilities", "latency_ms"))
-    for version in sorted(by_version):
-        for name in PROBABILITY_SOURCES:
-            report = by_version[version][name]
-            probs = _fmt_probs(report["result"]["probabilities"]) if report["result"] is not None else (
-                "-" if report["error"] is None else report["error"].kind)
-            latency = "-" if report["latency_ms"] is None else str(report["latency_ms"])
-            say("{:<5}{:<15}{:<19}{:<44}{}{}".format(
-                "v{}".format(version), name, _letters_cell(report, letters), probs, latency,
-                "  (default prompt)" if version == config["default_version"] else ""))
+    _print_probe_versions(by_version, config, letters, say)
     say()
     raw_ok = [v for v in sorted(by_version) if _complete(by_version[v][RAW_SOURCE])]
     post_ok = [v for v in sorted(by_version) if _complete(by_version[v][POST_SOURCE])]
@@ -1727,7 +1824,7 @@ def ask(provider, questions, calibration, market_db, verdicts_db, question_id, p
             return 1
         done = evaluate(provider, verdicts, market, product_id, bucket, question, calibration, template, mode)
     except ModelUnavailable as error:
-        say("model not healthy: {}".format(error))
+        say(MODEL_NOT_HEALTHY.format(error))
         return 2
     except (ModelResponseError, StateError) as error:
         say("no decision: {}".format(error))
@@ -1753,7 +1850,7 @@ def ask(provider, questions, calibration, market_db, verdicts_db, question_id, p
 # --------------------------------------------------------------------------- cli
 
 
-def run(service, poll_seconds=1.0, log=print):
+def run(service, poll_seconds=1.0):
     try:
         while True:
             service.poll()
@@ -1762,7 +1859,46 @@ def run(service, poll_seconds=1.0, log=print):
         service.close()
 
 
-def main(argv=None, provider=None, questions=None, calibration=None):
+def _cli_configuration(args, provider, questions, calibration, enabled):
+    from . import futures_qwen_trader as qt
+    env = os.environ
+    if enabled is None:
+        enabled = qt.candle_opinions_enabled(qt.load_config(qt.CONFIG_PATH_LIVE))
+    if not enabled and (args.probe_prompt_variants or args.probe or args.ask):
+        raise ValueError("Qwen solo se usa para noticias; las consultas sobre velas están desactivadas.")
+    questions = questions if questions is not None else load_questions(args.questions_file)
+    calibration = calibration if calibration is not None else load_calibration(args.calibration_file)
+    products = decision_products(dict(env, DECISIONS_PRODUCTS=args.products or env.get("DECISIONS_PRODUCTS", "")))
+    prompts = load_prompt_config(args.prompts_file)
+    version = args.prompt_version if args.prompt_version is not None else prompts["default_version"]
+    if version not in prompts["templates"]:
+        raise ValueError("unknown prompt version {} (have {})".format(
+            version, ", ".join(str(value) for value in sorted(prompts["templates"]))))
+    template = prompts["templates"][version]
+    mode = args.probability_source or prompts["probability_source"]
+    if provider is None and enabled:
+        provider = LlamaCppProvider(args.llama_url or llama_url(env), model_ref(env), timeout=args.timeout_seconds)
+    return questions, calibration, products, prompts, template, mode, provider, enabled
+
+
+def _cli_queries(args, provider, questions, calibration, products, prompts, template, mode):
+    if args.probe_prompt_variants:
+        return probe_prompt_variants(provider, questions, source=mode, config=prompts)
+    if args.probe:
+        return probe(provider, questions, source=mode, template=template)
+    if not args.ask:
+        return None
+    if args.ask not in questions:
+        print("unknown question {!r}; catalog: {}".format(args.ask, ", ".join(sorted(questions))), file=sys.stderr)
+        return 2
+    if not (args.market_db and args.verdicts_db):
+        print("--ask needs --market-db and --verdicts-db", file=sys.stderr)
+        return 2
+    return ask(provider, questions, calibration, args.market_db, args.verdicts_db, args.ask,
+               args.product or products[0], template=template, mode=mode)
+
+
+def main(argv=None, provider=None, questions=None, calibration=None, enabled=None):
     import argparse
 
     parser = argparse.ArgumentParser(description="Balancita futures LLM decision service (Q)")
@@ -1790,52 +1926,33 @@ def main(argv=None, provider=None, questions=None, calibration=None):
     parser.add_argument("--timeout-seconds", type=float, default=30.0, help="per model call")
     parser.add_argument("--max-age-seconds", type=float, default=DEFAULT_MAX_AGE_MS / 1000)
     args = parser.parse_args(argv)
-    env = os.environ
     log = lambda line: print(line, flush=True)
     try:
-        questions = questions if questions is not None else load_questions(args.questions_file)
-        calibration = calibration if calibration is not None else load_calibration(args.calibration_file)
-        products = decision_products(dict(env, DECISIONS_PRODUCTS=args.products or env.get("DECISIONS_PRODUCTS", "")))
-        prompts = load_prompt_config(args.prompts_file)
-        version = args.prompt_version if args.prompt_version is not None else prompts["default_version"]
-        if version not in prompts["templates"]:
-            raise ValueError("unknown prompt version {} (have {})".format(
-                version, ", ".join(str(v) for v in sorted(prompts["templates"]))))
-        template = prompts["templates"][version]
-        mode = args.probability_source or prompts["probability_source"]
-        if provider is None:
-            provider = LlamaCppProvider(args.llama_url or llama_url(env), model_ref(env), timeout=args.timeout_seconds)
+        questions, calibration, products, prompts, template, mode, provider, enabled = _cli_configuration(
+            args, provider, questions, calibration, enabled)
     except (OSError, ValueError) as error:
         print("configuration error: {}".format(error), file=sys.stderr)
         return 2
-    if args.probe_prompt_variants:
-        return probe_prompt_variants(provider, questions, source=mode, config=prompts)
-    if args.probe:
-        return probe(provider, questions, source=mode, template=template)
-    if args.ask:
-        if args.ask not in questions:
-            print("unknown question {!r}; catalog: {}".format(args.ask, ", ".join(sorted(questions))), file=sys.stderr)
-            return 2
-        if not (args.market_db and args.verdicts_db):
-            print("--ask needs --market-db and --verdicts-db", file=sys.stderr)
-            return 2
-        return ask(provider, questions, calibration, args.market_db, args.verdicts_db, args.ask,
-                   args.product or products[0], template=template, mode=mode)
+    queried = _cli_queries(args, provider, questions, calibration, products, prompts, template, mode)
+    if queried is not None:
+        return queried
     if not (args.market_db and args.verdicts_db and args.decisions_db):
         print("--market-db, --verdicts-db and --decisions-db are required", file=sys.stderr)
         return 2
     store = DecisionStore(args.decisions_db, DECISION_CONFIG)
     service = DecisionService(args.market_db, args.verdicts_db, store, provider, questions, calibration, products,
                               log=log, max_age_ms=int(args.max_age_seconds * 1000),
-                              template=template, probability_source=mode, calm_skip=args.qwen_calm_skip)
+                              template=template, probability_source=mode, calm_skip=args.qwen_calm_skip, enabled=enabled)
     try:
+        if not enabled:
+            log("Qwen de velas desactivado: el proceso queda inactivo; solo noticias puede consultar el modelo.")
         if args.once:
             print("decisions written {}".format(service.poll()))
             return 0
         log("decisions writing to {} (config {}) for {}; {} question(s): {}; prompt v{}, probability_source={}".format(
             args.decisions_db, store.config_hash[:12], ", ".join(products), len(questions), ", ".join(sorted(questions)),
             template["version"], mode) + ("; calm-skip on" if args.qwen_calm_skip else ""))
-        run(service, args.poll_seconds, log)
+        run(service, args.poll_seconds)
     except KeyboardInterrupt:
         pass
     finally:

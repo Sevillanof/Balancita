@@ -1128,6 +1128,8 @@ export default function StrategyRunView({
                             id: 'actual',
                             label: 'Actual',
                             kind: 'control' as const,
+                            enabled: true,
+                            disabled_reason: null,
                           },
                         ]),
                   ]
@@ -1142,11 +1144,14 @@ export default function StrategyRunView({
                         key={variant.id}
                         type="button"
                         onClick={() => setAsking(variant.id)}
-                        disabled={quickRunning}
+                        disabled={quickRunning || variant.enabled === false}
                         title={
-                          variant.kind === 'formula'
-                            ? 'Lee velas guardadas, tarda poco y no calienta la Mac.'
-                            : 'Le pregunta a Qwen sobre unas 150 fotos del pasado. Es orientativa: no es el Examen.'
+                          variant.enabled === false
+                            ? (variant.disabled_reason ??
+                              'Qwen solo analiza noticias.')
+                            : variant.kind === 'formula'
+                              ? 'Lee velas guardadas, tarda poco y no calienta la Mac.'
+                              : 'Le pregunta a Qwen sobre unas 150 fotos del pasado. Es orientativa: no es el Examen.'
                         }
                       >
                         {variant.kind === 'formula'
@@ -1857,6 +1862,7 @@ function WaysBars({ formula }: { formula: QuickFormula }) {
       ['Siempre corto', 'siempre_corto'],
     ] as [string, keyof QuickFormula['curvas']][]
   )
+    .filter(([, key]) => formula.curvas[key] !== undefined)
     .map(([label, key]) => {
       // Each row comes from its own operations, the ones of the product on screen.
       const list = (formula.curvas[key] ?? []).filter(
@@ -1924,6 +1930,14 @@ function FormulaResult({ formula }: { formula: QuickFormula }) {
         {DAY_FORMAT.format(periodOf(formula).fromMs)} al{' '}
         {DAY_FORMAT.format(periodOf(formula).toMs)} · {amount(formula.fotos, 0)}{' '}
         miradas
+      </p>
+      <p className="m-0 text-note text-ink-2">
+        {formula.execution === 'terminal.v2'
+          ? `Motor paper compartido · ${formula.cuenta === 'entera' ? 'cuenta entera con exposición limitada al efectivo' : 'tamaño fijo'}. Noticias históricas no evaluadas.`
+          : 'Resultado anterior: tamaños y precios aproximados; no es una reproducción exacta de la cuenta actual.'}
+        {formula.funding_complete === false
+          ? ' Funding incompleto: el resultado es provisional.'
+          : ''}
       </p>
       <WaysBars formula={formula} />
     </div>

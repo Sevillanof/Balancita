@@ -52,12 +52,16 @@ import sys
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
-from decimal import Decimal
+from decimal import Decimal, ROUND_DOWN, localcontext
+from typing import Callable, Optional, TYPE_CHECKING
 
 from . import futures_llm_decisions as llm
+from . import futures_qwen_funding as exact_funding
 from .futures_costs import COST_MODEL_VERSION, entry_fill, exit_fill, fee_rate, round_trip_cost_bps, side_impact_bps
 from .futures_history import DAY_MS, HOUR_MS, MINUTE_MS, CandleCache, HistoryError, fetch_funding, fill_gaps
 from .futures_simulator import accrue_funding
+if TYPE_CHECKING:
+    from .futures_qwen_analista import Movement
 
 D = Decimal
 SCHEMA = "balancita-qwen-trader.v1"
@@ -171,6 +175,13 @@ def config_hash(cfg):
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
+def candle_opinions_enabled(cfg):
+    values = (cfg.get("opinion_enabled", True), (cfg.get("runtime") or {}).get("opinion_enabled", True))
+    if any(type(value) is not bool for value in values):
+        raise TraderError("opinion_enabled tiene que ser verdadero o falso.")
+    return all(values)
+
+
 def load_holdout_ms(path=None):
     with open(path or GATE_CONFIG_PATH, encoding="utf-8") as handle:
         return date_ms(json.load(handle)["holdout_from"])
@@ -264,11 +275,17 @@ class FundingLine:
     """
 
     def __init__(self, periods=()):
-        self.periods = sorted((int(s), float(r)) for s, r in periods)
+        if isinstance(periods, exact_funding.FundingHistory):
+            self.absolute = periods
+            relative = [(p.start_ms, float(p.relative_rate)) for p in periods.periods if p.relative_rate is not None]
+        else:
+            self.absolute = None
+            relative = [(int(s), float(r)) for s, r in periods]
+        self.periods = sorted(relative)
         self.starts = [p[0] for p in self.periods]
 
     def __len__(self):
-        return len(self.periods)
+        return max(len(self.periods), len(self.absolute.periods) if self.absolute is not None else 0)
 
     def known_count(self, t_ms):
         return bisect.bisect_right(self.starts, t_ms - HOUR_MS)
@@ -306,21 +323,38 @@ class FundingLine:
                                         notional)
         return (total if long else -total), covered
 
+    def accrue_position(self, start_ms, end_ms, entry_notional, quantity, long, model):
+        if model == exact_funding.LEGACY_MODEL:
+            return self.accrue(start_ms, end_ms, entry_notional, long)
+        if model != exact_funding.EXACT_MODEL:
+            raise TraderError("Modelo de funding desconocido: {!r}".format(model))
+        if self.absolute is None:
+            return D(0), 0
+        return self.absolute.accrue(start_ms, end_ms, quantity, long)
+
 
 # --------------------------------------------------------------------------- positions and accounting
 
 
 class Position:
     __slots__ = ("side", "entry_ms", "entry_ref", "entry_px", "qty", "stop_px", "stop_pct", "max_hold_ms", "entry_p",
-                 "entry_reason", "trade_no", "mfe_bp", "mae_bp", "notional_usd")
+                 "entry_reason", "trade_no", "mfe_bp", "mae_bp", "notional_usd", "funding_model")
 
     def __init__(self, **kwargs):
         for name in self.__slots__:
             setattr(self, name, kwargs.get(name))
+        if self.funding_model is None:
+            self.funding_model = exact_funding.LEGACY_MODEL
 
     def snapshot(self):
         return {"side": self.side, "entry_ms": self.entry_ms, "entry_px": str(self.entry_px), "qty": str(self.qty),
                 "stop_px": self.stop_px, "trade_no": self.trade_no}
+
+
+def funding_status(held_ms, covered_ms):
+    if held_ms and covered_ms >= held_ms:
+        return "complete"
+    return "partial" if covered_ms > 0 else "unknown"
 
 
 def settle(product, position, ref_price, reason, end_ms, funding, notional=D(100)):
@@ -330,20 +364,18 @@ def settle(product, position, ref_price, reason, end_ms, funding, notional=D(100
     px = exit_fill(D(repr(float(ref_price))), position.side, product, reason)
     gross = (px - position.entry_px) * position.qty if long else (position.entry_px - px) * position.qty
     fees = (position.entry_px + px) * position.qty * fee_rate("taker")
-    paid, covered = funding.accrue(position.entry_ms, end_ms, position.entry_px * position.qty, long) \
+    paid, covered = funding.accrue_position(position.entry_ms, end_ms, position.entry_px * position.qty,
+                                           position.qty, long, position.funding_model) \
         if funding is not None else (D(0), 0)
     held = max(0, end_ms - position.entry_ms)
-    if held and covered >= held:
-        status = "complete"
-    elif covered > 0:
-        status = "partial"
-    else:
-        status = "unknown"
+    status = funding_status(held, covered)
     net = gross - fees - paid
     return {"exit_px": px, "net_bp": float(net / notional * 10_000), "gross_bp": float(gross / notional * 10_000),
             "funding_bp": float(paid / notional * 10_000), "funding_status": status,
             # the same figures in exact USD (Decimal), for the live books
-            "net_usd": net, "gross_usd": gross, "fees_usd": fees, "funding_usd": paid}
+            "net_usd": net, "gross_usd": gross, "fees_usd": fees, "funding_usd": paid,
+            "net_complete_usd": net if status == "complete" or held == 0 else None,
+            "funding_model": position.funding_model}
 
 
 # --------------------------------------------------------------------------- questions and the decider
@@ -397,10 +429,10 @@ class LlmDecider:
         self.spent = 0.0              # wall seconds spent waiting for the model (a concurrent pair counts once)
         self.latency_sum = 0.0        # sum of the individual call latencies (what each call took)
         self.down = 0
-        self.progress = None          # optional callable(decider), called every ``progress_every`` model calls
+        self.progress: Optional[Callable[["LlmDecider"], None]] = None
         self.progress_every = 200
         self._next_progress = self.progress_every
-        self.progress_every_s = None  # optional: also call ``progress`` when this many clock seconds passed without a report
+        self.progress_every_s: Optional[float] = None
         self._last_progress = None
 
     def mean_call(self):
@@ -556,11 +588,15 @@ class Trader:
         self.questions = questions_for(cfg, product)
         self.notional = D(cfg["notional_usd"])
         self.t, self.o, self.h, self.l, self.c, self.v, self.lc = [], [], [], [], [], [], []
+        self.data_gap_ms, self.last_observed_ms = None, None
         self.context = {}                 # other products' closes {product: {bar end ms: close}} (``state_extras``: otros_activos)
         self.positioning = None           # ``positioning_data.PositioningFeed`` of this product (``state_ficha``: renglón F6)
         self.news = None                  # ``futures_qwen_noticias.NewsFeed`` (analista de noticias, habilitador OR)
-        self.movement: object = None      # ``futures_qwen_analista.Movement`` (regulador de tamaño por volatilidad 24h vs 90d)
-        self.position = None
+        self.news_consumed = set()
+        self.execution_check: Optional[Callable[[], int]] = None
+        self.entry_check: Optional[Callable[[], None]] = None
+        self.movement: Optional["Movement"] = None
+        self.position: Optional[Position] = None
         self.cooldown_until = 0
         self.last_call_ms = None
         self.trade_seq = 0
@@ -584,7 +620,14 @@ class Trader:
         self.c.append(close)
         self.v.append(float(candle["volume_btc"]))
         self.lc.append(math.log(close) if close > 0 else 0.0)
-        if self.movement is not None and hasattr(self.movement, "add_bar"):
+        observed = candle.get("observed", True)
+        if type(observed) is not bool:
+            raise TraderError("Velas: falta una calidad verificable del dato.")
+        if observed:
+            self.last_observed_ms = self.t[-1] + BAR_MS
+        else:
+            self.data_gap_ms = self.t[-1] + BAR_MS
+        if observed and self.movement is not None and hasattr(self.movement, "add_bar"):
             self.movement.add_bar(candle)
         if len(self.c) > MAX_KEEP:
             cut = len(self.c) - (D7 + 300)
@@ -900,13 +943,20 @@ class Trader:
             raise ValueError("velas de 5m no contiguas: {} despues de {}".format(bucket, self.t[-1]))
         self._append(candle)
         t_ms = bucket + BAR_MS
-        if not trade or len(self.c) < MIN_BARS:
+        if not trade or len(self.c) < MIN_BARS or candle.get("observed") is False:
             return []
         events = []
         if self.position is not None:
             events += self._guardrails(t_ms)
-            if self.position is None:
-                return events
+        if self.data_gap_ms is not None:
+            return events + [{"type": "skipped", "t_ms": t_ms, "wake": ["datos"],
+                              "kind": "datos_incompletos",
+                              "detail": "Hay velas sin observar: no se usan para entradas ni decisiones de los expertos."}]
+        priority_events = self._feed_news_priority(t_ms, events)
+        if priority_events is not None:
+            return priority_events
+        if events and self.position is None:
+            return events
         if self.position is None and t_ms < self.cooldown_until:
             return events
         reasons = self.wake_reasons(t_ms)
@@ -918,8 +968,22 @@ class Trader:
                                "detail": skip.detail})
         return events
 
+    def _feed_news_priority(self, t_ms, events):
+        from . import futures_qwen_noticias as noticias
+        if noticias.priority_enabled(self.cfg) and self.news is not None:
+            priority = self.news.priority_at(t_ms)
+            if priority["status"] == "signal" or (priority["status"] == "conflict" and self.position is None):
+                try:
+                    if self.execution_check is not None:
+                        self.execution_check()
+                    return events + self._decide_news_priority(t_ms, priority)
+                except WakeSkipped as skip:
+                    return events + [{"type": "skipped", "t_ms": t_ms, "wake": ["noticia_fuerte"],
+                                      "kind": skip.kind, "detail": skip.detail}]
+        return None
+
     def _guardrails(self, t_ms):
-        position = self.position
+        position = self._require_position()
         long = position.side == "LONG"
         high, low, open_ = self.h[-1], self.l[-1], self.o[-1]
         ref = position.entry_ref
@@ -942,7 +1006,7 @@ class Trader:
         return self._close(self.t[-1] + BAR_MS, self.c[-1], "strategy_exit", reason, None)
 
     def _close(self, t_ms, ref_price, cost_reason, closed_by, exit_reason):
-        position = self.position
+        position = self._require_position()
         done = settle(self.product, position, ref_price, cost_reason, t_ms, self.funding,
                       position.notional_usd or self.notional)
         trade = {"trade_no": position.trade_no, "product": self.product, "side": position.side,
@@ -954,7 +1018,10 @@ class Trader:
                  "mfe_bp": round(position.mfe_bp, 2), "mae_bp": round(position.mae_bp, 2),
                 "net_usd": str(done["net_usd"]), "gross_usd": str(done["gross_usd"]), "fees_usd": str(done["fees_usd"]),
                 "funding_usd": str(done["funding_usd"]), "qty": str(position.qty), "entry_fill": str(position.entry_px),
-                "notional_usd": str(position.notional_usd or self.notional)}
+                "notional_usd": str(position.notional_usd or self.notional), "funding_model": position.funding_model,
+                "net_complete_usd": None if done["net_complete_usd"] is None else str(done["net_complete_usd"])}
+        if self.cfg.get("cuenta") == "entera":
+            self.notional += done["net_usd"]
         self.position = None
         self.cooldown_until = t_ms + self.cfg["guardrails"]["cooldown_min"] * MINUTE_MS
         events = []
@@ -964,9 +1031,28 @@ class Trader:
         events.append({"type": "trade", "trade": trade})
         return events
 
-    def _open(self, t_ms, side, probability, reason):
+    def _require_position(self) -> Position:
+        if self.position is None:
+            raise TraderError("No hay una posición abierta para gestionar o cerrar.")
+        return self.position
+
+    def _check_execution_deadline(self, t_ms, expires_at_ms=None):
+        now = t_ms if self.execution_check is None else self.execution_check()
+        if expires_at_ms is not None:
+            if type(now) is not int:
+                raise TraderError("Noticias: falta una hora de ejecución verificable.")
+            if now >= expires_at_ms:
+                raise WakeSkipped("noticia_vencida", "La noticia venció antes de poder ejecutar la decisión.")
+
+    def _open(self, t_ms, side, probability, reason, *, expires_at_ms=None) -> Position:
+        if self.entry_check is not None:
+            self.entry_check()
+        self._check_execution_deadline(t_ms, expires_at_ms)
         from . import futures_qwen_analista as analista
         guard = self.cfg["guardrails"]
+        funding_model = self.cfg.get("funding_model", exact_funding.LEGACY_MODEL)
+        if funding_model not in (exact_funding.LEGACY_MODEL, exact_funding.EXACT_MODEL):
+            raise TraderError("Modelo de funding inválido.")
         last = self.c[-1]
         stop_pct = None
         stop_px = None
@@ -977,13 +1063,23 @@ class Trader:
         entry = entry_fill(D(repr(last)), side, self.product)
         mult = D(str(analista.multiplier(self.cfg, self.movement, t_ms)))
         notional = self.notional if mult == 1 else self.notional * mult      # size 1 keeps the exact stored text ("1000", not "1000.0")
+        if self.cfg.get("cuenta") == "entera":
+            if not self.notional.is_finite() or self.notional <= 0:
+                raise WakeSkipped("saldo_insuficiente", "No hay saldo disponible para abrir la operación.")
+            with localcontext() as ctx:
+                ctx.rounding = ROUND_DOWN
+                notional = min(notional, self.notional / (1 + fee_rate("taker")))
+                qty = notional / entry
+        else:
+            qty = notional / entry
         self.last_open_ms = t_ms
         self.trade_seq += 1
         self.position = Position(
-            side=side, entry_ms=t_ms, entry_ref=last, entry_px=entry, qty=notional / entry,
+            side=side, entry_ms=t_ms, entry_ref=last, entry_px=entry, qty=qty,
             stop_px=stop_px,
             stop_pct=stop_pct, max_hold_ms=None if guard["max_hold_min"] is None else guard["max_hold_min"] * MINUTE_MS, entry_p=probability, entry_reason=reason,
-            trade_no=self.trade_seq, mfe_bp=0.0, mae_bp=0.0, notional_usd=notional)
+            trade_no=self.trade_seq, mfe_bp=0.0, mae_bp=0.0, notional_usd=notional, funding_model=funding_model)
+        return self.position
 
     def _passes_mirror(self, t_ms, reasons, action, event):
         """v3 mirror test: the same question about the mirrored STATE must give the opposite side. Anything else (the same
@@ -1064,9 +1160,9 @@ class Trader:
         if not enter:
             return [event]
         event.update(action=side, override="entrada_ventana", reason="entrada_ventana", forced=True)
-        self._open(t_ms, "LONG" if side == "LARGO" else "SHORT", event["p_action"], "ventana")
+        position = self._open(t_ms, "LONG" if side == "LARGO" else "SHORT", event["p_action"], "ventana")
         self.window = None
-        event["trade_no"] = self.position.trade_no
+        event["trade_no"] = position.trade_no
         return [event]
 
     def _ask_formula_opinion(self, t_ms, action, event, state, question):
@@ -1097,20 +1193,83 @@ class Trader:
     def _decide_formula(self, t_ms, event, state, question):
         """Version 9: the FORMULAS decide and Qwen gives an opinion next to them."""
         from . import futures_qwen_corta as corta
-        pos_side = None
+        pos_side, held_min = None, 0
         if self.position is not None:
             pos_side = 1 if self.position.side == "LONG" else -1
+            held_min = (t_ms - self.position.entry_ms) // MINUTE_MS
+        exhaust_min = (self.cfg.get("guardrails") or {}).get("exhaust_hold_min")
         readings = corta.readings(self, t_ms)
-        action, why = corta.formula_action(readings, pos_side)
+        action, why = corta.formula_action(readings, pos_side, held_min=held_min, exhaust_min=exhaust_min)
+        from . import futures_qwen_noticias as noticias
+        if noticias.priority_enabled(self.cfg) and self.position is None:
+            action, why = self._independent_formula_action(readings)
         event.update(formula_action=action, formula=corta.formula_json(readings, why), action=action, override=None)
-        self._ask_formula_opinion(t_ms, action, event, state, question)
+        event["formula"]["opinion_enabled"] = candle_opinions_enabled(self.cfg)
+        if candle_opinions_enabled(self.cfg):
+            self._ask_formula_opinion(t_ms, action, event, state, question)
+        if action == "CERRAR" and self.execution_check is not None:
+            self.execution_check()
         if action in ("LARGO", "CORTO"):
-            self._open(t_ms, "LONG" if action == "LARGO" else "SHORT", readings["portero_p"], "formula")
-            event["trade_no"] = self.position.trade_no
+            position = self._open(t_ms, "LONG" if action == "LARGO" else "SHORT", readings["portero_p"], "formula")
+            event["trade_no"] = position.trade_no
             return [event]
         if action == "CERRAR":
-            return [event] + self._close(t_ms, self.c[-1], "strategy_exit", "formula", "maestro_vuelta")
+            reason = "maestro_agotado" if "perdió fuerza" in why else "maestro_vuelta"
+            return [event] + self._close(t_ms, self.c[-1], "strategy_exit", "formula", reason)
         return [event]
+
+    @staticmethod
+    def _independent_formula_action(readings):
+        side = readings.get("portero_direccion")
+        if side not in (-1, 1):
+            return "ESPERAR", "falta un voto del portero autónomo"
+        if abs(readings["veredicto"]) < 2 or readings["veredicto"] * side <= 0:
+            return "ESPERAR", "maestro y portero autónomo no coinciden"
+        return "LARGO" if side == 1 else "CORTO", "maestro y portero autónomo coinciden"
+
+    def _decide_news_priority(self, t_ms, priority):
+        previous = self.position
+        signal = priority.get("signal")
+        action = "MANTENER" if previous is not None else "ESPERAR"
+        why = priority.get("reason", "noticia fuerte ya aplicada")
+        event = self._init_decision_event(
+            t_ms, priority.get("wake") or ["noticia_fuerte"], "Noticias verificadas", previous is not None)
+        event["action"] = action
+        formula = {
+            "maestro": None, "portero_si": None, "portero_p": None,
+            "noticias_si": signal is not None,
+            "noticias": {"disponible": bool(self.news is not None and self.news.available), "signal": signal},
+            "volatilidad": None, "authority": "noticias", "opinion_enabled": False,
+        }
+        events = []
+        if signal is not None and signal["event_id"] not in self.news_consumed:
+            self.news_consumed.add(signal["event_id"])
+            event["news_event"] = signal
+            try:
+                why = self._apply_news_position(t_ms, signal, previous, event, formula, events)
+            except WakeSkipped as skip:
+                event["override"] = skip.kind
+                formula["noticias_si"] = False
+                why = "noticia fuerte: " + skip.detail
+        formula["motivo"] = why
+        event.update(formula_action=event["action"], formula=formula, reason="noticia_fuerte")
+        return events + [event]
+
+    def _apply_news_position(self, t_ms, signal, previous, event, formula, events):
+        from . import futures_qwen_noticias as noticias
+        side = "LONG" if signal["side"] == 1 else "SHORT"
+        self._check_execution_deadline(t_ms, signal["expires_at"])
+        if previous is not None and previous.side == side:
+            return "noticia fuerte a favor: se mantiene sin aumentar el tamaño"
+        if previous is not None:
+            events.extend(self._close(t_ms, self.c[-1], "strategy_exit", "noticias", "noticia_contraria"))
+            event["action"] = "CERRAR"
+        position = self._open(t_ms, side, None, "noticias", expires_at_ms=signal["expires_at"])
+        position.max_hold_ms = noticias.NEWS_HOLD_MIN * MINUTE_MS
+        event["trade_no"] = position.trade_no
+        event["action"] = "LARGO" if signal["side"] == 1 else "CORTO"
+        formula["reversal"] = previous is not None
+        return "noticia fuerte verificada: " + ("cierre y giro" if previous is not None else "entrada")
 
     def _ask_entry_or_exit_reason(self, t_ms, action, state, event):
         try:
@@ -1125,15 +1284,16 @@ class Trader:
 
     def _init_decision_event(self, t_ms, reasons, state, in_position):
         kind = "position" if in_position else "flat"
-        snapshot = self.position.snapshot() if in_position else None
-        net_now = settle(self.product, self.position, self.c[-1], "strategy_exit", t_ms, self.funding,
-                         self.position.notional_usd or self.notional)["net_bp"] if in_position else None
+        position = self._require_position() if in_position else None
+        snapshot = position.snapshot() if position is not None else None
+        net_now = settle(self.product, position, self.c[-1], "strategy_exit", t_ms, self.funding,
+                         position.notional_usd or self.notional)["net_bp"] if position is not None else None
         return {"type": "decision", "kind": kind, "t_ms": t_ms, "wake": list(reasons), "state_text": state,
                 "state_hash": llm.text_hash(state)[:16], "position": snapshot, "net_bp_now": net_now,
                 "threshold": None if in_position else self.threshold, "answer": None, "model_action": None,
                 "p_action": None, "mirror_action": None, "mirror_p": None,
                 "action": "MANTENER" if in_position else "ESPERAR", "override": None,
-                "reason": None, "reason_answer": None, "trade_no": self.position.trade_no if in_position else None}
+                "reason": None, "reason_answer": None, "trade_no": position.trade_no if position is not None else None}
 
     def _can_execute_move(self, t_ms, reasons, action, in_position, event):
         if action not in ("LARGO", "CORTO", "CERRAR"):
@@ -1147,13 +1307,24 @@ class Trader:
             return self._passes_mirror(t_ms, reasons, action, event)
         return True
 
-    def _decide(self, t_ms, reasons):
-        self.last_call_ms = t_ms
-        in_position = self.position is not None
+    def _checked_state(self, t_ms, reasons):
         if self.cfg.get("state_corta"):
             from . import futures_qwen_corta as corta
             corta.check(self, t_ms)
-        state = self.state_text(t_ms, reasons)
+        return self.state_text(t_ms, reasons)
+
+    def _decide(self, t_ms, reasons):
+        self.last_call_ms = t_ms
+        if self.execution_check is not None:
+            self.execution_check()
+        position = self.position
+        in_position = position is not None
+        from . import futures_qwen_noticias as noticias
+        if position is not None and position.entry_reason == "noticias" and noticias.priority_enabled(self.cfg):
+            return self._decide_news_priority(t_ms, {
+                "wake": reasons, "reason": "operación de noticias: salida propia a las 24 h",
+            })
+        state = self._checked_state(t_ms, reasons)
         question = self.questions["position" if in_position else "flat"]
         event = self._init_decision_event(t_ms, reasons, state, in_position)
         if self.cfg.get("decide_by") == "formula":
@@ -1171,15 +1342,15 @@ class Trader:
             return [event]
         if not in_position and self.skip_entry_reason:
             event.update(action=action, reason=None)
-            self._open(t_ms, "LONG" if action == "LARGO" else "SHORT", event["p_action"], None)
-            event["trade_no"] = self.position.trade_no
+            position = self._open(t_ms, "LONG" if action == "LARGO" else "SHORT", event["p_action"], None)
+            event["trade_no"] = position.trade_no
             return [event]
         reason = self._ask_entry_or_exit_reason(t_ms, action, state, event)
         event.update(action=action, reason=reason)
         if in_position:
             return [event] + self._close(t_ms, self.c[-1], "strategy_exit", "qwen", reason)
-        self._open(t_ms, "LONG" if action == "LARGO" else "SHORT", event["p_action"], reason)
-        event["trade_no"] = self.position.trade_no
+        position = self._open(t_ms, "LONG" if action == "LARGO" else "SHORT", event["p_action"], reason)
+        event["trade_no"] = position.trade_no
         return [event]
 
 
@@ -1216,12 +1387,13 @@ class History:
             cache.close()
         self.funding(product)
 
-    def bars(self, product, from_ms, to_ms):
+    def bars(self, product, from_ms, to_ms, *, fill=True, annotate=False):
         """Gap-filled 5m candles of ``[from_ms, to_ms)``; reads the cache only."""
         self._check(to_ms)
         cache = self._cache(product)
         try:
-            return fill_gaps(cache.read(product, "5m", from_ms, to_ms), BAR_MS)
+            bars = cache.read("5m", from_ms, to_ms)
+            return fill_gaps(bars, BAR_MS, annotate=annotate) if fill else bars
         finally:
             cache.close()
 
@@ -1498,7 +1670,12 @@ def throughput_line(decider, provider, *_args):
     if blocks and block_seconds > 0:
         text += ", {:.1f} bloques por hora".format(blocks * 3600.0 / block_seconds)
     summary = getattr(provider, "perf_summary", None)
-    share = summary().get("cache_share") if callable(summary) else None
+    share = None
+    if callable(summary):
+        report = summary()
+        if not isinstance(report, dict):
+            raise TraderError("El proveedor devolvió un resumen de rendimiento inválido.")
+        share = report.get("cache_share")
     if share is not None:
         text += ", {:.0f} % del prompt salió de la caché del servidor".format(share * 100)
     return text
@@ -1674,7 +1851,7 @@ def exit_labels(product, snapshot, t_ms, net_now, block, trade, funding, notiona
     forced = trade is not None and trade["closed_by"] in ("stop", "tiempo")
     out = {"close_now_net_bp": None if net_now is None else round(net_now, 2)}
     for name, moment in (("1h", t_ms + HOUR_MS), ("4h", t_ms + 4 * HOUR_MS), ("block_end", end)):
-        if forced and trade["exit_ms"] <= moment:
+        if forced and trade is not None and trade["exit_ms"] <= moment:
             value, how = round(trade["net_bp"], 2), "closed_" + trade["closed_by"]
         else:
             value, how = at(moment), "marked"
@@ -1807,6 +1984,7 @@ def _parser():
     common(ee, "3", ("3", "live"))
     ee.add_argument("--exam-db", default=None, help="exam database (default: %s for v3, %s for live)" % (
         DEFAULT_EXAM_DB_V3, DEFAULT_EXAM_DB_LIVE))
+    ee.add_argument("--active-live-db", default=None, help="Read the committed Terminal configuration, never its cash or positions")
     ee.add_argument("--max-minutes", type=float, default=55.0)
     ee.add_argument("--llama-url", default=None)
     ee.add_argument("--offline", action="store_true", help="use only the local cache: no Kraken request at all")
@@ -1930,23 +2108,32 @@ def _cmd_exam_quick(args, cfg, history, holdout_ms, variant, variants):
     print(_QUICK_STATE_MSG.format(variant["id"], state["state"]))
 
 
+def _quick_variant_config(cfg, variant) -> dict:
+    from .futures_qwen_analista import apply_env as analista_env
+    from .futures_qwen_exigencia import apply_env
+    from . import futures_qwen_rebote as rebote
+    from . import futures_walkforward as walkforward
+    cfg = analista_env(apply_env(cfg))
+    if rebote.from_env() == "formula_eth":
+        return dict(cfg, entrada="formula_eth")
+    if variant["kind"] == "formula" and walkforward.medicion_from_env() == "honesta":
+        return walkforward.with_pairs(cfg)
+    return cfg
+
+
 def _prepare_exam_variant(args, cfg, variants):
     variant = variants.get_variant(args.variant) if args.variant or args.quick is not None else None
+    if not candle_opinions_enabled(cfg) and (variant is None or variant["kind"] not in ("formula", "rebote")):
+        raise TraderError("Qwen solo analiza noticias: no se inicia una prueba de opiniones sobre velas.")
     if args.version == "live" and variant is not None and variant["kind"] not in ("control", "memory", "formula", "rebote"):
         raise TraderError("con --version live se pregunta lo que pregunta Qwen en vivo (variante «actual» o «memoria»): "
                           "las otras variantes se aplican sobre la v3")
     if variant is not None and variant.get("model") is None and variant["kind"] not in ("formula", "rebote"):
         cfg = variants.apply_variant(cfg, variant)
     if args.quick is not None:
-        from .futures_qwen_analista import apply_env as analista_env
-        from .futures_qwen_exigencia import apply_env
-        from . import futures_qwen_rebote as rebote
-        from . import futures_walkforward as walkforward
-        cfg = analista_env(apply_env(cfg))
-        if rebote.from_env() == "formula_eth":
-            cfg = dict(cfg, entrada="formula_eth")
-        elif variant["kind"] == "formula" and walkforward.medicion_from_env() == "honesta":
-            cfg = walkforward.with_pairs(cfg)
+        if variant is None:
+            raise TraderError("La prueba rápida necesita una variante.")
+        cfg = _quick_variant_config(cfg, variant)
     if args.positioning_db:
         cfg = dict(cfg, positioning_db=os.path.abspath(args.positioning_db))
     return cfg, variant
@@ -1955,13 +2142,19 @@ def _prepare_exam_variant(args, cfg, variants):
 def _cmd_exam(args, cfg, holdout_ms):
     from . import futures_qwen_quick_variants as variants
     from .futures_qwen_trader_exam import run_exam
+    if getattr(args, "active_live_db", None):
+        from . import futures_qwen_live as live
+        with contextlib.closing(live.LiveStore(args.active_live_db, readonly=True)) as stored:
+            cfg = live.active_config(stored, cfg)
     if args.check_parallel is not None:
         _cmd_exam_check_parallel(args, cfg)
         return
     cfg, variant = _prepare_exam_variant(args, cfg, variants)
     from .futures_qwen_analista import extra_days as analista_days
     history = History(args.cache_dir, holdout_ms, offline=args.offline)
-    if args.quick is not None and variant["kind"] == "rebote":
+    if args.quick is not None and variant is None:
+        raise TraderError("La prueba rápida necesita una variante.")
+    if args.quick is not None and variant is not None and variant["kind"] == "rebote":
         from .futures_qwen_rebote import run_rebote
         base = os.path.dirname(os.path.abspath(args.exam_db))
         state = run_rebote(history, holdout_ms, os.path.join(base, variants.state_name(variant["id"])), variant)

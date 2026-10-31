@@ -186,6 +186,7 @@ def exam_cfg(**exam):
     """The live config over the in-memory candles: photos from START_DAY, the in-memory series as context."""
     cfg = copy.deepcopy(LIVE_CFG)
     cfg["guardrails"]["max_hold_min"] = 2880      # the operation of version 8 (48 h limit): these tests measure that rule; version 9 has none
+    cfg["guardrails"].pop("exhaust_hold_min", None)
     cfg["practice"] = dict(cfg["practice"], **{"from": START_DAY})
     cfg["exam"] = dict(cfg["exam"], products=["PF_XBTUSD"], **exam)
     cfg["exam"].pop("from", None)
@@ -302,8 +303,8 @@ class OperationNumbersTests(unittest.TestCase):
         self.assertEqual(op["maestro_fuerte"]["n"], 3)
         self.assertAlmostEqual(op["siempre_largo"]["neto_bp"], (30.0 + 20.0 - 70.0) / 3)
         self.assertAlmostEqual(op["siempre_corto"]["neto_bp"], (-50.0 - 40.0 + 50.0) / 3)
-        self.assertEqual(op["signals"]["gana"], True)
-        self.assertEqual(op["signals"]["mejor_que_formula"], False)
+        self.assertTrue(op["signals"]["gana"])
+        self.assertFalse(op["signals"]["mejor_que_formula"])
         self.assertIsNotNone(q["vs_azar_pct"])
         self.assertEqual(op["max_horas"], 48.0)
         self.assertIn("48 h", op["salida"])
@@ -441,7 +442,7 @@ class SchemeReplayTests(unittest.TestCase):
         self.assertEqual([(t["side"], t["net_bp"], t["exit_reason"]) for t in trades],
                          [("LONG", 30.0, "vuelta"), ("SHORT", 25.0, "tiempo")])
         self.assertEqual(trades[0]["source"], "formula")
-        self.assertEqual(made.call_args.kwargs["texts"], False)         # no Qwen, no STATE text
+        self.assertFalse(made.call_args.kwargs["texts"])         # no Qwen, no STATE text
 
     def test_nothing_is_replayed_for_a_product_that_is_not_operated_or_from_the_holdout_on(self):
         photos = [op_row(self.start + qt.DAY_MS, "ESPERAR", None, 2, True, 30.0, -50.0)]

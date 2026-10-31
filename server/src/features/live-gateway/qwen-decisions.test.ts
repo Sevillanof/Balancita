@@ -300,6 +300,19 @@ describe('createQwenDecisions: trades', () => {
     margin_usd: '100',
     qty: '0.001',
   }
+  it('reports an invalid persisted status instead of inventing a closed operation', () => {
+    const path = seed(
+      [],
+      [{ ...base, trade_no: 1, status: 'unexpected', entry_ms: 1000 }],
+    )
+    expect(
+      createQwenDecisions({ liveDbPath: path }).trades('PF_XBTUSD'),
+    ).toEqual({
+      status: 'error',
+      reason: 'invalid_trade_status',
+    })
+  })
+
   it('gives the open trade first with its result now, then the closed ones (newest first) with their net', () => {
     const path = seed(
       [],
@@ -375,6 +388,61 @@ describe('createQwenDecisions: trades', () => {
 })
 
 describe('createQwenDecisions: account balance', () => {
+  it('uses permanent capital rather than a changed Terminal setting', () => {
+    const path = seed([])
+    const db = new DatabaseSync(path)
+    db.exec(
+      "CREATE TABLE account(id INTEGER PRIMARY KEY,initial_usd TEXT,created_ms INTEGER); INSERT INTO account VALUES(1,'1000',0)",
+    )
+    db.close()
+    expect(
+      createQwenDecisions({ liveDbPath: path, startUsd: 50000 }).account(),
+    ).toMatchObject({
+      status: 'ok',
+      start_usd: 1000,
+      balance_usd: 1000,
+    })
+  })
+
+  it('does not silently invent capital for a damaged permanent account', () => {
+    const path = seed([])
+    const db = new DatabaseSync(path)
+    db.exec(
+      "CREATE TABLE account(id INTEGER PRIMARY KEY,initial_usd TEXT,created_ms INTEGER); INSERT INTO account VALUES(1,'NaN',0)",
+    )
+    db.close()
+    expect(createQwenDecisions({ liveDbPath: path }).account().status).toBe(
+      'error',
+    )
+  })
+
+  it('does not accumulate binary floating point errors in the account', () => {
+    const path = seed(
+      [],
+      [
+        trade('PF_ETHUSD', 1, 'closed', 1, '0.1'),
+        trade('PF_ETHUSD', 2, 'closed', 2, '0.2'),
+        trade('PF_ETHUSD', 3, 'closed', 3, '-0.3'),
+      ],
+    )
+    const result = createQwenDecisions({
+      liveDbPath: path,
+      startUsd: 0.1,
+    }).account()
+    expect(result).toMatchObject({
+      status: 'ok',
+      balance_usd: 0.1,
+      realized_usd: 0,
+    })
+  })
+
+  it('reports an invalid realized result instead of ignoring a loss', () => {
+    const path = seed([], [trade('PF_ETHUSD', 1, 'closed', 1, 'NaN')])
+    expect(createQwenDecisions({ liveDbPath: path }).account().status).toBe(
+      'error',
+    )
+  })
+
   const trade = (
     product: string,
     no: number,

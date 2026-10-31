@@ -46,7 +46,11 @@ describe('qwenTrades', () => {
     expect(
       qwenTrades({
         status: 'ok',
-        trades: [row({ side: 'SIDEWAYS' }), row({ entry_ms: null })],
+        trades: [
+          row({ side: 'SIDEWAYS' }),
+          row({ entry_ms: null }),
+          row({ status: 'unexpected' }),
+        ],
       }),
     ).toEqual([])
   })

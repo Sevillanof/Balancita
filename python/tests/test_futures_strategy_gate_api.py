@@ -2,12 +2,14 @@ import gzip
 import json
 import os
 import shutil
+import sqlite3
 import tempfile
 import threading
 import unittest
 import urllib.error
 import urllib.request
 from http.server import ThreadingHTTPServer
+from typing import Optional
 
 from balancita_engine import futures_strategy_gate_api as gate_api
 from balancita_engine.futures_strategy_gate_api import GateApi
@@ -20,6 +22,8 @@ SPEC = {"id": "c29-test-v1", "name": "x"}
 
 
 class FakeRegistry:
+    path: Optional[str] = None
+
     def _version_row(self, strategy_id, version):
         return {"strategy_id": strategy_id, "spec": SPEC} if strategy_id == "c29-test-v1" else None
 
@@ -44,11 +48,11 @@ class FakeChild:
         return self.code
 
 
-class GateApiTests(unittest.TestCase):
+class GateApiFixture(unittest.TestCase):
     def setUp(self):
         self.dir = tempfile.mkdtemp()
         self.spawned = []
-        self.next_child = None
+        self.next_child: Optional[FakeChild] = None
         self.gate = GateApi(FakeRegistry(), data_dir=self.dir, python="py", spawn=self.spawn, wait_s=0.3,
                             products=["PF_XBTUSD", "PF_ETHUSD"])
         server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(FakeService(self.gate)))
@@ -92,8 +96,7 @@ class GateApiTests(unittest.TestCase):
         db.commit()
         db.close()
 
-    # --------------------------------------------------------------- reads
-
+class GateApiTests(GateApiFixture):
     def test_no_database_means_empty_lists(self):
         status, body = self.json("/strategies/c29-test-v1/gate/runs")
         self.assertEqual(status, 200)
@@ -129,7 +132,9 @@ class GateApiTests(unittest.TestCase):
     def test_gate_db_is_opened_read_only(self):
         self.insert()
         db = self.gate._connect()
-        with self.assertRaises(Exception):
+        if db is None:
+            self.fail("La base de prueba del gate no se pudo abrir.")
+        with self.assertRaises(sqlite3.OperationalError):
             db.execute("DELETE FROM runs")
         db.close()
         self.assertEqual(self.json("/gate/runs/abc")[0], 404)
@@ -224,9 +229,7 @@ class GateApiTests(unittest.TestCase):
             self.assertEqual(self.call("/gate/runs/%d/report.md" % run)[0], 404)
 
 
-class PolicyApiTests(unittest.TestCase):
-    setUp, tearDown, spawn, call, json, insert = (GateApiTests.setUp, GateApiTests.tearDown, GateApiTests.spawn,
-                                                  GateApiTests.call, GateApiTests.json, GateApiTests.insert)
+class PolicyApiTests(GateApiFixture):
 
     def test_preflight_is_non_consuming_and_uses_the_evaluated_spec_identity(self):
         from unittest.mock import patch
@@ -255,8 +258,8 @@ class PolicyApiTests(unittest.TestCase):
         for sid, spec in specs.items():
             # A differing registry version must not change what the shipped gate evaluates.
             registry = FakeRegistry()
-            registry._version_row = lambda strategy_id, version: {"spec": dict(spec, name="other")}
-            registry.version = lambda strategy_id: {"spec": dict(spec, name="other")}
+            registry._version_row = lambda strategy_id, version, spec=spec: {"spec": dict(spec, name="other")}
+            registry.version = lambda strategy_id, version=None, spec=spec: {"spec": dict(spec, name="other")}
             api = GateApi(registry, data_dir=self.dir, spawn=self.spawn)
             with self.subTest(strategy=sid):
                 preflight = api.preflight(sid)
@@ -324,11 +327,9 @@ class PolicyApiTests(unittest.TestCase):
         self.assertEqual(rows[-2]["evaluation_policy"]["classification"], "unclassified")
 
 
-class VisualApiTests(unittest.TestCase):
+class VisualApiTests(GateApiFixture):
     """Stored trades and candles of a finished run, read-only, with the exam kept shut until it was taken."""
 
-    setUp, tearDown, spawn, call, json, insert = (GateApiTests.setUp, GateApiTests.tearDown, GateApiTests.spawn,
-                                                  GateApiTests.call, GateApiTests.json, GateApiTests.insert)
     START = 1_760_000_000_000 // MINUTE * MINUTE
     END = START + 600 * MINUTE
 
@@ -342,7 +343,7 @@ class VisualApiTests(unittest.TestCase):
         meta = {"run_id": run_id, "strategy_id": "c29-test-v1", "family": "c29-test", "version_key": "k",
                 "kind": kind, "start_ms": self.START, "end_ms": self.END, "products": list(products),
                 "config_hash": "h"}
-        cfg = {"holdout_from": "2026-04-19"}
+        cfg: dict = {"holdout_from": "2026-04-19"}
         trades = [self.trade("LONG", self.START + 30 * MINUTE, self.START + 45 * MINUTE, 12.0),
                   self.trade("SHORT", self.START + 200 * MINUTE, self.START + 230 * MINUTE, -4.2),
                   self.trade("LONG", self.START + 400 * MINUTE, self.START + 410 * MINUTE, 3.0, "PF_ETHUSD")]
@@ -531,7 +532,7 @@ class VisualApiTests(unittest.TestCase):
 
     def test_bad_products_and_values_are_refused_and_no_path_is_taken_from_the_client(self):
         self.store()
-        for bad in ("product=PF_ETHUSD", "product=..%2F..%2Fx", "product=", "product=PF_XBTUSD&from=abc",
+        for bad in ("product=PF_ETHUSD", "product=PF_%C3%89TH", "product=..%2F..%2Fx", "product=", "product=PF_XBTUSD&from=abc",
                     "product=PF_XBTUSD&limit=0", "product=PF_XBTUSD&limit=9999"):
             self.assertEqual(self.json("/gate/runs/1/trades?" + bad)[0], 400, bad)
         self.assertEqual(self.json("/gate/runs/1/candles?product=PF_ETHUSD")[0], 400)

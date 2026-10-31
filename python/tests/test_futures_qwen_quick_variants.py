@@ -126,7 +126,7 @@ class ModelServerTests(unittest.TestCase):
         launched = []
         with tempfile.TemporaryDirectory() as home:
             server = qv.ModelServer(self.MODEL, env={"HOME": home}, popen=lambda *a, **k: launched.append(a),
-                                    health=lambda: False)
+                                    health=lambda: False, news_only=False)
             old = os.environ.get("HOME")
             os.environ["HOME"] = home
             try:
@@ -144,8 +144,9 @@ class ModelServerTests(unittest.TestCase):
                 handle.write("gguf")
             os.environ["QUICK_MODELS_DIR"] = os.path.join(home, "models")
             try:
+                server = qv.ModelServer(self.MODEL, popen=None, health=lambda: True, news_only=False)
                 with self.assertRaises(qv.VariantError):
-                    qv.ModelServer(self.MODEL, popen=None, health=lambda: True).__enter__()
+                    server.__enter__()
             finally:
                 del os.environ["QUICK_MODELS_DIR"]
 
@@ -156,7 +157,7 @@ class VariantApiTests(unittest.TestCase):
         self.addCleanup(self.dir.cleanup)
         self.spawned = []
         self.api = quick_api.QuickTestApi(os.path.join(self.dir.name, "exam-v3.sqlite"), python="py",
-                                          spawn=lambda *a: self.spawned.append(a))
+                                          spawn=lambda *a: self.spawned.append(a), news_only=False)
 
     def test_status_lists_the_variants_and_launch_names_the_one_chosen(self):
         status = self.api.status(models.QWEN_LIVE_ID)

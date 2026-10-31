@@ -58,6 +58,11 @@ import sys
 import time
 import urllib.parse
 from decimal import ROUND_HALF_UP, Decimal
+READONLY_DB_URI = "file:{}?mode=ro"
+MISSING_VERDICT = "sin veredicto ({})"
+MEAN_TRADE_LABEL = "Promedio por operación"
+RUN_PARAMS_QUERY = "SELECT params FROM runs WHERE id=?"
+UPDATE_RUN_PARAMS = "UPDATE runs SET params=? WHERE id=?"
 
 from .futures_costs import COST_MODEL_VERSION, fee_rate, side_impact_bps, stop_exit_bps
 from .futures_funding_context import FundingContext, funding_periods
@@ -147,7 +152,7 @@ def research_trials(family, ledger_path):
     if not ledger_path or not os.path.isfile(ledger_path):
         return 0
     try:
-        conn = sqlite3.connect("file:{}?mode=ro".format(urllib.parse.quote(os.path.abspath(ledger_path))), uri=True,
+        conn = sqlite3.connect(READONLY_DB_URI.format(urllib.parse.quote(os.path.abspath(ledger_path))), uri=True,
                                timeout=5)
         try:
             return int(conn.execute("SELECT COUNT(DISTINCT variant_key) FROM trials WHERE family=?",
@@ -179,7 +184,7 @@ def registry_specs(registry_db):
     if not registry_db or not os.path.isfile(registry_db):
         return {}
     try:
-        db = sqlite3.connect("file:{}?mode=ro".format(os.path.abspath(registry_db)), uri=True, timeout=10)
+        db = sqlite3.connect(READONLY_DB_URI.format(os.path.abspath(registry_db)), uri=True, timeout=10)
     except sqlite3.Error:
         return {}
     out = {}
@@ -253,7 +258,7 @@ def _now_ms():
 
 def open_db(path, readonly=False):
     if readonly:
-        db = sqlite3.connect("file:{}?mode=ro".format(path), uri=True, timeout=30)
+        db = sqlite3.connect(READONLY_DB_URI.format(path), uri=True, timeout=30)
     else:
         os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
         db = sqlite3.connect(path, timeout=30)
@@ -290,7 +295,7 @@ def family_exam_on_window(db, spec, cfg):
                            (holdout,)).fetchall():
         if lock["strategy_id"] != spec["id"] and family_of(lock["strategy_id"]) == family:
             return {"version": lock["strategy_id"], "holdout_from": holdout,
-                    "verdict": lock["verdict"] or "sin veredicto ({})".format(lock["status"])}
+                    "verdict": lock["verdict"] or MISSING_VERDICT.format(lock["status"])}
     tomb = db.execute("SELECT verdict FROM exam_window_tombstones WHERE family_hash=? AND holdout_from=? "
                       "AND spec_hash!=? ORDER BY exam_date LIMIT 1", (family_hash(family), holdout,
                                                                       spec_hash(spec))).fetchone()
@@ -314,7 +319,7 @@ def check_exam_allowed(db, spec, cfg, allow_contaminated=False):
     lock = db.execute("SELECT * FROM exam_locks WHERE strategy_id=?", (spec["id"],)).fetchone()
     if lock is not None:
         if lock["code_hash"] == digest:
-            verdict = lock["verdict"] or "sin veredicto ({})".format(lock["status"])
+            verdict = lock["verdict"] or MISSING_VERDICT.format(lock["status"])
             raise GateError("El examen final de esta versión ya se rindió el {}: {}. Para volver a rendirlo, creá una "
                             "versión nueva.".format(_stamp(lock["locked_at"]), verdict))
         raise GateError("La estrategia {id} ya rindió su examen final el {fecha} con otro contenido (hash {old}; ahora "
@@ -360,7 +365,7 @@ class KrakenProvider:
     def candles(self, product, from_ms, to_ms):
         cache = self._cache(product)
         try:
-            return cache.read(product, "1m", from_ms, to_ms), cache.read(product, "5m", from_ms, to_ms)
+            return cache.read("1m", from_ms, to_ms), cache.read("5m", from_ms, to_ms)
         finally:
             cache.close()
 
@@ -395,7 +400,7 @@ def book_trades(spec, product_id, tick_size, ones, fives, funding, start_ms, end
 
     ``trace``: feed a ``TracedBook`` (same trades, plus the signals and evidence) and return it as a third item.
 
-    ``ones`` / ``fives`` are already gap-filled and end below ``end_ms``. Returns ``(trades, open_at_end)``; a position
+    ``ones`` / ``fives`` are already gap-filled and end below ``end_ms``. Returns ``(trades, open_at_end, trace_or_None)``; a position
     still open at the end is NOT closed (no later price exists in this window) and is reported as ``open_at_end``.
     """
     periods = merge_periods(DEFAULT_PERIODS, declared_indicators(spec))
@@ -416,9 +421,7 @@ def book_trades(spec, product_id, tick_size, ones, fives, funding, start_ms, end
         if count % CHUNK_FRAMES == 0:
             chunk(count / total)
     trades = [dict(t) for t in book.trades if t["entry_time_ms"] >= start_ms and t["exit_time_ms"] <= end_ms]
-    if trace:
-        return trades, int(book.position is not None), book.report(start_ms, end_ms)
-    return trades, int(book.position is not None)
+    return trades, int(book.position is not None), book.report(start_ms, end_ms) if trace else None
 
 
 def _compact(product, trade, cost_model_version=None):
@@ -469,11 +472,11 @@ def simulate_task(job):
     trades, open_at_end = produced[0], produced[1]
     observed["observed_trades"] = provenance.Records("trades")
     compact = []
+    cost_version = COST_MODEL_VERSION if book else None
     for trade in trades:
         observed["observed_trades"].add(trade)
-        compact.append(_compact(product, trade, COST_MODEL_VERSION if book else None))
+        compact.append(_compact(product, trade, cost_version))
     # Only this producer just ran Book with today's cost model. Old/model records gain no inferred cost identity.
-    cost_version = COST_MODEL_VERSION if source is book_trades else None
     out = {"index": index, "product": product, "label": job["label"], "open_at_end": open_at_end,
            "trades": compact,
            "full_trades": [_full(product, t, cost_version) for t in trades] if job["want_closes"] else [], "candles_1m": len(ones),
@@ -481,23 +484,27 @@ def simulate_task(job):
     if traced:
         out["trace"] = produced[2]
     if job["want_closes"]:
-        base = bisect.bisect_left([c["bucket_start"] for c in ones], start_ms)
-        def closes():
-            if not book:
-                observed["control_candles_1m"] = provenance.Records("candles")
-            for candle in ones:
-                if not book:
-                    observed["control_candles_1m"].add({"bucket_start": candle["bucket_start"], "close": candle["close"]})
-                yield float(candle["close"])
-        out["closes"] = array.array("d", closes())
-        out["first_ms"] = ones[0]["bucket_start"]
-        out["start_index"] = base
+        _attach_simulation_closes(out, ones, observed, book, start_ms)
     out["input_provenance"] = provenance.input_receipt(
         dict(job, spec_sha256=spec_hash(job["spec"])), {k: v.summary() for k, v in observed.items()}, book)
     if traced:
         out["trace"]["input_provenance"] = out["input_provenance"]
     _chunk(index, 1.0)
     return out
+
+
+def _attach_simulation_closes(out, ones, observed, book, start_ms):
+    base = bisect.bisect_left([candle["bucket_start"] for candle in ones], start_ms)
+    def closes():
+        if not book:
+            observed["control_candles_1m"] = provenance.Records("candles")
+        for candle in ones:
+            if not book:
+                observed["control_candles_1m"].add({"bucket_start": candle["bucket_start"], "close": candle["close"]})
+            yield float(candle["close"])
+    out["closes"] = array.array("d", closes())
+    out["first_ms"] = ones[0]["bucket_start"]
+    out["start_index"] = base
 
 
 # --------------------------------------------------------------------------- statistics
@@ -507,7 +514,12 @@ def trade_cost_bp(product, reason):
     """Fees and modelled execution of one round trip in bp of notional, by exit reason (``futures_costs``)."""
     fees = 2 * float(fee_rate("taker")) * 10_000
     entry = float(side_impact_bps(product))
-    leave = 0.0 if reason == "target" else float(stop_exit_bps(product) if reason == "stop" else side_impact_bps(product))
+    if reason == "target":
+        leave = 0.0
+    elif reason == "stop":
+        leave = float(stop_exit_bps(product))
+    else:
+        leave = float(side_impact_bps(product))
     return fees + entry + leave
 
 
@@ -543,7 +555,7 @@ def split_folds(trades, start_ms, end_ms, folds):
     return samples, fold_edges(start_ms, end_ms, folds)
 
 
-def random_entries_means(trades, series, *, draws, seed, tick=None):
+def random_entries_means(trades, series, *, draws, seed):
     """Mean net bp (before funding) of ``draws`` random-entry books against the strategy's trades.
 
     Every draw replaces each trade by a random entry bar of the SAME product, the same side and the same holding time
@@ -603,23 +615,7 @@ def sharpe_per_trade(values):
 # --------------------------------------------------------------------------- the judgement
 
 
-def judge(trades, series, cfg, *, kind, start_ms, end_ms, attempts, products, seed, progress=None, neighbors=None,
-          embargo_supported=True, open_at_end=0):
-    """Applies the predeclared rules. Pure: same trades, same series, same seed -> same verdict.
-
-    ``trades``: compact trade dicts (see ``_compact``). ``series``: per product the 1m closes for the random draws.
-    ``attempts``: practice runs on the strategy family so far (this one included), the trials of the deflated Sharpe.
-    ``neighbors``: ``[{param, direction, value, trades}]`` or ``None`` (n/d).
-    """
-    rules = cfg["rules"]
-    progress = progress or (lambda fraction: None)
-    ordered = sorted(trades, key=lambda t: (t["exit_ms"], t["entry_ms"], t["product"]))
-    values = [t["net_bp"] for t in ordered]
-    overall = summarize(ordered)
-    n = overall["n"]
-    ci = bootstrap_ci(values, seed=_stable_seed(seed, "ci"), draws=cfg["bootstrap_draws"],
-                      level=rules["ci_level"]) if n >= 2 else (None, None)
-    nfolds = cfg["practice_folds"] if kind == "practice" else cfg["exam_folds"]
+def _fold_statistics(ordered, start_ms, end_ms, nfolds, embargo_supported, open_at_end):
     by_fold, temporal_evidence = temporal.stability_samples(ordered, start_ms, end_ms, nfolds,
         embargo_supported=embargo_supported, open_at_end=open_at_end)
     edges = fold_edges(start_ms, end_ms, nfolds)
@@ -628,47 +624,38 @@ def judge(trades, series, cfg, *, kind, start_ms, end_ms, attempts, products, se
         if not fold["n"]:
             fold["mean_bp"] = None  # No measured expectancy; empty folds still count in the rule denominator.
     positive_folds = sum(1 for f in folds if f["n"] and f["mean_bp"] > 0)
-    per_product = {p: summarize([t for t in ordered if t["product"] == p]) for p in products}
-    positive_products = sum(1 for s in per_product.values() if s["n"] and s["mean_bp"] > 0)
-    per_side = {s: summarize([t for t in ordered if t["side"] == s]) for s in ("LONG", "SHORT")}
-    mult = rules["cost_stress_multiplier"]
-    stressed = [t["net_bp"] - (mult - 1.0) * trade_cost_bp(t["product"], t["reason"]) for t in ordered]
-    stress_mean = statistics.fmean(stressed) if stressed else None
-    # All observed closed trades, including partial nets; keep the historical comparison population.
-    ex_funding = [t["net_bp"] + (t.get("observed_funding_bp", t.get("funding_bp")) or 0.0) for t in ordered]
-    observed_ex = statistics.fmean(ex_funding) if ex_funding else None
-    means, skipped = random_entries_means(ordered, series, draws=cfg["random_draws"], seed=seed)
-    progress(0.9)
-    percentile = percentile_in(means, observed_ex) if means and observed_ex is not None else None
-    baseline = None
-    if means:
-        srt = sorted(means)
-        baseline = {"draws": len(means), "p05": _quantile(srt, 0.05), "p50": _quantile(srt, 0.5),
-                    "p95": _quantile(srt, 0.95), "mean": statistics.fmean(means), "skipped": skipped,
-                    "observed_ex_funding": observed_ex}
-    dsr = deflated_probability(values, attempts) if n >= 3 else None
-    funding_share = (sum(1 for t in ordered if t["funding_status"] == "complete") / n) if n else None
-    funding_status = collections.Counter(t["funding_status"] for t in ordered)
-    sens = None
-    if neighbors:
-        sens, seen = [], {}
-        for item in neighbors:
-            s = summarize(item["trades"])
-            signature = tuple(sorted((t["product"], t["side"], t["entry_ms"], t["exit_ms"], round(t["net_bp"], 9))
-                                     for t in item["trades"]))
-            if signature in seen:      # exactly the same trades: the parameters are coupled in the rules; show once
-                seen[signature]["also"].append({"param": item["param"], "direction": item["direction"],
-                                                "value": item["value"]})
-                continue
-            row = {"param": item["param"], "direction": item["direction"], "value": item["value"],
-                   "n": s["n"], "mean_bp": s["mean_bp"], "also": []}
-            seen[signature] = row
-            sens.append(row)
+    return folds, temporal_evidence, positive_folds, edges
+
+
+def _neighbor_sensitivity(neighbors):
+    if not neighbors:
+        return None
+    sensitivity, seen = [], {}
+    for item in neighbors:
+        stats = summarize(item["trades"])
+        signature = tuple(sorted((trade["product"], trade["side"], trade["entry_ms"], trade["exit_ms"], round(trade["net_bp"], 9))
+                                 for trade in item["trades"]))
+        if signature in seen:
+            seen[signature]["also"].append({"param": item["param"], "direction": item["direction"], "value": item["value"]})
+            continue
+        row = {"param": item["param"], "direction": item["direction"], "value": item["value"],
+               "n": stats["n"], "mean_bp": stats["mean_bp"], "also": []}
+        seen[signature] = row
+        sensitivity.append(row)
+    return sensitivity
+
+
+def _judgment_checks(values, rules, attempts, temporal_evidence):
+    n, overall, ci = values["n"], values["overall"], values["ci"]
+    percentile, dsr = values["percentile"], values["deflated"]
+    positive_folds, nfolds = values["positive_folds"], values["nfolds"]
+    positive_products, products = values["positive_products"], values["products"]
+    mult, stress_mean, funding_share = values["mult"], values["stress_mean"], values["funding_share"]
 
     def rule(rid, label, value, threshold, ok):
         return {"id": rid, "label": label, "value": value, "threshold": threshold, "ok": bool(ok)}
 
-    checks = [
+    return [
         rule("n_trades", "Al menos {} operaciones".format(rules["min_trades"]), n, rules["min_trades"],
              n >= rules["min_trades"]),
         rule("mean_net_positive", "Media neta > 0 bp con el límite inferior del IC {:.0f}% > 0".format(
@@ -694,8 +681,9 @@ def judge(trades, series, cfg, *, kind, start_ms, end_ms, attempts, products, se
             rules["min_funding_complete_share"] * 100), funding_share, rules["min_funding_complete_share"],
              funding_share is not None and funding_share >= rules["min_funding_complete_share"] - 1e-9),
     ]
-    # Evidence rules (enough trades, known funding) can only make the verdict INCONCLUSIVE; a failed performance rule
-    # is a NO PASA. Missing evidence never becomes a PASA.
+
+
+def _judgment_verdict(checks, n, rules, temporal_evidence):
     fold_rule = _rule_by_id({"rules": checks})["positive_folds"]
     temporal_available = temporal_evidence["embargo_supported"]
     fold_rule["measurement_status"] = "measured" if temporal_available else "unavailable"
@@ -719,6 +707,55 @@ def judge(trades, series, cfg, *, kind, start_ms, end_ms, attempts, products, se
         verdict = INCONCLUSIVE          # nothing else failed but the evidence is incomplete: we cannot tell
     else:
         verdict = PASS
+    return verdict, note, reasons
+
+
+def judge(trades, series, cfg, *, kind, start_ms, end_ms, attempts, products, seed, progress=None, neighbors=None,
+          embargo_supported=True, open_at_end=0):
+    """Applies the predeclared rules. Pure: same trades, same series, same seed -> same verdict.
+
+    ``trades``: compact trade dicts (see ``_compact``). ``series``: per product the 1m closes for the random draws.
+    ``attempts``: practice runs on the strategy family so far (this one included), the trials of the deflated Sharpe.
+    ``neighbors``: ``[{param, direction, value, trades}]`` or ``None`` (n/d).
+    """
+    rules = cfg["rules"]
+    progress = progress or (lambda fraction: None)
+    ordered = sorted(trades, key=lambda trade: (trade["exit_ms"], trade["entry_ms"], trade["product"]))
+    values = [trade["net_bp"] for trade in ordered]
+    overall = summarize(ordered)
+    n = overall["n"]
+    ci = bootstrap_ci(values, seed=_stable_seed(seed, "ci"), draws=cfg["bootstrap_draws"],
+                      level=rules["ci_level"]) if n >= 2 else (None, None)
+    nfolds = cfg["practice_folds"] if kind == "practice" else cfg["exam_folds"]
+    folds, temporal_evidence, positive_folds, edges = _fold_statistics(
+        ordered, start_ms, end_ms, nfolds, embargo_supported, open_at_end)
+    per_product = {product: summarize([trade for trade in ordered if trade["product"] == product]) for product in products}
+    positive_products = sum(1 for stats in per_product.values() if stats["n"] and stats["mean_bp"] > 0)
+    per_side = {side: summarize([trade for trade in ordered if trade["side"] == side]) for side in ("LONG", "SHORT")}
+    mult = rules["cost_stress_multiplier"]
+    stressed = [trade["net_bp"] - (mult - 1.0) * trade_cost_bp(trade["product"], trade["reason"]) for trade in ordered]
+    stress_mean = statistics.fmean(stressed) if stressed else None
+    ex_funding = [trade["net_bp"] + (trade.get("observed_funding_bp", trade.get("funding_bp")) or 0.0) for trade in ordered]
+    observed_ex = statistics.fmean(ex_funding) if ex_funding else None
+    means, skipped = random_entries_means(ordered, series, draws=cfg["random_draws"], seed=seed)
+    progress(0.9)
+    percentile = percentile_in(means, observed_ex) if means and observed_ex is not None else None
+    baseline = None
+    if means:
+        sorted_means = sorted(means)
+        baseline = {"draws": len(means), "p05": _quantile(sorted_means, 0.05), "p50": _quantile(sorted_means, 0.5),
+                    "p95": _quantile(sorted_means, 0.95), "mean": statistics.fmean(means), "skipped": skipped,
+                    "observed_ex_funding": observed_ex}
+    dsr = deflated_probability(values, attempts) if n >= 3 else None
+    funding_share = (sum(1 for trade in ordered if trade["funding_status"] == "complete") / n) if n else None
+    funding_status = collections.Counter(trade["funding_status"] for trade in ordered)
+    sens = _neighbor_sensitivity(neighbors)
+    checks = _judgment_checks({
+        "n": n, "overall": overall, "ci": ci, "percentile": percentile, "deflated": dsr,
+        "positive_folds": positive_folds, "nfolds": nfolds, "positive_products": positive_products, "products": products,
+        "mult": mult, "stress_mean": stress_mean, "funding_share": funding_share,
+    }, rules, attempts, temporal_evidence)
+    verdict, note, reasons = _judgment_verdict(checks, n, rules, temporal_evidence)
     return {"verdict": verdict, "verdict_note": note, "inconclusive_reasons": reasons if verdict == INCONCLUSIVE else [],
             "rules": checks, "overall": overall, "ci": ci, "folds": folds, "edges": edges,
             "accounting": accounting.summarize(ordered, minimum_complete_share=rules["min_funding_complete_share"],
@@ -779,7 +816,9 @@ def _factor(value):
 
 
 def _mark(ok):
-    return "⚠️" if ok is None else "✅" if ok else "❌"
+    if ok is None:
+        return "⚠️"
+    return "✅" if ok else "❌"
 
 
 def _table(header, rows):
@@ -793,7 +832,7 @@ def _row(label, s):
             _factor(s["profit_factor"]) if s["n"] else "n/d", _usd(s["total_bp"]) if s["n"] else "n/d"]
 
 
-ROW_HEADER = ["Operaciones", "Promedio por operación", "Acierto", "Factor de beneficio", "Resultado total"]
+ROW_HEADER = ["Operaciones", MEAN_TRADE_LABEL, "Acierto", "Factor de beneficio", "Resultado total"]
 
 
 def _rule_by_id(result):
@@ -851,6 +890,12 @@ def _checklist(r, cfg):
     return items
 
 
+def _random_summary(percentile):
+    if percentile >= 50:
+        return "Le fue mejor que entrar al azar (mejor que el {} % de los sorteos).".format(_es(percentile, 0))
+    return "Le fue peor que entrar al azar (peor que el {} % de los sorteos).".format(_es(100 - percentile, 0))
+
+
 def _summary_points(r, cfg):
     """3-5 plain-language bullets."""
     ov, rules, c = r["overall"], cfg["rules"], _rule_by_id(r)
@@ -863,10 +908,7 @@ def _summary_points(r, cfg):
                                                    _usd(ov["total_bp"])))
     pc = r["percentile"]
     if pc is not None:
-        if pc >= 50:
-            points.append("Le fue mejor que entrar al azar (mejor que el {} % de los sorteos).".format(_es(pc, 0)))
-        else:
-            points.append("Le fue peor que entrar al azar (peor que el {} % de los sorteos).".format(_es(100 - pc, 0)))
+        points.append(_random_summary(pc))
     f = c["positive_folds"]["value"]
     pp = c["positive_products"]["value"]
     if c["positive_folds"].get("measurement_status") == "unavailable":
@@ -898,26 +940,7 @@ def _verdict_line(r, cfg):
     if v == PASS:
         return "## ✅ PASA\n\nCumplió todas las reglas que se fijaron de antemano."
     if v == INCONCLUSIVE:
-        reasons = r.get("inconclusive_reasons") or []
-        parts = []
-        if "contaminated" in reasons:
-            parts.append("La reserva ya fue usada por esta familia de estrategias: el examen no es evidencia "
-                         "independiente y por eso nunca puede dar PASA.")
-        if "few_trades" in reasons:
-            parts.append("Hay muy pocas operaciones (menos de {}) para decidir.".format(rules["min_trades"]))
-        if "temporal_unsupported" in reasons or "temporal_unavailable" in reasons:
-            parts.append("Estabilidad temporal no evaluable: la evidencia de embargo no está disponible o no está "
-                         "soportada. No es un resultado negativo medido y no permite aprobar.")
-        if "funding" in reasons:
-            parts.append("Falta el funding de muchas operaciones (se pide al menos el {} %). {}.".format(
-                _es(rules["min_funding_complete_share"] * 100, 0), FUNDING_NOTE))
-        if not parts:
-            parts.append("Hay muy pocas operaciones (menos de {}) para decidir.".format(rules["min_trades"]))
-        tail = "Ninguna otra regla falló." if "contaminated" not in reasons else "Ninguna regla de resultado falló."
-        next_step = ("Hace falta evidencia temporal respaldada; más operaciones por sí solas no definen esa política."
-                     if "temporal_unsupported" in reasons or "temporal_unavailable" in reasons else
-                     "Hace falta más historia, más productos o un periodo con funding.")
-        return "## ⚠️ INCONCLUSO\n\n{} {} {}".format(" ".join(parts), tail, next_step)
+        return _inconclusive_line(r, rules)
     extra = " (pocas operaciones)" if r.get("verdict_note") else ""
     failed = [c for c in r["rules"] if not c["ok"] and c.get("measurement_status") != "unavailable"]
     return "## ❌ NO PASA{}\n\nNo cumplió {} de {} reglas.{}".format(
@@ -926,8 +949,112 @@ def _verdict_line(r, cfg):
         if r.get("verdict_note") else "")
 
 
+def _inconclusive_line(r, rules):
+    reasons = r.get("inconclusive_reasons") or []
+    parts = []
+    if "contaminated" in reasons:
+        parts.append("La reserva ya fue usada por esta familia de estrategias: el examen no es evidencia "
+                     "independiente y por eso nunca puede dar PASA.")
+    if "few_trades" in reasons:
+        parts.append("Hay muy pocas operaciones (menos de {}) para decidir.".format(rules["min_trades"]))
+    if "temporal_unsupported" in reasons or "temporal_unavailable" in reasons:
+        parts.append("Estabilidad temporal no evaluable: la evidencia de embargo no está disponible o no está "
+                     "soportada. No es un resultado negativo medido y no permite aprobar.")
+    if "funding" in reasons:
+        parts.append("Falta el funding de muchas operaciones (se pide al menos el {} %). {}.".format(
+            _es(rules["min_funding_complete_share"] * 100, 0), FUNDING_NOTE))
+    if not parts:
+        parts.append("Hay muy pocas operaciones (menos de {}) para decidir.".format(rules["min_trades"]))
+    tail = "Ninguna otra regla falló." if "contaminated" not in reasons else "Ninguna regla de resultado falló."
+    next_step = ("Hace falta evidencia temporal respaldada; más operaciones por sí solas no definen esa política."
+                 if "temporal_unsupported" in reasons or "temporal_unavailable" in reasons else
+                 "Hace falta más historia, más productos o un periodo con funding.")
+    return "## ⚠️ INCONCLUSO\n\n{} {} {}".format(" ".join(parts), tail, next_step)
+
+
 def _neighbor_label(item):
     return "{} {}".format(item["param"], item["direction"])
+
+
+def _report_metrics(r, ov):
+    lines = ["## Resultado general", "", "Cuánto ganó o perdió en total, con comisiones y deslizamiento incluidos "
+             "(posiciones fijas de 100 USD).", ""]
+    lines += _table([""] + ROW_HEADER + ["Caída máxima"], [_row("Todas", ov) + [
+        _usd(-ov["max_drawdown_bp"]) if ov["n"] else "n/d"]])
+    te = temporal.stored(r.get("temporal"))
+    lines += ["", "## Por periodo", "", "Cómo le fue en {} tramos consecutivos de tiempo; sirve para ver si el resultado "
+              "es estable. No se ajusta ningún parámetro. No es entrenamiento/prueba walk-forward ni demuestra "
+              "generalización sin fugas.".format(len(r["folds"])), "",
+              "- Método: `{}`; esquema: `{}`; estado: `{}`; motivos: `{}`.".format(
+                  te["method"], te["schema"], te["state"], ", ".join(te["reasons"]) or "ninguno"),
+              "- Embargo: {} ms; fuente: `{}`; tope heredado: 25 % del ancho del tramo. "
+              "No se impone una salida nueva ni se supone un horizonte universal para modelos.".format(
+                  _es(te["embargo_ms"], 0), te["embargo_source"]),
+              "- Entradas en [desde, hasta); salida <= hasta. Se purgan los cruces y se omite el inicio "
+              "embargado de cada tramo salvo el primero. Usadas: {}; excluidas: {}; motivos: `{}`. "
+              "Abiertas al corte (censuradas): {}.".format(
+                  te.get("used_trades", "n/d"), te.get("excluded_trades", "n/d"),
+                  te.get("excluded_reasons", {}), te.get("open_at_end", "n/d")),
+              "- Los tramos vacíos siguen en el denominador; su media es n/d, no cero medido. "
+              "Un tramo con una operación no permite medir dispersión. El resultado global y el 95 % de funding "
+              "conservan todas las cerradas observadas, incluso las excluidas aquí.", ""]
+    lines += _table(["Periodo", "Desde", "Hasta"] + ROW_HEADER,
+                    [[fold["index"], _stamp(fold["from_ms"]), _stamp(fold["to_ms"])] + _row("", fold)[1:] for fold in r["folds"]])
+    if te["folds"]:
+        lines += [""] + _table(["Periodo", "Embargo (ms)", "Usadas", "Excluidas", "Motivos", "Muestra"],
+                              [[fold["index"], fold["embargo_ms"], fold["used"], fold["excluded"],
+                                fold["excluded_reasons"], fold["sample_state"]] for fold in te["folds"]])
+    lines += ["", "## Por producto", "", "El mismo resultado separado por producto.", ""]
+    lines += _table(["Producto"] + ROW_HEADER, [_row(product, stats) for product, stats in r["per_product"].items()])
+    lines += ["", "## Compra contra venta", "", "Separado entre operaciones largas (apuesta a que sube) y cortas "
+              "(apuesta a que baja).", ""]
+    lines += _table(["Lado"] + ROW_HEADER, [_row("Compra (largo)" if side == "LONG" else "Venta (corto)", stats)
+                                            for side, stats in r["per_side"].items()])
+    return lines
+
+
+def _report_random(r):
+    baseline = r["baseline"]
+    if baseline is None:
+        return ["Sin operaciones: no hay con qué comparar."]
+    lines = ["Se repitió {} veces la misma cantidad de operaciones, del mismo lado, producto y duración, pero "
+             "entrando en momentos al azar. Así se ve cuánto aporta la estrategia frente a la suerte.".format(baseline["draws"]), ""]
+    lines += _table(["", MEAN_TRADE_LABEL], [
+        ["**La estrategia** (sin funding, para comparar parejo)", _pct_bp(baseline["observed_ex_funding"], 2, True)],
+        ["Al azar, promedio", _pct_bp(baseline["mean"], 2, True)],
+        ["Al azar, caso malo (5 % peores)", _pct_bp(baseline["p05"], 2, True)],
+        ["Al azar, caso típico (mediana)", _pct_bp(baseline["p50"], 2, True)],
+        ["Al azar, caso bueno (5 % mejores)", _pct_bp(baseline["p95"], 2, True)]])
+    lines += ["", "La estrategia quedó en el **puesto {} de 100** entre los sorteos (100 = mejor que todos).".format(
+        _es(r["percentile"], 0))]
+    if baseline["skipped"]:
+        lines += ["", "{} operaciones cuya duración no cabía en las velas quedaron fuera de los sorteos.".format(baseline["skipped"])]
+    return lines
+
+
+def _report_neighbors(r):
+    lines = ["", "## Parámetros vecinos", "", "Se mueve cada parámetro numérico un 20 % hacia arriba y hacia abajo para ver "
+             "si el resultado se sostiene o depende de un valor exacto. Es solo informativo: no decide el veredicto.", ""]
+    if not r["sensitivity"]:
+        return lines + ["No disponible (la estrategia no tiene parámetros numéricos, o se desactivó con --sin-vecinos)."]
+    rows = []
+    for item in r["sensitivity"]:
+        label = " y ".join([_neighbor_label(item)] + [_neighbor_label(other) for other in item.get("also", [])])
+        rows.append([label, item["value"] if not item.get("also") else "ver nota", item["n"],
+                     _pct_bp(item["mean_bp"], 2, True) if item["n"] else "n/d"])
+    lines += _table(["Cambio", "Valor probado", "Operaciones", MEAN_TRADE_LABEL], rows)
+    positive = sum(1 for stats in r["sensitivity"] if stats["mean_bp"] is not None and stats["mean_bp"] > 0)
+    lines += ["", "Variantes con promedio positivo: {} de {}.".format(positive, len(r["sensitivity"]))]
+    if any(item.get("also") for item in r["sensitivity"]):
+        lines += ["", "> Cuando dos parámetros dan exactamente las mismas operaciones se muestran juntos: en las reglas "
+                  "se combinan (por ejemplo, se multiplican en el umbral de entrada), así que moverlos por separado "
+                  "es lo mismo y cuenta como una sola variante."]
+    return lines
+
+
+def _report_warnings(notes):
+    warnings = [note for note in notes if note.startswith("Atención")]
+    return warnings, [line for note in warnings for line in ("> ⚠️ " + note, "")]
 
 
 def build_report(meta, result, cfg, extra_notes=()):
@@ -967,9 +1094,8 @@ def build_report(meta, result, cfg, extra_notes=()):
                   _share(acc["funding_complete_share"]), _share(acc["funding_time_share"])),
               "- La completitud exige importes, flags de funding y evidencia de costes del productor. "
               "No se infieren costes actuales para registros antiguos ni se vuelve a descontar ejecución.", ""]
-    warnings = [n for n in extra_notes if n.startswith("Atención")]
-    for note in warnings:
-        lines += ["> ⚠️ " + note, ""]
+    warnings, warning_lines = _report_warnings(extra_notes)
+    lines += warning_lines
     if meta.get("contaminated"):
         lines += ["> ⚠️ **REUTILIZACIÓN CONTAMINADA: esta reserva ya fue usada por la familia; no es evidencia "
                   "independiente.**", ""]
@@ -979,80 +1105,15 @@ def build_report(meta, result, cfg, extra_notes=()):
     lines += ["## Qué revisamos", "",
               "Reglas fijadas antes de mirar resultados. Para pasar hay que cumplir **todas**.", ""]
     lines += ["- {} {}".format(_mark(ok), text) for ok, text in _checklist(r, cfg)] + [""]
-    lines += ["## Resultado general", "", "Cuánto ganó o perdió en total, con comisiones y deslizamiento incluidos "
-              "(posiciones fijas de 100 USD).", ""]
-    lines += _table([""] + ROW_HEADER + ["Caída máxima"], [_row("Todas", ov) + [
-        _usd(-ov["max_drawdown_bp"]) if ov["n"] else "n/d"]])
-    te = temporal.stored(r.get("temporal"))
-    lines += ["", "## Por periodo", "", "Cómo le fue en {} tramos consecutivos de tiempo; sirve para ver si el resultado "
-              "es estable. No se ajusta ningún parámetro. No es entrenamiento/prueba walk-forward ni demuestra "
-              "generalización sin fugas.".format(len(r["folds"])), "",
-              "- Método: `{}`; esquema: `{}`; estado: `{}`; motivos: `{}`.".format(
-                  te["method"], te["schema"], te["state"], ", ".join(te["reasons"]) or "ninguno"),
-              "- Embargo: {} ms; fuente: `{}`; tope heredado: 25 % del ancho del tramo. "
-              "No se impone una salida nueva ni se supone un horizonte universal para modelos.".format(
-                  _es(te["embargo_ms"], 0), te["embargo_source"]),
-              "- Entradas en [desde, hasta); salida <= hasta. Se purgan los cruces y se omite el inicio "
-              "embargado de cada tramo salvo el primero. Usadas: {}; excluidas: {}; motivos: `{}`. "
-              "Abiertas al corte (censuradas): {}.".format(
-                  te.get("used_trades", "n/d"), te.get("excluded_trades", "n/d"),
-                  te.get("excluded_reasons", {}), te.get("open_at_end", "n/d")),
-              "- Los tramos vacíos siguen en el denominador; su media es n/d, no cero medido. "
-              "Un tramo con una operación no permite medir dispersión. El resultado global y el 95 % de funding "
-              "conservan todas las cerradas observadas, incluso las excluidas aquí.", ""]
-    lines += _table(["Periodo", "Desde", "Hasta"] + ROW_HEADER,
-                    [[f["index"], _stamp(f["from_ms"]), _stamp(f["to_ms"])] + _row("", f)[1:] for f in r["folds"]])
-    if te["folds"]:
-        lines += [""] + _table(["Periodo", "Embargo (ms)", "Usadas", "Excluidas", "Motivos", "Muestra"],
-                              [[f["index"], f["embargo_ms"], f["used"], f["excluded"],
-                                f["excluded_reasons"], f["sample_state"]] for f in te["folds"]])
-    lines += ["", "## Por producto", "", "El mismo resultado separado por producto.", ""]
-    lines += _table(["Producto"] + ROW_HEADER, [_row(p, s) for p, s in r["per_product"].items()])
-    lines += ["", "## Compra contra venta", "", "Separado entre operaciones largas (apuesta a que sube) y cortas "
-              "(apuesta a que baja).", ""]
-    lines += _table(["Lado"] + ROW_HEADER, [_row("Compra (largo)" if s == "LONG" else "Venta (corto)", v)
-                                            for s, v in r["per_side"].items()])
-    b = r["baseline"]
+    lines += _report_metrics(r, ov)
     lines += ["", "## Comparación con entradas al azar", ""]
-    if b is None:
-        lines += ["Sin operaciones: no hay con qué comparar."]
-    else:
-        lines += ["Se repitió {} veces la misma cantidad de operaciones, del mismo lado, producto y duración, pero "
-                  "entrando en momentos al azar. Así se ve cuánto aporta la estrategia frente a la suerte.".format(b["draws"]),
-                  ""]
-        lines += _table(["", "Promedio por operación"], [
-            ["**La estrategia** (sin funding, para comparar parejo)", _pct_bp(b["observed_ex_funding"], 2, True)],
-            ["Al azar, promedio", _pct_bp(b["mean"], 2, True)],
-            ["Al azar, caso malo (5 % peores)", _pct_bp(b["p05"], 2, True)],
-            ["Al azar, caso típico (mediana)", _pct_bp(b["p50"], 2, True)],
-            ["Al azar, caso bueno (5 % mejores)", _pct_bp(b["p95"], 2, True)]])
-        pc = r["percentile"]
-        lines += ["", "La estrategia quedó en el **puesto {} de 100** entre los sorteos (100 = mejor que todos).".format(
-            _es(pc, 0))]
-        if b["skipped"]:
-            lines += ["", "{} operaciones cuya duración no cabía en las velas quedaron fuera de los sorteos.".format(b["skipped"])]
+    lines += _report_random(r)
     lines += ["", "## Con costos más altos", "", "Se repite el cálculo con comisiones y deslizamiento multiplicados por "
               "{}, para ver si el resultado aguanta un mercado menos favorable.".format(_es(r["stress_multiplier"], 1)), ""]
-    lines += _table(["", "Promedio por operación"], [
+    lines += _table(["", MEAN_TRADE_LABEL], [
         ["Costos normales", _pct_bp(ov["mean_bp"], 2, True)],
         ["Costos x{}".format(_es(r["stress_multiplier"], 1)), _pct_bp(r["stress_mean_bp"], 2, True)]])
-    lines += ["", "## Parámetros vecinos", "", "Se mueve cada parámetro numérico un 20 % hacia arriba y hacia abajo para ver "
-              "si el resultado se sostiene o depende de un valor exacto. Es solo informativo: no decide el veredicto.", ""]
-    if not r["sensitivity"]:
-        lines += ["No disponible (la estrategia no tiene parámetros numéricos, o se desactivó con --sin-vecinos)."]
-    else:
-        rows = []
-        for item in r["sensitivity"]:
-            label = " y ".join([_neighbor_label(item)] + [_neighbor_label(o) for o in item.get("also", [])])
-            rows.append([label, item["value"] if not item.get("also") else "ver nota", item["n"],
-                         _pct_bp(item["mean_bp"], 2, True) if item["n"] else "n/d"])
-        lines += _table(["Cambio", "Valor probado", "Operaciones", "Promedio por operación"], rows)
-        positive = sum(1 for s in r["sensitivity"] if s["mean_bp"] is not None and s["mean_bp"] > 0)
-        lines += ["", "Variantes con promedio positivo: {} de {}.".format(positive, len(r["sensitivity"]))]
-        if any(item.get("also") for item in r["sensitivity"]):
-            lines += ["", "> Cuando dos parámetros dan exactamente las mismas operaciones se muestran juntos: en las reglas "
-                      "se combinan (por ejemplo, se multiplican en el umbral de entrada), así que moverlos por separado "
-                      "es lo mismo y cuenta como una sola variante."]
+    lines += _report_neighbors(r)
     lines += ["", "## Cómo se separaron los datos", ""]
     if exam:
         lines += ["- Examen: solo cuentan entradas desde el {} (lo anterior solo sirve para calentar los indicadores). "
@@ -1106,6 +1167,16 @@ def build_report(meta, result, cfg, extra_notes=()):
 # --------------------------------------------------------------------------- the run
 
 
+def _neighbor_value(base, factor):
+    moved = base * Decimal(str(factor))
+    if base == base.to_integral_value():
+        moved = moved.quantize(Decimal(1), rounding=ROUND_HALF_UP)
+        moved = min(moved, base - 1) if factor < 1 else max(moved, base + 1)
+        if moved < 1:
+            return None
+    return format(round(moved, 6).normalize(), "f")
+
+
 def neighbor_specs(spec, cfg):
     """``[(param, direction, value, spec)]``: each numeric ``params`` entry moved by ±pct, one at a time."""
     block = cfg.get("neighbors", {})
@@ -1121,14 +1192,9 @@ def neighbor_specs(spec, cfg):
             continue
         for direction, factor in (("-{:.0f}%".format(block["pct"] * 100), 1 - block["pct"]),
                                   ("+{:.0f}%".format(block["pct"] * 100), 1 + block["pct"])):
-            moved = base * Decimal(str(factor))
-            if base == base.to_integral_value():
-                # A whole-number parameter (bins, bars, counts) stays whole: a neighbour of 48 is 38 or 58, never 38.4.
-                moved = moved.quantize(Decimal(1), rounding=ROUND_HALF_UP)
-                moved = min(moved, base - 1) if factor < 1 else max(moved, base + 1)
-                if moved < 1:
-                    continue
-            value = format(round(moved, 6).normalize(), "f")
+            value = _neighbor_value(base, factor)
+            if value is None:
+                continue
             variant = json.loads(json.dumps(spec))
             variant["params"][name] = value
             out.append((name, direction, value, variant))
@@ -1215,11 +1281,114 @@ def _run_tasks(runner, jobs_list, workers, base, span):
     return results
 
 
+def _exam_window(cfg, from_date, to_date, now_ms, own_history, holdout_ms):
+    if (from_date or to_date) and not own_history:
+        raise GateError("El examen siempre evalúa desde la fecha de corte ({}); --from y --to solo valen en la práctica."
+                        .format(cfg["holdout_from"]))
+    start = _date_ms(from_date) if from_date else holdout_ms
+    end = min(_date_ms(to_date) if to_date else now_ms, now_ms)
+    if end - start < MINUTE_MS:
+        raise GateError("Todavía no hay datos posteriores a la fecha de corte.")
+    return start, end
+
+
+def _practice_window(cfg, from_date, to_date, now_ms, own_history, holdout_ms):
+    start, end = _date_ms(from_date or cfg["default_from"]), holdout_ms
+    if start >= holdout_ms and not own_history:
+        raise GateError("La práctica no puede empezar en o después de la fecha de corte ({}).".format(cfg["holdout_from"]))
+    if to_date:
+        end = _date_ms(to_date)
+        if own_history:
+            end = min(end, now_ms)
+        elif end > holdout_ms:
+            raise GateError("La práctica no puede terminar después de la fecha de corte ({}).".format(cfg["holdout_from"]))
+        if end <= start:
+            raise GateError("La práctica tiene que terminar después de la fecha de inicio.")
+    return start, end
+
+
+def _register_evaluation(db, spec, cfg, kind, start_ms, end_ms, product_list, scope, lab_variants,
+                         neighbors, allow_contaminated, repeatable, book_source):
+    strategy_id = spec["id"]
+    names = [product for product, _ in product_list]
+    key, digest = (check_exam_allowed(db, spec, cfg, allow_contaminated) if kind == "exam" and not repeatable
+                   else version_key_of(spec))
+    family = family_of(strategy_id)
+    contaminated = bool(kind == "exam" and allow_contaminated and not repeatable
+                        and family_exam_on_window(db, spec, cfg) is not None)
+    gate_attempts = attempts_of(db, family) + int(kind == "practice")
+    attempts = gate_attempts + lab_variants
+    identity = provenance.start(cfg, digest, kind, start_ms, end_ms, product_list, family,
+                                gate_attempts, lab_variants, neighbors, book_source)
+    params = {"from": _stamp(start_ms), "to": _stamp(end_ms), "products": names, "holdout_from": cfg["holdout_from"],
+              "config_hash": config_hash(cfg), "neighbors": bool(neighbors), "cost_model": COST_MODEL_VERSION,
+              "evaluation_policy": scope, "provenance": identity, "audit": provenance.audit(identity)}
+    if contaminated:
+        params["contaminated"] = True
+    if strategy_id == strategy_models.QWEN_LIVE_ID and kind == "practice":
+        params["exigencia"] = futures_qwen_exigencia.from_env()
+        params["analista"] = futures_qwen_analista.from_env()
+        params["medicion"] = futures_walkforward.medicion_from_env()
+        live_cfg = futures_qwen_live.apply_overrides(futures_qwen_trader.load_config(futures_qwen_trader.CONFIG_PATH_LIVE))
+        futures_walkforward.register(futures_walkforward.test_spec(live_cfg), medicion=params["medicion"])
+    with db:
+        cur = db.execute(
+            "INSERT INTO runs(strategy_id,family,version_key,code_hash,params,kind,status,progress,phase,started_at,"
+            "updated_at,pid) VALUES(?,?,?,?,?,?,'running',0,?,?,?,?)",
+            (strategy_id, family, key, digest, json.dumps(params, sort_keys=True), kind, PHASES["signals"],
+             _now_ms(), _now_ms(), os.getpid()))
+        run_id = cur.lastrowid
+        if kind == "practice":
+            db.execute("INSERT INTO attempts(family,strategy_id,version_key,run_id,at) VALUES(?,?,?,?,?)",
+                       (family, strategy_id, key, run_id, _now_ms()))
+    with db:
+        db.execute("UPDATE runs SET attempts=? WHERE id=?", (attempts, run_id))
+    meta = {"run_id": run_id, "strategy_id": strategy_id, "family": family, "version_key": key, "kind": kind,
+            "start_ms": start_ms, "end_ms": end_ms, "products": names, "config_hash": config_hash(cfg),
+            "name": spec.get("name") or strategy_id, "gate_attempts": gate_attempts, "lab_variants": lab_variants,
+            "contaminated": contaminated, "evaluation_policy": scope, "provenance": identity}
+    return meta, attempts, digest
+
+
+def _runner_signals(runner, install):
+    previous = {}
+    if install:
+        def stop(_signum, _frame):
+            runner.cancel_requested = True
+        for sig in (signal.SIGTERM, signal.SIGINT):
+            previous[sig] = signal.signal(sig, stop)
+    return previous
+
+
+def _cancelled_evaluation(runner, db, run_id, kind, scope, json_progress):
+    _finish(db, run_id, "cancelled", None, None, "cancelada por el usuario", kind)
+    if json_progress:
+        print(json.dumps({"run_id": run_id, "phase": "cancelada", "percent": runner.percent, "eta_seconds": 0,
+                          "started_at": int(runner.started * 1000), "status": "cancelled"},
+                         ensure_ascii=False), file=runner.stream, flush=True)
+    return {"run_id": run_id, "status": "cancelled", "verdict": None, "report_path": None,
+            "evaluation_policy": scope, **_saved_evidence(db, run_id)}
+
+
+def _evaluation_subject(strategy_id, spec, specs_dir, registry_db, trade_source, model_dirs):
+    if spec is None and strategy_models.is_model(strategy_id):
+        spec, trade_source = strategy_models.model_subject(strategy_id, *model_dirs)
+    repeatable = strategy_models.is_repeatable(strategy_id)
+    if spec is None:
+        spec = find_spec(strategy_id, specs_dir, registry_db)
+    if spec["id"] != strategy_id:
+        raise GateError("el id de la especificación ({}) no coincide con --strategy ({})".format(spec["id"], strategy_id))
+    return spec, trade_source, repeatable
+
+
+def _evaluation_ledger(research_ledger, data_dir):
+    if research_ledger is None and data_dir is None:
+        return DEFAULT_RESEARCH_LEDGER
+    return research_ledger
+
+
 def evaluate(strategy_id, *, kind="practice", from_date=None, to_date=None, products=None, cfg=None, data_dir=None, spec=None,
-             specs_dir=None, provider=None, trade_source=None, jobs=None, neighbors=True, json_progress=False,
-             on_progress=None, now_ms=None, install_signals=False, stream=None, registry_db=None,
-             kronos_dir=None, qwen_exit_dir=None, qwen_live_dir=None, research_ledger=None, allow_contaminated=False,
-             evaluation_mode=evaluation_policy.BASELINE_MODE):
+             specs_dir=None, provider=None, trade_source=None, jobs=None, **options):
     """Runs the gate for one strategy. Returns ``{"run_id", "verdict", "report_path", "status"}``.
 
     ``spec`` / ``provider`` / ``trade_source`` / ``cfg`` are for tests (a spec outside the shipped directory, synthetic
@@ -1228,51 +1397,43 @@ def evaluate(strategy_id, *, kind="practice", from_date=None, to_date=None, prod
     ``allow_contaminated``: lets an exam run although the family already examined this reserve; the run is marked
     (``params.contaminated``), the report warns and the verdict can never be PASA. Raises ``GateError`` for refusals (nothing is written for an exam refusal).
     """
+    neighbors = options.pop("neighbors", True)
+    json_progress = options.pop("json_progress", False)
+    on_progress = options.pop("on_progress", None)
+    now_ms = options.pop("now_ms", None)
+    install_signals = options.pop("install_signals", False)
+    stream = options.pop("stream", None)
+    registry_db = options.pop("registry_db", None)
+    kronos_dir = options.pop("kronos_dir", None)
+    qwen_exit_dir = options.pop("qwen_exit_dir", None)
+    qwen_live_dir = options.pop("qwen_live_dir", None)
+    research_ledger = options.pop("research_ledger", None)
+    allow_contaminated = options.pop("allow_contaminated", False)
+    evaluation_mode = options.pop("evaluation_mode", evaluation_policy.BASELINE_MODE)
+    if options:
+        raise TypeError("Unexpected evaluation options: " + ", ".join(options))
     try:
         evaluation_policy.require_mode(evaluation_mode)
     except ValueError as error:
         raise GateError(str(error))
     scope = evaluation_policy.metadata(recorded_model=strategy_models.is_model(strategy_id))
     cfg = cfg or load_config()
-    if research_ledger is None and data_dir is None:
-        research_ledger = DEFAULT_RESEARCH_LEDGER
+    research_ledger = _evaluation_ledger(research_ledger, data_dir)
     data_dir = data_dir or DATA_DIR
     if kind not in ("practice", "exam"):
         raise GateError("tipo desconocido: {}".format(kind))
-    if spec is None and strategy_models.is_model(strategy_id):
-        spec, trade_source = strategy_models.model_subject(strategy_id, kronos_dir, qwen_exit_dir, qwen_live_dir)
-    repeatable = strategy_models.is_repeatable(strategy_id)
-    if spec is None:
-        spec = find_spec(strategy_id, specs_dir, registry_db)
-    if spec["id"] != strategy_id:
-        raise GateError("el id de la especificación ({}) no coincide con --strategy ({})".format(spec["id"], strategy_id))
+    spec, trade_source, repeatable = _evaluation_subject(
+        strategy_id, spec, specs_dir, registry_db, trade_source, (kronos_dir, qwen_exit_dir, qwen_live_dir))
     holdout_ms = _date_ms(cfg["holdout_from"])
     now_ms = (now_ms if now_ms is not None else _now_ms()) // MINUTE_MS * MINUTE_MS
     # Kronos' stages are tramos of its own recorded operation (after the cut): nothing was ever hidden from it there.
     own_history = strategy_models.has_own_history(strategy_id)
     if kind == "exam":
-        if (from_date or to_date) and not own_history:
-            raise GateError("El examen siempre evalúa desde la fecha de corte ({}); --from y --to solo valen en la práctica."
-                            .format(cfg["holdout_from"]))
-        start_ms, end_ms = (_date_ms(from_date) if from_date else holdout_ms), (_date_ms(to_date) if to_date else now_ms)
-        end_ms = min(end_ms, now_ms)
-        if end_ms - start_ms < MINUTE_MS:
-            raise GateError("Todavía no hay datos posteriores a la fecha de corte.")
+        start_ms, end_ms = _exam_window(cfg, from_date, to_date, now_ms, own_history, holdout_ms)
     else:
-        start_ms, end_ms = _date_ms(from_date or cfg["default_from"]), holdout_ms
-        if start_ms >= holdout_ms and not own_history:
-            raise GateError("La práctica no puede empezar en o después de la fecha de corte ({}).".format(cfg["holdout_from"]))
-        if to_date:  # one market stage: the practice never goes past the holdout cut
-            end_ms = _date_ms(to_date)
-            if own_history:
-                end_ms = min(end_ms, now_ms)
-            elif end_ms > holdout_ms:
-                raise GateError("La práctica no puede terminar después de la fecha de corte ({}).".format(cfg["holdout_from"]))
-            if end_ms <= start_ms:
-                raise GateError("La práctica tiene que terminar después de la fecha de inicio.")
+        start_ms, end_ms = _practice_window(cfg, from_date, to_date, now_ms, own_history, holdout_ms)
     product_list = resolve_products(",".join(products) if isinstance(products, (list, tuple)) else
                                     (products or ",".join(cfg["default_products"])))
-    names = [p for p, _ in product_list]
     # Read the lab ledger BEFORE touching gate.sqlite: an unreadable ledger raises here, so it leaves no orphan
     # 'running' run, no attempt and no consumed exam lock.
     lab_variants = research_trials(family_of(strategy_id), research_ledger)
@@ -1280,64 +1441,20 @@ def evaluate(strategy_id, *, kind="practice", from_date=None, to_date=None, prod
     provider = provider or KrakenProvider(os.path.join(data_dir, "cache"))
     db = open_db(os.path.join(data_dir, DB_NAME))
     try:
-        key, digest = (check_exam_allowed(db, spec, cfg, allow_contaminated) if kind == "exam" and not repeatable
-                       else version_key_of(spec))
-        family = family_of(strategy_id)
-        contaminated = bool(kind == "exam" and allow_contaminated and not repeatable
-                            and family_exam_on_window(db, spec, cfg) is not None)
-        gate_attempts = attempts_of(db, family) + int(kind == "practice")
-        attempts = gate_attempts + lab_variants
-        identity = provenance.start(cfg, digest, kind, start_ms, end_ms, product_list, family,
-                                    gate_attempts, lab_variants, neighbors, trade_source in (None, book_trades))
-        params = {"from": _stamp(start_ms), "to": _stamp(end_ms), "products": names, "holdout_from": cfg["holdout_from"],
-                  "config_hash": config_hash(cfg), "neighbors": bool(neighbors), "cost_model": COST_MODEL_VERSION,
-                  "evaluation_policy": scope, "provenance": identity, "audit": provenance.audit(identity)}
-        if contaminated:
-            params["contaminated"] = True
-        if strategy_id == strategy_models.QWEN_LIVE_ID and kind == "practice":
-            params["exigencia"] = futures_qwen_exigencia.from_env()      # los niveles 0-10 de esta prueba (5 y 5 = paper)
-            params["analista"] = futures_qwen_analista.from_env()        # modo del analista de movimiento (apagado = paper)
-            params["medicion"] = futures_walkforward.medicion_from_env()  # «honesta» (fórmulas reajustadas cada trimestre) o «vigente»
-            live_cfg = futures_qwen_live.apply_overrides(futures_qwen_trader.load_config(futures_qwen_trader.CONFIG_PATH_LIVE))
-            futures_walkforward.register(futures_walkforward.test_spec(live_cfg), medicion=params["medicion"])
-        with db:
-            cur = db.execute(
-                "INSERT INTO runs(strategy_id,family,version_key,code_hash,params,kind,status,progress,phase,started_at,"
-                "updated_at,pid) VALUES(?,?,?,?,?,?,'running',0,?,?,?,?)",
-                (strategy_id, family, key, digest, json.dumps(params, sort_keys=True), kind, PHASES["signals"],
-                 _now_ms(), _now_ms(), os.getpid()))
-            run_id = cur.lastrowid
-            if kind == "practice":
-                db.execute("INSERT INTO attempts(family,strategy_id,version_key,run_id,at) VALUES(?,?,?,?,?)",
-                           (family, strategy_id, key, run_id, _now_ms()))
-        with db:
-            db.execute("UPDATE runs SET attempts=? WHERE id=?", (attempts, run_id))
+        meta, attempts, digest = _register_evaluation(
+            db, spec, cfg, kind, start_ms, end_ms, product_list, scope, lab_variants, neighbors, allow_contaminated,
+            repeatable, trade_source in (None, book_trades))
+        run_id = meta["run_id"]
         runner = Runner(db, run_id, data_dir, json_progress=json_progress, on_progress=on_progress, stream=stream)
-        previous = {}
-        if install_signals:
-            def stop(signum, frame):
-                runner.cancel_requested = True
-            for sig in (signal.SIGTERM, signal.SIGINT):
-                previous[sig] = signal.signal(sig, stop)
-        meta = {"run_id": run_id, "strategy_id": strategy_id, "family": family, "version_key": key, "kind": kind,
-                "start_ms": start_ms, "end_ms": end_ms, "products": names, "config_hash": config_hash(cfg),
-                "name": spec.get("name") or strategy_id,
-                "gate_attempts": gate_attempts, "lab_variants": lab_variants, "contaminated": contaminated,
-                "evaluation_policy": scope, "provenance": identity}
+        previous = _runner_signals(runner, install_signals)
         started = time.time()
         try:
             outcome = _execute(runner, db, spec, cfg, meta, product_list, provider, trade_source, jobs, neighbors,
-                               attempts, data_dir, digest, holdout_ms)
+                               attempts, data_dir, digest)
             meta["seconds"] = time.time() - started
             return outcome
         except Cancelled:
-            _finish(db, run_id, "cancelled", None, None, "cancelada por el usuario", kind)
-            if json_progress:
-                print(json.dumps({"run_id": run_id, "phase": "cancelada", "percent": runner.percent, "eta_seconds": 0,
-                                  "started_at": int(runner.started * 1000), "status": "cancelled"},
-                                 ensure_ascii=False), file=runner.stream, flush=True)
-            return {"run_id": run_id, "status": "cancelled", "verdict": None, "report_path": None,
-                    "evaluation_policy": scope, **_saved_evidence(db, run_id)}
+            return _cancelled_evaluation(runner, db, run_id, kind, scope, json_progress)
         except BaseException as error:
             _finish(db, run_id, "failed", None, None, "{}: {}".format(type(error).__name__, error), kind)
             raise
@@ -1436,36 +1553,35 @@ def write_artifact(data_dir, meta, cfg, spec, digest, trades, open_at_end, resul
 
 
 def _saved_evidence(db, run_id):
-    params = json.loads(db.execute("SELECT params FROM runs WHERE id=?", (run_id,)).fetchone()[0])
+    params = json.loads(db.execute(RUN_PARAMS_QUERY, (run_id,)).fetchone()[0])
     return {key: params.get(key) for key in ("provenance", "audit")}
 
 
 def _finish(db, run_id, status, verdict, report_path, error, kind):
     if status in ("failed", "cancelled"):
-        params = json.loads(db.execute("SELECT params FROM runs WHERE id=?", (run_id,)).fetchone()[0])
+        params = json.loads(db.execute(RUN_PARAMS_QUERY, (run_id,)).fetchone()[0])
         identity = provenance.stored(params.get("provenance"))
         if identity["state"] == "pending":
             identity = provenance.finish(identity, [])
         params.update(provenance=identity, audit=provenance.audit(identity, "unavailable", reason="run_" + status))
         with db:
-            db.execute("UPDATE runs SET params=? WHERE id=?", (json.dumps(params, sort_keys=True), run_id))
+            db.execute(UPDATE_RUN_PARAMS, (json.dumps(params, sort_keys=True), run_id))
     with db:
         db.execute("UPDATE runs SET status=?, verdict=?, report_path=?, error=?, finished_at=?, updated_at=?, "
                    "phase=CASE WHEN ?='cancelled' THEN 'cancelada' WHEN ?='failed' THEN 'falló' ELSE 'terminada' END, "
                    "eta_s=0, progress=CASE WHEN ?='done' THEN 100 ELSE progress END WHERE id=?",
                    (status, verdict, report_path, error, _now_ms(), _now_ms(), status, status, status, run_id))
         if kind == "exam":
-            label = verdict if status == "done" else ("cancelada después de leer el corte" if status == "cancelled"
-                                                      else "falló después de leer el corte")
+            if status == "done":
+                label = verdict
+            elif status == "cancelled":
+                label = "cancelada después de leer el corte"
+            else:
+                label = "falló después de leer el corte"
             db.execute("UPDATE exam_locks SET status=?, verdict=? WHERE run_id=?", (status, verdict or label, run_id))
 
 
-def _execute(runner, db, spec, cfg, meta, product_list, provider, trade_source, jobs, neighbors, attempts, data_dir,
-             digest, holdout_ms):
-    kind, start_ms, end_ms, run_id = meta["kind"], meta["start_ms"], meta["end_ms"], meta["run_id"]
-    names = [p for p, _ in product_list]
-    workers = jobs or max(1, min(os.cpu_count() or 1, 8))
-    # --- download (the only network use). A failure here has read no outcome: an exam keeps its lock free.
+def _download_funding(runner, product_list, provider, start_ms, end_ms):
     runner.set_phase("signals", "descargando velas")
     funding = {}
     for i, (product, _) in enumerate(product_list):
@@ -1476,19 +1592,52 @@ def _execute(runner, db, spec, cfg, meta, product_list, provider, trade_source, 
             funding[product] = [(s, r) for s, r in provider.funding(product) if s < end_ms]
         except HistoryError:
             funding[product] = []
-    # --- the exam's lock: taken right before the first outcome is computed.
+    return funding
+
+
+def _take_exam_lock(db, spec, cfg, meta, digest):
+    verb = "INSERT OR REPLACE" if strategy_models.is_repeatable(spec["id"]) else "INSERT"
+    try:
+        with db:
+            db.execute(verb + " INTO exam_locks(strategy_id,version_key,code_hash,holdout_from,run_id,locked_at,status)"
+                       " VALUES(?,?,?,?,?,?,'running')", (spec["id"], meta["version_key"], digest,
+                                                          cfg["holdout_from"], meta["run_id"], _now_ms()))
+            db.execute("UPDATE runs SET holdout_read=1 WHERE id=?", (meta["run_id"],))
+    except sqlite3.IntegrityError:
+        check_exam_allowed(db, spec, cfg, True)
+        raise GateError("El examen final de esta versión ya se rindió.")
+
+
+def _simulation_neighbors(runner, spec, cfg, product_list, provider, funding, trade_source, workers,
+                          neighbors, start_ms, end_ms):
+    variants = neighbor_specs(spec, cfg) if neighbors and trade_source is None else []
+    if not variants:
+        return None, []
+    njobs, tags = [], []
+    for name, direction, value, variant in variants:
+        for product, tick in product_list:
+            njobs.append({"index": len(njobs), "label": "{} {}".format(name, direction), "spec": variant,
+                          "product": product, "tick": tick, "start_ms": start_ms, "end_ms": end_ms,
+                          "provider": provider, "funding": funding[product], "trade_source": None,
+                          "want_closes": False})
+        tags.append((name, direction, value))
+    nres = _run_tasks(runner, njobs, workers, PHASE_START["simulating"], PHASE_START["random"] - PHASE_START["simulating"] - 4)
+    sens = []
+    per = len(product_list)
+    for k, (name, direction, value) in enumerate(tags):
+        group = [trade for result in nres[k * per:(k + 1) * per] for trade in result["trades"]]
+        sens.append({"param": name, "direction": direction, "value": value, "trades": group})
+    return sens, nres
+
+
+def _execute(runner, db, spec, cfg, meta, product_list, provider, trade_source, jobs, neighbors, attempts, data_dir,
+             digest):
+    kind, start_ms, end_ms, run_id = meta["kind"], meta["start_ms"], meta["end_ms"], meta["run_id"]
+    names = [product for product, _ in product_list]
+    workers = jobs or max(1, min(os.cpu_count() or 1, 8))
+    funding = _download_funding(runner, product_list, provider, start_ms, end_ms)
     if kind == "exam":
-        # Qwen and Kronos repeat the exam: the newest exam replaces the previous record (every run stays in ``runs``).
-        verb = "INSERT OR REPLACE" if strategy_models.is_repeatable(spec["id"]) else "INSERT"
-        try:
-            with db:
-                db.execute(verb + " INTO exam_locks(strategy_id,version_key,code_hash,holdout_from,run_id,locked_at,status)"
-                           " VALUES(?,?,?,?,?,?,'running')", (spec["id"], meta["version_key"], digest,
-                                                              cfg["holdout_from"], run_id, _now_ms()))
-                db.execute("UPDATE runs SET holdout_read=1 WHERE id=?", (run_id,))
-        except sqlite3.IntegrityError:
-            check_exam_allowed(db, spec, cfg, True)
-            raise GateError("El examen final de esta versión ya se rindió.")
+        _take_exam_lock(db, spec, cfg, meta, digest)
     runner.update(DOWNLOAD_SHARE, force=True, detail="calculando operaciones")
     span = PHASE_START["simulating"] - DOWNLOAD_SHARE
     main_jobs = [{"index": i, "label": "base", "spec": spec, "product": p, "tick": t, "start_ms": start_ms,
@@ -1502,23 +1651,8 @@ def _execute(runner, db, spec, cfg, meta, product_list, provider, trade_source, 
     open_at_end = sum(r["open_at_end"] for r in results)
     # --- parameter neighbors (informational)
     runner.set_phase("simulating", "vecinos de parámetros")
-    sens, nres = None, []
-    variants = neighbor_specs(spec, cfg) if neighbors and trade_source is None else []
-    if variants:
-        njobs, tags = [], []
-        for name, direction, value, variant in variants:
-            for product, tick in product_list:
-                njobs.append({"index": len(njobs), "label": "{} {}".format(name, direction), "spec": variant,
-                              "product": product, "tick": tick, "start_ms": start_ms, "end_ms": end_ms,
-                              "provider": provider, "funding": funding[product], "trade_source": None,
-                              "want_closes": False})
-            tags.append((name, direction, value))
-        nres = _run_tasks(runner, njobs, workers, PHASE_START["simulating"], PHASE_START["random"] - PHASE_START["simulating"] - 4)
-        sens = []
-        per = len(product_list)
-        for k, (name, direction, value) in enumerate(tags):
-            group = [t for r in nres[k * per:(k + 1) * per] for t in r["trades"]]
-            sens.append({"param": name, "direction": direction, "value": value, "trades": group})
+    sens, nres = _simulation_neighbors(runner, spec, cfg, product_list, provider, funding, trade_source, workers,
+                                       neighbors, start_ms, end_ms)
     runner.update(PHASE_START["random"] - 2, force=True, detail="métricas")
     # --- random-entry draws and the judgement
     runner.set_phase("random", "{} sorteos".format(cfg["random_draws"]))
@@ -1535,7 +1669,7 @@ def _execute(runner, db, spec, cfg, meta, product_list, provider, trade_source, 
     result["accounting"] = accounting.summarize(trades,
         minimum_complete_share=cfg["rules"]["min_funding_complete_share"], open_at_end=open_at_end)
     # Persist independently of artifact availability; the API never recalculates historical accounting.
-    params = json.loads(db.execute("SELECT params FROM runs WHERE id=?", (run_id,)).fetchone()[0])
+    params = json.loads(db.execute(RUN_PARAMS_QUERY, (run_id,)).fetchone()[0])
     params["accounting"] = result["accounting"]
     params["temporal"] = result["temporal"]
     if meta["strategy_id"] == strategy_models.QWEN_LIVE_ID and kind == "practice":
@@ -1544,7 +1678,7 @@ def _execute(runner, db, spec, cfg, meta, product_list, provider, trade_source, 
             medicion=params.get("medicion") or futures_walkforward.DEFAULT_MEDICION, trial_count=futures_walkforward.trials())
     params.update(provenance=result["provenance"], audit=result["audit"])
     with db:
-        db.execute("UPDATE runs SET params=? WHERE id=?", (json.dumps(params, sort_keys=True), run_id))
+        db.execute(UPDATE_RUN_PARAMS, (json.dumps(params, sort_keys=True), run_id))
     # --- report
     runner.set_phase("report", "escribiendo el informe")
     meta["open_at_end"] = open_at_end
@@ -1567,7 +1701,7 @@ def _execute(runner, db, spec, cfg, meta, product_list, provider, trade_source, 
         print("aviso: no se guardaron las operaciones de la corrida {}: {}".format(run_id, error), file=sys.stderr)
     params["audit"] = result["audit"]
     with db:
-        db.execute("UPDATE runs SET params=? WHERE id=?", (json.dumps(params, sort_keys=True), run_id))
+        db.execute(UPDATE_RUN_PARAMS, (json.dumps(params, sort_keys=True), run_id))
     report = build_report(meta, result, cfg, notes)
     reports = os.path.join(data_dir, "reports")
     os.makedirs(reports, exist_ok=True)
@@ -1591,6 +1725,80 @@ def _execute(runner, db, spec, cfg, meta, product_list, provider, trade_source, 
 # --------------------------------------------------------------------------- CLI
 
 
+def _remember_exam_tombstones(db, strategy_id, locks, counts):
+    for lock in locks:
+        label = lock["verdict"] or MISSING_VERDICT.format(lock["status"])
+        counts["tombstones"] += db.execute(
+            "INSERT OR IGNORE INTO exam_tombstones VALUES(?,?,?)",
+            (lock["code_hash"], _stamp(lock["locked_at"]), label)).rowcount
+        db.execute("INSERT OR IGNORE INTO exam_window_tombstones VALUES(?,?,?,?,?)",
+                   (family_hash(family_of(strategy_id)), lock["holdout_from"], lock["code_hash"],
+                    _stamp(lock["locked_at"]), label))
+
+
+def _remember_attempt_counts(db, strategy_id):
+    for family, count in db.execute("SELECT family, COUNT(*) FROM attempts WHERE strategy_id=? GROUP BY family",
+                                    (strategy_id,)).fetchall():
+        db.execute("INSERT INTO attempt_counts VALUES(?,?) ON CONFLICT(family_hash) DO UPDATE SET n=n+?",
+                   (family_hash(family), count, count))
+
+
+def _purge_gate_records(db, strategy_id, keep_tombstone, counts):
+    for row in db.execute("SELECT id, pid FROM runs WHERE strategy_id=? AND status='running'", (strategy_id,)):
+        try:
+            os.kill(row["pid"], 0)
+        except (OSError, TypeError):
+            continue
+        raise GateError("Hay una prueba en curso de esta estrategia: cancelala antes de borrarla.")
+    runs = db.execute("SELECT id, report_path FROM runs WHERE strategy_id=?", (strategy_id,)).fetchall()
+    locks = db.execute("SELECT code_hash, locked_at, status, verdict, holdout_from FROM exam_locks WHERE strategy_id=?",
+                       (strategy_id,)).fetchall()
+    with db:
+        if keep_tombstone:
+            _remember_exam_tombstones(db, strategy_id, locks, counts)
+        if strategy_purge.KEEP_ATTEMPT_COUNTER:
+            _remember_attempt_counts(db, strategy_id)
+        counts["attempts"] = db.execute("DELETE FROM attempts WHERE strategy_id=?", (strategy_id,)).rowcount
+        counts["exam_locks"] = db.execute("DELETE FROM exam_locks WHERE strategy_id=?", (strategy_id,)).rowcount
+        counts["runs"] = db.execute("DELETE FROM runs WHERE strategy_id=?", (strategy_id,)).rowcount
+    return runs
+
+
+def _purge_gate_files(runs, data_dir, counts):
+    for row in runs:
+        for candidate, key in ((os.path.join(data_dir, "reports", "{}.md".format(row["id"])), "reports"),
+                               (os.path.join(data_dir, "cancel", str(row["id"])), "cancel_flags")):
+            if os.path.isfile(candidate):
+                os.remove(candidate)
+                counts[key] += 1
+        stored = os.path.join(data_dir, ARTIFACTS_DIR, str(row["id"]))
+        if os.path.isdir(stored):
+            shutil.rmtree(stored, ignore_errors=True)
+            counts["artifacts"] += 1
+        recorded = row["report_path"]
+        if recorded and os.path.isfile(recorded) and os.path.realpath(recorded).startswith(
+                os.path.realpath(os.path.join(data_dir, "reports")) + os.sep):
+            os.remove(recorded)
+            counts["reports"] += 1
+
+
+def _purge_launch_logs(strategy_id, data_dir, counts):
+    logs = os.path.join(data_dir, "logs")
+    if not os.path.isdir(logs):
+        return
+    needle = strategy_id.encode("utf-8")
+    for name in os.listdir(logs):
+        full = os.path.join(logs, name)
+        try:
+            with open(full, "rb") as handle:
+                found = needle in handle.read()
+            if found:
+                os.remove(full)
+                counts["logs"] += 1
+        except OSError:
+            continue
+
+
 def purge_strategy(strategy_id, data_dir=None, keep_tombstone=None):
     """Deletes everything the gate holds about ``strategy_id`` (the gate is the single writer of ``gate.sqlite``).
 
@@ -1607,65 +1815,12 @@ def purge_strategy(strategy_id, data_dir=None, keep_tombstone=None):
     if os.path.exists(path):
         db = open_db(path)
         try:
-            for row in db.execute("SELECT id, pid FROM runs WHERE strategy_id=? AND status='running'", (strategy_id,)):
-                try:
-                    os.kill(row["pid"], 0)
-                except (OSError, TypeError):
-                    continue
-                raise GateError("Hay una prueba en curso de esta estrategia: cancelala antes de borrarla.")
-            runs = db.execute("SELECT id, report_path FROM runs WHERE strategy_id=?", (strategy_id,)).fetchall()
-            locks = db.execute("SELECT code_hash, locked_at, status, verdict, holdout_from FROM exam_locks "
-                               "WHERE strategy_id=?",
-                               (strategy_id,)).fetchall()
-            with db:
-                if keep_tombstone:
-                    for lock in locks:
-                        label = lock["verdict"] or "sin veredicto ({})".format(lock["status"])
-                        counts["tombstones"] += db.execute(
-                            "INSERT OR IGNORE INTO exam_tombstones VALUES(?,?,?)",
-                            (lock["code_hash"], _stamp(lock["locked_at"]), label)).rowcount
-                        db.execute("INSERT OR IGNORE INTO exam_window_tombstones VALUES(?,?,?,?,?)",
-                                   (family_hash(family_of(strategy_id)), lock["holdout_from"], lock["code_hash"],
-                                    _stamp(lock["locked_at"]), label))
-                if strategy_purge.KEEP_ATTEMPT_COUNTER:
-                    for family, n in db.execute("SELECT family, COUNT(*) FROM attempts WHERE strategy_id=? GROUP BY family",
-                                                (strategy_id,)).fetchall():
-                        db.execute("INSERT INTO attempt_counts VALUES(?,?) ON CONFLICT(family_hash) DO UPDATE SET n=n+?",
-                                   (family_hash(family), n, n))
-                counts["attempts"] = db.execute("DELETE FROM attempts WHERE strategy_id=?", (strategy_id,)).rowcount
-                counts["exam_locks"] = db.execute("DELETE FROM exam_locks WHERE strategy_id=?", (strategy_id,)).rowcount
-                counts["runs"] = db.execute("DELETE FROM runs WHERE strategy_id=?", (strategy_id,)).rowcount
-            for row in runs:
-                for candidate, key in ((os.path.join(data_dir, "reports", "{}.md".format(row["id"])), "reports"),
-                                       (os.path.join(data_dir, "cancel", str(row["id"])), "cancel_flags")):
-                    if os.path.isfile(candidate):
-                        os.remove(candidate)
-                        counts[key] += 1
-                stored = os.path.join(data_dir, ARTIFACTS_DIR, str(row["id"]))
-                if os.path.isdir(stored):
-                    shutil.rmtree(stored, ignore_errors=True)
-                    counts["artifacts"] += 1
-                recorded = row["report_path"]
-                if recorded and os.path.isfile(recorded) and os.path.realpath(recorded).startswith(
-                        os.path.realpath(os.path.join(data_dir, "reports")) + os.sep):
-                    os.remove(recorded)
-                    counts["reports"] += 1
+            runs = _purge_gate_records(db, strategy_id, keep_tombstone, counts)
+            _purge_gate_files(runs, data_dir, counts)
             db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
         finally:
             db.close()
-    logs = os.path.join(data_dir, "logs")
-    if os.path.isdir(logs):
-        needle = strategy_id.encode("utf-8")
-        for name in os.listdir(logs):
-            full = os.path.join(logs, name)
-            try:
-                with open(full, "rb") as handle:
-                    found = needle in handle.read()
-                if found:
-                    os.remove(full)
-                    counts["logs"] += 1
-            except OSError:
-                continue
+    _purge_launch_logs(strategy_id, data_dir, counts)
     return counts
 
 

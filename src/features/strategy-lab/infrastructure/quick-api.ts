@@ -107,7 +107,7 @@ export type ExigenciaLevels = {
   medicion?: Medicion
   /** What decides the entries of the test: the formula (paper) or ETH's rebound after a fall of 5 % in 1 h. */
   entrada?: Entrada
-  /** Screen only (never sent): 100 USD per trade, or the whole account (1.000 USD plus what was won or lost). */
+  /** Executed by the server: fixed notional or the whole available account, with entry fees reserved. */
   cuenta?: Cuenta
 }
 
@@ -168,6 +168,13 @@ export type QuickTrade = {
   salida_ms: number
   neto_bp: number
   motivo: string
+  pnl_usd?: string
+  notional_usd?: string
+  entrada_px?: string
+  salida_px?: string
+  funding_usd?: string
+  funding_status?: string
+  funding_model?: string
   /** The maestro at the entry (−2…+2), whether the portero agreed, and whether news enabled it. */
   maestro?: number
   portero?: boolean
@@ -190,6 +197,12 @@ export type QuickTrade = {
 
 /** The formula alone (no Qwen) over every wake of the exam range, one position per product, as it operates live. */
 export type QuickFormula = {
+  execution?: 'terminal.v2'
+  cuenta?: Cuenta
+  capital_inicial_usd?: string
+  saldo_final_usd?: string
+  news_evaluated?: boolean
+  funding_complete?: boolean | null
   /** What decided the entries (absent in results made before: the formula) and, for a rebound, the rule in words. */
   entrada?: Entrada
   regla?: string
@@ -211,12 +224,11 @@ export type QuickFormula = {
   /** Hourly closes `[t_ms, close]` by product over the period: what the price really did. */
   mercado?: Record<string, Array<[number, number]>>
   formula: QuickOperationStats
-  maestro_fuerte: QuickOperationStats
-  siempre_largo: QuickOperationStats
-  siempre_corto: QuickOperationStats
-  curvas: Record<
-    'formula' | 'maestro_fuerte' | 'siempre_largo' | 'siempre_corto',
-    QuickTrade[]
+  maestro_fuerte?: QuickOperationStats
+  siempre_largo?: QuickOperationStats
+  siempre_corto?: QuickOperationStats
+  curvas: { formula: QuickTrade[] } & Partial<
+    Record<'maestro_fuerte' | 'siempre_largo' | 'siempre_corto', QuickTrade[]>
   >
 }
 
@@ -255,6 +267,8 @@ export type QuickVariant = {
   summary?: QuickSummary | null
   error?: string | null
   started_ms?: number | null
+  enabled?: boolean
+  disabled_reason?: string | null
 }
 
 export type QuickState = {
@@ -299,13 +313,6 @@ async function failure(response: Response): Promise<Error> {
 const url = (strategyId: string) =>
   `${STRATEGIES_API_BASE}/strategies/${encodeURIComponent(strategyId)}/quick`
 
-/** The levels the server knows: the account size is only how the screen adds up the same operations. */
-const wire = (levels: ExigenciaLevels) => {
-  const out = { ...levels }
-  delete out.cuenta
-  return out
-}
-
 export const quickApi: QuickApi = {
   async status(strategyId) {
     const response = await fetch(url(strategyId))
@@ -318,7 +325,7 @@ export const quickApi: QuickApi = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         ...(variant ? { variant } : {}),
-        ...(exigencia ? { exigencia: wire(exigencia) } : {}),
+        ...(exigencia ? { exigencia } : {}),
       }),
     })
     if (!response.ok) throw await failure(response)

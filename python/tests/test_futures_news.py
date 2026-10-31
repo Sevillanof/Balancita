@@ -543,6 +543,29 @@ class FetcherTests(unittest.TestCase):
 
 
 class IngestTests(ServiceBase):
+    def test_slow_sources_record_actual_receipt_and_durable_poll_outcomes(self):
+        original = self.fetcher.fetch
+
+        def delayed(url, **kwargs):
+            self.clock.now += 2 * MINUTE
+            return original(url, **kwargs)
+
+        self.fetcher.fetch = delayed
+        service = self.service()
+        service.poll()
+        self.assertEqual({row["received_at"] for row in self.rows()}, {NOW + 2 * MINUTE})
+        [poll] = service.store.db.execute(
+            "SELECT started_at_ms,finished_at_ms,status FROM paper_futures_news_polls").fetchall()
+        self.assertEqual(tuple(poll), (NOW, NOW + 2 * MINUTE, "ok"))
+
+    def test_failed_fetch_is_recorded_even_when_no_headline_is_received(self):
+        self.fetcher.errors[SRC_A["url"]] = n.FetchError("HTTP 403")
+        service = self.service()
+        service.poll()
+        [poll] = service.store.db.execute(
+            "SELECT status,detail FROM paper_futures_news_polls").fetchall()
+        self.assertEqual(tuple(poll), ("error", "HTTP 403"))
+
     def test_poll_stores_each_item_with_its_received_time(self):
         service = self.service()
         result = service.poll()

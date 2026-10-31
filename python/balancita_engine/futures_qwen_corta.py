@@ -1,5 +1,8 @@
 """La FICHA CORTA de Qwen en vivo (versión 8): cuatro renglones y las reglas, nada más.
 
+La descripción histórica de v8 se conserva abajo. Con ``portero_autonomo`` o ``priority_v2`` no se carga ni se consulta
+el portero dependiente: el nuevo portero recibe solo hechos de mercado y da LARGO/CORTO/ESPERAR, o queda sin voto.
+
 Qwen ya no lee los ocho renglones de números de la ficha (``futures_qwen_ficha``): dos fórmulas fijas en CPU los leen por él y
 le dicen el resultado en una línea cada una (más el producto y la hora UTC como contexto), y él supervisa y decide entrar y salir.
 
@@ -69,25 +72,35 @@ def quarter_spec(spec, t_ms=None):
                 portero=os.path.join(folder, pair["portero"]), portero_hash=pair["portero_hash"])
 
 
-def formulas(cfg, t_ms=None):
-    """``(maestro, portero)`` de la config, cargados una vez por archivo y verificados contra los hashes declarados. Con
-    ``corta.pares`` (tabla de fórmulas trimestrales) elige el par del trimestre de ``t_ms``."""
-    spec = quarter_spec(cfg.get("corta") or {}, t_ms)
-    for key in ("maestro", "maestro_hash", "portero", "portero_hash"):
+def _verified_formula(spec, name, loader, hasher):
+    for key in (name, name + "_hash"):
         if not spec.get(key):
             raise qt.TraderError("la ficha corta necesita corta.{} en la config".format(key))
+    path = spec[name] if os.path.isabs(spec[name]) else os.path.join(qt.ROOT, "config", spec[name])
+    cached = _LOADED.get(path)
+    if cached is None:
+        cached = _LOADED[path] = loader(path)
+    got = hasher(cached)
+    if not got.startswith(spec[name + "_hash"]):
+        raise qt.TraderError("{}: el archivo {} tiene hash {}, la config declara {}: es otra fórmula, hace falta otra versión".format(
+            name, path, got[:12], spec[name + "_hash"]))
+    return cached
+
+
+def formulas(cfg, t_ms=None):
+    """``(maestro, portero_legacy_o_None)`` verificados por hash; en modo autónomo nunca carga el portero viejo.
+    ``corta.pares`` elige el maestro/par del trimestre de ``t_ms``."""
+    spec = quarter_spec(cfg.get("corta") or {}, t_ms)
+    autonomous = spec.get("portero_autonomo") is not None or noticias.priority_enabled(cfg)
     out = []
     for name, loader, hasher in (("maestro", maestro.load, maestro.teacher_hash), ("portero", portero.load, portero.portero_hash)):
-        path = spec[name] if os.path.isabs(spec[name]) else os.path.join(qt.ROOT, "config", spec[name])
-        cached = _LOADED.get(path)
-        if cached is None:
-            cached = _LOADED[path] = loader(path)
-        got = hasher(cached)
-        if not got.startswith(spec[name + "_hash"]):
-            raise qt.TraderError("{}: el archivo {} tiene hash {}, la config declara {}: es otra fórmula, hace falta otra versión".format(
-                name, path, got[:12], spec[name + "_hash"]))
-        out.append(cached)
+        if name == "portero" and autonomous:
+            out.append(None)
+            continue
+        out.append(_verified_formula(spec, name, loader, hasher))
     if cfg.get("exigencia"):                            # solo en las pruebas de /Estrategias: otros umbrales, la fórmula es la misma
+        if autonomous:
+            raise qt.TraderError("La exigencia del portero legacy no se aplica a un voto autónomo.")
         return exigencia.apply(out[0], out[1], exigencia.levels(**cfg["exigencia"]))
     return tuple(out)
 
@@ -111,17 +124,35 @@ def check(trader, t_ms):
         raise qt.WakeSkipped("datos_incompletos", "faltan " + " y ".join(gaps))
 
 
+def _keeper_vote(trader, keeper, row, facts, score, t_ms):
+    spec = (trader.cfg.get("corta") or {}).get("portero_autonomo")
+    if spec is not None:
+        from . import futures_qwen_independent_gate
+        vote = futures_qwen_independent_gate.read(spec, maestro.flat_facts(facts), at_ms=t_ms)
+        return vote["side"] != 0, vote["support"][vote["chosen"]], vote
+    if keeper is not None:
+        yes, support = portero.verdict(keeper, row, score)
+        return yes, support, None
+    return None, None, None
+
+
 def readings(trader, t_ms, f=None):
     """Los números de la foto: hechos aplanados, puntaje y veredicto del maestro, probabilidad y veredicto del portero, régimen.
     ``f``: los hechos de la ficha ya calculados (``ficha.facts``), para no repetirlos."""
     teacher, keeper = formulas(trader.cfg, t_ms)
     f = ficha.facts(trader, t_ms) if f is None else f
-    extra = maestro.uses_extra_eth(teacher) or portero.uses_extra_eth(keeper)
+    extra = maestro.uses_extra_eth(teacher) or (keeper is not None and portero.uses_extra_eth(keeper))
     row = maestro.flat_facts(f, extra_eth=extra)
     s = maestro.score(teacher, row)
     v = maestro.verdict_of(teacher, s)
-    yes, p = portero.verdict(keeper, row, s)
-    news_yes, news_info = noticias.verdict(getattr(trader, "news", None), t_ms, -1 if s < 0 else 1)
+    yes, p, independent = _keeper_vote(trader, keeper, row, f, s, t_ms)
+    feed = getattr(trader, "news", None)
+    if noticias.priority_enabled(trader.cfg):
+        priority = feed.priority_at(t_ms) if feed is not None else {"status": "unavailable", "reason": "sin fuente"}
+        news_yes = priority["status"] == "signal"
+        news_info = {"disponible": bool(feed is not None and feed.available), "priority": priority}
+    else:
+        news_yes, news_info = noticias.verdict(feed, t_ms, -1 if s < 0 else 1)
     r24, r7 = float(f["range24"]), float(f["range7"])
     ratio = r24 / r7 if r7 > 0 else 1.0
     if ratio >= VOL_HIGH:
@@ -131,6 +162,7 @@ def readings(trader, t_ms, f=None):
     else:
         regime = "NORMAL"
     return {"hechos": row, "puntaje": s, "flojo": teacher["umbrales"]["flojo"], "veredicto": v, "portero_p": p, "portero_si": yes,
+            "portero_direccion": None if independent is None else independent["side"], "portero_autonomo": independent,
             "noticias_si": news_yes, "noticias": news_info, "vol_ratio": ratio, "volatilidad": regime,
             "sigma24": trader._sigma5() * math.sqrt(qt.H24), "range24": r24, "range7": r7}
 
@@ -140,6 +172,10 @@ def _flat_action(r):
     if abs(v) < 2:
         return "ESPERAR", "el maestro no está fuerte"
     direction = "LARGO" if v > 0 else "CORTO"
+    if r.get("portero_direccion") is not None:
+        if r["portero_direccion"] * v <= 0:
+            return "ESPERAR", "maestro y portero autónomo no coinciden"
+        return direction, "maestro y portero autónomo coinciden"
     if r.get("portero_si"):
         return direction, "maestro fuerte y portero a favor"
     if r.get("noticias_si"):
@@ -147,22 +183,26 @@ def _flat_action(r):
     return "ESPERAR", "el portero dice que no conviene"
 
 
-def formula_action(r, side):
+def formula_action(r, side, *, held_min=0, exhaust_min=None):
     """Lo que deciden las fórmulas (versión 9). ``r``: ``readings``. ``side``: 1 / -1 si hay posición abierta (largo / corto),
     ``None`` si no. Sin posición: ``LARGO`` / ``CORTO`` cuando el maestro dice FUERTE y el portero o el analista de noticias dicen
-    que conviene entrar (del lado del maestro); si no, ``ESPERAR``. Con posición: ``CERRAR`` cuando el maestro se da vuelta en contra,
-    al menos flojo; si no, ``MANTENER``. Sin límite de tiempo: una operación dura lo que dure el maestro. Devuelve ``(acción, motivo)``."""
+    que conviene entrar (del lado del maestro); si no, ``ESPERAR``. Con posición: ``CERRAR`` cuando el maestro se da vuelta en contra
+    (al menos flojo) o cuando pasaron ``exhaust_min`` minutos y el maestro ya perdió fuerza a favor (``side * puntaje <= 0``);
+    si no, ``MANTENER``. Devuelve ``(acción, motivo)``."""
     if side is None:
         return _flat_action(r)
     if side * r["veredicto"] <= -1:
         return "CERRAR", "el maestro se dio vuelta en contra"
+    if exhaust_min is not None and held_min >= exhaust_min and side * r.get("puntaje", r["veredicto"]) <= 0:
+        return "CERRAR", "pasaron {} h y el maestro perdió fuerza a favor".format(int(exhaust_min // 60))
     return "MANTENER", "el maestro no se dio vuelta"
 
 
 def formula_json(r, why):
     """Lo que las fórmulas vieron y por qué decidieron, para guardarlo junto a la decisión (y al ejemplo de entrenamiento)."""
-    return {"maestro": r["veredicto"], "puntaje": round(r["puntaje"], 6), "portero_si": bool(r["portero_si"]),
-            "portero_p": round(r["portero_p"], 6), "noticias_si": bool(r.get("noticias_si")),
+    return {"maestro": r["veredicto"], "puntaje": round(r["puntaje"], 6), "portero_si": r["portero_si"],
+            "portero_p": None if r["portero_p"] is None else round(r["portero_p"], 6), "noticias_si": bool(r.get("noticias_si")),
+            "portero_autonomo": r.get("portero_autonomo"),
             "noticias": r.get("noticias"), "volatilidad": r["volatilidad"], "motivo": why}
 
 
@@ -178,11 +218,19 @@ def lines(trader, t_ms, sg, reasons):
                    "n/d" if hit is None else qt.es(hit * 100, 0), WORDS[v], qt.es(s, 2, True),
                    qt.es(teacher["umbrales"]["flojo"], 2), qt.es(teacher["umbrales"]["fuerte"], 2)))
     in_position = trader.position is not None
+    if r.get("portero_autonomo") is not None:
+        keeper_line = "2. Portero autónomo: {} a 12 h; apoyo de clasificación {}, no probabilidad de ganancia.".format(
+            r["portero_autonomo"]["chosen"], qt.es(r["portero_p"], 2))
+    elif keeper is None:
+        keeper_line = "2. Portero autónomo: sin modelo; no hay voto para abrir una posición."
+    else:
+        keeper_line = (
+            "2. Portero{} (fórmula fija que dice si conviene tomar la señal del maestro ahora, mirando tendencia, lugar en el "
+            "rango y volatilidad): {} (probabilidad de ganar tras costos {}; conviene desde {}).".format(
+                " (solo cuenta para entrar)" if in_position else "", "CONVIENE ENTRAR" if r["portero_si"] else "NO CONVIENE ENTRAR",
+                qt.es(r["portero_p"], 2), qt.es(keeper["umbral"], 2)))
     out.extend([
-        "2. Portero{} (fórmula fija que dice si conviene tomar la señal del maestro ahora, mirando tendencia, lugar en el "
-        "rango y volatilidad): {} (probabilidad de ganar tras costos {}; conviene desde {}).".format(
-            " (solo cuenta para entrar)" if in_position else "", "CONVIENE ENTRAR" if r["portero_si"] else "NO CONVIENE ENTRAR",
-            qt.es(r["portero_p"], 2), qt.es(keeper["umbral"], 2)),
+        keeper_line,
         _news_line(r, in_position, sg),
         "3. Volatilidad: {} (rango de las últimas 24 h {} % contra {} % de promedio de los últimos 7 días; movimiento "
         "esperable en 24 h +-{} %).".format(r["volatilidad"], qt.es(r["range24"] * 100, 2), qt.es(r["range7"] * 100, 2),
@@ -194,8 +242,23 @@ def lines(trader, t_ms, sg, reasons):
     return out
 
 
+def _priority_news_line(priority):
+    status = priority["status"]
+    if status == "unavailable":
+        return "Noticias verificadas (15 min): sin dato."
+    if status == "conflict":
+        return "Noticias verificadas (15 min): contradictorias; sin entrada nueva."
+    if status == "signal":
+        side = "LARGO" if priority["signal"]["side"] == 1 else "CORTO"
+        return "Noticias verificadas (15 min): catalizador para {}.".format(side)
+    return "Noticias verificadas (15 min): sin catalizador habilitado ({} descartes).".format(
+        len(priority.get("rejections") or []))
+
+
 def _news_line(r, in_position, sg=1):
     info = r.get("noticias") or {}
+    if "priority" in info:
+        return _priority_news_line(info["priority"])
     note = " (solo cuenta para entrar)" if in_position else ""
     if not info.get("disponible"):
         return "Noticias (últimas 4 h){}: sin dato.".format(note)

@@ -662,6 +662,19 @@ export function qwenExitSwitch(
   return { off: true, invalid: true, since: null, reason: INVALID_OFF_REASON }
 }
 
+export function readQwenNewsOnly(root, read = readFileSync) {
+  try {
+    const config = JSON.parse(read(`${root}/config/qwen-live.json`, 'utf8'))
+    return (
+      config?.opinion_enabled === false ||
+      config?.runtime?.opinion_enabled === false
+    )
+  } catch (error) {
+    if (error.code === 'ENOENT') return false
+    throw error
+  }
+}
+
 export function devChildSpecs({
   root,
   env,
@@ -678,6 +691,7 @@ export function devChildSpecs({
   // the function stays pure.
   findModel = () => undefined,
   qwenExit = qwenExitSwitch(root),
+  qwenNewsOnly = readQwenNewsOnly(root),
   platform = process.platform,
 }) {
   const serverCwd = `${root}/server`
@@ -804,6 +818,7 @@ export function devChildSpecs({
     ...(python?.command && (env.NEWS_ENABLED ?? '').trim() !== '0'
       ? newsChildren()
       : []),
+    ...(python?.command && qwenNewsOnly ? [liveOperatorChild()] : []),
     ...(python?.command && llm?.command ? llmChildren() : []),
   ]
 
@@ -873,57 +888,40 @@ export function devChildSpecs({
         ],
         env: { ...env },
       },
-      {
-        name: 'q',
-        command: python.command,
-        cwd: serverCwd,
-        args: [
-          ...python.prefixArgs,
-          '-m',
-          'balancita_engine.futures_llm_decisions',
-          '--market-db',
-          marketDb,
-          '--verdicts-db',
-          verdictsDb,
-          '--decisions-db',
-          decisionsDb,
-        ],
-        env: {
-          ...env,
-          LLAMA_PORT: port,
-          STRATEGY_FORWARD_PATH: forwardPath,
-          PYTHONPATH: [`${root}/python`, env.PYTHONPATH]
-            .filter(Boolean)
-            .join(delimiter),
-        },
-      },
-      {
-        // Qwen operador en vivo (paper, sin órdenes reales): decide cada 15 minutos con las velas públicas de Kraken y
-        // el mismo modelo local. Sole writer of its own database. Size, leverage and products: QWEN_LIVE_* in `.env.local`.
-        name: 'qwenlive',
-        command: python.command,
-        cwd: serverCwd,
-        args: [
-          ...python.prefixArgs,
-          '-m',
-          'balancita_engine.futures_qwen_live',
-          '--db',
-          qwenLiveDb,
-        ],
-        env: {
-          ...env,
-          LLAMA_PORT: port,
-          PYTHONPATH: [`${root}/python`, env.PYTHONPATH]
-            .filter(Boolean)
-            .join(delimiter),
-        },
-      },
+      ...(!qwenNewsOnly
+        ? [
+            {
+              name: 'q',
+              command: python.command,
+              cwd: serverCwd,
+              args: [
+                ...python.prefixArgs,
+                '-m',
+                'balancita_engine.futures_llm_decisions',
+                '--market-db',
+                marketDb,
+                '--verdicts-db',
+                verdictsDb,
+                '--decisions-db',
+                decisionsDb,
+              ],
+              env: {
+                ...env,
+                LLAMA_PORT: port,
+                STRATEGY_FORWARD_PATH: forwardPath,
+                PYTHONPATH: [`${root}/python`, env.PYTHONPATH]
+                  .filter(Boolean)
+                  .join(delimiter),
+              },
+            },
+          ]
+        : []),
+      ...(!qwenNewsOnly ? [liveOperatorChild()] : []),
       ...(qwenExit.off
         ? []
         : [
             {
-              // C31: entries from the shipped specs, every exit decided by Qwen (market DB read-only -> its own
-              // DB and summary, sole writer of both). Asks the model only while a position is open.
+              // C31 remains a separate frozen strategy with its own switch.
               name: 'qwenexit',
               command: python.command,
               cwd: serverCwd,
@@ -948,6 +946,30 @@ export function devChildSpecs({
             },
           ]),
     ]
+  }
+
+  function liveOperatorChild() {
+    return {
+      // Qwen operador en vivo (paper, sin órdenes reales): decide cada 15 minutos con las velas públicas de Kraken y
+      // el mismo modelo local. Sole writer of its own database. Size, leverage and products: QWEN_LIVE_* in `.env.local`.
+      name: 'qwenlive',
+      command: python.command,
+      cwd: serverCwd,
+      args: [
+        ...python.prefixArgs,
+        '-m',
+        'balancita_engine.futures_qwen_live',
+        '--db',
+        qwenLiveDb,
+      ],
+      env: {
+        ...env,
+        LLAMA_PORT: String(llamaPort(env)),
+        PYTHONPATH: [`${root}/python`, env.PYTHONPATH]
+          .filter(Boolean)
+          .join(delimiter),
+      },
+    }
   }
 
   function pythonChildren() {

@@ -59,13 +59,20 @@ function seedNewsDb(): string {
 }
 
 describe('createNewsItems', () => {
-  it('returns analyzed news items newest first with relevance, direction and provenance', () => {
+  it('returns received news with actual analysis states and never invents a reuse license', () => {
     const path = seedNewsDb()
     const news = createNewsItems({ newsDbPath: path })
     const result = news.list(10)
-    expect(result).toEqual({
+    expect(result).toMatchObject({
       status: 'ok',
       items: [
+        {
+          id: 'h3',
+          relevance: null,
+          direction: null,
+          analysis_status: 'stale',
+          license_status: 'unknown',
+        },
         {
           id: 'h2',
           source_id: 'coindesk',
@@ -77,7 +84,9 @@ describe('createNewsItems', () => {
           relevance: 'medium',
           relevance_value: 0.58,
           direction: 'neutral',
-          license: 'public_rss',
+          license_status: 'unknown',
+          known_at_ms: 2200,
+          analysis_version: 2,
         },
         {
           id: 'h1',
@@ -90,7 +99,9 @@ describe('createNewsItems', () => {
           relevance: 'high',
           relevance_value: 0.92,
           direction: 'bullish',
-          license: 'public_rss',
+          license_status: 'unknown',
+          known_at_ms: 1200,
+          analysis_version: 2,
         },
       ],
     })
@@ -100,7 +111,7 @@ describe('createNewsItems', () => {
     const path = seedNewsDb()
     const news = createNewsItems({ newsDbPath: path })
     expect(news.list(0)).toEqual({ status: 'error', reason: 'invalid_limit' })
-    expect(news.list(1)).toMatchObject({ status: 'ok', items: [{ id: 'h2' }] })
+    expect(news.list(1)).toMatchObject({ status: 'ok', items: [{ id: 'h3' }] })
     expect(createNewsItems({ newsDbPath: undefined }).list()).toEqual({
       status: 'off',
       reason: 'source_not_configured',
@@ -108,6 +119,49 @@ describe('createNewsItems', () => {
     expect(newsItemsOff('disabled').list()).toEqual({
       status: 'off',
       reason: 'disabled',
+    })
+  })
+
+  it('does not present an old BTC v1 analysis as an Ethereum classification', () => {
+    const path = seedNewsDb()
+    const db = new DatabaseSync(path)
+    db.exec(`
+        INSERT INTO paper_futures_news_items VALUES
+          (4, 'btc-old', 'fixture', 'Fixture', 'https://example.invalid/old', 'Legacy BTC classification', '', 4000, 4100, 'c4');
+        INSERT INTO paper_futures_news_analysis(item_hash,question_id,question_version,status,analyzed_at,chosen)
+          VALUES ('btc-old','news_relevance_btc',1,'done',4200,'high'),
+                 ('btc-old','news_direction',1,'done',4200,'bullish');
+      `)
+    db.close()
+    expect(createNewsItems({ newsDbPath: path }).list(1)).toMatchObject({
+      status: 'ok',
+      items: [
+        {
+          id: 'btc-old',
+          analysis_status: 'pending',
+          analysis_version: null,
+          relevance: null,
+          direction: null,
+        },
+      ],
+    })
+  })
+
+  it('reports fetch failures separately from a successfully readable cache', () => {
+    const path = seedNewsDb()
+    const db = new DatabaseSync(path)
+    db.exec(`
+        CREATE TABLE paper_futures_news_source_sets(source_set_id INTEGER PRIMARY KEY,sources_json TEXT,interval_ms INTEGER);
+        CREATE TABLE paper_futures_news_polls(poll_id INTEGER PRIMARY KEY,source_set_id INTEGER,source_id TEXT,finished_at_ms INTEGER,status TEXT,detail TEXT);
+        INSERT INTO paper_futures_news_source_sets VALUES (1,'[{"id":"thedefiant"},{"id":"coindesk"}]',300000);
+        INSERT INTO paper_futures_news_polls VALUES (1,1,'thedefiant',4000,'ok',NULL),(2,1,'coindesk',4000,'error','HTTP 403');
+      `)
+    db.close()
+    expect(
+      createNewsItems({ newsDbPath: path, clock: () => 5000 }).list(),
+    ).toMatchObject({
+      status: 'ok',
+      collection: { status: 'warning', failed_sources: ['coindesk'] },
     })
   })
 })

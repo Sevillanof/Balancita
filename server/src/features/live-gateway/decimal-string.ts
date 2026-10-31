@@ -40,6 +40,27 @@ export function isDecimal(value: unknown): value is string {
   return parse(value) !== null
 }
 
+/** Python Decimal may serialize very small results with an exponent. */
+export function decimalFromPython(value: unknown): string | null {
+  const plain = parse(value)
+  if (plain) return format(plain.units, plain.scale)
+  if (typeof value !== 'string') return null
+  const match = /^(-?\d+(?:\.\d+)?)[eE]([+-]?\d+)$/.exec(value)
+  if (!match) return null
+  const coefficient = parse(match[1])
+  const exponent = Number(match[2])
+  if (
+    !coefficient ||
+    !Number.isSafeInteger(exponent) ||
+    Math.abs(exponent) > 1000
+  )
+    return null
+  const scale = coefficient.scale - exponent
+  return scale < 0
+    ? format(coefficient.units * 10n ** BigInt(-scale), 0)
+    : format(coefficient.units, scale)
+}
+
 /** `left + right`, or null when either is not a decimal string. */
 export function addDecimal(left: unknown, right: unknown): string | null {
   const a = parse(left)

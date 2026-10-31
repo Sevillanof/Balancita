@@ -98,6 +98,10 @@ def facts_file(cache_dir, product, from_day, to_day, out, *, extra_eth=False, on
         found.append((t_ms, row))
         if on_progress is not None and len(found) % 1000 == 0:
             on_progress(len(found), total_wakes)
+    return _write_facts(out, found, closes, product, cost)
+
+
+def _write_facts(out, found, closes, product, cost):
     n = 0
     with open(out, "w", encoding="utf-8") as handle:
         for t_ms, row in found:
@@ -226,7 +230,8 @@ def _build_flat_rows_destila(cfg, product, flat_found, readings, closes, cost, w
         op = ap.operation(cfg, t_ms, readings, closes, cost, weak)
         if op is None:
             continue
-        formula = ap.formula_flat(op["maestro"], op["portero_si"], op.get("noticias_si", False))
+        formula = ap.formula_flat(op["maestro"], op["portero_si"], op.get("noticias_si", False),
+                                  portero_direccion=op.get("portero_direccion"))
         rows_flat.append({"kind": "flat", "product": product, "t_ms": t_ms, "month": ap._month(t_ms), "state_text": state,
                           "mirror_text": mirror, "maestro": op["maestro"], "portero_si": op["portero_si"], "portero_p": op["portero_p"],
                           "largo_bp": op["largo"]["neto_bp"], "corto_bp": op["corto"]["neto_bp"], "formula": formula, "label": formula,
@@ -247,7 +252,8 @@ def _wake_reading_destila(trader, t_ms):
 
 
 def _step_window_destila(trader, product, t_ms, reasons, r, closes, hold_ms, open_trade, rows_pos, flat_found, rng, entry_rate, wait_rate):
-    action = ap.formula_flat(r["veredicto"], r["portero_si"], r.get("noticias_si", False))
+    action = ap.formula_flat(r["veredicto"], r["portero_si"], r.get("noticias_si", False),
+                             portero_direccion=r.get("portero_direccion"))
     rate = entry_rate if action != "ESPERAR" else wait_rate
     if rng.random() < rate:  # NOSONAR
         _sample_flat_look(trader, t_ms, reasons, flat_found)

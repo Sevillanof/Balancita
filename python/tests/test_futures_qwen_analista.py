@@ -100,6 +100,42 @@ class AnalistaTest(unittest.TestCase):
         self.assertEqual(incremental.active(75 * 24 * HOUR), batch.active(75 * 24 * HOUR))
         self.assertAlmostEqual(incremental.at(75 * 24 * HOUR), batch.at(75 * 24 * HOUR))
 
+    def test_partial_hour_warmup_matches_batch_at_every_later_quarter_hour(self):
+        all_bars = bars(24 * 62, lambda hour: 0.001 * (1 + 0.4 * math.sin(hour / 10)))
+        batch = an.Movement(all_bars)
+        for offset in (1, 6, 11):
+            cutoff = 60 * 24 * 12 + offset
+            incremental = an.Movement(all_bars[:cutoff])
+            for bar in all_bars[cutoff:cutoff + 24 * 12]:
+                incremental.add_bar(bar)
+                at = bar["bucket_start"] + BAR
+                if at % (15 * 60_000) == 0:
+                    with self.subTest(offset=offset, at=at):
+                        self.assertEqual(incremental.at(at), batch.at(at))
+                        self.assertEqual(incremental.active(at), batch.active(at))
+
+    def test_future_query_does_not_finalize_an_hour_with_unseen_candles(self):
+        all_bars = bars(24 * 61, lambda hour: 0.001)
+        cutoff = 60 * 24 * 12 + 6
+        incremental = an.Movement(all_bars[:cutoff])
+        end_of_hour = (all_bars[cutoff - 1]["bucket_start"] // HOUR + 1) * HOUR
+        self.assertIsNone(incremental.at(end_of_hour))
+        for bar in all_bars[cutoff:cutoff + 6]:
+            incremental.add_bar(bar)
+        self.assertEqual(incremental.at(end_of_hour), an.Movement(all_bars).at(end_of_hour))
+
+    def test_future_candles_leave_past_readings_unchanged(self):
+        all_bars = bars(24 * 62, lambda hour: 0.001 * (1 + 0.4 * math.sin(hour / 10)))
+        cutoff = 60 * 24 * 12 + 6
+        prefix = an.Movement(all_bars[:cutoff])
+        batch = an.Movement(all_bars)
+        at = all_bars[cutoff - 1]["bucket_start"] + BAR
+        self.assertIsNotNone(prefix.at(at))
+        self.assertEqual(prefix.at(at), batch.at(at))
+        for bar in all_bars[cutoff:]:
+            prefix.add_bar(bar)
+        self.assertEqual(prefix.at(at), batch.at(at))
+
 
 if __name__ == "__main__":
     unittest.main()

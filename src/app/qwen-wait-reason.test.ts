@@ -17,6 +17,21 @@ const flat = {
 }
 
 describe('waitReason', () => {
+  it('distinguishes a news reversal from a missing candle-model opinion', () => {
+    const text = waitReason({
+      formula_action: 'CORTO',
+      formula: {
+        authority: 'noticias',
+        opinion_enabled: false,
+        reversal: true,
+        motivo: 'noticia fuerte verificada: cierre y giro',
+      },
+    })
+    expect(text).toContain('Noticias')
+    expect(text).toContain('cierre y giro')
+    expect(text).not.toContain('Qwen no dio opinión')
+  })
+
   it('says the entry wish that fell short of the minimum', () => {
     expect(
       waitReason({

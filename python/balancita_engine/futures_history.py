@@ -5,6 +5,7 @@ talks to ``futures.kraken.com`` for history. Public endpoints only, no credentia
 """
 
 import json
+from decimal import Decimal
 import os
 import sqlite3
 import time
@@ -24,13 +25,13 @@ class HistoryError(Exception):
     """A clear, user-facing failure (Kraken unreachable); the CLIs print it and exit 2."""
 
 
-def _http_get(url, attempts=5):
+def _http_get(url, attempts=5, *, decimal=False):
     last = None
     for attempt in range(attempts):
         try:
             request = urllib.request.Request(url, headers={"User-Agent": "balancita-history"})
             with urllib.request.urlopen(request, timeout=60) as response:
-                return json.loads(response.read())
+                return json.loads(response.read(), parse_float=Decimal if decimal else float)
         except Exception as error:  # network, 5xx, bad JSON: wait and try again, then fail loudly
             last = error
             time.sleep(min(30, 2 ** attempt))
@@ -64,16 +65,17 @@ def fetch_candles(product, resolution, from_ms, to_ms, *, get=None, now_ms=None)
     return [out[t] for t in sorted(out) if t + step <= now_ms and from_ms <= t < to_ms]
 
 
-def fill_gaps(candles, step_ms):
+def fill_gaps(candles, step_ms, *, annotate=False):
     """Quiet minutes are flat candles (previous close, no volume), as the official candles of the market DB are."""
     ordered = sorted({c["bucket_start"]: c for c in candles}.values(), key=lambda c: c["bucket_start"])
     out = []
     for candle in ordered:
         while out and candle["bucket_start"] - out[-1]["bucket_start"] > step_ms:
             close = out[-1]["close"]
-            out.append({"bucket_start": out[-1]["bucket_start"] + step_ms, "open": close, "high": close,
-                        "low": close, "close": close, "volume_btc": "0"})
-        out.append(candle)
+            generated = {"bucket_start": out[-1]["bucket_start"] + step_ms, "open": close, "high": close,
+                         "low": close, "close": close, "volume_btc": "0"}
+            out.append(dict(generated, observed=False) if annotate else generated)
+        out.append(dict(candle, observed=candle.get("observed", True)) if annotate else candle)
     return out
 
 
@@ -85,6 +87,13 @@ def fetch_funding(product, *, get=None):
     return periods_from_responses([json.dumps(body)])
 
 
+def fetch_funding_records(product, *, get=None):
+    from . import futures_qwen_funding
+    get = get or (lambda url: _http_get(url, decimal=True))
+    body = get("{}/derivatives/api/v3/historical-funding-rates?symbol={}".format(KRAKEN, product))
+    return futures_qwen_funding.from_public(product, body, known_at_ms=int(time.time() * 1000))
+
+
 class CandleCache:
     """Raw candles per product in one SQLite file, so a second run only fetches what is new."""
 
@@ -94,7 +103,7 @@ class CandleCache:
         self.db.execute("CREATE TABLE IF NOT EXISTS candles(res TEXT NOT NULL, t INTEGER NOT NULL, o TEXT NOT NULL, "
                         "h TEXT NOT NULL, l TEXT NOT NULL, c TEXT NOT NULL, v TEXT NOT NULL, PRIMARY KEY(res, t))")
 
-    def ensure(self, product, resolution, from_ms, to_ms, fetch=fetch_candles, **kwargs):
+    def ensure(self, product, resolution, from_ms, to_ms, fetch=fetch_candles, *, repair_gaps=False, **kwargs):
         """Fetches into the cache what is missing of ``[from_ms, to_ms)``; reads nothing back."""
         step = {"1m": MINUTE_MS, "5m": 5 * MINUTE_MS}[resolution]
         have = self.db.execute("SELECT MIN(t), MAX(t) FROM candles WHERE res=?", (resolution,)).fetchone()
@@ -103,14 +112,36 @@ class CandleCache:
             fetch_from = hi + step
         else:
             fetch_from = from_ms
-        if fetch_from < to_ms:
-            new = fetch(product, resolution, fetch_from, to_ms, **kwargs)
+        def fetch_into(low, high):
+            new = fetch(product, resolution, low, high, **kwargs)
             with self.db:
                 self.db.executemany("INSERT OR REPLACE INTO candles VALUES(?,?,?,?,?,?,?)",
                                     [(resolution, c["bucket_start"], c["open"], c["high"], c["low"], c["close"],
                                       c["volume_btc"]) for c in new])
+        if fetch_from < to_ms:
+            fetch_into(fetch_from, to_ms)
+        if repair_gaps:
+            for low, high in self.missing_ranges(resolution, from_ms, to_ms)[:4]:
+                fetch_into(low, high)
 
-    def read(self, product, resolution, from_ms, to_ms):
+    def missing_ranges(self, resolution, from_ms, to_ms):
+        step = {"1m": MINUTE_MS, "5m": 5 * MINUTE_MS}[resolution]
+        existing = {row[0] for row in self.db.execute(
+            "SELECT t FROM candles WHERE res=? AND t>=? AND t<?", (resolution, from_ms, to_ms))}
+        start, ranges = None, []
+        last = to_ms // step * step
+        for bucket in range((from_ms + step - 1) // step * step, last, step):
+            if bucket not in existing:
+                if start is None:
+                    start = bucket
+            elif start is not None:
+                ranges.append((start, bucket))
+                start = None
+        if start is not None:
+            ranges.append((start, last))
+        return ranges
+
+    def read(self, resolution, from_ms, to_ms):
         """What the cache holds of ``[from_ms, to_ms)``; never touches the network."""
         rows = self.db.execute("SELECT t,o,h,l,c,v FROM candles WHERE res=? AND t>=? AND t<? ORDER BY t",
                                (resolution, from_ms, to_ms)).fetchall()
@@ -119,9 +150,7 @@ class CandleCache:
 
     def load(self, product, resolution, from_ms, to_ms, fetch=fetch_candles, **kwargs):
         self.ensure(product, resolution, from_ms, to_ms, fetch=fetch, **kwargs)
-        return self.read(product, resolution, from_ms, to_ms)
+        return self.read(resolution, from_ms, to_ms)
 
     def close(self):
         self.db.close()
-
-

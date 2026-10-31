@@ -1,7 +1,21 @@
 import { describe, expect, it } from 'vitest'
-import { addDecimal, isDecimal, unrealizedPnl } from './decimal-string.ts'
+import {
+  addDecimal,
+  decimalFromPython,
+  isDecimal,
+  unrealizedPnl,
+} from './decimal-string.ts'
 
 describe('decimal strings', () => {
+  it('normalizes Python Decimal text exactly without changing the plain-decimal wire contract', () => {
+    expect(decimalFromPython('1.2300E-8')).toBe('0.0000000123')
+    expect(decimalFromPython('-0E-27')).toBe('0')
+    expect(decimalFromPython('1E+3')).toBe('1000')
+    expect(decimalFromPython('NaN')).toBeNull()
+    expect(decimalFromPython('1e1000000')).toBeNull()
+    expect(isDecimal('1e5')).toBe(false)
+  })
+
   it('adds exactly and normalizes', () => {
     expect(addDecimal('0.1', '0.2')).toBe('0.3')
     expect(addDecimal('9999.50494555', '0.99')).toBe('10000.49494555')

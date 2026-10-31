@@ -3,7 +3,6 @@ export function formatShortDateTime(ms: number): {
   search: string
 } {
   const iso = new Date(ms).toISOString()
-  // iso: YYYY-MM-DDTHH:mm:ss.sssZ
   const yyyy = iso.slice(0, 4)
   const mm = iso.slice(5, 7)
   const dd = iso.slice(8, 10)

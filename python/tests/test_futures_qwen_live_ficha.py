@@ -419,11 +419,11 @@ class PositioningFeedReloadTests(unittest.TestCase):
         positioning_db(self.path, "PF_XBTUSD", first_ms=BASE, hours=5)
         feed = pd.PositioningFeed(self.path, "PF_XBTUSD", since_ms=BASE)
         at = BASE + 9 * HOUR
-        self.assertEqual(feed.at(at)["long"], None)                             # the last bucket ended 3 h+ ago: a gap
+        self.assertIsNone(feed.at(at)["long"])                             # the last bucket ended 3 h+ ago: a gap
         add_positioning(self.path, "PF_XBTUSD", BASE + 5 * HOUR, 3, long_start=70.0)
         self.assertTrue(feed.reload())
         self.assertEqual(feed.at(at)["long"], 70.0 + 1.0)
-        self.assertEqual(pd.PositioningFeed(self.path, "PF_XBTUSD").at(BASE)["long"], None)   # nothing ended before the first bucket
+        self.assertIsNone(pd.PositioningFeed(self.path, "PF_XBTUSD").at(BASE)["long"])   # nothing ended before the first bucket
 
     def test_reload_keeps_the_rows_when_the_file_cannot_be_read_and_since_limits_what_is_kept(self):
         positioning_db(self.path, "PF_XBTUSD", first_ms=BASE, hours=10)
@@ -470,68 +470,50 @@ class ArchiveTests(unittest.TestCase):
         finally:
             con.close()
 
-    def test_a_database_of_another_config_is_archived_with_the_old_hash_in_the_name_and_a_new_one_starts(self):
+    def test_a_flat_configuration_change_preserves_the_account_and_existing_history(self):
         env = self.traded(Policy(flat="ESPERAR"))
         old_hash = qt.config_hash(env.cfg)
         before = {t: self.rows(env.db_path, "SELECT * FROM {}".format(t)) for t in ("decisions", "trades", "skipped", "meta")}
         self.assertTrue(before["decisions"])
         new = self.other_cfg(env.cfg)
-        result, logs = self.archive(env, new)
-        self.assertEqual(os.path.basename(result["path"]), "live-{}.sqlite".format(old_hash[:12]))
-        self.assertEqual(os.path.dirname(result["path"]), env.tmp)                                   # same folder
-        self.assertEqual(result["old_hash"], old_hash)
-        self.assertFalse(os.path.exists(env.db_path))
+        with self.assertRaises(qt.TraderError):
+            self.archive(env, new)
         for table, rows in before.items():                                                          # nothing lost
-            self.assertEqual(self.rows(result["path"], "SELECT * FROM {}".format(table)), rows, table)
-        self.assertTrue(any("ARCHIVÓ" in m and "no se borró nada" in m for m in logs))
+            self.assertEqual(self.rows(env.db_path, "SELECT * FROM {}".format(table)), rows, table)
         store = live.LiveStore(env.db_path)
         self.addCleanup(store.close)
-        store.check_identity(new)                                                                   # the new base takes the new identity
+        balance = store.cash_balance_usd()
+        store.activate_flat_config(new)
         self.assertEqual(store.meta()["config_hash"], qt.config_hash(new))
-        self.assertEqual(store.db.execute("SELECT COUNT(*) FROM decisions").fetchone()[0], 0)
+        self.assertEqual(store.cash_balance_usd(), balance)
+        self.assertEqual(store.db.execute("SELECT COUNT(*) FROM decisions").fetchone()[0], len(before["decisions"]))
+        self.assertEqual(store.db.execute("SELECT previous_hash FROM config_versions ORDER BY id DESC").fetchone()[0], old_hash)
 
-    def test_an_open_position_is_closed_as_fin_de_bloque_cambio_de_version_before_archiving(self):
+    def test_an_open_position_prevents_archiving_and_keeps_its_identity_and_history(self):
         env = self.traded(Policy(flat="LARGO"))
         open_rows = self.rows(env.db_path, "SELECT * FROM trades WHERE status='open' ORDER BY product")
         self.assertEqual(len(open_rows), 2)
-        result, logs = self.archive(env, self.other_cfg(env.cfg))
-        self.assertEqual({(p, n) for p, n, _ in result["closed"]}, {(r["product"], r["trade_no"]) for r in open_rows})
-        archived = self.rows(result["path"], "SELECT * FROM trades ORDER BY product")
-        for before, row in zip(open_rows, archived):
-            self.assertEqual((row["status"], row["closed_by"], row["exit_reason"]), ("closed", "fin_de_bloque", "cambio_de_version"))
-            self.assertEqual(row["exit_ms"], before["mark_ms"])                                           # at the last moment seen
-            self.assertAlmostEqual(float(row["exit_px"]) / before["mark_px"], 1.0, delta=0.002)           # its price, less the exit slippage
-            self.assertLess(float(row["exit_px"]), before["mark_px"])
-            self.assertIsNotNone(row["net_usd"])
-            self.assertIsNotNone(row["net_bp"])
-            self.assertEqual(row["entry_px"], before["entry_px"])
-            self.assertEqual(row["notional_usd"], before["notional_usd"])
-            self.assertGreater(float(row["fees_usd"]), 0)
-        self.assertEqual(self.rows(result["path"], "SELECT COUNT(*) AS n FROM trader_state WHERE position_json IS NOT NULL")[0]["n"], 0)
-        self.assertEqual(len([m for m in logs if "fin_de_bloque / cambio_de_version" in m]), 2)
-        self.assertEqual(self.rows(result["path"], "SELECT COUNT(*) AS n FROM decisions")[0]["n"],
-                         len(self.rows(result["path"], "SELECT * FROM decisions")))
-        # the gate and the Terminal read the new base: no trades, no decisions, and the old ones stay in the archive
-        new = self.other_cfg(env.cfg)
-        store = live.LiveStore(env.db_path)
-        self.addCleanup(store.close)
-        store.check_identity(new)
-        source = models.QwenLiveTrades(env.db_path, os.path.join(env.tmp, "no-exam.sqlite"))
-        self.assertEqual(source.live_trades("PF_XBTUSD"), [])
-        self.assertEqual(models.live_config_hash(env.tmp), qt.config_hash(new))
-        archived_source = models.QwenLiveTrades(result["path"], os.path.join(env.tmp, "no-exam.sqlite"))
-        self.assertEqual([t["net_bp"] is not None for t in archived_source.live_trades("PF_XBTUSD")], [True])
+        before = {t: self.rows(env.db_path, "SELECT * FROM {}".format(t))
+                  for t in ("decisions", "trades", "trader_state", "meta")}
+        changed = self.other_cfg(env.cfg)
+        with self.assertRaises(qt.TraderError):
+            self.archive(env, changed)
+        for table, rows in before.items():
+            self.assertEqual(self.rows(env.db_path, "SELECT * FROM {}".format(table)), rows)
+        self.assertEqual(models.live_config_hash(env.tmp), qt.config_hash(env.cfg))
 
-    def test_the_funding_that_cannot_be_read_does_not_stop_the_archive(self):
+    def test_unavailable_funding_never_allows_archiving_an_open_book(self):
         env = self.traded(Policy(flat="LARGO"))
 
         def down(product):
             raise OSError("sin red")
 
         logs = []
-        result = live.archive_other_config(env.db_path, self.other_cfg(env.cfg), funding_for=down, now_ms=env.now[0], log=logs.append)
-        self.assertEqual(len(result["closed"]), 2)
-        self.assertEqual({r["funding_status"] for r in self.rows(result["path"], "SELECT * FROM trades")}, {"unknown"})
+        changed = self.other_cfg(env.cfg)
+        with self.assertRaises(qt.TraderError):
+            live.archive_other_config(env.db_path, changed, funding_for=down, now_ms=env.now[0], log=logs.append)
+        self.assertEqual(len(self.rows(env.db_path, "SELECT * FROM trades WHERE status='open'")), 2)
+        self.assertEqual(logs, [])
 
     def test_the_same_configuration_or_no_file_or_an_empty_one_archives_nothing(self):
         env = self.traded(Policy(flat="LARGO"))
@@ -552,27 +534,34 @@ class ArchiveTests(unittest.TestCase):
         for change in ({"QWEN_LIVE_NOTIONAL_USD": "250"}, {"QWEN_LIVE_LEVERAGE": "2"}, {"QWEN_LIVE_PRODUCTS": "PF_XBTUSD"}):
             env = self.traded(Policy(flat="ESPERAR"))
             new = live.apply_overrides(env.cfg, change)
-            result, _ = self.archive(env, new)
-            self.assertIsNotNone(result, change)
-            self.assertTrue(os.path.exists(result["path"]))
+            with self.assertRaises(qt.TraderError):
+                self.archive(env, new)
+            store = live.LiveStore(env.db_path)
+            self.addCleanup(store.close)
+            before = store.cash_balance_usd()
+            store.activate_flat_config(new)
+            self.assertEqual(store.cash_balance_usd(), before)
+            self.assertTrue(os.path.exists(env.db_path))
 
-    def test_a_name_that_is_taken_gets_a_number_and_nothing_is_ever_overwritten(self):
+    def test_existing_backups_are_never_overwritten_and_the_account_file_stays_put(self):
         env = self.traded(Policy(flat="ESPERAR"))
         new = self.other_cfg(env.cfg)
-        first, _ = self.archive(env, new)
-        shutil_copy = lambda src, dst: open(dst, "wb").write(open(src, "rb").read())
-        shutil_copy(first["path"], env.db_path)                                  # the same old base shows up again
-        second, _ = self.archive(env, new)
-        self.assertNotEqual(first["path"], second["path"])
-        self.assertTrue(second["path"].endswith("-2.sqlite"))
-        self.assertTrue(os.path.exists(first["path"]) and os.path.exists(second["path"]))
+        backup = os.path.join(env.tmp, "live-{}.sqlite".format(qt.config_hash(env.cfg)[:12]))
+        with open(backup, "wb") as handle:
+            handle.write(b"existing backup")
+        with self.assertRaises(qt.TraderError):
+            self.archive(env, new)
+        self.assertTrue(os.path.exists(env.db_path))
+        with open(backup, "rb") as handle:
+            self.assertEqual(handle.read(), b"existing backup")
 
     def test_the_operator_itself_still_refuses_a_base_of_another_config(self):
         env = self.traded(Policy(flat="ESPERAR"))
         store = live.LiveStore(env.db_path)
         self.addCleanup(store.close)
+        changed = self.other_cfg(env.cfg)
         with self.assertRaises(qt.TraderError):
-            store.check_identity(self.other_cfg(env.cfg))
+            store.check_identity(changed)
 
     def test_a_base_without_the_factors_column_gets_it_and_a_decision_keeps_its_factors(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -754,7 +743,7 @@ class QuickLiveTests(unittest.TestCase):
         cfg = exam_cfg()
         self.assertEqual(qt.config_hash(qv.apply_variant(cfg, actual)), qt.config_hash(cfg))
         spawned = []
-        api = quick_api.QuickTestApi(os.path.join(self.dir.name, "exam-live.sqlite"), python="py", spawn=lambda *a: spawned.append(a))
+        api = quick_api.QuickTestApi(os.path.join(self.dir.name, "exam-live.sqlite"), python="py", spawn=lambda *a: spawned.append(a), news_only=False)
         api.launch(models.QWEN_LIVE_ID, "actual")
         api.launch(models.QWEN_LIVE_ID, "ficha")
         versions = [a[0][a[0].index("--version") + 1] for a in spawned]

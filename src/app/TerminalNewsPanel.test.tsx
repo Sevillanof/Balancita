@@ -60,18 +60,54 @@ const sampleNews: TerminalNewsItem[] = [
 ]
 
 describe('TerminalNewsPanel', () => {
+  it('distinguishes expired news and does not present relevance as a probability of profit', () => {
+    render(
+      <TerminalNewsPanel
+        items={[
+          { ...sampleNews[0]!, expiresAtMs: Date.UTC(2026, 9, 30, 14, 30) },
+        ]}
+        loaded={true}
+        nowMs={Date.UTC(2026, 9, 30, 15)}
+      />,
+    )
+    expect(screen.getByText(/Vencida/)).toBeTruthy()
+    expect(screen.queryByText(/91%/)).toBeNull()
+  })
+
+  it('keeps a received-but-unclassified item visible as pending', () => {
+    const items = decodeTerminalNews({
+      status: 'ok',
+      items: [
+        {
+          id: 'pending',
+          source: 'Fixture',
+          url: 'https://example.invalid/test',
+          title: 'Noticia pendiente',
+          received_at_ms: 1000,
+          published_at_ms: 900,
+          relevance: null,
+          direction: null,
+          analysis_status: 'pending',
+        },
+      ],
+    })
+    expect(items).toHaveLength(1)
+    render(<TerminalNewsPanel items={items} loaded={true} nowMs={1100} />)
+    expect(screen.getByText(/Pendiente/)).toBeTruthy()
+  })
+
   it('shows 3 news items per page with their relevance grade, paginates, and searches by date/time', () => {
     render(<TerminalNewsPanel items={sampleNews} loaded={true} />)
     const list = screen.getByRole('list', { name: 'Lista de noticias' })
     expect(within(list).getAllByRole('listitem')).toHaveLength(3)
-    expect(screen.getByText('Relevancia Alta 91%')).toBeTruthy()
-    expect(screen.getByText('Relevancia Media 62%')).toBeTruthy()
-    expect(screen.getByText('Relevancia Baja 31%')).toBeTruthy()
+    expect(screen.getByText('Relevancia Alta')).toBeTruthy()
+    expect(screen.getByText('Relevancia Media')).toBeTruthy()
+    expect(screen.getByText('Relevancia Baja')).toBeTruthy()
     expect(screen.getByText('1 / 2')).toBeTruthy()
 
     fireEvent.click(screen.getByRole('button', { name: 'Siguiente' }))
     expect(within(list).getAllByRole('listitem')).toHaveLength(1)
-    expect(screen.getByText('Relevancia Nula 8%')).toBeTruthy()
+    expect(screen.getByText('Relevancia Nula')).toBeTruthy()
     expect(screen.getByText('29/10 18:45')).toBeTruthy()
 
     const search = screen.getByRole('searchbox', {

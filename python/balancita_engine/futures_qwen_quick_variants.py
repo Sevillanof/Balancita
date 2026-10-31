@@ -26,6 +26,11 @@ class VariantError(Exception):
     pass
 
 
+def news_only_role():
+    from . import futures_qwen_trader as qt
+    return not qt.candle_opinions_enabled(qt.load_config(qt.CONFIG_PATH_LIVE))
+
+
 def load_variants(path=None):
     with open(path or VARIANTS_PATH, encoding="utf-8") as handle:
         data = json.load(handle)
@@ -77,10 +82,7 @@ def db_name(variant_id):
     return "exam-v3-rapida.sqlite" if variant_id == CONTROL else "exam-v3-rapida-{}.sqlite".format(variant_id)
 
 
-def find_model_file(model, env=None, home=None):
-    """Looks for the variant's GGUF in the places llama.cpp and Hugging Face keep them (bounded depth). ``None`` if absent."""
-    env = os.environ if env is None else env
-    home = home or os.path.expanduser("~")
+def _model_roots(env, home):
     hf_home = (env.get("HF_HOME") or "").strip() or os.path.join(home, ".cache", "huggingface")
     roots = [(env.get("LLAMA_CACHE") or "").strip() or os.path.join(home, "Library", "Caches", "llama.cpp"),
              (env.get("HF_HUB_CACHE") or "").strip() or os.path.join(hf_home, "hub"),
@@ -88,31 +90,48 @@ def find_model_file(model, env=None, home=None):
     extra = (env.get("QUICK_MODELS_DIR") or "").strip()
     if extra:
         roots.insert(0, extra)
+    return roots
+
+
+def _find_model_in_root(root, wanted, repo):
+    for base, dirs, files in os.walk(root):
+        if base[len(root):].count(os.sep) >= 6:
+            dirs[:] = []
+        for name in files:
+            low = name.lower()
+            if low == wanted or (low.endswith(wanted) and repo in low):
+                path = os.path.join(base, name)
+                if os.path.getsize(path) > 0:
+                    return path
+    return None
+
+
+def find_model_file(model, env=None, home=None):
+    """Looks for the variant's GGUF in the places llama.cpp and Hugging Face keep them (bounded depth). ``None`` if absent."""
+    env = os.environ if env is None else env
+    home = home or os.path.expanduser("~")
     wanted = model["file"].lower()
     repo = model["hf"].split(":")[0].replace("/", "_").lower()
-    for root in roots:
-        for base, dirs, files in os.walk(root):
-            if base[len(root):].count(os.sep) >= 6:
-                dirs[:] = []
-            for name in files:
-                low = name.lower()
-                if low == wanted or (low.endswith(wanted) and repo in low):
-                    path = os.path.join(base, name)
-                    if os.path.getsize(path) > 0:
-                        return path
+    for root in _model_roots(env, home):
+        path = _find_model_in_root(root, wanted, repo)
+        if path is not None:
+            return path
     return None
 
 
 class ModelServer:
     """Context manager: ``llama-server`` for one model variant, on loopback and offline, stopped on exit."""
 
-    def __init__(self, model, *, env=None, binary="llama-server", log=print, popen=subprocess.Popen, health=None):
+    def __init__(self, model, *, env=None, binary="llama-server", log=print, popen=subprocess.Popen, health=None, news_only=None):
         self.model, self.env, self.binary, self.log = model, dict(os.environ if env is None else env), binary, log
         self.popen, self.health = popen, health
         self.proc = None
+        self.news_only = news_only
         self.url = "http://127.0.0.1:{}".format(int(model["port"]))
 
     def __enter__(self):
+        if self.news_only is True or self.news_only is None and news_only_role():
+            raise VariantError("Qwen solo se usa para noticias: no se levanta un modelo para opinar sobre velas.")
         llm.check_loopback_url(self.url)
         path = find_model_file(self.model, self.env)
         if path is None:

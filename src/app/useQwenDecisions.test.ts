@@ -72,6 +72,15 @@ describe('qwenNotice', () => {
 
 describe('qwenHealthNotice', () => {
   const now = 10_000_000
+  it('warns about unavailable market inputs even when the operator heartbeat is current', () => {
+    expect(
+      qwenHealthNotice(
+        { state: 'ok', heartbeatMs: now, dataIssues: ['PF_ETHUSD: error'] },
+        now,
+      ),
+    ).toMatch(/datos de mercado.*PF_ETHUSD/i)
+  })
+
   it('says nothing while the heartbeat is fresh, or when the base has none', () => {
     expect(
       qwenHealthNotice(

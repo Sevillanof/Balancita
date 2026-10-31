@@ -1,5 +1,6 @@
 import type { DatabaseSync } from 'node:sqlite'
 import { withDb, num, rowOf, type Row } from './observability-health.ts'
+import { addDecimal, decimalFromPython } from './decimal-string.ts'
 
 /**
  * Qwen operador en vivo, solo lectura: sus decisiones (una por producto cada
@@ -111,6 +112,9 @@ export interface QwenTrade {
   readonly fees_usd: string | null
   readonly funding_usd: string | null
   readonly funding_status: string | null
+  readonly funding_model?: string | null
+  readonly net_complete_usd?: string | null
+  readonly config_hash?: string | null
   /** Closed: the final net. Open: what closing now would net (costs included). */
   readonly net_usd: string | null
   readonly closed_by: string | null
@@ -126,6 +130,9 @@ export interface QwenHeartbeat {
   /** Whether llama-server answered /health at the last cycle; null when unknown. */
   readonly model_ok: boolean | null
   readonly last_error_ms: number | null
+  readonly model_scope?: string
+  readonly data_health?: Readonly<Record<string, Row>>
+  readonly pending_config?: Row
 }
 
 export type QwenDecisionsResponse =
@@ -154,7 +161,7 @@ export interface QwenAccountStep {
 export type QwenAccountResponse =
   | {
       readonly status: 'ok'
-      /** Simulated starting capital (setting, not read from the base). */
+      /** Permanent account genesis; the setting is used only for unmigrated legacy databases. */
       readonly start_usd: number
       /** start + closed nets + what the open positions would net now. */
       readonly balance_usd: number
@@ -165,7 +172,7 @@ export type QwenAccountResponse =
       readonly funding_incomplete: boolean
       readonly steps: readonly QwenAccountStep[]
     }
-  | { readonly status: 'off'; readonly reason: string }
+  | { readonly status: 'off' | 'error'; readonly reason: string }
 
 export interface QwenDecisions {
   report(product: string, limit?: number): QwenDecisionsResponse
@@ -283,18 +290,29 @@ function heartbeatOf(meta: Record<string, unknown>): QwenHeartbeat {
     heartbeat_ms: ms(meta.heartbeat_ms),
     model_ok: typeof meta.model_ok === 'boolean' ? meta.model_ok : null,
     last_error_ms: ms(meta.last_error_ms),
+    ...(typeof meta.model_scope === 'string'
+      ? { model_scope: meta.model_scope }
+      : {}),
+    ...(Object.keys(meta).some((key) => key.startsWith('data_health_'))
+      ? {
+          data_health: Object.fromEntries(
+            Object.entries(meta)
+              .filter(([key]) => key.startsWith('data_health_'))
+              .map(([key, value]) => [
+                key.slice('data_health_'.length),
+                rowOf(value),
+              ]),
+          ),
+        }
+      : {}),
+    ...(meta.pending_config && typeof meta.pending_config === 'object'
+      ? { pending_config: rowOf(meta.pending_config) }
+      : {}),
   }
 }
 
 function text(value: unknown): string | null {
   return value === null || value === undefined ? null : String(value)
-}
-
-/** A decimal stored as TEXT (or a number) read as a number; null when absent or not finite. */
-function amount(value: unknown): number | null {
-  if (value === null || value === undefined || value === '') return null
-  const parsed = Number(value)
-  return Number.isFinite(parsed) ? parsed : null
 }
 
 function optionalColumns(db: DatabaseSync): string {
@@ -311,7 +329,7 @@ function optionalColumns(db: DatabaseSync): string {
 
 export function createQwenDecisions(options: {
   readonly liveDbPath: string | undefined
-  /** Simulated starting capital of the account (default 1000 USD). */
+  /** Legacy read-only fallback only. An initialized account always owns its capital. */
   readonly startUsd?: number
 }): QwenDecisions {
   const startUsd = options.startUsd ?? DEFAULT_START_USD
@@ -428,6 +446,8 @@ export function createQwenDecisions(options: {
         const side =
           row.side === 'LONG' || row.side === 'SHORT' ? row.side : null
         if (tradeNo === null || entry === null || side === null) continue
+        if (row.status !== 'open' && row.status !== 'closed')
+          return { status: 'error', reason: 'invalid_trade_status' }
         const open = row.status === 'open'
         trades.push({
           product,
@@ -446,6 +466,12 @@ export function createQwenDecisions(options: {
           fees_usd: text(row.fees_usd),
           funding_usd: text(row.funding_usd),
           funding_status: text(row.funding_status),
+          funding_model: text(row.funding_model),
+          net_complete_usd:
+            row.funding_status === 'complete'
+              ? text(row.net_complete_usd)
+              : null,
+          config_hash: text(row.config_hash),
           net_usd: text(open ? row.net_now_usd : row.net_usd),
           closed_by: text(row.closed_by),
           exit_reason: text(row.exit_reason),
@@ -457,57 +483,96 @@ export function createQwenDecisions(options: {
       return { status: 'ok', trades }
     },
     account() {
-      const opened = withDb(options.liveDbPath, (db) =>
-        db
+      const opened = withDb(options.liveDbPath, (db) => {
+        const money = (value: unknown, field: string): string => {
+          const out = decimalFromPython(value)
+          if (out === null) throw new Error(`account_invalid_${field}`)
+          return out
+        }
+        const sum = (left: string, right: string): string => {
+          const out = addDecimal(left, right)
+          if (out === null) throw new Error('account_invalid_total')
+          return out
+        }
+        const display = (value: string): number => {
+          const out = Number(value)
+          if (!Number.isFinite(out))
+            throw new Error('account_amount_out_of_range')
+          return out
+        }
+        const hasAccount = db
+          .prepare(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='account'",
+          )
+          .get()
+        const saved = hasAccount
+          ? db.prepare('SELECT initial_usd FROM account WHERE id=1').get()
+          : undefined
+        if (hasAccount && saved === undefined)
+          throw new Error('account_not_initialized')
+        const initial = money(
+          saved ? rowOf(saved).initial_usd : String(startUsd),
+          'initial_capital',
+        )
+        if (display(initial) <= 0)
+          throw new Error('account_invalid_initial_capital')
+        const rows = db
           .prepare(
             `SELECT * FROM trades ORDER BY (status='open') ASC, exit_ms ASC, trade_no ASC`,
           )
           .all()
-          .map((row) => rowOf(row)),
-      )
-      if (opened.state !== 'read')
-        return { status: 'off', reason: opened.detail }
-      const steps: QwenAccountStep[] = []
-      let balance = startUsd
-      let realized = 0
-      let openUsd = 0
-      let openCount = 0
-      let incomplete = false
-      for (const row of opened.value as Row[]) {
-        const side =
-          row.side === 'LONG' || row.side === 'SHORT' ? row.side : null
-        const tradeNo = num(row.trade_no)
-        if (side === null || tradeNo === null) continue
-        if (row.funding_status !== 'complete') incomplete = true
-        if (row.status === 'open') {
-          openUsd += amount(row.net_now_usd) ?? 0
-          openCount += 1
-          continue
+          .map((row) => rowOf(row))
+        const steps: QwenAccountStep[] = []
+        let balance = initial
+        let realized = '0'
+        let openUsd = '0'
+        let openCount = 0
+        let incomplete = false
+        for (const row of rows) {
+          const side =
+            row.side === 'LONG' || row.side === 'SHORT' ? row.side : null
+          const tradeNo = num(row.trade_no)
+          if (side === null || tradeNo === null)
+            throw new Error('account_invalid_trade')
+          if (row.funding_status !== 'complete') incomplete = true
+          if (row.status === 'open') {
+            openUsd = sum(openUsd, money(row.net_now_usd, 'open_result'))
+            openCount += 1
+            continue
+          }
+          if (row.status !== 'closed')
+            throw new Error('account_invalid_trade_status')
+          const net = money(row.net_usd, 'realized_result')
+          const exit = num(row.exit_ms)
+          if (exit === null) throw new Error('account_invalid_exit_time')
+          realized = sum(realized, net)
+          balance = sum(balance, net)
+          steps.push({
+            product: String(row.product),
+            trade_no: tradeNo,
+            side,
+            exit_ms: exit,
+            net_usd: display(net),
+            balance_usd: display(balance),
+          })
         }
-        const net = amount(row.net_usd)
-        const exit = num(row.exit_ms)
-        if (net === null || exit === null) continue
-        realized += net
-        balance += net
-        steps.push({
-          product: String(row.product),
-          trade_no: tradeNo,
-          side,
-          exit_ms: exit,
-          net_usd: net,
-          balance_usd: balance,
-        })
-      }
-      return {
-        status: 'ok',
-        start_usd: startUsd,
-        balance_usd: balance + openUsd,
-        realized_usd: realized,
-        open_usd: openUsd,
-        open_count: openCount,
-        funding_incomplete: incomplete,
-        steps,
-      }
+        return {
+          status: 'ok' as const,
+          start_usd: display(initial),
+          balance_usd: display(sum(balance, openUsd)),
+          realized_usd: display(realized),
+          open_usd: display(openUsd),
+          open_count: openCount,
+          funding_incomplete: incomplete,
+          steps,
+        }
+      })
+      if (opened.state !== 'read')
+        return {
+          status: opened.state === 'missing' ? 'off' : 'error',
+          reason: opened.detail,
+        }
+      return opened.value
     },
   }
 }

@@ -52,6 +52,11 @@ class FakeHistory:
 class FindDropsTest(unittest.TestCase):
     principal, filtro = rb.RULES["rebote"], rb.RULES["rebote_btc"]
 
+    def test_nan_and_nonpositive_closes_never_create_a_drop(self):
+        for bad in (float("nan"), 0.0, -1.0):
+            eth = series([2000.0] * 12 + [bad])
+            self.assertEqual(rb.find_drops(eth, None, self.principal, T0, T0 + 13 * BAR), [])
+
     def test_a_drop_of_5_percent_in_an_hour_fires_and_4_9_does_not(self):
         n = 12 * 24 * 3
         fires = rb.find_drops(series(flat_with_drop(n, 12 * 30, -5.0)), None, self.principal, T0, T0 + n * BAR)

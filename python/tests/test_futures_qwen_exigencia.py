@@ -72,7 +72,7 @@ class ExigenciaWiringTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             spawned = []
             api = quick_api.QuickTestApi(os.path.join(folder, "exam-v3.sqlite"), python="py",
-                                         spawn=lambda *a: spawned.append(a))
+                                         spawn=lambda *a: spawned.append(a), news_only=False)
             api.launch(models.QWEN_LIVE_ID, "formula", {"maestro": 8, "portero": "2"})
             env = spawned[0][1]
             self.assertEqual((env[ex.ENV_MAESTRO], env[ex.ENV_PORTERO]), ("8", "2"))

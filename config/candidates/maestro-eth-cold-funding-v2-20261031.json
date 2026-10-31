@@ -1,0 +1,68 @@
+{
+ "ajuste": {
+  "acierto_signo": 0.5605,
+  "desde": "2025-10-29",
+  "flojo_share": 0.5,
+  "fotos": 8824,
+  "fuerte_share": 0.2,
+  "hasta": "2026-01-31",
+  "l2": 10.0,
+  "productos": [
+   "PF_ETHUSD"
+  ]
+ },
+ "coeficientes": {
+  "area_out": 0.048064,
+  "area_signed": -0.043334,
+  "move15_n": 0.006859,
+  "pos24": -0.496807,
+  "pos7": -0.138106,
+  "ret_1h": 0.020618,
+  "ret_24h": -0.243393,
+  "ret_4h": 0.076705,
+  "ret_7d": -0.36828,
+  "since_diff": 0.062195,
+  "strength": -0.046601,
+  "z_1h": 0.030868,
+  "z_24h": 0.618264,
+  "z_4h": -0.044264,
+  "z_7d": 0.416246
+ },
+ "nota": "Candidato en fr\u00edo; historial explorado, no validaci\u00f3n a ciegas.",
+ "plazo_min": 720,
+ "provenance": {
+  "cold_start": true,
+  "fit_until_ms": 1769904000000,
+  "funding_model": "kraken-absolute-quantity.v2",
+  "historical_exploration": true,
+  "independent_raw_features": true,
+  "last_label_end_ms": 1769903100000,
+  "target": "direction_12h"
+ },
+ "regla_paper": {
+  "ejecucion": "el coordinador aplica las reglas de entrada y salida; este archivo no las fija",
+  "rol": "solo predicci\u00f3n de direcci\u00f3n a 12 h"
+ },
+ "schema": "balancita-qwen-lora-maestro.v1",
+ "sd": {
+  "area_out": 3.40449821,
+  "area_signed": 0.36120423,
+  "move15_n": 1.05247911,
+  "pos24": 0.51644788,
+  "pos7": 0.54157001,
+  "ret_1h": 0.00702078,
+  "ret_24h": 0.03230249,
+  "ret_4h": 0.01431304,
+  "ret_7d": 0.07335995,
+  "since_diff": 12.92366959,
+  "strength": 0.55941253,
+  "z_1h": 1.03665958,
+  "z_24h": 0.90019853,
+  "z_4h": 1.0204558,
+  "z_7d": 0.99513846
+ },
+ "umbrales": {
+  "flojo": 0.226449,
+  "fuerte": 0.443395
+ }
+}

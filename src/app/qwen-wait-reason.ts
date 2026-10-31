@@ -61,6 +61,8 @@ export function skippedReason(reason: unknown, detail?: unknown): string {
       'No decidió: el proceso de Qwen estaba apagado a esa hora.',
     datos_incompletos:
       'No se le preguntó: la ficha estaba incompleta (faltaban datos), y los datos viejos no se le muestran.',
+    saldo_insuficiente:
+      'No abrió la operación: no hay saldo disponible después de reservar margen y comisiones.',
   }
   if (typeof reason === 'string' && known[reason]) return known[reason]
   const extra =
@@ -117,8 +119,12 @@ const OPINION_WORDS: Record<string, string> = {
 /** Version 9: the formulas decide and Qwen only gives an opinion next to them; both are said, with who did what. */
 function formulaReason(row: Record<string, unknown>): string {
   const action = String(row.formula_action)
-  const why = record(row.formula).motivo
-  const head = `Decidió la fórmula: ${OPINION_WORDS[action] ?? action}${typeof why === 'string' ? ` (${why})` : ''}.`
+  const formula = record(row.formula)
+  const why = formula.motivo
+  const author =
+    formula.authority === 'noticias' ? 'Noticias' : 'Decidió la fórmula'
+  const head = `${author}: ${OPINION_WORDS[action] ?? action}${typeof why === 'string' ? ` (${why})` : ''}.`
+  if (formula.opinion_enabled === false) return head
   const opinion = typeof row.model_action === 'string' ? row.model_action : null
   if (!opinion)
     return `${head} Qwen no dio opinión esta vez${typeof row.opinion_error === 'string' ? ` (${row.opinion_error.replaceAll('_', ' ')})` : ''}.`
