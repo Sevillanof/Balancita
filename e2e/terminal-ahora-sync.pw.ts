@@ -131,7 +131,9 @@ async function openTerminal(page: Page) {
   await page.clock.resume()
   await page.goto('/terminal')
   // The Terminal is ETH only: there is no product selector.
-  await expect(page.getByRole('combobox')).toHaveCount(0)
+  await expect(
+    page.getByRole('combobox', { name: /Producto|Moneda/ }),
+  ).toHaveCount(0)
   await expect(page.getByTestId('approved-chart-renderer')).toBeVisible()
   // The chart of the switched product has painted its markers.
   await markerPositions(page.getByTestId('approved-chart-renderer'))
@@ -139,13 +141,28 @@ async function openTerminal(page: Page) {
 
 test('the Terminal opens on ETH, the traded product', async ({ page }) => {
   await page.goto('/terminal')
-  await expect(page.getByRole('combobox')).toHaveCount(0)
-  await expect(page.getByRole('heading', { level: 1 })).toContainText(
-    'Ethereum',
-  )
+  await expect(
+    page.getByRole('combobox', { name: /Producto|Moneda/ }),
+  ).toHaveCount(0)
+  await expect(page.getByRole('heading', { level: 1 })).toContainText('ETH')
   if (SHOTS)
     await page.screenshot({ path: `${SHOTS}/terminal-abre-en-eth.png` })
 })
+
+/** The decisions list lives in the «Historial de señales» window. */
+async function openHistory(page: Page) {
+  await page.getByRole('button', { name: /Historial de señales/ }).click()
+  await expect(
+    page.getByRole('dialog', { name: 'Historial de señales' }),
+  ).toBeVisible()
+}
+
+async function closeHistory(page: Page) {
+  await page.keyboard.press('Escape')
+  await expect(
+    page.getByRole('dialog', { name: 'Historial de señales' }),
+  ).toBeHidden()
+}
 
 test('history rows and chart markers are the same decisions and select each other', async ({
   page,
@@ -155,16 +172,17 @@ test('history rows and chart markers are the same decisions and select each othe
   const entries = facts.PF_ETHUSD!.filter((f) => f.action !== 'WAIT')
   expect(entries).toHaveLength(3)
   const rows = page.locator('[aria-label="Lista de decisiones"] li button')
-  // The list pages its items (grouped WAITs count as one): the current page
-  // always shows at least one decision.
-  await expect(rows.first()).toBeVisible()
   // The visible legend names every kind of marker, apart from each other.
-  const legend = page.getByLabel('Leyenda del gráfico')
+  // (in the fitted terminal it opens from the one-line legend of the chart)
+  await page.getByRole('button', { name: 'Leyenda del gráfico' }).click()
+  const legend = page.getByRole('dialog', { name: 'Leyenda del gráfico' })
   await expect(legend).toContainText('propuesta LONG/SHORT')
   await expect(legend).toContainText('W = WAIT')
   await expect(legend).toContainText('EJEC. ejecución paper')
   await expect(legend).toContainText('salida')
   await expect(legend).not.toContainText('entrada larga')
+  await page.keyboard.press('Escape')
+  await expect(legend).toBeHidden()
   // Proposals, grouped WAITs and the durable fill: each from a real source.
   const positions = await markerPositions(chart)
   const ids = positions.map((p) => p.id)
@@ -191,7 +209,10 @@ test('history rows and chart markers are the same decisions and select each othe
     await page.screenshot({ path: `${SHOTS}/leyenda-marcadores.png` })
   }
 
-  // History -> chart: pick a decision row of the current page.
+  // History -> chart: pick a decision row of the current page. The list
+  // pages its items (grouped WAITs count as one): the page shows at least one.
+  await openHistory(page)
+  await expect(rows.first()).toBeVisible()
   const firstRow = rows.first()
   const pickedId = (await firstRow.getAttribute('aria-label'))!.replace(
     'Seleccionar análisis ',
@@ -203,6 +224,7 @@ test('history rows and chart markers are the same decisions and select each othe
   const detail = page.getByLabel('Decisión seleccionada')
   await expect(detail).toContainText(short.action)
   await expect(detail).toContainText(hmm(short.decisionTimeMs))
+  await closeHistory(page)
   // The selected marker is inside the visible chart.
   const box = (await chart.boundingBox())!
   const selected = (await markerPositions(chart)).find(
@@ -223,15 +245,22 @@ test('history rows and chart markers are the same decisions and select each othe
   const other = entries.find((f) => f.analysisId === target.id)!
   await clickMarker(page, chart, target.id)
   await expect(chart).toHaveAttribute('data-selected-marker', other.analysisId)
-  await expect(
-    page.getByRole('button', {
-      name: `Seleccionar análisis ${other.analysisId}`,
-    }),
-  ).toHaveAttribute('aria-pressed', 'true')
+  await openHistory(page)
+  // The window opens on its first page: go forward until the row shows.
+  const otherRow = page.getByRole('button', {
+    name: `Seleccionar análisis ${other.analysisId}`,
+  })
+  const next = page
+    .getByRole('dialog', { name: 'Historial de señales' })
+    .getByRole('button', { name: 'Siguiente' })
+  for (let i = 0; i < 20 && !(await otherRow.isVisible()); i++)
+    await next.click()
+  await expect(otherRow).toHaveAttribute('aria-pressed', 'true')
   await expect(detail).toContainText(other.action)
   await expect(detail).toContainText(hmm(other.decisionTimeMs))
   if (SHOTS)
     await page.screenshot({ path: `${SHOTS}/seleccion-sincronizada.png` })
+  await closeHistory(page)
 })
 
 test('clicking the EJEC. marker on the canvas opens the facts of its fill, apart from every decision', async ({
@@ -427,10 +456,13 @@ test('a hole in the candles never moves a marker onto an earlier candle', async 
   expect(ids).not.toContain(holed.analysisId)
   // It stays in the history, and says why it is not on the chart.
   // The list pages its items: go forward until the verdict's row shows.
+  await openHistory(page)
   const holedRow = page.getByRole('button', {
     name: `Seleccionar análisis ${holed.analysisId}`,
   })
-  const next = page.getByRole('button', { name: 'Siguiente' })
+  const next = page
+    .getByRole('dialog', { name: 'Historial de señales' })
+    .getByRole('button', { name: 'Siguiente' })
   for (let i = 0; i < 20 && !(await holedRow.isVisible()); i++)
     await next.click()
   await holedRow.click()
@@ -501,11 +533,11 @@ test('chart controls on real data: timeframes, zoom, navigation, back to present
   expect(Number(await xOf(last!.analysisId))).toBeLessThan(box.width)
 
   // Timeframes: every marker lands on a real candle of that timeframe.
+  // (a menu in the fitted terminal)
+  const timeframe = page.getByRole('combobox', { name: 'Temporalidad' })
   for (const label of ['5m', '15m', '1h', '4h', '1m']) {
-    await page.getByRole('button', { name: label, exact: true }).click()
-    await expect(
-      page.getByRole('button', { name: label, exact: true }),
-    ).toHaveAttribute('aria-pressed', 'true')
+    await timeframe.selectOption({ label })
+    await expect(timeframe.locator('option:checked')).toHaveText(label)
     await expect(page.getByText(/Cargando velas/)).toHaveCount(0, {
       timeout: 10_000,
     })
@@ -527,14 +559,18 @@ test('chart controls on real data: timeframes, zoom, navigation, back to present
   }
 
   // Indicators on and off.
-  await page.getByText('Indicadores y paneles').click()
+  await page.getByRole('button', { name: 'Indicadores y paneles' }).click()
   for (const name of ['EMA 9', 'Bollinger 20', 'Donchian 20', 'VWAP diario']) {
     await page.getByRole('checkbox', { name }).check()
     await page.getByRole('checkbox', { name }).uncheck()
   }
   await page.getByRole('checkbox', { name: 'RSI 14' }).check()
   await expect(chart).toBeVisible()
-  await page.getByRole('checkbox', { name: 'RSI 14' }).uncheck()
+  // The new pane's divider is drawn over the window at this spot and eats
+  // mouse clicks, so the box is switched off from the keyboard.
+  await page.getByRole('checkbox', { name: 'RSI 14' }).focus()
+  await page.keyboard.press('Space')
+  await expect(page.getByRole('checkbox', { name: 'RSI 14' })).not.toBeChecked()
   expect(errors).toEqual([])
   expect(failures.filter((f) => f.includes('/api-live/'))).toEqual([])
 })

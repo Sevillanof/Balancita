@@ -1,4 +1,4 @@
-import { render, screen, within } from '@testing-library/react'
+import { fireEvent, render, screen, within } from '@testing-library/react'
 import { describe, expect, it } from 'vitest'
 import MarketStrip from './MarketStrip.tsx'
 import TerminalNotices from './TerminalNotices.tsx'
@@ -15,6 +15,30 @@ const props = {
 }
 
 describe('MarketStrip', () => {
+  it('preserves actual warnings and event evidence in the compact header', () => {
+    render(
+      <MarketStrip
+        {...props}
+        compact
+        alerts={[
+          {
+            key: 'stale',
+            tone: 'warn',
+            text: 'Precio atrasado: entradas detenidas.',
+          },
+        ]}
+      />,
+    )
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Ver 1 aviso de mercado' }),
+    )
+    expect(
+      screen.getByRole('dialog', { name: 'Avisos del mercado' }),
+    ).toHaveTextContent('Precio atrasado: entradas detenidas.')
+    expect(screen.getByRole('dialog')).toHaveTextContent(props.eventTimes)
+    fireEvent.keyDown(window, { key: 'Escape' })
+    expect(screen.queryByRole('dialog')).toBeNull()
+  })
   it.each([
     [0, '+0% 24 h', 'ok', 'text-long'],
     [2.25, '+2,25% 24 h', 'ok', 'text-long'],

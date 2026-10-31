@@ -33,6 +33,8 @@ Design rules
 * ``news_features(db, t)`` is pure over the stored rows and has no lookahead: an item
   counts at decision time ``t`` only if it was received at or before ``t`` and both of
   its answers were stored at or before ``t``.
+* The optional news briefing is a separate, append-only, view-only Qwen synthesis.
+  Its bounded background chat never writes classifier rows or enters ``news_features``.
 * Stdlib only, Python 3.9+.
 """
 
@@ -54,6 +56,7 @@ from datetime import datetime, timedelta, timezone
 from html import unescape
 
 from . import system_trust
+from .futures_news_briefing import BriefingService, create_table as create_briefing_table
 from .futures_llm_decisions import (
     LOOPBACK_HOSTS,
     SOURCE_MODES,
@@ -509,6 +512,7 @@ class NewsStore:
                   BEFORE DELETE ON paper_futures_news_{t} BEGIN SELECT RAISE(ABORT, 'news is immutable'); END;
                 """.format(t=table)
             )
+        create_briefing_table(self.db)
 
     def register_sources(self, sources, now, interval_ms, retry_window_ms, max_published_age_ms, max_analyses_per_poll):
         with self.db:
@@ -699,6 +703,9 @@ class NewsService:
         self.source_set_id = self.store.register_sources(
             self.sources, self.clock(), self.interval_ms, self.retry_window_ms,
             self.max_published_age_ms, self.max_analyses_per_poll)
+        self.briefing = BriefingService(
+            self.store, self.provider, enabled=options.get("briefing_enabled", False),
+            clock=self.clock, log=self.log)
 
     def _problem_once(self, key, message):
         if self._problems.get(key) != message:
@@ -860,10 +867,11 @@ class NewsService:
         else:
             self._problems.pop("db", None)
             self._problems.pop("unexpected", None)
+        self.briefing.tick()
         return result
 
     def close(self):
-        pass
+        self.briefing.close()
 
 
 # --------------------------------------------------------------------------- cli
@@ -889,6 +897,8 @@ def _build_news_parser():
     parser.add_argument("--once", action="store_true", help="poll every source once, analyze, and exit")
     parser.add_argument("--analyze", action="store_true",
                         help="ask the local llama-server the news questions (also NEWS_ANALYSIS=1); ingest never needs it")
+    parser.add_argument("--no-briefing", action="store_true",
+                        help="disable the view-only news synthesis (otherwise enabled with analysis)")
     parser.add_argument("--features-at", type=int, metavar="MS",
                         help="print the stored features known at this decision time (epoch ms) and exit")
     parser.add_argument("--llama-url", help="default: http://127.0.0.1:$LLAMA_PORT (8088); loopback only")
@@ -927,7 +937,9 @@ def _resolve_analysis_options(args, env, provider):
 
 def _run_service_loop(service, store, args, sources, interval, provider, log):
     if args.once:
-        print(_summary(service.poll()))
+        outcome = service.poll()
+        service.briefing.drain()
+        print(_summary(outcome))
         return 0
     log("news writing to {} (config {}); {} source(s), every {} s; analysis {}".format(
         args.news_db, store.config_hash[:12], len(sources), int(interval),
@@ -966,7 +978,8 @@ def main(argv=None, provider=None, fetcher=None):
             template=template, probability_source=mode, log=log, interval_ms=int(interval * 1000),
             retry_window_ms=int(args.retry_window_minutes * MINUTE_MS),
             max_published_age_ms=int(args.max_published_age_hours * HOUR_MS),
-            max_analyses_per_poll=args.max_analyses_per_poll)
+            max_analyses_per_poll=args.max_analyses_per_poll,
+            briefing_enabled=provider is not None and not args.no_briefing)
     except (OSError, ValueError) as error:
         if store is not None:
             store.close()

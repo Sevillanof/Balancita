@@ -33,7 +33,7 @@ const flow = (extra: Record<string, number | null>) => ({
   ...extra,
 })
 
-function panel(live = true, product?: string) {
+function panel(live = true, product?: string, viewport = false) {
   return (
     <TerminalChartPanel
       candles={[candle(1_000), candle(1_060)]}
@@ -42,6 +42,7 @@ function panel(live = true, product?: string) {
       onSelect={() => undefined}
       apiBase="http://x"
       live={live}
+      viewport={viewport}
       product={product}
       ticker={null}
       position={{}}
@@ -64,6 +65,30 @@ beforeEach(() => {
 })
 
 describe('chart controls and market facts', () => {
+  it('keeps all timeframes, indicators and market facts accessible in bounded mode', () => {
+    render(panel(true, 'PF_ETHUSD', true))
+    fireEvent.change(screen.getByRole('combobox', { name: 'Temporalidad' }), {
+      target: { value: '300000' },
+    })
+    expect(screen.getByText('Cargando velas de 5m…')).toBeTruthy()
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Indicadores y paneles' }),
+    )
+    fireEvent.click(screen.getByLabelText('EMA 9'))
+    expect(screen.getByLabelText('EMA 9')).toBeChecked()
+    fireEvent.keyDown(window, { key: 'Escape' })
+    expect(screen.queryByRole('dialog')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Datos del mercado' }))
+    const dialog = screen.getByRole('dialog', { name: 'Datos del mercado' })
+    expect(dialog).toHaveTextContent('Funding (por hora)')
+    expect(dialog).toHaveTextContent('Bid / ask')
+    expect(dialog).toHaveTextContent('Cuentas en largo')
+    fireEvent.keyDown(window, { key: 'Escape' })
+    fireEvent.click(screen.getByRole('button', { name: 'Leyenda del gráfico' }))
+    expect(
+      screen.getByRole('dialog', { name: 'Leyenda del gráfico' }),
+    ).toHaveTextContent('entrada larga')
+  })
   it('keeps the two market fact groups and their source labels', () => {
     render(panel())
     const compact = screen.getByLabelText('Datos del mercado')

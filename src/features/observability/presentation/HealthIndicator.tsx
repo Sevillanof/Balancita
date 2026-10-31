@@ -269,7 +269,13 @@ export default function HealthIndicator({
   applicable = true,
   flow,
   extra,
-}: HealthRead & { applicable?: boolean; flow?: FlowFace; extra?: ReactNode }) {
+  compact = false,
+}: HealthRead & {
+  applicable?: boolean
+  flow?: FlowFace
+  extra?: ReactNode
+  compact?: boolean
+}) {
   const [open, setOpen] = useState(false)
   const [now, setNow] = useState(Date.now)
   // The clock always runs so `now` is never older than a tick when a report arrives.
@@ -315,24 +321,34 @@ export default function HealthIndicator({
     <>
       <button
         type="button"
-        className={OBS.health}
+        className={compact ? `${OBS.health} px-2 py-1 text-label` : OBS.health}
         data-tone={tone}
         aria-haspopup="dialog"
         aria-expanded={open}
+        aria-label={
+          compact
+            ? [text, flow?.text, flow?.mode].filter(Boolean).join(' · ')
+            : undefined
+        }
         data-testid="health-indicator"
         onClick={() => setOpen(true)}
         title={
           applicable && qualification
             ? `Lectura anterior: ${qualification}`
-            : 'Abrir el estado del sistema'
+            : compact
+              ? [text, flow?.text, flow?.mode].filter(Boolean).join(' · ')
+              : 'Abrir el estado del sistema'
         }
       >
         <span className={OBS.dot} aria-hidden="true" />
-        {applicable && <span>{text}</span>}
+        {applicable && (
+          <span className={compact ? 'sr-only' : undefined}>{text}</span>
+        )}
+        {compact && <span aria-hidden="true">Salud</span>}
         {flow && (
           <>
             <span
-              className={OBS.flow}
+              className={compact ? 'sr-only' : OBS.flow}
               data-level={flow.level}
               data-testid="flow-status"
             >

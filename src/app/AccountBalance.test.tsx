@@ -35,6 +35,13 @@ const account = qwenAccount({
 })!
 
 describe('AccountBalanceView', () => {
+  it('distinguishes current equity from capital after closed operations in the compact header', () => {
+    render(<AccountBalanceView account={account} compact />)
+    expect(screen.getByText('Valor actual')).toBeTruthy()
+    expect(screen.getByText('Realizado')).toBeTruthy()
+    expect(screen.getByTestId('account-realized')).toHaveTextContent('1003,00')
+    expect(screen.getByTestId('account-balance')).toHaveTextContent('1003,50')
+  })
   it('shows only the formatted number, and the chart after a click', () => {
     render(<AccountBalanceView account={account} />)
     const button = screen.getByTestId('account-balance')

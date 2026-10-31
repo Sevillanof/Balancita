@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
+import ModalFrame from '../../strategy-lab/presentation/ModalFrame.tsx'
 import { productBase, productPair } from '../domain/product-label.ts'
 import { amount, compactUsd, usd } from '../../../shared/finance/format.ts'
 import ApprovedTerminalChart, {
@@ -35,6 +36,13 @@ import {
   chartPositions,
   timeframeCandles,
 } from '../domain/terminal-chart-model.ts'
+import {
+  tradeIdentity,
+  tradeHistoryNotice,
+  tradeTone,
+  type TerminalChartTrade,
+} from '../domain/terminal-trade-model.ts'
+import { signedUsd } from '../../../app/qwen-trades-text.ts'
 
 const SUMMARY_CLASSES =
   'inline-flex min-h-7.5 items-center rounded-lg border border-solid border-line px-chart-control py-0 text-ink-2 cursor-pointer chart-desktop:min-h-6.5 chart-desktop:whitespace-nowrap'
@@ -48,21 +56,84 @@ const LABEL_CLASSES =
 function ChartStats({
   children,
   compact = false,
+  dialog = false,
 }: {
   children: ReactNode
   compact?: boolean
+  dialog?: boolean
 }) {
   return (
     <dl
       aria-label={compact ? 'Datos del mercado' : 'Más datos del mercado'}
-      className={`m-0 grid grid-cols-chart-stats gap-x-4 gap-y-chart-row px-3 py-0 text-provenance leading-normal chart-phone:flex chart-phone:gap-chart-gap chart-phone:overflow-x-auto chart-phone:pb-1 chart-phone:snap-x chart-phone:snap-proximity chart-desktop:flex chart-desktop:gap-chart-gap ${
-        compact
-          ? 'chart-phone:flex-none chart-desktop:order-2 chart-desktop:min-w-0 chart-desktop:flex-auto chart-desktop:basis-full chart-desktop:shrink-0 chart-desktop:flex-nowrap chart-desktop:justify-start chart-desktop:gap-x-chart-strip chart-desktop:gap-y-0 chart-desktop:p-0 chart-desktop:text-stat-label'
-          : 'group-open:absolute group-open:top-popover group-open:left-0 group-open:z-20 group-open:w-chart-popover group-open:rounded-lg group-open:border group-open:border-solid group-open:border-line group-open:bg-surface-1 group-open:p-chart-inset! group-open:shadow-popover chart-desktop:flex-wrap chart-desktop:pt-2'
-      }`}
+      className={
+        dialog
+          ? 'm-0 grid grid-cols-1 gap-2 text-body from-600:grid-cols-2 child-div:min-w-0 child-div:whitespace-normal'
+          : `m-0 grid grid-cols-chart-stats gap-x-4 gap-y-chart-row px-3 py-0 text-provenance leading-normal chart-phone:flex chart-phone:gap-chart-gap chart-phone:overflow-x-auto chart-phone:pb-1 chart-phone:snap-x chart-phone:snap-proximity chart-desktop:flex chart-desktop:gap-chart-gap ${
+              compact
+                ? 'chart-phone:flex-none chart-desktop:order-2 chart-desktop:min-w-0 chart-desktop:flex-auto chart-desktop:basis-full chart-desktop:shrink-0 chart-desktop:flex-nowrap chart-desktop:justify-start chart-desktop:gap-x-chart-strip chart-desktop:gap-y-0 chart-desktop:p-0 chart-desktop:text-stat-label'
+                : 'group-open:absolute group-open:top-popover group-open:left-0 group-open:z-20 group-open:w-chart-popover group-open:rounded-lg group-open:border group-open:border-solid group-open:border-line group-open:bg-surface-1 group-open:p-chart-inset! group-open:shadow-popover chart-desktop:flex-wrap chart-desktop:pt-2'
+            }`
+      }
     >
       {children}
     </dl>
+  )
+}
+
+function ChartMenu({
+  label,
+  compactLabel,
+  viewport,
+  inline = false,
+  compactStats,
+  children,
+}: {
+  label: string
+  compactLabel: string
+  viewport: boolean
+  inline?: boolean
+  compactStats?: ReactNode
+  children: ReactNode
+}) {
+  const [open, setOpen] = useState(false)
+  if (!viewport && inline) return children
+  if (!viewport)
+    return (
+      <>
+        <details className="group relative text-provenance leading-normal chart-phone:flex-none">
+          <summary className={SUMMARY_CLASSES}>{label}</summary>
+          {children}
+        </details>
+        {compactStats}
+      </>
+    )
+  return (
+    <>
+      <button
+        type="button"
+        aria-label={label}
+        onClick={() => setOpen(true)}
+        className={
+          inline
+            ? 'cursor-pointer border-0 bg-transparent px-2 py-0 text-left text-label text-ink-2'
+            : 'min-h-6 cursor-pointer rounded-sm border border-solid border-line bg-transparent px-2 text-label text-ink-2'
+        }
+      >
+        {compactLabel}
+      </button>
+      {open && (
+        <ModalFrame label={label} wide onClose={() => setOpen(false)}>
+          <header className="flex items-center justify-between gap-2">
+            <h2>{label}</h2>
+            <button type="button" onClick={() => setOpen(false)}>
+              Cerrar
+            </button>
+          </header>
+          {compactStats}
+          {children}
+        </ModalFrame>
+      )}
+    </>
   )
 }
 
@@ -407,6 +478,12 @@ export default function TerminalChartPanel({
   proposalLegend = false,
   historicalLabel,
   instrument = `${productPair(product)} perpetuo`,
+  trades,
+  tradesConfirmed = false,
+  selectedTradeId = '',
+  tradeFocus = null,
+  onSelectTrade,
+  viewport = false,
 }: {
   /** Live 1m candles from the terminal stream (seconds). */
   candles: readonly ApprovedTerminalCandle[]
@@ -431,6 +508,12 @@ export default function TerminalChartPanel({
   /** Positions and exits come from a retired book: every one carries this label. */
   historicalLabel?: string
   instrument?: string
+  trades?: readonly TerminalChartTrade[]
+  tradesConfirmed?: boolean
+  selectedTradeId?: string
+  tradeFocus?: { id: string; revision: number } | null
+  onSelectTrade?: (id: string) => void
+  viewport?: boolean
 }) {
   const [settings, setSettings] = useState<Settings>(loadSettings)
   const [now, setNow] = useState(() => Date.now())
@@ -466,6 +549,19 @@ export default function TerminalChartPanel({
     live,
     undefined,
     product,
+    trades === undefined
+      ? undefined
+      : Math.min(
+          5_000,
+          Math.max(
+            500,
+            Math.ceil(
+              ((candles.at(-1)?.time ?? 0) * 1000 -
+                Math.min(...trades.map((trade) => trade.entryMs))) /
+                settings.intervalMs,
+            ) + 60,
+          ),
+        ),
   )
   const intervalSeconds = settings.intervalMs / 1000
   // Real data: wait for the server series instead of opening on the few
@@ -670,31 +766,78 @@ export default function TerminalChartPanel({
   const change = stats?.change_24h_pct ?? null
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col gap-chart-gap chart-desktop:gap-chart-tight">
-      <div className="flex flex-wrap items-center gap-x-4 gap-y-2 px-3 py-0 chart-phone:flex-nowrap chart-phone:gap-x-3 chart-phone:overflow-x-auto chart-phone:pb-1 chart-desktop:gap-x-3 chart-desktop:gap-y-1 chart-desktop:px-2">
-        <div
-          className="inline-flex gap-0.5 rounded-lg border border-solid border-line p-0.75 chart-phone:flex-none chart-desktop:p-0.5"
-          role="group"
-          aria-label="Temporalidad"
+    <div
+      className={
+        viewport
+          ? 'flex min-h-0 min-w-0 flex-1 flex-col gap-1'
+          : 'flex min-h-0 flex-1 flex-col gap-chart-gap chart-desktop:gap-chart-tight'
+      }
+    >
+      <div
+        className={
+          viewport
+            ? 'flex flex-none items-center gap-2 px-2'
+            : 'flex flex-wrap items-center gap-x-4 gap-y-2 px-3 py-0 chart-phone:flex-nowrap chart-phone:gap-x-3 chart-phone:overflow-x-auto chart-phone:pb-1 chart-desktop:gap-x-3 chart-desktop:gap-y-1 chart-desktop:px-2'
+        }
+      >
+        {viewport ? (
+          <select
+            aria-label="Temporalidad"
+            value={settings.intervalMs}
+            onChange={(event) =>
+              setSettings((value) => ({
+                ...value,
+                intervalMs: Number(event.target.value),
+              }))
+            }
+            className="h-6 cursor-pointer rounded-sm border border-solid border-line bg-surface-1 px-1 py-0 text-label leading-4 text-ink"
+          >
+            {CHART_TIMEFRAMES.map((item) => (
+              <option key={item.ms} value={item.ms}>
+                {item.label}
+              </option>
+            ))}
+          </select>
+        ) : (
+          <div
+            className="inline-flex gap-0.5 rounded-lg border border-solid border-line p-0.75 chart-phone:flex-none chart-desktop:p-0.5"
+            role="group"
+            aria-label="Temporalidad"
+          >
+            {CHART_TIMEFRAMES.map((item) => (
+              <button
+                className="min-h-7.5 cursor-pointer rounded-brand border-0 border-none border-current bg-transparent px-chart-control py-0 text-control! leading-normal! text-ink-2 aria-pressed:bg-line aria-pressed:text-inherit chart-desktop:min-h-6.5 chart-desktop:whitespace-nowrap"
+                key={item.ms}
+                type="button"
+                aria-pressed={settings.intervalMs === item.ms}
+                onClick={() =>
+                  setSettings((value) => ({ ...value, intervalMs: item.ms }))
+                }
+              >
+                {item.label}
+              </button>
+            ))}
+          </div>
+        )}
+        <ChartMenu
+          viewport={viewport}
+          label="Indicadores y paneles"
+          compactLabel="Indicadores"
         >
-          {CHART_TIMEFRAMES.map((item) => (
-            <button
-              className="min-h-7.5 cursor-pointer rounded-brand border-0 border-none border-current bg-transparent px-chart-control py-0 text-control! leading-normal! text-ink-2 aria-pressed:bg-line aria-pressed:text-inherit chart-desktop:min-h-6.5 chart-desktop:whitespace-nowrap"
-              key={item.ms}
-              type="button"
-              aria-pressed={settings.intervalMs === item.ms}
-              onClick={() =>
-                setSettings((value) => ({ ...value, intervalMs: item.ms }))
+          <div
+            className={
+              viewport
+                ? 'grid min-w-0 gap-3'
+                : 'absolute top-popover left-0 z-20 grid min-w-88 gap-2 rounded-lg border border-solid border-line bg-surface-1 p-3 shadow-popover'
+            }
+          >
+            <fieldset
+              className={
+                viewport
+                  ? 'm-0 grid grid-cols-1 gap-1 border-0 p-0 from-600:grid-cols-2'
+                  : TOGGLES_CLASSES
               }
             >
-              {item.label}
-            </button>
-          ))}
-        </div>
-        <details className="relative text-provenance leading-normal chart-phone:flex-none">
-          <summary className={SUMMARY_CLASSES}>Indicadores y paneles</summary>
-          <div className="absolute top-popover left-0 z-20 grid min-w-88 gap-2 rounded-lg border border-solid border-line bg-surface-1 p-3 shadow-popover">
-            <fieldset className={TOGGLES_CLASSES}>
               <legend className={LEGEND_CLASSES}>Indicadores</legend>
               {OVERLAYS.map((item) => (
                 <label className={LABEL_CLASSES} key={item.id}>
@@ -717,7 +860,13 @@ export default function TerminalChartPanel({
                 </label>
               ))}
             </fieldset>
-            <fieldset className={TOGGLES_CLASSES}>
+            <fieldset
+              className={
+                viewport
+                  ? 'm-0 grid grid-cols-1 gap-1 border-0 p-0 from-600:grid-cols-2'
+                  : TOGGLES_CLASSES
+              }
+            >
               <legend className={LEGEND_CLASSES}>Paneles</legend>
               {PANES.map((item) => (
                 <label className={LABEL_CLASSES} key={item.id}>
@@ -737,10 +886,52 @@ export default function TerminalChartPanel({
               ))}
             </fieldset>
           </div>
-        </details>
-        <details className="group relative text-provenance leading-normal chart-phone:flex-none">
-          <summary className={SUMMARY_CLASSES}>Más datos del mercado</summary>
-          <ChartStats>
+        </ChartMenu>
+        <ChartMenu
+          viewport={viewport}
+          label={viewport ? 'Datos del mercado' : 'Más datos del mercado'}
+          compactLabel="Mercado"
+          compactStats={
+            <ChartStats compact dialog={viewport}>
+              <ChartStat
+                label="Cambio 24 h"
+                compact
+                tone={
+                  change == null
+                    ? undefined
+                    : change >= 0
+                      ? 'text-long'
+                      : 'text-short'
+                }
+              >
+                {percent(change)}
+              </ChartStat>
+              <ChartStat label="Funding (por hora)" compact>
+                {stats?.relative_funding_rate == null
+                  ? '—'
+                  : percent(stats.relative_funding_rate * 100, 4)}
+                {' · próx. '}
+                {stats?.relative_funding_rate_prediction == null
+                  ? '—'
+                  : percent(stats.relative_funding_rate_prediction * 100, 4)}
+                {' en '}
+                {countdown(stats?.next_funding_time_ms, now)}
+              </ChartStat>
+              <ChartStat label="Bid / ask" compact>
+                {usd(stats?.bid, 0)} ({amount(stats?.bid_size, 3)}) /{' '}
+                {usd(stats?.ask, 0)} ({amount(stats?.ask_size, 3)}) · spread{' '}
+                {usd(stats?.spread)}
+              </ChartStat>
+              <ChartStat label="Interés abierto" compact>
+                {amount(stats?.open_interest, 1)} {productBase(product)}
+                {stats?.open_interest != null && stats.mark != null
+                  ? ` · ${compactUsd(stats.open_interest * stats.mark)}`
+                  : ''}
+              </ChartStat>
+            </ChartStats>
+          }
+        >
+          <ChartStats dialog={viewport}>
             <ChartStat label="Máx / mín 24 h">
               {usd(stats?.high_24h, 0)} / {usd(stats?.low_24h, 0)}
             </ChartStat>
@@ -765,44 +956,7 @@ export default function TerminalChartPanel({
                 : ` · top 20 %: ${amount(latestFlow.top_long_percent, 1)} %`}
             </ChartStat>
           </ChartStats>
-        </details>
-        <ChartStats compact>
-          <ChartStat
-            label="Cambio 24 h"
-            compact
-            tone={
-              change == null
-                ? undefined
-                : change >= 0
-                  ? 'text-long'
-                  : 'text-short'
-            }
-          >
-            {percent(change)}
-          </ChartStat>
-          <ChartStat label="Funding (por hora)" compact>
-            {stats?.relative_funding_rate == null
-              ? '—'
-              : percent(stats.relative_funding_rate * 100, 4)}
-            {' · próx. '}
-            {stats?.relative_funding_rate_prediction == null
-              ? '—'
-              : percent(stats.relative_funding_rate_prediction * 100, 4)}
-            {' en '}
-            {countdown(stats?.next_funding_time_ms, now)}
-          </ChartStat>
-          <ChartStat label="Bid / ask" compact>
-            {usd(stats?.bid, 0)} ({amount(stats?.bid_size, 3)}) /{' '}
-            {usd(stats?.ask, 0)} ({amount(stats?.ask_size, 3)}) · spread{' '}
-            {usd(stats?.spread)}
-          </ChartStat>
-          <ChartStat label="Interés abierto" compact>
-            {amount(stats?.open_interest, 1)} {productBase(product)}
-            {stats?.open_interest != null && stats.mark != null
-              ? ` · ${compactUsd(stats.open_interest * stats.mark)}`
-              : ''}
-          </ChartStat>
-        </ChartStats>
+        </ChartMenu>
       </div>
       {!live && (
         <p className="m-0 px-3 py-0 text-hint text-ink-2">
@@ -813,7 +967,11 @@ export default function TerminalChartPanel({
 
       {waiting ? (
         <p
-          className="m-0 grid h-terminal-chart place-items-center text-ink-2 chart-height"
+          className={
+            viewport
+              ? 'm-0 grid min-h-0 flex-1 place-items-center text-label text-ink-2'
+              : 'm-0 grid h-terminal-chart place-items-center text-ink-2 chart-height'
+          }
           role="status"
         >
           Cargando velas de {timeframeLabel}…
@@ -834,6 +992,12 @@ export default function TerminalChartPanel({
           profile={profile}
           panes={panes}
           priceLines={lines}
+          trades={trades}
+          viewport={viewport}
+          tradesConfirmed={tradesConfirmed}
+          selectedTradeId={selectedTradeId}
+          tradeFocus={tradeFocus}
+          onSelectTrade={onSelectTrade}
           onSelect={(time, markerId) => {
             if (markerId) {
               // An executed operation (EJEC.) opens its own facts; it never
@@ -875,15 +1039,95 @@ export default function TerminalChartPanel({
           }}
         />
       )}
-      {pendingPanes.map((pane) => (
+      {trades
+        ?.filter((trade) => tradeIdentity(trade) === selectedTradeId)
+        .map((trade) => {
+          const firstMs = (shown[0]?.time ?? 0) * 1000
+          const notice = firstMs > 0 ? tradeHistoryNotice(trade, firstMs) : null
+          return notice ? (
+            <p
+              key={tradeIdentity(trade)}
+              className={
+                viewport
+                  ? 'm-0 line-clamp-1 px-2 text-label text-warn'
+                  : 'm-0 px-3 text-label text-warn'
+              }
+              role="status"
+              title={notice}
+            >
+              {notice}
+            </p>
+          ) : null
+        })}
+      {trades !== undefined && trades.length > 0 && (
+        <div
+          className={
+            viewport
+              ? 'flex flex-none gap-1.5 overflow-x-auto border-t border-t-solid border-t-line px-2 py-0.5'
+              : 'flex gap-2.5 overflow-x-auto border-t border-t-solid border-t-line p-3'
+          }
+          aria-label="Operaciones registradas"
+        >
+          {trades.map((trade) => {
+            const id = tradeIdentity(trade)
+            const tone = tradeTone(trade, tradesConfirmed)
+            return (
+              <button
+                key={id}
+                type="button"
+                className={`flex-none cursor-pointer rounded-lg border border-solid ${viewport ? 'px-2 py-1 text-label' : 'px-3 py-2.5 text-label'} ${selectedTradeId === id ? 'border-chart-info bg-surface-1' : 'border-line bg-surface-2'} focus-visible:outline-2 focus-visible:outline-info`}
+                aria-pressed={selectedTradeId === id}
+                onClick={() => onSelectTrade?.(id)}
+              >
+                <span
+                  className={trade.side === 'LONG' ? 'text-long' : 'text-short'}
+                >
+                  {trade.side === 'LONG' ? '▲' : '▼'} {trade.side}
+                </span>
+                <small className="mx-2 text-ink-2">
+                  #{trade.tradeNo} · {trade.open ? 'En curso' : 'Cerrada'}
+                </small>
+                <strong
+                  className={
+                    tone === 'gain'
+                      ? 'text-long'
+                      : tone === 'loss'
+                        ? 'text-short'
+                        : tone === 'provisional'
+                          ? 'text-warn'
+                          : 'text-ink-2'
+                  }
+                >
+                  {!tradesConfirmed
+                    ? 'Sin confirmar'
+                    : trade.netUsd === null
+                      ? '—'
+                      : `${signedUsd(trade.netUsd)}${tone === 'provisional' ? ' *' : ''}`}
+                </strong>
+              </button>
+            )
+          })}
+        </div>
+      )}
+      {viewport && pendingPanes.length > 0 ? (
         <p
-          key={pane.id}
-          className="m-0 grid h-27.5 place-items-center border-t border-t-solid border-t-line text-ink-2"
+          className="m-0 line-clamp-1 px-2 text-label text-ink-2"
+          title={pendingPanes.map((pane) => pane.text).join(' · ')}
           role="status"
         >
-          {pane.text}
+          {pendingPanes.map((pane) => pane.text).join(' · ')}
         </p>
-      ))}
+      ) : (
+        pendingPanes.map((pane) => (
+          <p
+            key={pane.id}
+            className="m-0 grid h-27.5 place-items-center border-t border-t-solid border-t-line text-ink-2"
+            role="status"
+          >
+            {pane.text}
+          </p>
+        ))
+      )}
       {fillRows && (
         <section
           className="mx-3 my-0 rounded-lg border border-solid border-line-overlay px-3 py-2 text-hint"
@@ -912,63 +1156,93 @@ export default function TerminalChartPanel({
           </p>
         </section>
       )}
-      <p
-        className="m-0 flex flex-wrap gap-x-4 gap-y-1 px-3 py-0 text-hint text-ink-2"
-        aria-label="Leyenda del gráfico"
+      <ChartMenu
+        viewport={viewport}
+        inline
+        label="Leyenda del gráfico"
+        compactLabel="▲ LONG / ▼ SHORT · ━ Entrada · ● Neto · × Cierre · ⓘ"
       >
-        {proposalLegend ? (
-          <>
-            <span data-testid="legend-proposal">
-              <b className="text-long">▲</b>
-              <b className="text-short">▼</b> propuesta LONG/SHORT (no es una
-              operación)
-            </span>
-            <span data-testid="legend-wait">
-              <b style={{ color: colors.muted }}>◌</b> W = WAIT (W×n: agrupados)
-            </span>
-            <span data-testid="legend-fill">
-              <b className="text-long">■</b> EJEC. ejecución paper (EJ L/S, un
-              marcador por fill; el detalle sale al seleccionarlo)
-            </span>
-            <span data-testid="legend-exit">
-              <b style={{ color: colors.info }}>●</b> salida (stop, objetivo,
-              tiempo)
-            </span>
-            <span data-testid="legend-qwen">
-              <b style={{ color: colors.amber }}>■</b> Portero ✕ = el portero
-              frenó la entrada · Qwen ≠ = Qwen opina distinto
-            </span>
-          </>
-        ) : (
-          <>
+        <p
+          className="m-0 flex flex-wrap gap-x-4 gap-y-1 px-3 py-0 text-hint text-ink-2"
+          aria-label="Leyenda del gráfico"
+        >
+          {trades !== undefined && trades.length > 0 ? (
+            <>
+              <span>
+                <b className="text-long">▲ LONG</b> /{' '}
+                <b className="text-short">▼ SHORT</b> · operación registrada
+              </span>
+              <span>
+                <b className="text-chart-info">━</b> entrada fija hasta el
+                cierre
+              </span>
+              <span>
+                <b className="text-chart-info">×</b> cierre · ● neto a la marca
+                registrada
+              </span>
+              <span>
+                <b className="text-warn">*</b> funding incompleto · neto
+                provisional
+              </span>
+              <span title="Las marcas pequeñas son señales del motor, no operaciones. El sombreado es el recorrido observado del precio, no un cálculo de PnL por vela.">
+                Marcas pequeñas: señales · sombreado: precio
+              </span>
+            </>
+          ) : proposalLegend ? (
+            <>
+              <span data-testid="legend-proposal">
+                <b className="text-long">▲</b>
+                <b className="text-short">▼</b> propuesta LONG/SHORT (no es una
+                operación)
+              </span>
+              <span data-testid="legend-wait">
+                <b style={{ color: colors.muted }}>◌</b> W = WAIT (W×n:
+                agrupados)
+              </span>
+              <span data-testid="legend-fill">
+                <b className="text-long">■</b> EJEC. ejecución paper (EJ L/S, un
+                marcador por fill; el detalle sale al seleccionarlo)
+              </span>
+              <span data-testid="legend-exit">
+                <b style={{ color: colors.info }}>●</b> salida (stop, objetivo,
+                tiempo)
+              </span>
+              <span data-testid="legend-qwen">
+                <b style={{ color: colors.amber }}>■</b> Portero ✕ = el portero
+                frenó la entrada · Qwen ≠ = Qwen opina distinto
+              </span>
+            </>
+          ) : (
+            <>
+              <span>
+                <b className="text-long">▲</b> entrada larga
+              </span>
+              <span>
+                <b className="text-short">▼</b> entrada corta
+              </span>
+              <span>
+                <b style={{ color: colors.info }}>●</b> salida (stop, objetivo,
+                tiempo)
+              </span>
+            </>
+          )}
+          {panes.some((pane) => pane.id === 'flow') && (
             <span>
-              <b className="text-long">▲</b> entrada larga
+              Compra/venta: volumen agresor comprador arriba, vendedor abajo
             </span>
+          )}
+          {panes.some((pane) => pane.id === 'positioning') && (
             <span>
-              <b className="text-short">▼</b> entrada corta
+              Long/short: % de cuentas en largo (verde) y top 20 % (ámbar)
             </span>
+          )}
+          {panes.some((pane) => pane.id === 'premium') && (
             <span>
-              <b style={{ color: colors.info }}>●</b> salida (stop, objetivo,
-              tiempo)
+              Prima: precio del perpetuo sobre el contado, en puntos básicos
             </span>
-          </>
-        )}
-        {panes.some((pane) => pane.id === 'flow') && (
-          <span>
-            Compra/venta: volumen agresor comprador arriba, vendedor abajo
-          </span>
-        )}
-        {panes.some((pane) => pane.id === 'positioning') && (
-          <span>
-            Long/short: % de cuentas en largo (verde) y top 20 % (ámbar)
-          </span>
-        )}
-        {panes.some((pane) => pane.id === 'premium') && (
-          <span>
-            Prima: precio del perpetuo sobre el contado, en puntos básicos
-          </span>
-        )}
-      </p>
+          )}
+        </p>
+      </ChartMenu>
     </div>
   )
 }

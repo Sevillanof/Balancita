@@ -21,6 +21,17 @@ const candle = (time: number, close: number, volume = 1) => ({
 const colors = { entry: 'blue', stop: 'red', target: 'green' }
 
 describe('terminal chart model', () => {
+  it('uses verified remote 1m history so an old open entry does not disappear with the short stream', () => {
+    const remote = [candle(0, 100), candle(60, 101), candle(120, 102)]
+    const stream = [candle(120, 103), candle(180, 104)]
+    expect(timeframeCandles(stream, 60, remote)).toEqual([
+      candle(0, 100),
+      candle(60, 101),
+      candle(120, 103),
+      candle(180, 104),
+    ])
+  })
+
   it('turns filled reduce-only orders into labelled exit markers', () => {
     expect(
       exitMarkers([
@@ -93,7 +104,10 @@ describe('terminal chart model', () => {
     expect(
       timeframeCandles(minutes, 300, null).map((item) => item.time),
     ).toEqual([300, 600])
-    expect(timeframeCandles(minutes, 60, remote)).toEqual(minutes)
+    expect(timeframeCandles(minutes, 60, remote)).toEqual([
+      remote[0],
+      ...minutes,
+    ])
   })
 
   it('accepts only a well-formed chart body', () => {

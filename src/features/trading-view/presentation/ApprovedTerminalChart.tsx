@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { currency as formatCurrency } from '../../../shared/finance/format.ts'
 import { TERMINAL_BUTTON } from '../../../shared/design-system/terminal-styles.ts'
 import {
@@ -13,7 +13,18 @@ import {
   type ISeriesApi,
   type SeriesMarker,
   type Time,
+  type Logical,
 } from 'lightweight-charts'
+import {
+  timeLogicalIndex,
+  tradeIdentity,
+  type TerminalChartTrade,
+} from '../domain/terminal-trade-model.ts'
+import TerminalTradeOverlay from './TerminalTradeOverlay.tsx'
+import {
+  EMPTY_TRADE_FRAME,
+  TerminalTradePrimitive,
+} from './TerminalTradePrimitive.ts'
 
 export type ApprovedTerminalCandle = {
   time: number
@@ -110,6 +121,12 @@ type Props = {
    * False opens on the latest candles and only follows later selections.
    */
   focusOnMount?: boolean
+  trades?: readonly TerminalChartTrade[]
+  tradesConfirmed?: boolean
+  selectedTradeId?: string
+  tradeFocus?: { id: string; revision: number } | null
+  onSelectTrade?: (id: string) => void
+  viewport?: boolean
 }
 
 export type ApprovedVolumeProfile = {
@@ -227,6 +244,12 @@ export default function ApprovedTerminalChart({
   panes = NO_PANES,
   priceLines: fixedLines = NO_LINES,
   focusOnMount = true,
+  trades,
+  tradesConfirmed = false,
+  selectedTradeId = '',
+  tradeFocus = null,
+  onSelectTrade,
+  viewport = false,
 }: Props) {
   const container = useRef<HTMLDivElement>(null)
   const chartRef = useRef<IChartApi | null>(null)
@@ -253,6 +276,15 @@ export default function ApprovedTerminalChart({
   const propsRef = useRef({ candles, markers, intervalSeconds, onSelect })
   const publishRef = useRef<(() => void) | null>(null)
   const paintedRef = useRef<readonly SeriesMarker<Time>[]>([])
+  const tradePrimitive = useRef<TerminalTradePrimitive | null>(null)
+  const [tradeFrame, setTradeFrame] = useState(EMPTY_TRADE_FRAME)
+  const focusedTrade = useRef('')
+  const initialTradeView = useRef(false)
+  const focusedTradeHistory = useRef<{
+    firstTime: number
+    covered: boolean
+  } | null>(null)
+  const tradeMode = trades !== undefined
 
   useEffect(() => {
     propsRef.current = { candles, markers, intervalSeconds, onSelect }
@@ -320,6 +352,7 @@ export default function ApprovedTerminalChart({
         timeVisible: true,
         secondsVisible: false,
         rightOffset: 8,
+        ...(tradeMode ? { minBarSpacing: 0.1 } : {}),
         ...(initialViewport === 'approved-terminal' ? { barSpacing: 8 } : {}),
       },
       handleScroll: true,
@@ -350,6 +383,10 @@ export default function ApprovedTerminalChart({
       .priceScale()
       .applyOptions({ scaleMargins: { top: 0.83, bottom: 0.02 } })
     const markerApi = createSeriesMarkers(series, [])
+    if (tradeMode && typeof series.attachPrimitive === 'function') {
+      tradePrimitive.current = new TerminalTradePrimitive(setTradeFrame)
+      series.attachPrimitive(tradePrimitive.current)
+    }
     // Where each painted marker sits (container pixels). The canvas has no DOM
     // per marker, so this is what lets the browser tests (and anyone
     // inspecting the page) find and click a marker without guessing, and what
@@ -529,8 +566,12 @@ export default function ApprovedTerminalChart({
       focusedSelection.current = null
       renderedCandles.current = null
       renderedInterval.current = null
+      tradePrimitive.current = null
+      focusedTrade.current = ''
+      initialTradeView.current = false
+      focusedTradeHistory.current = null
     }
-  }, [currency, initialViewport])
+  }, [currency, initialViewport, tradeMode])
 
   useEffect(() => {
     const series = candleSeriesRef.current
@@ -558,6 +599,16 @@ export default function ApprovedTerminalChart({
       })
     const visibleRange =
       rebuild && fitted.current ? timeScale?.getVisibleLogicalRange() : null
+    const historyShift =
+      visibleRange &&
+      previous?.length &&
+      renderedInterval.current === intervalSeconds
+        ? (timeLogicalIndex(
+            candles.map((candle) => candle.time),
+            previous[0]!.time * 1000,
+            intervalSeconds,
+          ) ?? 0)
+        : 0
     const pricePoint = (candle: ApprovedTerminalCandle) => ({
       time: candle.time as Time,
       open: candle.open,
@@ -571,6 +622,8 @@ export default function ApprovedTerminalChart({
       color: candle.close >= candle.open ? volumeUpColor : volumeDownColor,
     })
     if (rebuild) {
+      if (tradeMode && renderedInterval.current !== intervalSeconds)
+        initialTradeView.current = false
       series.setData(candles.map(pricePoint))
       volumeRef.current?.setData(candles.map(volumePoint))
       renderedInterval.current = intervalSeconds
@@ -592,8 +645,55 @@ export default function ApprovedTerminalChart({
         else chartRef.current?.timeScale().fitContent()
       }
       fitted.current = candles.length > 0
-    } else if (visibleRange) timeScale?.setVisibleLogicalRange(visibleRange)
-  }, [candles, intervalSeconds, initialViewport])
+    } else if (visibleRange)
+      timeScale?.setVisibleLogicalRange({
+        from: (visibleRange.from + historyShift) as Logical,
+        to: (visibleRange.to + historyShift) as Logical,
+      })
+  }, [candles, intervalSeconds, initialViewport, tradeMode])
+
+  useEffect(() => {
+    tradePrimitive.current?.setData(trades ?? [], candles, intervalSeconds)
+  }, [trades, candles, intervalSeconds, tradeMode, currency, initialViewport])
+
+  useEffect(() => {
+    if (!trades || !candles.length || !chartRef.current) return
+    const trade = tradeFocus
+      ? trades.find((item) => tradeIdentity(item) === tradeFocus.id)
+      : initialTradeView.current
+        ? undefined
+        : (trades.find((trade) => trade.open) ?? trades[0])
+    if (!trade) return
+    const key = `${tradeIdentity(trade)}:${tradeFocus?.revision ?? 0}:${intervalSeconds}`
+    const firstTime = candles[0]!.time
+    if (!trade.open && trade.exitMs !== null && trade.exitMs < firstTime * 1000)
+      return
+    if (
+      focusedTrade.current === key &&
+      (focusedTradeHistory.current?.covered ||
+        firstTime >= (focusedTradeHistory.current?.firstTime ?? firstTime))
+    )
+      return
+    const times = candles.map((candle) => candle.time)
+    const start = timeLogicalIndex(times, trade.entryMs, intervalSeconds)
+    const end = timeLogicalIndex(
+      times,
+      trade.open
+        ? candles.at(-1)!.time * 1000
+        : (trade.exitMs ?? trade.entryMs),
+      intervalSeconds,
+    )
+    if (start === null || end === null) return
+    const from = Math.max(0, start - 8)
+    chartRef.current?.timeScale().setVisibleLogicalRange({
+      from: from as Logical,
+      to: Math.max(from + 20, end + 8) as Logical,
+    })
+    focusedTrade.current = key
+    const covered = trade.entryMs >= firstTime * 1000
+    focusedTradeHistory.current = { firstTime, covered }
+    initialTradeView.current = covered || candles.length >= 5_000
+  }, [tradeFocus, intervalSeconds, candles, trades])
 
   // Markers depend on which buckets exist, not on the forming candle's price.
   const bucketsKey = `${candles.length}:${candles[0]?.time}:${candles.at(-1)?.time}`
@@ -826,28 +926,73 @@ export default function ApprovedTerminalChart({
     )
   }, [fixedLines, initialViewport, currency])
 
+  const renderer = (
+    <div
+      ref={container}
+      data-testid="approved-chart-renderer"
+      data-candle-count={candles.length}
+      data-marker-count={markers.length}
+      data-selected-marker={selectedId}
+      className={
+        tradeMode
+          ? 'h-full w-full'
+          : 'chart-height h-terminal-chart min-h-0 flex-1 w-full'
+      }
+      role="img"
+      aria-label={
+        ariaLabel ??
+        `Gráfico de velas ${instrument} con volumen; las decisiones del backend se describen y seleccionan en el panel lateral`
+      }
+    />
+  )
   return (
     <>
-      <div
-        ref={container}
-        data-testid="approved-chart-renderer"
-        data-candle-count={candles.length}
-        data-marker-count={markers.length}
-        data-selected-marker={selectedId}
-        className="chart-height h-terminal-chart min-h-0 flex-1 w-full"
-        role="img"
-        aria-label={
-          ariaLabel ??
-          `Gráfico de velas ${instrument} con volumen; las decisiones del backend se describen y seleccionan en el panel lateral`
-        }
-      />
-      <button
-        className={TERMINAL_BUTTON}
-        type="button"
-        onClick={() => chartRef.current?.timeScale().scrollToRealTime()}
-      >
-        Volver al presente
-      </button>
+      {tradeMode ? (
+        <div
+          className={
+            viewport
+              ? 'relative h-full min-h-0 w-full flex-1'
+              : 'relative h-chart-fluid min-h-95 w-full until-599:h-97.5 until-599:min-h-97.5'
+          }
+          data-testid="terminal-chart-surface"
+        >
+          {renderer}
+          <TerminalTradeOverlay
+            items={tradeFrame.items}
+            width={tradeFrame.width}
+            height={tradeFrame.height}
+            selectedId={selectedTradeId}
+            confirmed={tradesConfirmed}
+            onSelect={(id) => onSelectTrade?.(id)}
+          />
+          {viewport && (
+            <button
+              className="absolute top-1 right-1 z-10 min-h-6 cursor-pointer rounded-sm border border-solid border-line bg-canvas px-1 text-label text-ink-2"
+              type="button"
+              aria-label="Volver al presente"
+              onClick={() => chartRef.current?.timeScale().scrollToRealTime()}
+            >
+              Ahora
+            </button>
+          )}
+        </div>
+      ) : (
+        renderer
+      )}
+      {tradeFrame.issues.map((issue) => (
+        <small key={issue} role="status" className="text-warn">
+          {issue}
+        </small>
+      ))}
+      {!viewport && (
+        <button
+          className={TERMINAL_BUTTON}
+          type="button"
+          onClick={() => chartRef.current?.timeScale().scrollToRealTime()}
+        >
+          Volver al presente
+        </button>
+      )}
     </>
   )
 }

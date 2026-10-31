@@ -15,7 +15,13 @@ const BARS_H = 64
 const MAX_BARS = 60
 
 /** The simulated balance, as the number alone; the panel under it shows each operation. */
-export function AccountBalanceView({ account }: { account: QwenAccount }) {
+export function AccountBalanceView({
+  account,
+  compact = false,
+}: {
+  account: QwenAccount
+  compact?: boolean
+}) {
   const [open, setOpen] = useState(false)
   const root = useRef<HTMLDivElement>(null)
   const panelId = useId()
@@ -40,25 +46,50 @@ export function AccountBalanceView({ account }: { account: QwenAccount }) {
   const tone = gain > 0 ? 'text-long' : gain < 0 ? 'text-short' : 'text-ink'
   const barW = CURVE_W / Math.max(steps.length, 1)
   return (
-    <div ref={root} className="relative flex justify-center">
+    <div
+      ref={root}
+      className={
+        compact
+          ? 'relative flex items-center gap-3 rounded-lg border border-solid border-line bg-surface-1 px-2 py-1 from-1100:gap-4 from-1100:px-3'
+          : 'relative flex justify-center'
+      }
+    >
       <button
         type="button"
         data-testid="account-balance"
         aria-expanded={open}
         aria-controls={panelId}
         aria-label={`Saldo de la cuenta simulada ${formatBalance(account.balanceUsd)}`}
-        className={`min-h-10 cursor-pointer rounded-sm border border-solid border-transparent bg-transparent px-3 font-sans text-value font-semibold tabular-nums hover:border-line-strong focus-visible:outline-2 focus-visible:outline-long focus-visible:outline-offset-2 ${tone}`}
+        className={`${compact ? 'min-h-8 px-0 py-0 text-left text-brand-compact leading-none from-1100:text-run-title' : 'min-h-10 px-3 text-value'} cursor-pointer rounded-sm border border-solid border-transparent bg-transparent font-sans font-semibold tabular-nums hover:border-line-strong focus-visible:outline-2 focus-visible:outline-long focus-visible:outline-offset-2 ${compact ? 'text-ink' : tone}`}
         onClick={() => setOpen((value) => !value)}
       >
+        {compact && (
+          <small className="block text-badge font-normal leading-tight text-ink-2">
+            Valor actual
+          </small>
+        )}
         {formatBalance(account.balanceUsd)}
       </button>
+      {compact && (
+        <div className="text-left">
+          <small className="block text-badge leading-tight text-ink-2">
+            Realizado
+          </small>
+          <strong
+            data-testid="account-realized"
+            className="block text-label leading-tight text-ink from-1100:text-hint"
+          >
+            {formatBalance(account.startUsd + account.realizedUsd)}
+          </strong>
+        </div>
+      )}
       {open && (
         <div
           id={panelId}
           role="dialog"
           aria-label="Saldo de la cuenta simulada"
           data-testid="account-balance-panel"
-          className="absolute top-full left-1/2 z-20 mt-2 w-balance -translate-x-1/2 header-stack:fixed header-stack:top-auto header-stack:inset-x-4 header-stack:left-4 header-stack:w-auto header-stack:translate-x-0 rounded-panel border border-solid border-line-strong bg-surface-1 p-4 text-left shadow-lg"
+          className={`${compact ? 'fixed top-20 left-1/2 z-30 max-h-popover w-popover -translate-x-1/2 overflow-auto' : 'absolute top-full left-1/2 z-20 mt-2 w-balance -translate-x-1/2 header-stack:fixed header-stack:top-auto header-stack:inset-x-4 header-stack:left-4 header-stack:w-auto header-stack:translate-x-0'} rounded-panel border border-solid border-line-strong bg-surface-1 p-4 text-left shadow-lg`}
         >
           <p className="m-0 text-hint text-ink-2">Cuenta simulada (paper)</p>
           <p className="m-0 mb-3 text-hint text-ink-2">
@@ -146,7 +177,13 @@ export function AccountBalanceView({ account }: { account: QwenAccount }) {
 }
 
 /** Header-center balance: renders nothing while the gateway has no account to show. */
-export default function AccountBalance() {
+export default function AccountBalance({
+  compact = false,
+}: {
+  compact?: boolean
+}) {
   const account = useQwenAccount()
-  return account ? <AccountBalanceView account={account} /> : null
+  return account ? (
+    <AccountBalanceView account={account} compact={compact} />
+  ) : null
 }

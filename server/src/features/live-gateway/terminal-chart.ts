@@ -9,6 +9,7 @@ export const CHART_INTERVALS_MS = [
   60_000, 300_000, 900_000, 3_600_000, 14_400_000, 86_400_000,
 ] as const
 const CANDLES_SERVED = 500
+export const MAX_CHART_CANDLES = 5_000
 /** Analytics source per timeframe: minutes up to 15m, hours above. */
 const MINUTE = 60_000
 const HOUR = 3_600_000
@@ -206,14 +207,22 @@ export function chartCandles(
   minuteCandles: readonly ChartCandle[],
   now: number,
   productId: string = FUTURES_PRODUCT,
+  limit = CANDLES_SERVED,
 ): ChartCandle[] {
-  if (intervalMs === MINUTE) return minuteCandles.slice(-CANDLES_SERVED)
-  const official = officialChartCandles(
-    store,
-    intervalMs,
-    CANDLES_SERVED,
-    productId,
-  )
+  if (intervalMs === MINUTE) {
+    if (limit <= CANDLES_SERVED) return minuteCandles.slice(-limit)
+    const candles = new Map(
+      officialChartCandles(store, MINUTE, limit, productId).map((candle) => [
+        candle.time_ms,
+        candle,
+      ]),
+    )
+    for (const candle of minuteCandles) candles.set(candle.time_ms, candle)
+    return [...candles.values()]
+      .sort((a, b) => a.time_ms - b.time_ms)
+      .slice(-limit)
+  }
+  const official = officialChartCandles(store, intervalMs, limit, productId)
   let cursor =
     official.length > 0 ? official.at(-1)!.time_ms + intervalMs : undefined
   const finer: ChartCandle[] = []
@@ -243,7 +252,7 @@ export function chartCandles(
   return [
     ...official,
     ...provisional.filter((candle) => candle.time_ms > last),
-  ].slice(-CANDLES_SERVED)
+  ].slice(-limit)
 }
 
 const num = (values: Record<string, string> | undefined, key: string) =>

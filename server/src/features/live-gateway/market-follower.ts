@@ -390,7 +390,7 @@ export class LiveMarketFollower {
    * built from finer data), Kraken analytics folded into the same buckets,
    * the latest depth snapshot and the latest ticker stats.
    */
-  terminalChart(intervalMs: number): Row {
+  terminalChart(intervalMs: number, limit = 500): Row {
     const now = this.clock()
     const store = this.open()
     const empty = {
@@ -420,6 +420,7 @@ export class LiveMarketFollower {
         minutes,
         now,
         this.productId,
+        limit,
       )
       return {
         ...empty,

@@ -1,8 +1,12 @@
 import { OBS } from './observability-styles.ts'
+import ModalFrame from '../../strategy-lab/presentation/ModalFrame.tsx'
 import { APPROVED_TERMINAL_STRATEGIES } from '../../../app/terminal-approved.ts'
 import { useCallback, useState, type ReactNode } from 'react'
 import { DataState, StatusPill } from '../../../shared/mission-control/index.ts'
-import { TERMINAL_FRAME } from '../../../shared/design-system/terminal-styles.ts'
+import {
+  TERMINAL_CARD_LABEL,
+  TERMINAL_FRAME,
+} from '../../../shared/design-system/terminal-styles.ts'
 import {
   ACTIVITY_WINDOWS,
   fetchActivity,
@@ -325,6 +329,8 @@ export default function ObserverPanel({
   glance,
   news,
   children,
+  visualOperations = false,
+  viewport = false,
 }: {
   product: string | null
   health: HealthRead & HealthFreshness
@@ -344,8 +350,11 @@ export default function ObserverPanel({
   news?: ReactNode
   /** The decisions history the Terminal already renders. */
   children?: ReactNode
+  visualOperations?: boolean
+  viewport?: boolean
 }) {
   const [window, setWindow] = useState<ActivityWindow>('3h')
+  const [historyOpen, setHistoryOpen] = useState(false)
   const load = useCallback(
     (signal: AbortSignal) => fetchActivity(window, product, signal),
     [window, product],
@@ -356,6 +365,71 @@ export default function ObserverPanel({
   const current =
     data && data.window === window && data.product === product ? data : null
   const compactOperations = Boolean(glance || news)
+  if (visualOperations)
+    return (
+      <section
+        className={
+          viewport
+            ? 'grid h-full min-h-0 min-w-0 grid-rows-news-100 gap-2 from-700:grid-rows-news-172 terminal-condensed:grid-rows-news-64'
+            : 'grid min-w-0 gap-4'
+        }
+        aria-label="Operaciones"
+        data-testid="activity-panel"
+      >
+        <h2 className="clip-hidden">Operaciones</h2>
+        {glance}
+        {news && (
+          <section
+            className={`${TERMINAL_FRAME} ${viewport ? 'flex min-h-0 flex-col p-2' : 'p-4'}`}
+            aria-label="Noticias relevantes"
+          >
+            <h2
+              className={
+                viewport
+                  ? 'm-0 mb-1 text-label leading-4 font-semibold text-ink-2'
+                  : TERMINAL_CARD_LABEL
+              }
+            >
+              Noticias · Baja / Media / Alta
+            </h2>
+            {news}
+          </section>
+        )}
+        {viewport ? (
+          <>
+            <button
+              type="button"
+              className={`${TERMINAL_FRAME} cursor-pointer bg-surface-1 p-1 text-label text-ink-2`}
+              onClick={() => setHistoryOpen(true)}
+            >
+              Historial de señales ↗
+            </button>
+            {historyOpen && (
+              <ModalFrame
+                label="Historial de señales"
+                wide
+                onClose={() => setHistoryOpen(false)}
+              >
+                <header className="flex items-center justify-between gap-2">
+                  <h2>Historial de señales</h2>
+                  <button type="button" onClick={() => setHistoryOpen(false)}>
+                    Cerrar
+                  </button>
+                </header>
+                {children}
+              </ModalFrame>
+            )}
+          </>
+        ) : (
+          <details className={`${TERMINAL_FRAME} p-3`}>
+            <summary className="cursor-pointer text-hint text-ink-2">
+              Historial de señales
+            </summary>
+            <div>{children}</div>
+          </details>
+        )}
+      </section>
+    )
   return (
     <section
       className={`${TERMINAL_FRAME} ${OBS.observer}`}

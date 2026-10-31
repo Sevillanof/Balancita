@@ -176,6 +176,12 @@ function openStatus() {
   fireEvent.click(screen.getByTestId('health-indicator'))
 }
 
+/** The decisions list lives in the «Historial de señales» window: a test about the list opens it first. */
+async function openHistory() {
+  const button = screen.queryByRole('button', { name: /Historial de señales/ })
+  if (button) await act(async () => button.click())
+}
+
 describe('FuturesTerminal presentation', () => {
   afterEach(() => {
     cleanup()
@@ -293,7 +299,7 @@ describe('FuturesTerminal presentation', () => {
     expect(parseTerminalEnvelope(snapshot)).not.toBeNull()
     TerminalSocket.latest!.publish(snapshot)
     expect(await screen.findByText(/100\.123,45/)).toBeTruthy()
-    expect(screen.getByText('Último trade público · BTC/USD')).toBeTruthy()
+    expect(screen.getByText(/^Último trade público/)).toBeTruthy()
     openStatus()
     expect(
       screen.getByText(/Evento .* UTC · recibido .* UTC · hace \d+ s/),
@@ -386,6 +392,7 @@ describe('FuturesTerminal presentation', () => {
     )
     expect(await screen.findByText(/100\.123,45/)).toBeTruthy()
     expect(screen.getByText('Última vela cerrada')).toBeTruthy()
+    await openHistory()
     expect(screen.getByText(/Motor de decisiones apagado/)).toBeTruthy()
     TerminalSocket.latest!.publish(
       envelope(11, 'market.updated', {
@@ -523,6 +530,7 @@ describe('FuturesTerminal presentation', () => {
         }),
       ),
     )
+    await openHistory()
     expect(
       screen.getAllByText(/Entradas pausadas: el motor no abre nuevas/).length,
     ).toBeGreaterThan(0)
@@ -633,7 +641,10 @@ describe('FuturesTerminal on the live gateway with paper execution', () => {
     },
   }
 
-  async function renderLive(snapshotState: Record<string, unknown> = state) {
+  async function renderLive(
+    snapshotState: Record<string, unknown> = state,
+    withHistory = true,
+  ) {
     vi.stubGlobal('WebSocket', TerminalSocket)
     render(
       <FuturesTerminal
@@ -647,6 +658,7 @@ describe('FuturesTerminal on the live gateway with paper execution', () => {
       live(0, 'snapshot', { watermark: 0, state: snapshotState }),
     )
     await screen.findByText('Operaciones')
+    if (withHistory) await openHistory()
   }
 
   afterEach(() => {
@@ -658,12 +670,15 @@ describe('FuturesTerminal on the live gateway with paper execution', () => {
   })
 
   it('shows the Operaciones right panel and omits the removed bottom sections', async () => {
-    await renderLive()
+    await renderLive(state, false)
     expect(screen.queryByText(/Motor de decisiones apagado/)).toBeNull()
     expect(screen.getByRole('region', { name: 'Operaciones' })).toBeTruthy()
-    expect(screen.getByTestId('qwen-glance')).toBeTruthy()
-    expect(screen.getByText('Historial de señales')).toBeTruthy()
-    expect(screen.getByText('Últimas 3 noticias')).toBeTruthy()
+    expect(screen.getByLabelText('Operación seleccionada')).toBeTruthy()
+    expect(
+      screen.getByRole('button', { name: /Historial de señales/ }),
+    ).toBeTruthy()
+    expect(screen.getByText('Noticias · Baja / Media / Alta')).toBeTruthy()
+    await openHistory()
     expect(screen.getByText('Decisiones del motor')).toBeTruthy()
     expect(screen.getByLabelText('Decisión seleccionada')).toBeTruthy()
     expect(screen.queryByTestId('terminal-secondary')).toBeNull()
@@ -1366,6 +1381,7 @@ describe('FuturesTerminal on the live gateway with paper execution', () => {
           live(0, 'snapshot', { watermark: 0, state: mixed }),
         )
         await screen.findByText('Operaciones')
+        await openHistory()
         // The chart paints lines and markers in effects after the render.
         await waitFor(() => {
           expect(chartHarness.priceLines.length).toBeGreaterThan(0)
@@ -1522,13 +1538,13 @@ describe('FuturesTerminal on the live gateway with paper execution', () => {
       expect(ejecIds()).toEqual([])
     })
 
-    it('names proposals, WAIT, EJEC. and exits in the visible legend', async () => {
+    it('names the side, entry, net result and close of the trades in the visible legend', async () => {
       await renderLive()
       const legend = screen.getByLabelText('Leyenda del gráfico')
-      expect(legend.textContent).toMatch(/propuesta LONG\/SHORT/)
-      expect(legend.textContent).toMatch(/W = WAIT/)
-      expect(legend.textContent).toMatch(/EJEC\. ejecución paper/)
-      expect(legend.textContent).toMatch(/salida/)
+      expect(legend.textContent).toMatch(/▲ LONG \/ ▼ SHORT/)
+      expect(legend.textContent).toMatch(/Entrada/)
+      expect(legend.textContent).toMatch(/Neto/)
+      expect(legend.textContent).toMatch(/Cierre/)
       expect(legend.textContent).not.toMatch(/entrada larga|entrada corta/)
     })
   })
@@ -1610,7 +1626,7 @@ describe('FuturesTerminal on the live gateway with paper execution', () => {
         )
       })
       await waitFor(() => expect(healthCalls).toBeGreaterThan(readsBefore))
-      expect(screen.getByTestId('qwen-glance')).toBeTruthy()
+      expect(screen.getByLabelText('Operación seleccionada')).toBeTruthy()
       expect(screen.getByTestId('terminal-news-panel')).toBeTruthy()
     })
   })

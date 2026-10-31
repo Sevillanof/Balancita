@@ -6,11 +6,29 @@ import {
   screen,
   within,
 } from '@testing-library/react'
-import { afterEach, describe, expect, it } from 'vitest'
+import { act } from '@testing-library/react'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import TerminalNewsPanel from './TerminalNewsPanel.tsx'
-import { decodeTerminalNews, type TerminalNewsItem } from './useTerminalNews.ts'
+import {
+  decodeTerminalNews,
+  type TerminalNewsBriefing,
+  type TerminalNewsItem,
+} from './useTerminalNews.ts'
 
-afterEach(cleanup)
+beforeEach(() => {
+  vi.stubGlobal(
+    'ResizeObserver',
+    class {
+      observe() {}
+      disconnect() {}
+    },
+  )
+})
+afterEach(() => {
+  cleanup()
+  vi.restoreAllMocks()
+  vi.unstubAllGlobals()
+})
 
 const sampleNews: TerminalNewsItem[] = [
   {
@@ -59,7 +77,155 @@ const sampleNews: TerminalNewsItem[] = [
   },
 ]
 
+const briefing: TerminalNewsBriefing = {
+  status: 'ok',
+  product: 'PF_ETHUSD',
+  text: 'Síntesis de prueba: las noticias no confirman un catalizador único para Ethereum.',
+  knownAtMs: Date.UTC(2026, 9, 30, 15),
+  checkedAtMs: Date.UTC(2026, 9, 30, 15, 1),
+  expiresAtMs: Date.UTC(2026, 9, 30, 16),
+  sourceCount: 1,
+  sources: [
+    {
+      id: 'n1',
+      source: 'The Defiant',
+      url: sampleNews[0]!.url,
+      publishedAtMs: sampleNews[0]!.publishedAtMs,
+      receivedAtMs: sampleNews[0]!.receivedAtMs,
+      licenseStatus: 'unknown',
+    },
+  ],
+  reason: null,
+}
+
 describe('TerminalNewsPanel', () => {
+  it('uses measured capacity, preserves Qwen across pages, and recalculates on resize', () => {
+    let available = 282
+    const resize: TestResizeObserver[] = []
+    class TestResizeObserver implements ResizeObserver {
+      private callback: ResizeObserverCallback
+      constructor(callback: ResizeObserverCallback) {
+        this.callback = callback
+        resize.push(this)
+      }
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+      notify() {
+        this.callback([], this)
+      }
+    }
+    vi.stubGlobal('ResizeObserver', TestResizeObserver)
+    vi.spyOn(Element.prototype, 'getBoundingClientRect').mockImplementation(
+      function (this: Element) {
+        return new DOMRect(
+          0,
+          0,
+          280,
+          this.getAttribute('data-testid') === 'news-available-space'
+            ? available
+            : this.tagName === 'LI'
+              ? 50
+              : 0,
+        )
+      },
+    )
+    const items = Array.from({ length: 7 }, (_, index) => ({
+      ...sampleNews[0]!,
+      id: `fit-${index}`,
+      title: `Titular ${index}`,
+    }))
+    render(
+      <TerminalNewsPanel
+        viewport
+        items={items}
+        briefing={briefing}
+        nowMs={briefing.checkedAtMs}
+      />,
+    )
+    const list = screen.getByRole('list', { name: 'Lista de noticias' })
+    expect(within(list).getAllByRole('listitem')).toHaveLength(5)
+    fireEvent.click(screen.getByRole('button', { name: 'Siguiente' }))
+    expect(within(list).getAllByRole('listitem')).toHaveLength(2)
+    expect(
+      screen.getByRole('region', { name: 'Qwen, resumen de noticias' }),
+    ).toHaveTextContent(briefing.text!)
+    available = 108
+    act(() => resize.forEach((observer) => observer.notify()))
+    expect(within(list).getAllByRole('listitem')).toHaveLength(2)
+    expect(screen.getByText('2 / 4')).toBeTruthy()
+  })
+  it('pins only a real Qwen news summary above search results', () => {
+    render(
+      <TerminalNewsPanel
+        viewport
+        items={sampleNews}
+        briefing={briefing}
+        nowMs={briefing.checkedAtMs}
+        source={{
+          state: 'ok',
+          collectorStatus: 'ok',
+          collectorReason: null,
+          policy: 'priority_v2',
+        }}
+      />,
+    )
+    const summary = screen.getByRole('region', {
+      name: 'Qwen, resumen de noticias',
+    })
+    expect(summary).toHaveTextContent(briefing.text!)
+    fireEvent.click(screen.getByRole('button', { name: 'Buscar noticias' }))
+    fireEvent.change(screen.getByRole('searchbox'), {
+      target: { value: 'sin coincidencias' },
+    })
+    expect(summary).toHaveTextContent(briefing.text!)
+    expect(screen.getByText(/Sin noticias para/)).toBeTruthy()
+  })
+
+  it('does not present an expired or disconnected Qwen summary as current', () => {
+    render(
+      <TerminalNewsPanel
+        viewport
+        items={[]}
+        briefing={briefing}
+        nowMs={briefing.expiresAtMs! + 1}
+        source={{ state: 'error', reason: 'Disconnected' }}
+      />,
+    )
+    expect(
+      screen.getByRole('region', { name: 'Qwen, resumen de noticias' }),
+    ).toHaveTextContent('Sin confirmar')
+  })
+
+  it('shows an explicit pending first card instead of invented Qwen prose', () => {
+    render(<TerminalNewsPanel viewport items={[]} />)
+    expect(
+      screen.getByRole('region', { name: 'Qwen, resumen de noticias' }),
+    ).toHaveTextContent('Pendiente')
+    expect(screen.getByText(/Todavía no hay una síntesis/)).toBeTruthy()
+  })
+  it('shows only Baja, Media and Alta in the approved side card, preserving processing visibility', () => {
+    render(
+      <TerminalNewsPanel
+        relevantOnly
+        items={[
+          ...sampleNews,
+          {
+            ...sampleNews[0]!,
+            id: 'waiting',
+            relevance: null,
+            analysisStatus: 'pending',
+          },
+        ]}
+      />,
+    )
+    expect(screen.getByText('Relevancia Alta')).toBeTruthy()
+    expect(screen.getByText('Relevancia Media')).toBeTruthy()
+    expect(screen.getByText('Relevancia Baja')).toBeTruthy()
+    expect(screen.queryByText('Macro wrap for October 29')).toBeNull()
+    expect(screen.getByText(/1 pendiente/)).toBeTruthy()
+  })
+
   it('distinguishes expired news and does not present relevance as a probability of profit', () => {
     render(
       <TerminalNewsPanel

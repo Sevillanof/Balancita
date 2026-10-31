@@ -40,6 +40,7 @@ export default function AppStatusChips({
   modeLabel = 'PAPER · KRAKEN',
   diagnosis,
   b1,
+  compact = false,
 }: {
   apiBase: string
   override?: FlowOverride
@@ -47,6 +48,7 @@ export default function AppStatusChips({
   modeLabel?: string
   diagnosis?: ReactNode
   b1?: HealthRead
+  compact?: boolean
 }) {
   const [health, setHealth] = useState<{
     reachable: boolean
@@ -96,6 +98,7 @@ export default function AppStatusChips({
   const paper = modeLabel.split(' · ')[0]
   return (
     <HealthIndicator
+      compact={compact}
       data={b1?.data ?? null}
       error={b1?.error ?? null}
       receivedAt={b1?.receivedAt ?? null}
