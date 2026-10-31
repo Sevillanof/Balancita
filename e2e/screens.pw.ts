@@ -51,8 +51,9 @@ async function openTerminal(page: Page, count: number) {
   counts.set(page, count)
   if (first) await routeTerminal(page)
   await page.goto('/terminal')
+  // The decisions live in the «Historial de señales» window of the side column.
   await expect(
-    page.getByRole('region', { name: 'Decisiones del motor' }),
+    page.getByRole('button', { name: /Historial de señales/ }),
   ).toBeVisible()
 }
 
@@ -117,7 +118,6 @@ test('terminal decisions list keeps its height whatever the number of verdicts',
   page,
 }) => {
   await openTerminal(page, 5)
-  const panel = page.getByRole('region', { name: 'Decisiones del motor' })
   const frame = page.getByTestId('activity-panel')
   const small = await frame.boundingBox()
   const smallPage = await page.evaluate(() => document.body.scrollHeight)
@@ -130,6 +130,9 @@ test('terminal decisions list keeps its height whatever the number of verdicts',
 
   // The list itself is visible and scrolls inside the panel; the frame that
   // holds it keeps the same height.
+  await page.getByRole('button', { name: /Historial de señales/ }).click()
+  const panel = page.getByRole('region', { name: 'Decisiones del motor' })
+  await expect(panel).toBeVisible()
   const list = panel.locator('[aria-label="Lista de decisiones"]')
   expect((await list.boundingBox())!.height).toBeGreaterThan(100)
   expect(large!.height).toBe(small!.height)
@@ -343,12 +346,13 @@ test('terminal chart with two sub-panes takes the available height', async ({
   const chart = page.getByTestId('approved-chart-renderer')
   await expect(chart).toBeVisible()
   // The indicator and pane controls are folded behind one line.
-  await page.getByText('Indicadores y paneles').click()
+  await page.getByRole('button', { name: 'Indicadores y paneles' }).click()
   await expect(
     page.getByRole('checkbox', { name: 'Compra/venta' }),
   ).toBeChecked()
   // Open interest is not a default pane any more: the test turns it on.
   await page.getByRole('checkbox', { name: 'Interés abierto' }).check()
+  await page.getByRole('button', { name: 'Cerrar', exact: true }).click()
   const { width, height } = page.viewportSize()!
   // The chart (price area plus the two sub-panes) fills its frame, which has
   // the height of the decisions column next to it.

@@ -110,7 +110,7 @@ def llama_reply(body):
 
 class TempDirTest(unittest.TestCase):
     def setUp(self):
-        self.dir = tempfile.mkdtemp()
+        self.dir = tempfile.mkdtemp(prefix=".news-test-", dir=".")
         self.addCleanup(shutil.rmtree, self.dir)
         self.path = os.path.join(self.dir, "news.sqlite")
         self.logs = []
@@ -1100,12 +1100,39 @@ class CliTests(TempDirTest):
         self.assertEqual(server.completions(), [])
 
     def test_once_with_analyze_asks_the_local_model(self):
-        self.server.body = rss([fresh_item(1, now=int(time.time() * 1000), minutes_ago=1)])
+        self.server.body = rss([fresh_item(1, now=int(time.time() * 1000), minutes_ago=1,
+                                          title="Ethereum protocol update")])
+        server = FakeLlama()
+        self.addCleanup(server.stop)
+        text = "Ethereum centra las novedades del protocolo y la regulación, sin una señal de operación."
+
+        def response(body):
+            if body.get("response_format"):
+                return {"model": "qwen.gguf", "choices": [{
+                    "finish_reason": "stop", "message": {"content": json.dumps({"summary": text})},
+                }]}
+            return llama_reply(body)
+
+        server.pick = response
+        code, out = self.run_main("--once", "--analyze", "--news-db", self.path, "--sources-file", self.sources,
+                                  "--llama-url", server.url)
+        self.assertEqual(code, 0)
+        self.assertIn("analyzed 2", out)
+        self.assertEqual(len(server.completions()), 3)
+        db = sqlite3.connect(self.path)
+        self.assertEqual(db.execute(
+            "SELECT status,text FROM paper_futures_news_briefings ORDER BY briefing_id DESC LIMIT 1"
+        ).fetchone(), ("ok", text))
+        db.close()
+
+    def test_no_briefing_preserves_news_classification_without_synthesis(self):
+        self.server.body = rss([fresh_item(1, now=int(time.time() * 1000), minutes_ago=1,
+                                          title="Ethereum protocol update")])
         server = FakeLlama()
         self.addCleanup(server.stop)
         server.pick = llama_reply
-        code, out = self.run_main("--once", "--analyze", "--news-db", self.path, "--sources-file", self.sources,
-                                  "--llama-url", server.url)
+        code, out = self.run_main("--once", "--analyze", "--no-briefing",
+                                  "--news-db", self.path, "--sources-file", self.sources, "--llama-url", server.url)
         self.assertEqual(code, 0)
         self.assertIn("analyzed 2", out)
         self.assertEqual(len(server.completions()), 2)

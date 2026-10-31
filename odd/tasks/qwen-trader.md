@@ -1,5 +1,33 @@
 # qwen-trader
 
+## Operaciones visuales de Terminal (2026-10-31)
+
+**El gráfico lee las operaciones reales del libro, sin operar ni modificar la cuenta.**
+La ficha, las etiquetas y el historial de operaciones comparten una única lectura.
+La selección de una operación es independiente de la selección de una señal del motor.
+
+| Elemento                   | Significado                                                                                                                                                                  |
+| -------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| ▲ LONG / ▼ SHORT           | Dirección registrada, con una etiqueta visible y un punto en el precio ejecutado. No se sustituye el fill por el cierre de una vela.                                         |
+| Línea azul                 | Precio de entrada fijo; termina en el último dato de mercado mientras está abierta y se congela en la hora exacta de cierre después.                                         |
+| × / ● y neto               | Cierre ejecutado o marca registrada. El color del resultado usa `net_usd`, no la dirección ni una cuenta de PnL en JavaScript. La ficha muestra la hora UTC de la marca.     |
+| Incompleto / sin confirmar | Funding incompleto es provisional; un fallo de lectura conserva el último dato, gris y sin confirmar. Nunca se transforma en una posición cerrada o una ganancia confirmada. |
+| Entrada anterior           | La entrada queda fuera del tramo visible; no se inventa un fill en la primera vela. «Centrar operación» permite ver su período, si hay historia disponible.                  |
+| Noticias                   | La columna muestra importancia Baja, Media o Alta, con fechas, procedencia, vigencia y permisos. El conteo de análisis pendientes/incompletos permanece visible.             |
+
+El layout usa las utilidades y los tokens de Tailwind existentes. La altura del gráfico
+no depende del espacio que dejan los controles en una ventana baja. Los intervalos,
+paneles e indicadores anteriores siguen disponibles; las señales se consultan en
+«Historial de señales». Las etiquetas de un giro se separan sin mover sus puntos de ejecución.
+
+La API de lectura `terminal/chart` conserva el límite normal de 500 velas y acepta
+`limit` entero entre 1 y 5.000. Terminal solicita historia pública local suficiente para
+las operaciones cargadas, mezcla las velas oficiales con el tramo vivo y mantiene los
+huecos como huecos. No agrega velas ficticias ni consulta otra cuenta. Al recargar el
+servidor de lectura se cierran sus sockets antes del HTTP; el operador paper es otro
+proceso y no se reinicia. Cambiar el gráfico, centrar o seleccionar no cambia cantidad,
+capital, comisiones, funding, modelos ni reglas.
+
 ## Mantenimiento de calidad (Sonar)
 
 La simplificación de validadores, noticias, cuenta y replay no cambia reglas,

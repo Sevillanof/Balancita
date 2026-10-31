@@ -1,6 +1,7 @@
 import { render } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import ApprovedTerminalChart from './ApprovedTerminalChart.tsx'
+import type { TerminalChartTrade } from '../domain/terminal-trade-model.ts'
 
 const chartMocks = vi.hoisted(() => {
   const priceScaleApply = vi.fn()
@@ -387,6 +388,75 @@ describe('approved connected terminal chart', () => {
     expect(chartMocks.candles.setData).toHaveBeenCalledTimes(
       callsAfterBootstrap,
     )
+  })
+
+  it('focuses a recorded trade once, not on price or result polling, and permits an explicit repeat', () => {
+    const trade: TerminalChartTrade = {
+      product: 'PF_ETHUSD',
+      tradeNo: 2,
+      side: 'SHORT',
+      open: true,
+      entryMs: candles[10]!.time * 1000,
+      exitMs: null,
+      entryPrice: 101,
+      exitPrice: null,
+      markPrice: 100,
+      markMs: candles[99]!.time * 1000,
+      netUsd: 1,
+      fundingComplete: true,
+    }
+    const props = {
+      candles,
+      markers: [],
+      selectedId: '',
+      intervalSeconds: 60,
+      initialViewport: 'approved-terminal' as const,
+      onSelect: vi.fn(),
+      trades: [trade],
+      tradeFocus: { id: 'terminal:PF_ETHUSD:2', revision: 1 },
+    }
+    const view = render(<ApprovedTerminalChart {...props} />)
+    chartMocks.timeScale.setVisibleLogicalRange.mockClear()
+    view.rerender(
+      <ApprovedTerminalChart
+        {...props}
+        trades={[{ ...trade, netUsd: 2 }]}
+        candles={candles.map((candle, index) =>
+          index === 99 ? { ...candle, close: 100.5 } : candle,
+        )}
+      />,
+    )
+    expect(chartMocks.timeScale.setVisibleLogicalRange).not.toHaveBeenCalled()
+    view.rerender(
+      <ApprovedTerminalChart
+        {...props}
+        tradeFocus={{ ...props.tradeFocus, revision: 2 }}
+      />,
+    )
+    expect(chartMocks.timeScale.setVisibleLogicalRange).toHaveBeenCalledTimes(1)
+  })
+
+  it('preserves the visible time window when verified older candles are prepended', () => {
+    const props = {
+      candles,
+      markers: [],
+      selectedId: '',
+      intervalSeconds: 60,
+      initialViewport: 'approved-terminal' as const,
+      onSelect: vi.fn(),
+    }
+    const view = render(<ApprovedTerminalChart {...props} />)
+    chartMocks.timeScale.setVisibleLogicalRange.mockClear()
+    const older = Array.from({ length: 20 }, (_, i) => ({
+      ...candles[0]!,
+      time: candles[0]!.time - (20 - i) * 60,
+    }))
+    view.rerender(
+      <ApprovedTerminalChart {...props} candles={[...older, ...candles]} />,
+    )
+    expect(
+      chartMocks.timeScale.setVisibleLogicalRange,
+    ).toHaveBeenLastCalledWith({ from: 27, to: 94 })
   })
 
   it('never widens the price scale for a dense same-bucket marker stack', () => {

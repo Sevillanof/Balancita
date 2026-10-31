@@ -1,5 +1,5 @@
+import { createHash } from 'node:crypto'
 import { mkdtempSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -12,7 +12,7 @@ afterEach(() => {
 })
 
 function seedNewsDb(): string {
-  const dir = mkdtempSync(join(tmpdir(), 'balancita-news-'))
+  const dir = mkdtempSync(join(process.cwd(), '.balancita-news-test-'))
   dirs.push(dir)
   const path = join(dir, 'futures-news.sqlite')
   const db = new DatabaseSync(path)
@@ -163,5 +163,268 @@ describe('createNewsItems', () => {
       status: 'ok',
       collection: { status: 'warning', failed_sources: ['coindesk'] },
     })
+  })
+
+  const BRIEFING_TEXT =
+    'La actividad de Ethereum y las novedades regulatorias concentran las noticias recientes, sin una señal de operación.'
+  const BRIEFING_NOW = 1_793_460_000_000
+
+  function seedBriefing(path: string, changes: Record<string, unknown> = {}) {
+    const db = new DatabaseSync(path)
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS paper_futures_news_briefings(
+        briefing_id INTEGER PRIMARY KEY, briefing_version TEXT, product TEXT,
+        status TEXT, started_at_ms INTEGER, known_at_ms INTEGER, expires_at_ms INTEGER,
+        input_hash TEXT, inputs_json TEXT, model_ref TEXT, model_info_json TEXT,
+        prompt_hash TEXT, prompt_version INTEGER, text TEXT, response_json TEXT,
+        latency_ms INTEGER, reason TEXT
+      );
+    `)
+    const inputs = JSON.stringify([
+      {
+        id: 'h1',
+        source_id: 'thedefiant',
+        source: 'The Defiant',
+        url: 'https://thedefiant.io/a',
+        title: 'Ethereum governance update',
+        summary: 'Ethereum community update',
+        published_at_ms: BRIEFING_NOW - 120000,
+        received_at_ms: BRIEFING_NOW - 60000,
+        relevance_at_ms: BRIEFING_NOW - 1000,
+        direction_at_ms: BRIEFING_NOW - 1000,
+        relevance: 'medium',
+        direction: 'neutral',
+        license_status: 'unknown',
+      },
+    ])
+    const row = {
+      briefing_version: 'futures-news-briefing.v1',
+      product: 'PF_ETHUSD',
+      status: 'ok',
+      started_at_ms: BRIEFING_NOW - 100,
+      known_at_ms: BRIEFING_NOW,
+      expires_at_ms: BRIEFING_NOW + 900000,
+      input_hash: createHash('sha256').update(inputs).digest('hex'),
+      inputs_json: inputs,
+      model_ref: 'Qwen-local.gguf',
+      model_info_json: JSON.stringify({
+        model_ref: 'Qwen-local.gguf',
+        props: null,
+      }),
+      prompt_hash: 'a'.repeat(64),
+      prompt_version: 1,
+      text: BRIEFING_TEXT,
+      response_json: JSON.stringify({
+        model: 'Qwen-local.gguf',
+        choices: [
+          {
+            finish_reason: 'stop',
+            message: { content: JSON.stringify({ summary: BRIEFING_TEXT }) },
+          },
+        ],
+      }),
+      latency_ms: 42,
+      reason: null,
+      ...changes,
+    }
+    const columns = Object.keys(row)
+    db.prepare(
+      `INSERT INTO paper_futures_news_briefings(${columns.join(',')}) VALUES(${columns.map(() => '?').join(',')})`,
+    ).run(...(Object.values(row) as (string | number | null)[]))
+    db.close()
+  }
+
+  describe('stored Qwen news briefing', () => {
+    it.each([1, 2])(
+      'reads known prompt version %s without relaxing summary validation',
+      (prompt_version) => {
+        const path = seedNewsDb()
+        seedBriefing(path, { prompt_version })
+        expect(
+          createNewsItems({
+            newsDbPath: path,
+            clock: () => BRIEFING_NOW,
+          }).list(),
+        ).toMatchObject({
+          status: 'ok',
+          briefing: { status: 'ok', text: BRIEFING_TEXT },
+        })
+        seedBriefing(path, {
+          prompt_version,
+          text: 'Ethereum news remains focused on crypto security.',
+        })
+        expect(
+          createNewsItems({
+            newsDbPath: path,
+            clock: () => BRIEFING_NOW,
+          }).list(),
+        ).toMatchObject({
+          status: 'ok',
+          briefing: {
+            status: 'error',
+            text: null,
+            reason: 'invalid_briefing_record',
+          },
+        })
+      },
+    )
+
+    it('reports legacy or empty tables as pending without fabricating Qwen text', () => {
+      const path = seedNewsDb()
+      const result = createNewsItems({
+        newsDbPath: path,
+        clock: () => BRIEFING_NOW,
+      }).list()
+      expect(result).toMatchObject({
+        status: 'ok',
+        briefing: {
+          status: 'pending',
+          product: 'PF_ETHUSD',
+          text: null,
+          known_at_ms: null,
+          checked_at_ms: BRIEFING_NOW,
+          source_count: 0,
+          sources: [],
+          reason: 'briefing_not_recorded',
+        },
+      })
+      if (result.status === 'ok')
+        expect(result.briefing.expires_at_ms).toBeUndefined()
+    })
+
+    it('reads exactly the persisted synthesis with provenance, never changing news or classifier rows', () => {
+      const path = seedNewsDb()
+      seedBriefing(path)
+      const before = new DatabaseSync(path, { readOnly: true })
+      const items = before
+        .prepare('SELECT * FROM paper_futures_news_items')
+        .all()
+      const analyses = before
+        .prepare('SELECT * FROM paper_futures_news_analysis')
+        .all()
+      before.close()
+      expect(
+        createNewsItems({
+          newsDbPath: path,
+          clock: () => BRIEFING_NOW + 1,
+        }).list(),
+      ).toMatchObject({
+        status: 'ok',
+        briefing: {
+          status: 'ok',
+          product: 'PF_ETHUSD',
+          text: BRIEFING_TEXT,
+          known_at_ms: BRIEFING_NOW,
+          checked_at_ms: BRIEFING_NOW + 1,
+          source_count: 1,
+          sources: [
+            {
+              id: 'h1',
+              source: 'The Defiant',
+              url: 'https://thedefiant.io/a',
+              published_at_ms: BRIEFING_NOW - 120000,
+              received_at_ms: BRIEFING_NOW - 60000,
+              license_status: 'unknown',
+            },
+          ],
+          reason: null,
+          model_ref: 'Qwen-local.gguf',
+          expires_at_ms: BRIEFING_NOW + 900000,
+        },
+      })
+      const after = new DatabaseSync(path, { readOnly: true })
+      expect(
+        after.prepare('SELECT * FROM paper_futures_news_items').all(),
+      ).toEqual(items)
+      expect(
+        after.prepare('SELECT * FROM paper_futures_news_analysis').all(),
+      ).toEqual(analyses)
+      after.close()
+    })
+
+    it('does not relabel stale text or future knowledge as a current Qwen summary', () => {
+      const path = seedNewsDb()
+      seedBriefing(path)
+      expect(
+        createNewsItems({
+          newsDbPath: path,
+          clock: () => BRIEFING_NOW + 900000,
+        }).list(),
+      ).toMatchObject({
+        status: 'ok',
+        briefing: { status: 'stale', text: null, reason: 'briefing_expired' },
+      })
+      expect(
+        createNewsItems({
+          newsDbPath: path,
+          clock: () => BRIEFING_NOW - 1,
+        }).list(),
+      ).toMatchObject({
+        status: 'ok',
+        briefing: { status: 'pending', text: null, source_count: 0 },
+      })
+    })
+
+    it.each([
+      ['pending', 'generation_in_progress'],
+      ['no_news', 'no_recent_analyzed_news'],
+      ['off', 'briefing_disabled'],
+      ['error', 'malformed_response'],
+    ] as const)(
+      'surfaces the explicit %s state, with no fallback summary',
+      (status, reason) => {
+        const path = seedNewsDb()
+        seedBriefing(path, {
+          status,
+          reason,
+          text: null,
+          response_json: null,
+          ...(status === 'off' || status === 'no_news'
+            ? {
+                inputs_json: '[]',
+                input_hash: createHash('sha256').update('[]').digest('hex'),
+              }
+            : {}),
+        })
+        expect(
+          createNewsItems({
+            newsDbPath: path,
+            clock: () => BRIEFING_NOW,
+          }).list(),
+        ).toMatchObject({
+          status: 'ok',
+          briefing: { status, text: null, reason },
+        })
+      },
+    )
+
+    it.each([
+      { inputs_json: '[not json]' },
+      { input_hash: 'tampered' },
+      { text: ' '.repeat(201) },
+      { text: 'Compra Ethereum ahora.' },
+      { response_json: '{}' },
+      { model_ref: 'another-model.gguf' },
+      { prompt_version: 3 },
+    ])(
+      'isolates malformed briefing rows from the existing news list: %j',
+      (changes) => {
+        const path = seedNewsDb()
+        seedBriefing(path, changes)
+        expect(
+          createNewsItems({ newsDbPath: path, clock: () => BRIEFING_NOW }).list(
+            1,
+          ),
+        ).toMatchObject({
+          status: 'ok',
+          items: [{ id: 'h3' }],
+          briefing: {
+            status: 'error',
+            text: null,
+            reason: 'invalid_briefing_record',
+          },
+        })
+      },
+    )
   })
 })

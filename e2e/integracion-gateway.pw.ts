@@ -185,17 +185,20 @@ test('Terminal on the real gateway: every interaction answers without 404', asyn
   await expect(dialog).toBeHidden()
 
   // Chart controls.
-  await page.getByRole('button', { name: '5m', exact: true }).click()
-  await expect(
-    page.getByRole('button', { name: '5m', exact: true }),
-  ).toHaveAttribute('aria-pressed', 'true')
-  await page.getByText('Indicadores y paneles').click()
+  const timeframe = page.getByRole('combobox', { name: 'Temporalidad' })
+  await timeframe.selectOption({ label: '5m' })
+  await expect(timeframe.locator('option:checked')).toHaveText('5m')
+  await page.getByRole('button', { name: 'Indicadores y paneles' }).click()
   await page.getByRole('checkbox', { name: 'Interés abierto' }).check()
-  await page.getByText('Más datos del mercado').click()
+  await page.getByRole('button', { name: 'Cerrar', exact: true }).click()
+  await page.getByRole('button', { name: 'Datos del mercado' }).click()
+  await page.getByRole('button', { name: 'Cerrar', exact: true }).click()
 
   // Decisions list: pick a row when the gateway served analyses.
+  await page.getByRole('button', { name: /Historial de señales/ }).click()
   const rows = page.locator('[aria-label="Lista de decisiones"] li button')
   if ((await rows.count()) > 0) await rows.first().click()
+  await page.keyboard.press('Escape')
 
   // Terminal <-> Estrategias (registry S is up in this run).
   await page.getByRole('link', { name: 'Estrategias' }).click()

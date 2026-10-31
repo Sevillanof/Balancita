@@ -3,6 +3,8 @@ import { createHash } from 'node:crypto'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { once } from 'node:events'
+import { WebSocket } from 'ws'
 import { afterEach, describe, expect, it } from 'vitest'
 import { FuturesMarketStore } from '../kraken-futures/futures-market-store.ts'
 import { parseAnalytics } from '../kraken-futures/market-analytics.ts'
@@ -108,6 +110,65 @@ const rawTicker = {
 }
 
 describe('terminal chart series', () => {
+  it('closes an idle read-only chart socket before HTTP shutdown, allowing an independent viewer reload', async () => {
+    const app = await buildLiveGateway({
+      marketDbPath: dbPath(),
+      allowedOrigins: ['http://localhost:5173'],
+    })
+    closers.push(() => app.close())
+    const address = await app.listen({ port: 0, host: '127.0.0.1' })
+    const socket = new WebSocket(
+      `${address.replace('http:', 'ws:')}/api/terminal/stream`,
+      { origin: 'http://localhost:5173' },
+    )
+    await once(socket, 'open')
+    const closing = app.close()
+    let deadline: ReturnType<typeof setTimeout> | undefined
+    let closedPromptly: boolean
+    try {
+      closedPromptly = await Promise.race([
+        closing.then(() => true),
+        new Promise<boolean>((resolve) => {
+          deadline = setTimeout(() => resolve(false), 250)
+        }),
+      ])
+    } finally {
+      if (deadline) clearTimeout(deadline)
+      socket.terminate()
+      await closing
+    }
+    expect(closedPromptly).toBe(true)
+  })
+
+  it('allows bounded extra verified history for an open operation without changing the normal window', async () => {
+    const path = dbPath()
+    const store = new FuturesMarketStore(path)
+    saveOfficial(
+      store,
+      M,
+      Array.from({ length: 600 }, (_, i) => BASE + i * M),
+    )
+    store.close()
+    const app = await buildLiveGateway({
+      marketDbPath: path,
+      clock: () => BASE + 11 * H,
+    })
+    closers.push(() => app.close())
+    const normal = (
+      await app.inject('/api/terminal/chart?interval_ms=60000')
+    ).json() as { candles: unknown[] }
+    const expanded = (
+      await app.inject('/api/terminal/chart?interval_ms=60000&limit=1000')
+    ).json() as { candles: Array<{ time_ms: number }> }
+    expect(normal.candles.length).toBeLessThanOrEqual(500)
+    expect(expanded.candles).toHaveLength(600)
+    expect(expanded.candles[0]?.time_ms).toBe(BASE)
+    for (const limit of ['0', '5001', '2.5', 'bad'])
+      expect(
+        (await app.inject(`/api/terminal/chart?limit=${limit}`)).statusCode,
+      ).toBe(400)
+  })
+
   it('reads every trader-facing ticker field from the raw provider message', () => {
     const stats = tickerStats({
       type: 'ticker',

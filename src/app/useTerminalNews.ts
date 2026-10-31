@@ -48,6 +48,32 @@ export interface TerminalNewsItem {
   readonly licenseUrl?: string | null
 }
 
+export type NewsBriefingStatus =
+  'ok' | 'pending' | 'no_news' | 'off' | 'error' | 'stale'
+
+export interface NewsBriefingSource {
+  readonly id: string
+  readonly source: string
+  readonly url: string
+  readonly publishedAtMs: number | null
+  readonly receivedAtMs: number
+  readonly licenseStatus: string
+}
+
+export interface TerminalNewsBriefing {
+  readonly status: NewsBriefingStatus
+  readonly product: string
+  readonly text: string | null
+  readonly knownAtMs: number | null
+  readonly checkedAtMs: number
+  readonly expiresAtMs: number | null
+  readonly sourceCount: number
+  readonly sources: readonly NewsBriefingSource[]
+  readonly reason: string | null
+  readonly inputHash?: string | null
+  readonly modelRef?: string | null
+}
+
 const RELEVANCE = new Set<NewsRelevance>(['high', 'medium', 'low', 'none'])
 const DIRECTION = new Set<NewsDirection>(['bullish', 'bearish', 'neutral'])
 const ANALYSIS = new Set<NewsAnalysisStatus>([
@@ -72,6 +98,74 @@ function num(value: unknown): number | null {
   if (value === null || value === undefined || value === '') return null
   const n = Number(value)
   return Number.isFinite(n) ? n : null
+}
+
+function briefingStatus(value: unknown): value is NewsBriefingStatus {
+  return (
+    value === 'ok' ||
+    value === 'pending' ||
+    value === 'no_news' ||
+    value === 'off' ||
+    value === 'error' ||
+    value === 'stale'
+  )
+}
+
+export function decodeNewsBriefing(
+  payload: unknown,
+): TerminalNewsBriefing | null {
+  const value = record(payload).briefing
+  if (value === undefined || value === null) return null
+  const row = record(value)
+  const knownAtMs = num(row.known_at_ms)
+  const checkedAtMs = num(row.checked_at_ms)
+  const text = typeof row.text === 'string' ? row.text.trim() : null
+  if (
+    !briefingStatus(row.status) ||
+    row.product !== 'PF_ETHUSD' ||
+    checkedAtMs === null ||
+    !Number.isInteger(row.source_count) ||
+    !Array.isArray(row.sources) ||
+    row.source_count !== row.sources.length ||
+    (knownAtMs !== null && knownAtMs > checkedAtMs) ||
+    (text !== null && text.length > 200) ||
+    (row.status === 'ok' &&
+      (!text || knownAtMs === null || row.sources.length === 0))
+  )
+    throw new Error('Invalid news briefing response')
+  const sources = row.sources.map((value): NewsBriefingSource => {
+    const source = record(value)
+    const receivedAtMs = num(source.received_at_ms)
+    if (
+      typeof source.id !== 'string' ||
+      typeof source.source !== 'string' ||
+      typeof source.url !== 'string' ||
+      typeof source.license_status !== 'string' ||
+      receivedAtMs === null
+    )
+      throw new Error('Invalid news briefing provenance')
+    return {
+      id: source.id,
+      source: source.source,
+      url: source.url,
+      publishedAtMs: num(source.published_at_ms),
+      receivedAtMs,
+      licenseStatus: source.license_status,
+    }
+  })
+  return {
+    status: row.status,
+    product: row.product,
+    text,
+    knownAtMs,
+    checkedAtMs,
+    expiresAtMs: num(row.expires_at_ms),
+    sourceCount: sources.length,
+    sources,
+    reason: typeof row.reason === 'string' ? row.reason : null,
+    inputHash: typeof row.input_hash === 'string' ? row.input_hash : null,
+    modelRef: typeof row.model_ref === 'string' ? row.model_ref : null,
+  }
 }
 
 export function decodeTerminalNews(payload: unknown): TerminalNewsItem[] {
@@ -153,11 +247,17 @@ const EMPTY: TerminalNewsItem[] = []
 export function useTerminalNews(
   apiBase = '/api-live',
   enabled = true,
-): { items: TerminalNewsItem[]; loaded: boolean; source: NewsSource } {
+): {
+  items: TerminalNewsItem[]
+  loaded: boolean
+  source: NewsSource
+  briefing: TerminalNewsBriefing | null
+} {
   const [read, setRead] = useState<{
     base: string
     items: TerminalNewsItem[]
     source: NewsSource
+    briefing: TerminalNewsBriefing | null
   } | null>(null)
 
   useEffect(() => {
@@ -175,6 +275,7 @@ export function useTerminalNews(
           setRead((previous) => ({
             base: apiBase,
             items: previous?.base === apiBase ? previous.items : EMPTY,
+            briefing: previous?.base === apiBase ? previous.briefing : null,
             source: {
               state: body.status === 'off' ? 'off' : 'error',
               reason: String(body.reason ?? 'News unavailable'),
@@ -193,6 +294,7 @@ export function useTerminalNews(
         setRead({
           base: apiBase,
           items,
+          briefing: decodeNewsBriefing(body),
           source: {
             state: 'ok',
             collectorStatus:
@@ -209,6 +311,7 @@ export function useTerminalNews(
           setRead((previous) => ({
             base: apiBase,
             items: previous?.base === apiBase ? previous.items : EMPTY,
+            briefing: previous?.base === apiBase ? previous.briefing : null,
             source: {
               state: 'error',
               reason: error instanceof Error ? error.message : String(error),
@@ -229,8 +332,19 @@ export function useTerminalNews(
       items: EMPTY,
       loaded: false,
       source: { state: 'off', reason: 'News disabled in this mode' },
+      briefing: null,
     }
   return read?.base === apiBase
-    ? { items: read.items, loaded: true, source: read.source }
-    : { items: EMPTY, loaded: false, source: { state: 'loading' } }
+    ? {
+        items: read.items,
+        loaded: true,
+        source: read.source,
+        briefing: read.briefing,
+      }
+    : {
+        items: EMPTY,
+        loaded: false,
+        source: { state: 'loading' },
+        briefing: null,
+      }
 }

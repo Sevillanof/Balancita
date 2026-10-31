@@ -152,6 +152,7 @@ export function useTerminalChart(
   enabled: boolean,
   refreshMs = 15_000,
   product?: string,
+  limit?: number,
 ): TerminalChartData | null {
   const [data, setData] = useState<TerminalChartData | null>(null)
   useEffect(() => {
@@ -163,7 +164,7 @@ export function useTerminalChart(
       controller = new AbortController()
       try {
         const response = await fetch(
-          `${apiBase}/terminal/chart?interval_ms=${intervalMs}${productQuery(product, false)}`,
+          `${apiBase}/terminal/chart?interval_ms=${intervalMs}${productQuery(product, false)}${limit === undefined ? '' : `&limit=${limit}`}`,
           { signal: controller.signal },
         )
         if (!response.ok) return
@@ -181,6 +182,6 @@ export function useTerminalChart(
       clearInterval(timer)
       controller?.abort()
     }
-  }, [apiBase, intervalMs, enabled, refreshMs, product])
+  }, [apiBase, intervalMs, enabled, refreshMs, product, limit])
   return enabled && data?.intervalMs === intervalMs ? data : null
 }

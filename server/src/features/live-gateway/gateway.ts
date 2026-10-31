@@ -11,7 +11,7 @@ import { qwenScoresOff, type QwenScores } from './qwen-scores.ts'
 import { qwenDecisionsOff, type QwenDecisions } from './qwen-decisions.ts'
 import { newsItemsOff, type NewsItems } from './news-items.ts'
 import { createMovements, type Movements } from './movements.ts'
-import { CHART_INTERVALS_MS } from './terminal-chart.ts'
+import { CHART_INTERVALS_MS, MAX_CHART_CANDLES } from './terminal-chart.ts'
 import type { SystemUsage } from './system-usage.ts'
 import {
   createObservabilityHealth,
@@ -303,17 +303,19 @@ export async function buildLiveGateway(
       }
     },
   )
-  app.get<{ Querystring: { interval_ms?: string; product?: string } }>(
-    '/api/terminal/chart',
-    async (request, reply) => {
-      const view = requested(request.query.product)
-      if (!view) return reply.code(400).send(unknownProduct)
-      const interval = Number(request.query.interval_ms ?? 60_000)
-      if (!(CHART_INTERVALS_MS as readonly number[]).includes(interval))
-        return reply.code(400).send({ error: { code: 'unsupported_interval' } })
-      return view.follower.terminalChart(interval)
-    },
-  )
+  app.get<{
+    Querystring: { interval_ms?: string; product?: string; limit?: string }
+  }>('/api/terminal/chart', async (request, reply) => {
+    const view = requested(request.query.product)
+    if (!view) return reply.code(400).send(unknownProduct)
+    const interval = Number(request.query.interval_ms ?? 60_000)
+    if (!(CHART_INTERVALS_MS as readonly number[]).includes(interval))
+      return reply.code(400).send({ error: { code: 'unsupported_interval' } })
+    const limit = Number(request.query.limit ?? 500)
+    if (!Number.isInteger(limit) || limit < 1 || limit > MAX_CHART_CANDLES)
+      return reply.code(400).send({ error: { code: 'unsupported_limit' } })
+    return view.follower.terminalChart(interval, limit)
+  })
   app.get('/api/health', () => ({
     process: 'live-gateway',
     capture: defaultView.follower.status(),
@@ -573,7 +575,7 @@ export async function buildLiveGateway(
     },
   )
 
-  app.addHook('onClose', async () => {
+  app.addHook('preClose', async () => {
     closing = true
     clearInterval(pollTimer)
     clearInterval(heartbeatTimer)
@@ -586,10 +588,13 @@ export async function buildLiveGateway(
       view.sessions.clear()
     }
     await new Promise<void>((resolve) => wss.close(() => resolve()))
+  })
+  app.addHook('onClose', (_instance, done) => {
     for (const view of views.values()) {
       view.follower.close()
       view.engine.close()
     }
+    done()
   })
   return app
 }

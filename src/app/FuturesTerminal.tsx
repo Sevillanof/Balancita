@@ -28,7 +28,9 @@ import {
   qwenNotice,
   useQwenDecisions,
 } from './useQwenDecisions.ts'
-import QwenGlance from './QwenGlance.tsx'
+import TerminalOperationCard from './TerminalOperationCard.tsx'
+import { useQwenTrades } from './useQwenTrades.ts'
+import { tradeIdentity } from '../features/trading-view/domain/terminal-trade-model.ts'
 import TerminalNewsPanel from './TerminalNewsPanel.tsx'
 import { formatShortDateTime } from './terminal-date.ts'
 import { useTerminalNews } from './useTerminalNews.ts'
@@ -83,6 +85,7 @@ export default function FuturesTerminal({
     items: newsItems,
     loaded: newsLoaded,
     source: newsSource,
+    briefing: newsBriefing,
   } = useTerminalNews(apiBase, liveGateway)
 
   const position = record(state?.position)
@@ -102,6 +105,34 @@ export default function FuturesTerminal({
   const displayedPrice = quote.price
   // The default view (no product pinned) is the first product: Qwen loads without touching the selector.
   const qwenProduct = product ?? bootstrap.products?.[0]
+  const tradeRead = useQwenTrades(qwenProduct, liveGateway)
+  const [pickedTrade, setPickedTrade] = useState<{
+    product: string | undefined
+    id: string
+  } | null>(null)
+  const [tradeFocus, setTradeFocus] = useState<{
+    id: string
+    revision: number
+  } | null>(null)
+  const ownTrades = tradeRead.trades.filter(
+    (trade) => trade.product === qwenProduct,
+  )
+  const selectedTrade =
+    (pickedTrade !== null && pickedTrade.product === qwenProduct
+      ? ownTrades.find((trade) => tradeIdentity(trade) === pickedTrade.id)
+      : null) ??
+    ownTrades.find((trade) => trade.open) ??
+    ownTrades[0] ??
+    null
+  const selectedTradeId = selectedTrade ? tradeIdentity(selectedTrade) : ''
+  const focusTrade = (id: string) => {
+    if (!ownTrades.some((trade) => tradeIdentity(trade) === id)) return
+    setPickedTrade({ product: qwenProduct, id })
+    setTradeFocus((previous) => ({
+      id,
+      revision: (previous?.revision ?? 0) + 1,
+    }))
+  }
   const { rows: qwen, source: qwenSource } = useQwenDecisions(
     qwenProduct,
     bootstrap.mode === 'paper_live',
@@ -387,17 +418,34 @@ export default function FuturesTerminal({
   )
 
   const modeLabel = 'PAPER · KRAKEN'
+  const marketStrip = (
+    <MarketStrip
+      product={product}
+      mode={bootstrap.mode}
+      displayedPrice={displayedPrice}
+      change24h={change24h}
+      eventTimes={eventTimes}
+      quoteLabel={quote.label}
+      quoteReceivedAt={quote.receivedAt}
+      displayClock={displayClock}
+      alerts={alerts}
+      compact={liveGateway}
+    />
+  )
 
   return (
     <AppShell
       brandHref="/"
       brandLabel="Balancita, volver a la aplicación"
       navigation={appNavigation('terminal')}
-      center={<AccountBalance />}
+      viewport={liveGateway}
+      center={<AccountBalance compact={liveGateway} />}
+      market={liveGateway ? marketStrip : undefined}
       status={
         <>
           {sourceSwitch}
           <AppStatusChips
+            compact={liveGateway}
             apiBase={apiBase}
             override={flowInputs}
             showUsage={bootstrap.mode === 'paper_live'}
@@ -408,17 +456,7 @@ export default function FuturesTerminal({
         </>
       }
     >
-      <MarketStrip
-        product={product}
-        mode={bootstrap.mode}
-        displayedPrice={displayedPrice}
-        change24h={change24h}
-        eventTimes={eventTimes}
-        quoteLabel={quote.label}
-        quoteReceivedAt={quote.receivedAt}
-        displayClock={displayClock}
-        alerts={alerts}
-      />
+      {!liveGateway && marketStrip}
       {error && (
         <p role="alert">
           {error} No se sustituyen datos desconectados por mocks.
@@ -428,9 +466,10 @@ export default function FuturesTerminal({
       {state && (
         <>
           <ApprovedTerminalLayout
+            tradeLayout={liveGateway}
             chart={
               <section
-                className={`${TERMINAL_FRAME} observer-height flex flex-col`}
+                className={`${TERMINAL_FRAME} ${liveGateway ? 'h-full min-h-0 pt-2' : 'observer-height'} flex flex-col`}
                 aria-label={`Gráfico ${productPair(product)}`}
               >
                 <TerminalMarketChart
@@ -439,6 +478,12 @@ export default function FuturesTerminal({
                   analyses={bootstrap.mode === 'paper_live' ? analyses : []}
                   selectedId={bootstrap.mode === 'paper_live' ? selectedId : ''}
                   onSelect={selectAnalysis}
+                  trades={liveGateway ? ownTrades : undefined}
+                  viewport={liveGateway}
+                  tradesConfirmed={tradeRead.source.state === 'ok'}
+                  selectedTradeId={selectedTradeId}
+                  tradeFocus={tradeFocus}
+                  onSelectTrade={focusTrade}
                   apiBase={apiBase}
                   product={product}
                   ticker={
@@ -476,6 +521,8 @@ export default function FuturesTerminal({
             decisions={
               bootstrap.mode === 'paper_live' ? (
                 <ObserverPanel
+                  visualOperations
+                  viewport={liveGateway}
                   product={product ?? bootstrap.products?.[0] ?? null}
                   health={health}
                   latest={
@@ -489,20 +536,26 @@ export default function FuturesTerminal({
                   localNowMs={displayClock}
                   glance={
                     liveGateway ? (
-                      <QwenGlance
-                        product={qwenProduct}
-                        latest={selectedAnalysis}
+                      <TerminalOperationCard
+                        compact
+                        trade={selectedTrade}
+                        source={tradeRead.source}
                         nowMs={displayClock}
+                        onFocus={() => focusTrade(selectedTradeId)}
+                        notice={qwenHealthNotice(qwenSource, displayClock)}
                       />
                     ) : undefined
                   }
                   news={
                     liveGateway ? (
                       <TerminalNewsPanel
+                        viewport
+                        briefing={newsBriefing}
                         items={newsItems}
                         loaded={newsLoaded}
                         nowMs={displayClock}
                         source={newsSource}
+                        relevantOnly
                       />
                     ) : undefined
                   }
@@ -512,7 +565,6 @@ export default function FuturesTerminal({
                     rows={decisionRows}
                     selectedId={selectedId}
                     onSelect={selectAnalysis}
-                    health={qwenHealthNotice(qwenSource, displayClock)}
                     notice={
                       engineOff && !analyses.length
                         ? 'Motor de decisiones apagado. Solo se muestran velas y precio públicos de Kraken Futures; no hay análisis, cuenta ni operaciones simuladas.'

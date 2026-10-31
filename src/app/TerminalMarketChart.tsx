@@ -12,6 +12,7 @@ import { candleForDecision, markerGap } from './terminal-markers.ts'
 import { decisionView } from './terminal-decision-view.ts'
 import { analysisAction } from './terminal-labels.ts'
 import { QWEN_STRATEGY_ID } from './useQwenDecisions.ts'
+import type { TerminalChartTrade } from '../features/trading-view/domain/terminal-trade-model.ts'
 
 export default function TerminalMarketChart({
   market,
@@ -28,6 +29,12 @@ export default function TerminalMarketChart({
   fills = [],
   quantityUnit,
   historicalLabel,
+  trades,
+  tradesConfirmed,
+  selectedTradeId,
+  tradeFocus,
+  onSelectTrade,
+  viewport = false,
 }: {
   market: Record<string, unknown>
   mode: TerminalBootstrap['mode']
@@ -44,6 +51,12 @@ export default function TerminalMarketChart({
   fills?: unknown[]
   quantityUnit?: string
   historicalLabel?: string
+  trades?: readonly TerminalChartTrade[]
+  tradesConfirmed?: boolean
+  selectedTradeId?: string
+  tradeFocus?: { id: string; revision: number } | null
+  onSelectTrade?: (id: string) => void
+  viewport?: boolean
 }) {
   const marketCandles = market.candles
   const candles = useMemo<ApprovedTerminalCandle[]>(
@@ -237,6 +250,12 @@ export default function TerminalMarketChart({
         quantityUnit={quantityUnit}
         proposalLegend
         historicalLabel={historicalLabel}
+        trades={trades}
+        viewport={viewport}
+        tradesConfirmed={tradesConfirmed}
+        selectedTradeId={selectedTradeId}
+        tradeFocus={tradeFocus}
+        onSelectTrade={onSelectTrade}
       />
     </>
   )

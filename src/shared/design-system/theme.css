@@ -251,6 +251,71 @@
 @custom-variant chart-desktop (@media (width >= 901px));
 @custom-variant terminal-wide (@media (width >= 1200px));
 @custom-variant terminal-stack (@media (width <= 900px));
+@custom-variant terminal-condensed {
+  @media (min-width: 700px) and (max-height: 600px),
+    (max-width: 699px) and (max-height: 720px) {
+    @slot;
+  }
+}
+/* Viewport steps of the Terminal shell (inclusive, like the legacy ones above). */
+@custom-variant from-600 (@media (width >= 600px));
+@custom-variant from-700 (@media (width >= 700px));
+@custom-variant from-800 (@media (width >= 800px));
+@custom-variant from-1000 (@media (width >= 1000px));
+@custom-variant from-1100 (@media (width >= 1100px));
+@custom-variant until-599 (@media (width <= 599px));
+@custom-variant until-699 (@media (width <= 699px));
+@custom-variant phone-short (@media (width <= 699px) and (height <= 720px));
+/* Styling of direct or nested children of a card, without arbitrary variants. */
+@custom-variant child-div (& > div);
+@custom-variant child-span (& > span);
+@custom-variant child-i (& > i);
+@custom-variant descendant-dt (& dt);
+@custom-variant descendant-dd (& dd);
+
+/* Named grid and size tracks of the Terminal shell, operation card and news column. */
+@utility grid-cols-main-auto {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+@utility grid-cols-top-bar-wide {
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+}
+@utility grid-cols-layout-side {
+  grid-template-columns: minmax(0, 1fr) 304px;
+}
+@utility grid-rows-card {
+  grid-template-rows: auto minmax(0, 1fr) auto;
+}
+@utility grid-rows-shell {
+  grid-template-rows: auto minmax(0, 1fr);
+}
+@utility grid-rows-news-100 {
+  grid-template-rows: 100px minmax(0, 1fr) auto;
+}
+@utility grid-rows-news-172 {
+  grid-template-rows: 172px minmax(0, 1fr) auto;
+}
+@utility grid-rows-news-64 {
+  grid-template-rows: 64px minmax(0, 1fr) auto;
+}
+@utility grid-rows-layout-fill {
+  grid-template-rows: minmax(0, 1fr);
+}
+@utility grid-rows-layout-stack {
+  grid-template-rows: minmax(0, 1fr) 344px;
+}
+@utility grid-rows-layout-stack-short {
+  grid-template-rows: minmax(0, 1fr) 308px;
+}
+@utility h-chart-fluid {
+  height: clamp(420px, 56vh, 650px);
+}
+@utility max-h-popover {
+  max-height: calc(100dvh - 96px);
+}
+@utility w-popover {
+  width: min(352px, calc(100vw - 32px));
+}
 @custom-variant shell-link (& a);
 @custom-variant shell-link-focus (& a:focus-visible);
 @custom-variant shell-button-focus (& :where(button:focus-visible));

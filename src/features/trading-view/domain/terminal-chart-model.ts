@@ -298,7 +298,13 @@ export function timeframeCandles(
   intervalSeconds: number,
   remote: readonly ApprovedTerminalCandle[] | null,
 ): ApprovedTerminalCandle[] {
-  if (intervalSeconds === 60) return [...minute]
+  if (intervalSeconds === 60) {
+    const history = new Map(
+      (remote ?? []).map((candle) => [candle.time, candle]),
+    )
+    for (const candle of minute) history.set(candle.time, candle)
+    return [...history.values()].sort((a, b) => a.time - b.time)
+  }
   if (!remote || remote.length === 0) return aggregate(minute, intervalSeconds)
   const out = remote.map((candle) => ({ ...candle }))
   const last = out.at(-1)!

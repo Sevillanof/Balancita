@@ -10,6 +10,9 @@ lerna-debug.log*
 node_modules
 dist
 dist-ssr
+# Local Node and Vite/Vitest caches (21-character generated directory names)
+/node-compile-cache/
+/?????????????????????/ssr/
 *.local
 playwright-artifacts/
 playwright-report/
