@@ -350,6 +350,19 @@ test('without an open operation the strip shows the entry steps', async ({
     })
   await page.keyboard.press('Escape')
   await expect(detail).toBeHidden()
+  // A grey step is not a failure: it says what it is waiting for.
+  await strip.getByRole('button', { name: /^Noticias/ }).click()
+  const news = page.getByRole('dialog', { name: /Noticias: última evaluación/ })
+  await expect(news).toContainText('sin señal')
+  await expect(news).toContainText('Sin catalizador habilitado')
+  if (SHOTS)
+    await page.screenshot({
+      path: `${SHOTS}/noticias-${test.info().project.name}.png`,
+    })
+  await strip.getByRole('button', { name: /^Entrada/ }).click()
+  await expect(
+    page.getByRole('dialog', { name: /Entrada: última evaluación/ }),
+  ).toContainText('en espera')
 })
 
 test('with an open operation the strip shows the exit steps', async ({
