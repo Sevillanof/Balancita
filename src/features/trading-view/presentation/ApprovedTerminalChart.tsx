@@ -125,6 +125,8 @@ type Props = {
   tradesConfirmed?: boolean
   selectedTradeId?: string
   tradeFocus?: { id: string; revision: number } | null
+  /** Moves the view to this instant (a new `revision` moves it again). */
+  timeFocus?: { ms: number; revision: number } | null
   onSelectTrade?: (id: string) => void
   viewport?: boolean
 }
@@ -248,6 +250,7 @@ export default function ApprovedTerminalChart({
   tradesConfirmed = false,
   selectedTradeId = '',
   tradeFocus = null,
+  timeFocus = null,
   onSelectTrade,
   viewport = false,
 }: Props) {
@@ -694,6 +697,23 @@ export default function ApprovedTerminalChart({
     focusedTradeHistory.current = { firstTime, covered }
     initialTradeView.current = covered || candles.length >= 5_000
   }, [tradeFocus, intervalSeconds, candles, trades])
+
+  const focusedTime = useRef(0)
+  useEffect(() => {
+    if (!timeFocus || !candles.length || !chartRef.current) return
+    if (focusedTime.current === timeFocus.revision) return
+    const index = timeLogicalIndex(
+      candles.map((candle) => candle.time),
+      timeFocus.ms,
+      intervalSeconds,
+    )
+    if (index === null) return
+    chartRef.current.timeScale().setVisibleLogicalRange({
+      from: Math.max(0, index - 20) as Logical,
+      to: (index + 20) as Logical,
+    })
+    focusedTime.current = timeFocus.revision
+  }, [timeFocus, candles, intervalSeconds])
 
   // Markers depend on which buckets exist, not on the forming candle's price.
   const bucketsKey = `${candles.length}:${candles[0]?.time}:${candles.at(-1)?.time}`

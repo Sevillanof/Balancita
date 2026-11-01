@@ -44,7 +44,7 @@ import {
   utcTime,
 } from './terminal-labels.ts'
 import { record } from '../shared/wire/decode.ts'
-import { lifecycleView } from './terminal-lifecycle.ts'
+import { lifecycleView, minutePrices } from './terminal-lifecycle.ts'
 import { useHealth } from '../features/observability/presentation/useHealth.ts'
 import { latestDecision } from '../features/observability/presentation/latest-decision.ts'
 import ObserverPanel from '../features/observability/presentation/ObserverPanel.tsx'
@@ -488,6 +488,7 @@ export default function FuturesTerminal({
                           openTrade:
                             ownTrades.find((trade) => trade.open) ?? null,
                           nowMs: displayClock,
+                          prices: minutePrices(market.candles),
                         })
                       : null
                   }

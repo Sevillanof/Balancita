@@ -24,6 +24,15 @@ export type StepIcon =
   | 'maker'
   | 'alert'
 
+/** How one look turned out 30 minutes later: right, wrong, still too recent, or nothing to judge. */
+export interface StepCheck {
+  state: 'right' | 'wrong' | 'pending' | 'none'
+  /** The instant of the look. */
+  atMs: number
+  /** What the price did in the 30 minutes after the look, in basis points; null while unknown. */
+  moveBp: number | null
+}
+
 export interface LifecycleStep {
   id: string
   icon: StepIcon
@@ -41,6 +50,8 @@ export interface LifecycleStep {
   history: readonly StepTone[]
   /** The step's rule in plain words. */
   rule: string
+  /** The last looks judged against the price 30 minutes later (same order as `history`); null when the step is a fixed rule. */
+  checks: readonly StepCheck[] | null
 }
 
 export interface LifecycleView {
@@ -55,6 +66,10 @@ const HOUR_MS = 3_600_000
 const EXHAUST_H = 24
 const CAP_H = 36
 const NEWS_H = 12
+/** A look is judged against the price this long after it (two candles of 15 min). */
+const CHECK_MS = 30 * 60_000
+/** What a round trip costs (taker both ways, 0,05 % each), in basis points: a move smaller than this pays nothing. */
+const COST_BP = 10
 
 const clock = new Intl.DateTimeFormat('es-ES', {
   timeZone: 'Europe/Madrid',
@@ -145,6 +160,7 @@ function entryStepsOf(analysis: Record<string, unknown>): LifecycleStep[] {
       meter: null,
       history: [],
       rule: 'Cada 15 min, con velas de 5 min cerradas. Con datos incompletos no decide.',
+      checks: null,
     },
     {
       id: 'master',
@@ -172,6 +188,7 @@ function entryStepsOf(analysis: Record<string, unknown>): LifecycleStep[] {
       meter: null,
       history: [],
       rule: 'Solo abre si el maestro está fuerte (▲▲ o ▼▼).',
+      checks: null,
     },
     {
       id: 'gate',
@@ -209,6 +226,7 @@ function entryStepsOf(analysis: Record<string, unknown>): LifecycleStep[] {
             },
       history: [],
       rule: 'Tiene que coincidir con el lado del maestro. Las noticias pueden pasar por encima.',
+      checks: null,
     },
     {
       id: 'news',
@@ -245,6 +263,7 @@ function entryStepsOf(analysis: Record<string, unknown>): LifecycleStep[] {
       meter: null,
       history: [],
       rule: 'Una noticia verificada puede abrir aunque el portero diga que no.',
+      checks: null,
     },
     {
       id: 'enter',
@@ -260,6 +279,7 @@ function entryStepsOf(analysis: Record<string, unknown>): LifecycleStep[] {
       meter: null,
       history: [],
       rule: 'Entra a mercado con la cuenta entera cuando todo lo anterior da el sí.',
+      checks: null,
     },
   ]
 }
@@ -304,6 +324,7 @@ function exitStepsOf(
       meter: null,
       history: [],
       rule: 'Cierra cuando el maestro se da vuelta en contra, al menos flojo.',
+      checks: null,
     },
     {
       id: 'news12',
@@ -335,6 +356,7 @@ function exitStepsOf(
         : null,
       history: [],
       rule: 'Si entró por noticia, en las primeras 12 h cierra cuando el maestro deja de estar fuerte.',
+      checks: null,
     },
     {
       id: 'exhaust24',
@@ -361,6 +383,7 @@ function exitStepsOf(
       },
       history: [],
       rule: 'Pasadas 24 h, cierra si el maestro dejó de estar a favor.',
+      checks: null,
     },
     {
       id: 'cap',
@@ -382,6 +405,7 @@ function exitStepsOf(
       },
       history: [],
       rule: 'Cierra siempre a las 36 h, pase lo que pase.',
+      checks: null,
     },
     {
       id: 'maker',
@@ -434,6 +458,7 @@ function exitStepsOf(
         : null,
       history: [],
       rule: 'Al cerrar deja una orden límite que sigue al mejor precio; sale a mercado a los 45 min, a 40 pb en contra o ante una emergencia.',
+      checks: null,
     },
     {
       id: 'emergency',
@@ -447,6 +472,7 @@ function exitStepsOf(
       meter: null,
       history: [],
       rule: 'Una emergencia manda cerrar a mercado sin esperar la orden.',
+      checks: null,
     },
   ]
 }
@@ -484,22 +510,134 @@ function enteredByNews(
   return r.news === true && r.gate !== true && r.gateSide === null
 }
 
+export interface PricePoint {
+  /** Open time of a 1 minute candle. */
+  timeMs: number
+  close: number
+}
+
+type Claim = { kind: 'dir' | 'hold' | 'close' | 'flat' | 'block'; side: number }
+
+/** The steps that say something about the market and so can be judged afterwards; the others are fixed rules. */
+const JUDGED = new Set([
+  'master',
+  'gate',
+  'news',
+  'enter',
+  'flip',
+  'news12',
+  'exhaust24',
+])
+
+/** The 1 minute candles of the terminal market as price points (anything malformed is left out). */
+export function minutePrices(candles: unknown): PricePoint[] {
+  if (!Array.isArray(candles)) return []
+  return candles.flatMap((value) => {
+    const candle = record(value)
+    const close = Number(candle.close)
+    return Number.isSafeInteger(candle.time_ms) && Number.isFinite(close)
+      ? [{ timeMs: Number(candle.time_ms), close }]
+      : []
+  })
+}
+
+/** Price at an instant: the close of the last candle that had ended by then. */
+function priceAt(prices: readonly PricePoint[], ms: number): number | null {
+  let found: number | null = null
+  for (const point of prices) {
+    if (point.timeMs + 60_000 > ms) break
+    found = point.close
+  }
+  return found
+}
+
+function claimOf(
+  step: LifecycleStep,
+  side: number,
+  entry: {
+    masterSide: number
+    newsSide: number | null
+    enterSide: number
+  } | null,
+): Claim | null {
+  if (!JUDGED.has(step.id)) return null
+  if (entry) {
+    if (step.id === 'master')
+      return step.tone === 'ok'
+        ? { kind: 'dir', side: entry.masterSide }
+        : step.tone === 'warn'
+          ? { kind: 'flat', side: 0 }
+          : null
+    if (step.id === 'gate' && entry.masterSide === 0) return null
+    if (step.id === 'gate')
+      return step.tone === 'ok'
+        ? { kind: 'dir', side: entry.masterSide }
+        : step.tone === 'no'
+          ? { kind: 'block', side: entry.masterSide }
+          : null
+    if (step.id === 'news')
+      return step.tone === 'ok' && entry.newsSide !== null
+        ? { kind: 'dir', side: entry.newsSide }
+        : null
+    // 'enter'
+    return step.tone === 'ok'
+      ? { kind: 'dir', side: entry.enterSide }
+      : { kind: 'flat', side: 0 }
+  }
+  return step.tone === 'no'
+    ? { kind: 'close', side }
+    : step.tone === 'ok'
+      ? { kind: 'hold', side }
+      : null
+}
+
+function checkOf(
+  claim: Claim | null,
+  atMs: number,
+  nowMs: number,
+  prices: readonly PricePoint[],
+): StepCheck {
+  if (claim === null) return { state: 'none', atMs, moveBp: null }
+  const from = priceAt(prices, atMs)
+  if (from === null || from <= 0) return { state: 'none', atMs, moveBp: null }
+  const to = atMs + CHECK_MS > nowMs ? null : priceAt(prices, atMs + CHECK_MS)
+  if (to === null) return { state: 'pending', atMs, moveBp: null }
+  const move = (to / from - 1) * 10_000
+  const signed = claim.side * move
+  const right =
+    claim.kind === 'dir'
+      ? signed > 0
+      : claim.kind === 'hold'
+        ? signed >= 0
+        : claim.kind === 'close'
+          ? signed < 0
+          : claim.kind === 'block'
+            ? signed < COST_BP
+            : Math.abs(move) < COST_BP
+  return { state: right ? 'right' : 'wrong', atMs, moveBp: move }
+}
+
 /**
  * The strip for the product: entry steps when no operation is open, exit steps
  * while one is. `null` when Qwen has not looked yet (nothing to evaluate).
+ * `prices` (1 minute candles) lets each past look be judged against what the
+ * price did in the next 30 minutes.
  */
 export function lifecycleView(input: {
   analyses: readonly unknown[]
   openTrade: QwenTrade | null
   nowMs: number
+  prices?: readonly PricePoint[]
 }): LifecycleView | null {
   const looks = qwenLooks(input.analyses)
   const latest = looks.at(-1)
   if (!latest) return null
+  const prices = input.prices ?? []
   const evaluatedMs = Number(latest.decision_time_ms)
   const recent = looks.slice(-HISTORY)
   const trade = input.openTrade
   if (trade) {
+    const side = trade.side === 'LONG' ? 1 : -1
     const byNews = enteredByNews(looks, trade)
     const build = (analysis: Record<string, unknown>, at: number) =>
       exitStepsOf(analysis, trade, at, byNews)
@@ -513,12 +651,50 @@ export function lifecycleView(input: {
             (look) =>
               build(look, Number(look.decision_time_ms))[index]?.tone ?? 'na',
           ),
+      checks: JUDGED.has(step.id)
+        ? recent.map((look) => {
+            const at = Number(look.decision_time_ms)
+            // Looks from before the operation opened had nothing to hold or close.
+            const past = build(look, at)[index]
+            return checkOf(
+              at < trade.entryMs || !past ? null : claimOf(past, side, null),
+              at,
+              input.nowMs,
+              prices,
+            )
+          })
+        : null,
     }))
     return { phase: 'exit', steps, evaluatedMs }
+  }
+  const entryContext = (analysis: Record<string, unknown>) => {
+    const r = read(analysis)
+    const view = decisionView(analysis)
+    const signal = record(
+      record(record(analysis.formula).noticias).priority,
+    ).signal
+    return {
+      masterSide:
+        r.master !== null && Math.abs(r.master) >= 2 ? Math.sign(r.master) : 0,
+      newsSide: num(record(signal).side),
+      enterSide: view.kind === 'enter-long' ? 1 : -1,
+    }
   }
   const steps = entryStepsOf(latest).map((step, index) => ({
     ...step,
     history: recent.map((look) => entryStepsOf(look)[index]?.tone ?? 'na'),
+    checks: JUDGED.has(step.id)
+      ? recent.map((look) => {
+          const at = Number(look.decision_time_ms)
+          const past = entryStepsOf(look)[index]
+          return checkOf(
+            past ? claimOf(past, 0, entryContext(look)) : null,
+            at,
+            input.nowMs,
+            prices,
+          )
+        })
+      : null,
   }))
   return { phase: 'entry', steps, evaluatedMs }
 }
