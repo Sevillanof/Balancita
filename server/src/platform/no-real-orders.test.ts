@@ -26,6 +26,7 @@ const PUBLIC_REST = [
   'https://futures.kraken.com/derivatives/api/v3/instruments',
   'https://futures.kraken.com/derivatives/api/v3/historical-funding-rates',
   'https://futures.kraken.com/derivatives/api/v3/tickers',
+  'https://futures.kraken.com/derivatives/api/v3/orderbook',
   'https://futures.kraken.com/api/charts/v1/trade',
   'https://futures.kraken.com/api/charts/v1/analytics',
   'https://futures.kraken.com/api/charts/v1/mark',

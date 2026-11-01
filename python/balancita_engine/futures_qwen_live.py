@@ -79,6 +79,11 @@ SKIP_TEXT = {
     "proceso_detenido": "el proceso estaba apagado a esa hora",
     "datos_incompletos": "la ficha estaba incompleta (faltaban datos), no se le preguntó",
     "saldo_insuficiente": "no hay saldo disponible para abrir la operación",
+    "libro_no_disponible": "no se pudo recibir el libro público",
+    "libro_invalido": "el libro público no es válido",
+    "libro_obsoleto": "el libro público perdió vigencia",
+    "liquidez_insuficiente": "el libro no cubre toda la operación",
+    "ejecucion_tarde": "la decisión venció antes de ejecutarse",
 }
 
 
@@ -257,6 +262,21 @@ CREATE TABLE IF NOT EXISTS trades(
 CREATE TABLE IF NOT EXISTS errors(
   id INTEGER PRIMARY KEY AUTOINCREMENT, at_ms INTEGER NOT NULL, place TEXT NOT NULL, product TEXT, kind TEXT NOT NULL,
   detail TEXT);
+CREATE TABLE IF NOT EXISTS execution_receipts(
+  receipt_id TEXT PRIMARY KEY, product TEXT NOT NULL, trade_no INTEGER NOT NULL,
+  purpose TEXT NOT NULL CHECK(purpose IN ('entry','exit','mark','funding')),
+  signal_ms INTEGER NOT NULL, recorded_at_ms INTEGER NOT NULL,
+  evidence_hash TEXT NOT NULL, evidence_json TEXT NOT NULL
+) STRICT;
+CREATE UNIQUE INDEX IF NOT EXISTS execution_receipts_single_leg
+ON execution_receipts(product,trade_no,purpose) WHERE purpose IN ('entry','exit');
+CREATE TRIGGER IF NOT EXISTS execution_receipts_no_update BEFORE UPDATE ON execution_receipts
+BEGIN SELECT RAISE(ABORT,'execution evidence is immutable'); END;
+CREATE TRIGGER IF NOT EXISTS execution_receipts_no_delete BEFORE DELETE ON execution_receipts
+BEGIN SELECT RAISE(ABORT,'execution evidence is immutable'); END;
+CREATE TRIGGER IF NOT EXISTS execution_receipts_no_replace BEFORE INSERT ON execution_receipts
+WHEN EXISTS(SELECT 1 FROM execution_receipts WHERE receipt_id=NEW.receipt_id)
+BEGIN SELECT RAISE(ABORT,'execution evidence already exists'); END;
 CREATE TABLE IF NOT EXISTS news_actions(
   product TEXT NOT NULL, event_id TEXT NOT NULL, consumed_ms INTEGER NOT NULL,
   action TEXT NOT NULL, evidence_json TEXT NOT NULL, PRIMARY KEY(product,event_id));
@@ -270,14 +290,17 @@ _ADDED_COLUMNS = {
                   ("look_n", "INTEGER"), ("mirror_ok", "INTEGER"), ("factors_json", "TEXT"),
                   ("formula_action", "TEXT"), ("formula_json", "TEXT"), ("opinion_agrees", "INTEGER"), ("opinion_error", "TEXT")),
     "trader_state": (("window_json", "TEXT"),),
-    "trades": (("funding_model", "TEXT"), ("net_complete_usd", "TEXT"), ("config_hash", "TEXT")),
+    "trades": (("funding_model", "TEXT"), ("net_complete_usd", "TEXT"), ("config_hash", "TEXT"),
+               ("execution_model", "TEXT"), ("entry_receipt_id", "TEXT"), ("exit_receipt_id", "TEXT"),
+               ("mark_receipt_id", "TEXT"), ("funding_receipt_id", "TEXT"), ("execution_error", "TEXT")),
 }
 
 _TRADE_COLUMNS = ("status", "side", "entry_ms", "exit_ms", "entry_px", "exit_px", "qty", "notional_usd", "gross_usd",
                   "fees_usd", "funding_usd", "net_usd", "net_bp", "funding_status", "closed_by", "exit_reason",
                   "entry_reason", "entry_p", "hold_min", "mfe_bp", "mae_bp", "stop_px", "max_hold_ms", "mark_px",
                   "mark_ms", "net_now_usd", "opened_at_ms", "closed_at_ms", "leverage", "margin_usd",
-                  "funding_model", "net_complete_usd", "config_hash")
+                  "funding_model", "net_complete_usd", "config_hash", "execution_model", "entry_receipt_id",
+                  "exit_receipt_id", "mark_receipt_id", "funding_receipt_id", "execution_error")
 
 
 def position_to_json(position):
@@ -288,6 +311,8 @@ def position_to_json(position):
             "mae_bp": position.mae_bp, "funding_model": position.funding_model}
     if position.notional_usd is not None:
         body["notional_usd"] = str(position.notional_usd)
+    if position.entry_execution is not None:
+        body["entry_execution"] = position.entry_execution
     return json.dumps(body, sort_keys=True)
 
 
@@ -296,6 +321,13 @@ def position_from_json(text):
     raw["entry_px"], raw["qty"] = D(raw["entry_px"]), D(raw["qty"])
     if raw.get("notional_usd") is not None:
         raw["notional_usd"] = D(str(raw["notional_usd"]))
+    if raw.get("entry_execution") is not None:
+        from . import futures_book_execution as book
+        fill = book.replay_fill(raw["entry_execution"])
+        if (fill.purpose != "entry" or fill.price != raw["entry_px"] or fill.quantity != raw["qty"]
+                or fill.executed_at_ms != raw["entry_ms"]
+                or raw["entry_execution"].get("funding_model") != raw.get("funding_model")):
+            raise qt.TraderError("La posición guardada contradice su recibo de entrada.")
     return qt.Position(**raw)
 
 
@@ -481,6 +513,118 @@ class LiveStore:
         self.db.execute("UPDATE trades SET {} WHERE product=? AND trade_no=?".format(", ".join(n + "=?" for n in names)),
                         tuple(fields[n] for n in names) + (product, trade_no))
 
+    def put_execution(self, product, trade_no, evidence, recorded_at_ms):
+        from . import futures_book_execution as book
+        try:
+            book.replay_fill(evidence)
+        except book.BookError as error:
+            raise qt.TraderError(error.detail) from error
+        if (evidence["product"] != product or type(trade_no) is not int or trade_no <= 0
+                or type(recorded_at_ms) is not int or recorded_at_ms < evidence["executed_at_ms"]):
+            raise qt.TraderError("El recibo no pertenece a esta operación o todavía no estaba disponible.")
+        trade = self.db.execute("SELECT side,qty,entry_ms,entry_px,execution_model FROM trades "
+                                "WHERE product=? AND trade_no=?", (product, trade_no)).fetchone()
+        if (trade is None or trade["execution_model"] != evidence["model"]
+                or D(trade["qty"]) != D(evidence["quantity"])):
+            raise qt.TraderError("La operación no corresponde al recibo de ejecución.")
+        if evidence["purpose"] == "entry":
+            if (evidence["side"] != trade["side"] or D(evidence["price"]) != D(trade["entry_px"])
+                    or evidence["executed_at_ms"] != trade["entry_ms"]):
+                raise qt.TraderError("La entrada contradice la posición guardada.")
+        elif evidence["side"] != ("SHORT" if trade["side"] == "LONG" else "LONG"):
+            raise qt.TraderError("La ejecución de salida tiene el lado incorrecto.")
+        for period in (evidence.get("settlement") or {}).get("funding_periods", []):
+            if period["known_at_ms"] > recorded_at_ms:
+                raise qt.TraderError("No se registra funding antes de que haya sido recibido.")
+        digest = book.canonical_hash(evidence)
+        purpose = evidence["purpose"]
+        key = {"product": product, "trade_no": trade_no, "purpose": purpose,
+               "signal_ms": evidence["signal_at_ms"]}
+        if purpose == "funding":
+            key["revision"] = digest
+        receipt_id = book.canonical_hash(key)
+        previous = self.db.execute(
+            "SELECT evidence_hash FROM execution_receipts WHERE receipt_id=?", (receipt_id,)).fetchone()
+        if previous is not None:
+            if previous["evidence_hash"] != digest:
+                raise qt.TraderError("Un recibo existente no puede cambiar de precios ni de costes.")
+            return receipt_id
+        self.db.execute("INSERT INTO execution_receipts VALUES(?,?,?,?,?,?,?,?)",
+                        (receipt_id, product, trade_no, purpose, evidence["signal_at_ms"],
+                         recorded_at_ms, digest, json.dumps(evidence, sort_keys=True)))
+        return receipt_id
+
+    def execution_evidence(self, receipt_id, *, product=None, trade_no=None, purpose=None):
+        from . import futures_book_execution as book
+        row = self.db.execute("SELECT product,trade_no,purpose,evidence_hash,evidence_json "
+                              "FROM execution_receipts WHERE receipt_id=?",
+                              (receipt_id,)).fetchone()
+        if row is None:
+            raise qt.TraderError("Falta el recibo de ejecución.")
+        if ((product is not None and row["product"] != product)
+                or (trade_no is not None and row["trade_no"] != trade_no)
+                or (purpose is not None and row["purpose"] != purpose)):
+            raise qt.TraderError("El recibo pertenece a otra operación o acción.")
+        evidence = json.loads(row["evidence_json"])
+        if book.canonical_hash(evidence) != row["evidence_hash"]:
+            raise qt.TraderError("El recibo no pasa su hash; no se sustituye por una estimación.")
+        key = {"product": row["product"], "trade_no": row["trade_no"], "purpose": row["purpose"],
+               "signal_ms": evidence["signal_at_ms"]}
+        if row["purpose"] == "funding":
+            key["revision"] = row["evidence_hash"]
+        if (book.canonical_hash(key) != receipt_id or evidence["product"] != row["product"]
+                or evidence["purpose"] != row["purpose"]):
+            raise qt.TraderError("La identidad del recibo no pasa su hash.")
+        try:
+            book.replay_fill(evidence)
+        except book.BookError as error:
+            raise qt.TraderError(error.detail) from error
+        return evidence
+
+    def replay_trade(self, product, trade_no):
+        own_transaction = not self.db.in_transaction
+        if own_transaction:
+            self.db.execute("BEGIN")
+        try:
+            return self._replay_trade(product, trade_no)
+        finally:
+            if own_transaction:
+                self.db.rollback()
+
+    def _replay_trade(self, product, trade_no):
+        from . import futures_book_execution as book
+        row = self.db.execute("SELECT * FROM trades WHERE product=? AND trade_no=?", (product, trade_no)).fetchone()
+        if row is None or "execution_model" not in row.keys() or row["execution_model"] != book.MODEL:
+            raise qt.TraderError("La operación no tiene ejecución de libro reproducible.")
+        entry_data = self.execution_evidence(row["entry_receipt_id"], product=product,
+                                            trade_no=trade_no, purpose="entry")
+        ending_id = row["exit_receipt_id"] if row["status"] == "closed" else row["mark_receipt_id"]
+        if row["status"] == "open" and row["execution_error"]:
+            raise qt.TraderError("La posición no tiene una marca ejecutable vigente.")
+        exit_data = self.execution_evidence(ending_id, product=product, trade_no=trade_no,
+                                           purpose="exit" if row["status"] == "closed" else "mark")
+        settlement = self.execution_evidence(row["funding_receipt_id"], product=product,
+                                              trade_no=trade_no, purpose="funding")["settlement"] \
+            if row["funding_receipt_id"] else exit_data["settlement"]
+        if settlement["entry_execution_hash"] != book.canonical_hash(entry_data):
+            raise qt.TraderError("La liquidación no pertenece a este recibo de entrada.")
+        entry, exit_ = book.replay_fill(entry_data), book.replay_fill(exit_data)
+        periods = [qt.exact_funding.FundingPeriod(**period) for period in settlement["funding_periods"]]
+        history = qt.exact_funding._history(product, periods)
+        position = qt.Position(
+            side=settlement["position_side"], entry_ms=settlement["entry_at_ms"], entry_px=entry.price,
+            qty=entry.quantity, notional_usd=entry.notional, entry_execution=entry_data,
+            funding_model=settlement["funding_model"],
+        )
+        done = qt.settle(product, position, 0, "strategy_exit", exit_.executed_at_ms,
+                         qt.FundingLine(history), entry.notional, execution=exit_)
+        result = {key: None if done[key] is None else str(done[key])
+                  for key in ("net_usd", "gross_usd", "fees_usd", "funding_usd", "net_complete_usd")}
+        result["funding_status"] = done["funding_status"]
+        if result != settlement["expected"]:
+            raise qt.TraderError("La liquidación no coincide con sus entradas registradas.")
+        return result
+
     def last_entry_ms(self, product):
         row = self.db.execute("SELECT MAX(entry_ms) AS m FROM trades WHERE product=?", (product,)).fetchone()
         return row["m"]
@@ -534,6 +678,7 @@ class PublicFeed:
         from .futures_history import fetch_funding_records
         self.cache_dir, self._fetch, self._fetch_funding = cache_dir, fetch, fetch_funding_fn or fetch_funding_records
         self._next_gap_repair = {}
+        self._book_cache = {}
 
     def bars(self, product, from_ms, to_ms):
         """Closed 5m candles of ``[from_ms, to_ms)``; downloads only what the cache lacks."""
@@ -552,6 +697,14 @@ class PublicFeed:
         if isinstance(records, qt.exact_funding.FundingHistory):
             return records
         return [(int(s), float(r)) for s, r in records]
+
+    def book_snapshot(self, product):
+        from . import futures_book_execution as book
+        cached = self._book_cache.get(product)
+        if cached is None or int(time.time() * 1000) - cached.received_at_ms > 500:
+            cached = book.fetch_snapshot(product)
+            self._book_cache[product] = cached
+        return cached
 
 
 # --------------------------------------------------------------------------- the decider the Trader sees
@@ -620,7 +773,9 @@ def closed_fields(trade, notional, leverage, margin, now):
     trade_margin = trade_notional / D(str(leverage)) if trade.get("notional_usd") else margin
     return {
         "status": "closed", "side": trade["side"], "entry_ms": trade["entry_ms"], "exit_ms": trade["exit_ms"],
-        "entry_px": trade["entry_fill"], "exit_px": repr(trade["exit_px"]), "qty": trade["qty"],
+        "entry_px": trade["entry_fill"],
+        "exit_px": trade["exit_fill"] if trade.get("exit_execution") is not None else repr(trade["exit_px"]),
+        "qty": trade["qty"],
         "notional_usd": str(trade_notional), "leverage": str(leverage), "margin_usd": str(trade_margin),
         "gross_usd": trade["gross_usd"], "fees_usd": trade["fees_usd"], "funding_usd": trade["funding_usd"],
         "net_usd": trade["net_usd"], "net_bp": trade["net_bp"], "funding_status": trade["funding_status"],
@@ -669,6 +824,14 @@ class LiveOperator:
         self.warmup_ms = int(live.get("warmup_days", 8)) * DAY_MS
         self.poll_s = float(live.get("poll_seconds", 30))
         self.max_late_ms = int(float(live.get("max_late_seconds", 240)) * 1000)
+        self.book_enabled = "execution" in cfg
+        if self.book_enabled:
+            from . import futures_book_execution as book
+            if (cfg["execution"] != {"model": book.MODEL} or cfg["products"] != ["PF_ETHUSD"]
+                    or cfg.get("funding_model") != qt.exact_funding.EXACT_MODEL):
+                raise qt.TraderError("La ejecución de libro requiere ETH y el funding absoluto.")
+            self.max_late_ms = min(self.max_late_ms, 15_000)
+            self.poll_s = min(self.poll_s, 5.0)
         if noticias.priority_enabled(cfg):
             self.max_late_ms = min(self.max_late_ms, 15_000)
             self.poll_s = min(self.poll_s, 5.0)
@@ -738,6 +901,12 @@ class LiveOperator:
                            entry_threshold=self.cfg["entry_threshold"])
         trader.execution_check = lambda: self._check_execution(trader)
         trader.entry_check = self._check_pending_entry
+        if self.book_enabled:
+            from . import futures_book_execution as book
+            snapshot_for = getattr(self.feed, "book_snapshot", None)
+            if not callable(snapshot_for):
+                raise qt.TraderError("La fuente no ofrece un libro público verificable.")
+            trader.book_execution = book.BookExecution(snapshot_for, self.now_ms)
         trader.news_consumed = self.store.consumed_news(product)
         state = self.store.load_state(product)
         last_fed = None
@@ -1093,8 +1262,7 @@ class LiveOperator:
                 self._funding[product] = qt.FundingLine(())
 
     def _reconcile_funding(self, product):
-        """Funding of the last hour is published after it ends: a trade closed meanwhile is settled again, with the same
-        formula as ``settle``, once the periods it touched are known. Never changes anything else."""
+        """Reconcile observed missing funding without changing price, fee or entry/exit receipts."""
         line = self.traders[product].funding
         with self.store.db:
             for row in self.store.incomplete_funding(product):
@@ -1104,14 +1272,35 @@ class LiveOperator:
                     row["funding_model"] or qt.exact_funding.LEGACY_MODEL)
                 held = max(0, row["exit_ms"] - row["entry_ms"])
                 status = qt.funding_status(held, covered)
-                if status == row["funding_status"] and str(paid) == row["funding_usd"]:
-                    continue
                 net = D(row["gross_usd"]) - D(row["fees_usd"]) - paid
                 notional = D(row["notional_usd"]) if row["notional_usd"] is not None else D(row["entry_px"]) * D(row["qty"])
                 if not notional.is_finite() or notional <= 0:
                     raise qt.TraderError("Funding: el nocional de la operación no es válido.")
+                reconciliation = None
+                net_bp = float(net / notional * 10_000)
+                if row["execution_model"] is not None:
+                    from . import futures_book_execution as book
+                    entry_data = self.store.execution_evidence(row["entry_receipt_id"], product=product,
+                                                               trade_no=row["trade_no"], purpose="entry")
+                    exit_data = self.store.execution_evidence(row["exit_receipt_id"], product=product,
+                                                              trade_no=row["trade_no"], purpose="exit")
+                    position = qt.Position(
+                        side=row["side"], entry_ms=row["entry_ms"], entry_px=D(row["entry_px"]), qty=D(row["qty"]),
+                        notional_usd=notional, entry_execution=entry_data, funding_model=row["funding_model"],
+                    )
+                    done = qt.settle(product, position, 0, "strategy_exit", row["exit_ms"], line, notional,
+                                     execution=book.replay_fill(exit_data))
+                    paid, net, status, net_bp = done["funding_usd"], done["net_usd"], done["funding_status"], done["net_bp"]
+                    reconciliation = copy.deepcopy(exit_data)
+                    reconciliation.update(purpose="funding", settlement=done["execution"]["settlement"],
+                                          reconciled_at_ms=self.now_ms())
+                if status == row["funding_status"] and str(paid) == row["funding_usd"]:
+                    continue
+                if reconciliation is not None:
+                    receipt = self.store.put_execution(product, row["trade_no"], reconciliation, self.now_ms())
+                    self.store.update_trade(product, row["trade_no"], funding_receipt_id=receipt)
                 self.store.update_trade(product, row["trade_no"], funding_usd=str(paid), funding_status=status,
-                                        net_usd=str(net), net_bp=float(net / notional * 10_000),
+                                        net_usd=str(net), net_bp=net_bp,
                                         net_complete_usd=str(net) if status == "complete" else None)
 
     # ---- one candle
@@ -1140,6 +1329,14 @@ class LiveOperator:
 
     def _record(self, product, trader, t_ms, events, now, *, observed=True):
         meta = {"prompt_version": self.cfg["prompt"]["version"], "model": self.model, "config_hash": self.config_hash}
+        mark, mark_error = None, None
+        if trader.position is not None and observed:
+            try:
+                mark = trader.mark(t_ms)
+            except qt.WakeSkipped as error:
+                mark_error = error
+        if self.book_enabled:
+            now = self.now_ms()
         with self.store.db:
             for event in events:
                 kind = event["type"]
@@ -1155,8 +1352,15 @@ class LiveOperator:
                     self._record_decision(product, event, meta, now)
             position = trader.position
             if position is not None and observed:
-                self._write_open(product, trader, position, t_ms, now)
+                self._write_open(product, trader, position, t_ms, now, mark=mark)
+                if mark_error is not None:
+                    self.store.update_trade(product, position.trade_no, net_now_usd=None, net_complete_usd=None,
+                                            execution_error=mark_error.kind)
             self.store.save_state(product, trader, t_ms - BAR_MS, now)
+        if mark_error is not None:
+            self._failure("ejecucion", product, mark_error)
+        elif self.book_enabled:
+            self._recovered("ejecucion", product)
         if events and self.cfg.get("decide_by") == "formula" and qt.candle_opinions_enabled(self.cfg):
             self._resolve_examples(product, trader, now)
 
@@ -1223,24 +1427,42 @@ class LiveOperator:
             event["answer"]["confidence"], LiveOperator._legacy_tail(event)
         )
 
-    def _write_open(self, product, trader, position, t_ms, now):
+    def _write_open(self, product, trader, position, t_ms, now, *, mark=None):
         pos_notional = position.notional_usd or trader.notional
-        mark = qt.settle(product, position, trader.c[-1], "strategy_exit", t_ms, trader.funding, pos_notional)
         pos_margin = pos_notional / self.leverage
+        marked = {} if mark is None else {
+            "gross_usd": str(mark["gross_usd"]), "fees_usd": str(mark["fees_usd"]),
+            "funding_usd": str(mark["funding_usd"]), "funding_status": mark["funding_status"],
+            "mark_px": float(mark["exit_px"]) if mark["execution"] is not None else trader.c[-1],
+            "mark_ms": mark["executed_at_ms"], "net_now_usd": str(mark["net_usd"]),
+            "net_complete_usd": None if mark["net_complete_usd"] is None else str(mark["net_complete_usd"]),
+        }
         self.store.put_trade(
             product, position.trade_no, status="open", side=position.side, entry_ms=position.entry_ms,
             entry_px=str(position.entry_px), qty=str(position.qty), notional_usd=str(pos_notional),
             leverage=str(self.leverage), margin_usd=str(pos_margin), entry_reason=position.entry_reason, entry_p=position.entry_p, mfe_bp=round(position.mfe_bp, 2),
             mae_bp=round(position.mae_bp, 2), stop_px=position.stop_px, max_hold_ms=position.max_hold_ms,
-            gross_usd=str(mark["gross_usd"]), fees_usd=str(mark["fees_usd"]),
-            funding_usd=str(mark["funding_usd"]), funding_status=mark["funding_status"],
-            mark_px=trader.c[-1], mark_ms=t_ms, net_now_usd=str(mark["net_usd"]), opened_at_ms=now,
+            opened_at_ms=now,
             funding_model=position.funding_model, config_hash=self.config_hash,
-            net_complete_usd=None if mark["net_complete_usd"] is None else str(mark["net_complete_usd"]))
+            execution_model=None if position.entry_execution is None else position.entry_execution["model"],
+            **marked)
+        if position.entry_execution is not None:
+            entry_id = self.store.put_execution(product, position.trade_no, position.entry_execution, now)
+            updates = {"execution_model": position.entry_execution["model"], "entry_receipt_id": entry_id}
+            if mark is not None:
+                updates["mark_receipt_id"] = self.store.put_execution(product, position.trade_no, mark["execution"], now)
+                updates["execution_error"] = None
+            self.store.update_trade(product, position.trade_no, **updates)
 
     def _write_closed(self, product, trade, now):
         self.store.put_trade(product, trade["trade_no"], **closed_fields(trade, self.notional, self.leverage, self.margin, now),
-                             config_hash=self.config_hash)
+                             config_hash=self.config_hash,
+                             execution_model=None if trade.get("entry_execution") is None else trade["entry_execution"]["model"])
+        if trade.get("entry_execution") is not None:
+            entry_id = self.store.put_execution(product, trade["trade_no"], trade["entry_execution"], now)
+            exit_id = self.store.put_execution(product, trade["trade_no"], trade["exit_execution"], now)
+            self.store.update_trade(product, trade["trade_no"], execution_model=trade["entry_execution"]["model"],
+                                    entry_receipt_id=entry_id, exit_receipt_id=exit_id, execution_error=None)
         self.log("{} {}: cierre {} por {} — neto {} USD (costos {} USD, funding {} USD, {})".format(
             _hhmm(trade["exit_ms"]), product, "LARGO" if trade["side"] == "LONG" else "CORTO", trade["closed_by"],
             _usd(trade["net_usd"]), _usd(trade["fees_usd"]), _usd(trade["funding_usd"]), trade["funding_status"]))
@@ -1453,7 +1675,7 @@ def pending_config(cfg, spec) -> dict:
             or overlay.get("base_config_hash") != qt.config_hash(cfg)):
         raise qt.TraderError("Traspaso: la configuración de origen no coincide.")
     changes = overlay.get("changes")
-    allowed = {"note", "corta", "noticias", "funding_model", "opinion_enabled", "live", "decide_by", "mirror"}
+    allowed = {"note", "corta", "noticias", "funding_model", "opinion_enabled", "live", "decide_by", "mirror", "execution"}
     if not isinstance(changes, dict) or not changes or set(changes) - allowed:
         raise qt.TraderError("Traspaso: cambios inválidos; no se redefine la cuenta ni su capital.")
     target = copy.deepcopy(cfg)
@@ -1506,6 +1728,10 @@ def _parser():
                              "base, F6 dice n/d y el proceso sigue")
     parser.add_argument("--export", default=None, metavar="SALIDA.jsonl",
                         help="no corre nada: escribe las decisiones guardadas para reentrenar offline y sale")
+    parser.add_argument("--replay-trade", type=int, metavar="NUMERO",
+                        help="recalcula una operación solo con sus recibos, sin red ni cambios en la cuenta")
+    parser.add_argument("--product", choices=["PF_ETHUSD"], default="PF_ETHUSD",
+                        help="producto de --replay-trade")
     return parser
 
 
@@ -1561,6 +1787,17 @@ def main(argv=None):
     args = _parser().parse_args(argv)
     db_path = resolve_db(args.db)
     try:
+        if args.replay_trade is not None:
+            if args.replay_trade <= 0 or args.export or args.activate_flat_config or args.archive_flat_book:
+                raise qt.TraderError("El replay de recibos requiere un número positivo y no admite activar ni exportar.")
+            if not os.path.isfile(db_path):
+                raise qt.TraderError("No existe la cuenta para reproducir sus recibos.")
+            store = LiveStore(db_path, readonly=True)
+            try:
+                print(json.dumps(store.replay_trade(args.product, args.replay_trade), sort_keys=True))
+            finally:
+                store.close()
+            return 0
         if args.archive_flat_book and args.activate_flat_config:
             raise qt.TraderError("Elegí --activate-flat-config; la cuenta no se reinicia archivándola.")
         if args.export:

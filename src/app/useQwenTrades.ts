@@ -3,6 +3,31 @@ import { record } from '../shared/wire/decode.ts'
 
 const POLL_MS = 15_000
 
+export interface QwenExecutionPhase {
+  receiptId: string
+  costModelHash: string
+  price: number
+  quantity: number
+  feeUsd: number
+  feeRate: number
+  sourceUrl: string
+  signalMs: number
+  decisionMs: number
+  requestedMs: number
+  receivedMs: number
+  serverMs: number
+  executedMs: number
+}
+
+export interface QwenExecution {
+  model: string
+  entry: QwenExecutionPhase
+  exit: QwenExecutionPhase | null
+  mark: QwenExecutionPhase | null
+  fundingReceiptId: string | null
+  error: string | null
+}
+
 /** One operation of Qwen operador (paper), as the gateway serves it. */
 export interface QwenTrade {
   product: string
@@ -28,6 +53,7 @@ export interface QwenTrade {
   notionalUsd: number | null
   leverage: number | null
   marginUsd: number | null
+  execution?: QwenExecution | null
 }
 
 export type QwenTradesSource =
@@ -42,6 +68,96 @@ const number = (value: unknown): number | null => {
   return Number.isFinite(parsed) ? parsed : null
 }
 
+function executionPhase(value: unknown): QwenExecutionPhase | null {
+  const row = record(value)
+  const price = number(row.price)
+  const quantity = number(row.quantity)
+  const feeUsd = number(row.fee_usd)
+  const feeRate = number(row.fee_rate)
+  const times = [
+    row.signal_at_ms,
+    row.decision_at_ms,
+    row.requested_at_ms,
+    row.received_at_ms,
+    row.server_at_ms,
+    row.executed_at_ms,
+  ]
+  if (
+    typeof row.receipt_id !== 'string' ||
+    !/^[a-f0-9]{64}$/.test(row.receipt_id) ||
+    typeof row.cost_model_hash !== 'string' ||
+    !/^[a-f0-9]{64}$/.test(row.cost_model_hash) ||
+    row.source !==
+      'https://futures.kraken.com/derivatives/api/v3/orderbook?symbol=PF_ETHUSD' ||
+    price === null ||
+    price <= 0 ||
+    quantity === null ||
+    quantity <= 0 ||
+    feeUsd === null ||
+    feeUsd < 0 ||
+    feeRate === null ||
+    feeRate < 0 ||
+    feeRate >= 1 ||
+    !times.every(
+      (time) =>
+        typeof time === 'number' && Number.isSafeInteger(time) && time > 0,
+    )
+  )
+    return null
+  const out: QwenExecutionPhase = {
+    receiptId: row.receipt_id,
+    costModelHash: row.cost_model_hash,
+    price,
+    quantity,
+    feeUsd,
+    feeRate,
+    sourceUrl: row.source,
+    signalMs: Number(row.signal_at_ms),
+    decisionMs: Number(row.decision_at_ms),
+    requestedMs: Number(row.requested_at_ms),
+    receivedMs: Number(row.received_at_ms),
+    serverMs: Number(row.server_at_ms),
+    executedMs: Number(row.executed_at_ms),
+  }
+  if (
+    out.signalMs > out.decisionMs ||
+    out.decisionMs > out.executedMs ||
+    out.requestedMs > out.receivedMs ||
+    out.receivedMs > out.executedMs
+  )
+    return null
+  return out
+}
+
+function executionOf(value: unknown): QwenExecution | null {
+  const row = record(value)
+  const entry = executionPhase(row.entry)
+  const exit = row.exit == null ? null : executionPhase(row.exit)
+  const mark = row.mark == null ? null : executionPhase(row.mark)
+  if (
+    row.model !== 'kraken-futures-book.v1' ||
+    entry === null ||
+    (row.exit != null && exit === null) ||
+    (row.mark != null && mark === null) ||
+    (row.error != null && typeof row.error !== 'string') ||
+    (row.funding_receipt_id != null &&
+      (typeof row.funding_receipt_id !== 'string' ||
+        !/^[a-f0-9]{64}$/.test(row.funding_receipt_id)))
+  )
+    return null
+  return {
+    model: row.model,
+    entry,
+    exit,
+    mark,
+    fundingReceiptId:
+      typeof row.funding_receipt_id === 'string'
+        ? row.funding_receipt_id
+        : null,
+    error: typeof row.error === 'string' ? row.error : null,
+  }
+}
+
 /** The trades of a `/api/qwen/trades` answer; anything malformed is left out. */
 export function qwenTrades(payload: unknown): QwenTrade[] {
   const body = record(payload)
@@ -49,12 +165,20 @@ export function qwenTrades(payload: unknown): QwenTrade[] {
   return body.trades.map(record).flatMap((row) => {
     const entryMs = number(row.entry_ms)
     const tradeNo = number(row.trade_no)
+    const execution = row.execution == null ? null : executionOf(row.execution)
     if (
       typeof row.product !== 'string' ||
       entryMs === null ||
       tradeNo === null ||
       (row.status !== 'open' && row.status !== 'closed') ||
-      (row.side !== 'LONG' && row.side !== 'SHORT')
+      (row.side !== 'LONG' && row.side !== 'SHORT') ||
+      (row.execution != null && execution === null) ||
+      (execution !== null &&
+        (row.product !== 'PF_ETHUSD' ||
+          execution.entry.executedMs !== entryMs ||
+          execution.entry.price !== number(row.entry_price) ||
+          (row.status === 'closed' && execution.exit === null) ||
+          (execution.error !== null && row.net_usd != null)))
     )
       return []
     return [
@@ -86,6 +210,7 @@ export function qwenTrades(payload: unknown): QwenTrade[] {
         notionalUsd: number(row.notional_usd),
         leverage: number(row.leverage),
         marginUsd: number(row.margin_usd),
+        execution,
       },
     ]
   })
