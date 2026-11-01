@@ -23,6 +23,7 @@ import time
 from . import futures_qwen_analista as analista
 from . import futures_qwen_corta as corta
 from . import futures_qwen_exigencia as exigencia
+from . import futures_maker_exit as maker_exit
 from . import futures_qwen_factors as fq
 from . import futures_qwen_ficha as fficha
 from . import futures_qwen_maestro as maestro
@@ -966,6 +967,7 @@ def _replay_curve(trade, product):
         "neto_bp": trade["net_bp"], "motivo": trade["closed_by"], "pnl_usd": trade["net_usd"],
         "notional_usd": trade["notional_usd"], "entrada_px": trade["entry_fill"], "salida_px": str(trade["exit_px"]),
         "funding_usd": trade["funding_usd"], "funding_status": trade["funding_status"], "funding_model": trade["funding_model"],
+        "salida": (trade.get("exit_plan") or {}).get("outcome", "mercado"),
     }
 
 
@@ -974,6 +976,7 @@ def replay_formula(history, cfg, holdout_ms):
     cfg, start = _replay_config(cfg)
     products = cfg["exam"]["products"]
     curves, market, snapshots, all_items = [], {}, 0, []
+    exits = []
     final = qt.D(1000)
     for product in products:
         trader, bars = _setup_replay(history, cfg, product, start, holdout_ms)
@@ -983,6 +986,7 @@ def replay_formula(history, cfg, holdout_ms):
         for trade in trades:
             all_items.append(_replay_stat_item(trade))
             curves.append(_replay_curve(trade, product))
+            exits.append(trade)
         if cfg.get("cuenta") == "entera":
             final = trader.notional
         else:
@@ -996,7 +1000,7 @@ def replay_formula(history, cfg, holdout_ms):
         "entrada": cfg.get("entrada", "formula"), "fotos": snapshots, "desde_ms": start, "hasta_ms": holdout_ms,
         "max_horas": cfg["guardrails"]["max_hold_min"] / 60, "nocional_usd": float(cfg["notional_usd"]),
         "productos": products, "analista": analista.describe(cfg), "formula": stats,
-        "curvas": {"formula": curves}, "mercado": market,
+        "curvas": {"formula": curves}, "mercado": market, "salida": maker_exit.describe(cfg, exits),
     }
 
 

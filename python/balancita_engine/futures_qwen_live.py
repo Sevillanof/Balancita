@@ -292,7 +292,8 @@ _ADDED_COLUMNS = {
     "trader_state": (("window_json", "TEXT"),),
     "trades": (("funding_model", "TEXT"), ("net_complete_usd", "TEXT"), ("config_hash", "TEXT"),
                ("execution_model", "TEXT"), ("entry_receipt_id", "TEXT"), ("exit_receipt_id", "TEXT"),
-               ("mark_receipt_id", "TEXT"), ("funding_receipt_id", "TEXT"), ("execution_error", "TEXT")),
+               ("mark_receipt_id", "TEXT"), ("funding_receipt_id", "TEXT"), ("execution_error", "TEXT"),
+               ("exit_plan_json", "TEXT")),
 }
 
 _TRADE_COLUMNS = ("status", "side", "entry_ms", "exit_ms", "entry_px", "exit_px", "qty", "notional_usd", "gross_usd",
@@ -313,6 +314,8 @@ def position_to_json(position):
         body["notional_usd"] = str(position.notional_usd)
     if position.entry_execution is not None:
         body["entry_execution"] = position.entry_execution
+    if position.exit_plan is not None:
+        body["exit_plan"] = position.exit_plan
     return json.dumps(body, sort_keys=True)
 
 
@@ -328,6 +331,10 @@ def position_from_json(text):
                 or fill.executed_at_ms != raw["entry_ms"]
                 or raw["entry_execution"].get("funding_model") != raw.get("funding_model")):
             raise qt.TraderError("La posición guardada contradice su recibo de entrada.")
+    plan = raw.get("exit_plan")
+    if plan is not None and (not isinstance(plan, dict) or plan.get("schema") != qt.maker_exit.SCHEMA
+                             or plan.get("position_side") != raw["side"] or not plan.get("orders")):
+        raise qt.TraderError("La posición guardada tiene una orden de salida inválida.")
     return qt.Position(**raw)
 
 
@@ -827,7 +834,8 @@ class LiveOperator:
         self.book_enabled = "execution" in cfg
         if self.book_enabled:
             from . import futures_book_execution as book
-            if (cfg["execution"] != {"model": book.MODEL} or cfg["products"] != ["PF_ETHUSD"]
+            if ({k: v for k, v in cfg["execution"].items() if k != "exit"} != {"model": book.MODEL}
+                    or cfg["products"] != ["PF_ETHUSD"]
                     or cfg.get("funding_model") != qt.exact_funding.EXACT_MODEL):
                 raise qt.TraderError("La ejecución de libro requiere ETH y el funding absoluto.")
             self.max_late_ms = min(self.max_late_ms, 15_000)
@@ -1033,6 +1041,7 @@ class LiveOperator:
 
     def _poll_product(self, product, now):
         trader = self.traders[product]
+        self._service_exit(product, now)
         from_ms = trader.t[-1] + BAR_MS if trader.t else now - self.warmup_ms
         if trader.data_gap_ms is not None:
             from_ms = min(from_ms, trader.data_gap_ms - BAR_MS)
@@ -1350,9 +1359,14 @@ class LiveOperator:
                         _hhmm(event["t_ms"]), product, SKIP_TEXT.get(event["kind"], event["kind"])))
                 elif kind == "decision":
                     self._record_decision(product, event, meta, now)
+                elif kind == "exit_plan":
+                    self._log_exit_plan(product, event)
             position = trader.position
             if position is not None and observed:
                 self._write_open(product, trader, position, t_ms, now, mark=mark)
+                if position.exit_plan is not None or self.book_enabled:
+                    self.store.update_trade(product, position.trade_no, exit_plan_json=(
+                        None if position.exit_plan is None else json.dumps(position.exit_plan, sort_keys=True)))
                 if mark_error is not None:
                     self.store.update_trade(product, position.trade_no, net_now_usd=None, net_complete_usd=None,
                                             execution_error=mark_error.kind)
@@ -1363,6 +1377,35 @@ class LiveOperator:
             self._recovered("ejecucion", product)
         if events and self.cfg.get("decide_by") == "formula" and qt.candle_opinions_enabled(self.cfg):
             self._resolve_examples(product, trader, now)
+
+    def _log_exit_plan(self, product, event):
+        plan = event["plan"]
+        self.log("{} {}: orden de salida {} a {} (espera máx. {} min, tope {} pb).".format(
+            _hhmm(event["t_ms"]), product, "colocada" if event["action"] == "colocada" else "movida",
+            event["price"], plan["ttl_ms"] // MINUTE_MS, plan["tope_bp"]))
+
+    def _service_exit(self, product, now):
+        """Every poll, between candles: the waiting exit order follows the public book (fills, moves or goes to market)."""
+        trader = self.traders[product]
+        position = trader.position
+        if position is None or position.exit_plan is None:
+            return
+        try:
+            events = trader.service_exit(now)
+        except qt.WakeSkipped as skip:
+            self._failure("ejecucion", product, skip)
+            return
+        self._recovered("ejecucion", product)
+        if any(event["type"] == "trade" for event in events):
+            self._record(product, trader, trader.t[-1] + BAR_MS, events, self.now_ms(), observed=True)
+            return
+        # still waiting: keep the order (and its last sign of life) on disk, without a new mark receipt
+        with self.store.db:
+            for event in events:
+                self._log_exit_plan(product, event)
+            self.store.update_trade(product, trader.position.trade_no, exit_plan_json=json.dumps(
+                trader.position.exit_plan, sort_keys=True))
+            self.store.save_state(product, trader, trader.t[-1], self.now_ms())
 
     def _record_decision(self, product, event, meta, now):
         if event.get("answer") is None and not event.get("formula_action"):

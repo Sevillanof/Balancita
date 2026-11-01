@@ -93,6 +93,16 @@ class QuickApiTests(unittest.TestCase):
         self.assertIn("formula", args)
         self.assertEqual(env.get("QWEN_ENTRADA"), "formula_eth")
 
+    def test_exit_choice_travels_in_the_env_defaults_to_paper_and_rejects_nonsense(self):
+        self.api.launch(models.QWEN_LIVE_ID, variant="formula", exigencia_levels={"salida": "fija"})
+        self.assertEqual(self.spawned[-1][1].get("QWEN_SALIDA"), "fija")
+        with open(self.api.state_path, "w", encoding="utf-8") as handle:
+            json.dump({"state": "done"}, handle)
+        self.api.launch(models.QWEN_LIVE_ID, variant="formula")
+        self.assertEqual(self.spawned[-1][1].get("QWEN_SALIDA"), "sigue")
+        with self.assertRaises(GateApiError):
+            self.api.launch(models.QWEN_LIVE_ID, variant="formula", exigencia_levels={"salida": "rapida"})
+
 
 if __name__ == "__main__":
     unittest.main()

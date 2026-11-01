@@ -58,6 +58,7 @@ from typing import Callable, Optional, TYPE_CHECKING
 from . import futures_llm_decisions as llm
 from . import futures_qwen_funding as exact_funding
 from . import futures_book_execution as book_execution
+from . import futures_maker_exit as maker_exit
 from .futures_costs import COST_MODEL_VERSION, entry_fill, exit_fill, fee_rate, round_trip_cost_bps, side_impact_bps
 from .futures_history import DAY_MS, HOUR_MS, MINUTE_MS, CandleCache, HistoryError, fetch_funding, fill_gaps
 from .futures_simulator import accrue_funding
@@ -339,7 +340,8 @@ class FundingLine:
 
 class Position:
     __slots__ = ("side", "entry_ms", "entry_ref", "entry_px", "qty", "stop_px", "stop_pct", "max_hold_ms", "entry_p",
-                 "entry_reason", "trade_no", "mfe_bp", "mae_bp", "notional_usd", "funding_model", "entry_execution")
+                 "entry_reason", "trade_no", "mfe_bp", "mae_bp", "notional_usd", "funding_model", "entry_execution",
+                 "exit_plan")
 
     def __init__(self, **kwargs):
         for name in self.__slots__:
@@ -358,7 +360,7 @@ def funding_status(held_ms, covered_ms):
     return "partial" if covered_ms > 0 else "unknown"
 
 
-def settle(product, position, ref_price, reason, end_ms, funding, notional=D(100), *, execution=None):
+def settle(product, position, ref_price, reason, end_ms, funding, notional=D(100), *, execution=None, maker_exit=False):
     """What closing ``position`` at ``ref_price`` (before the exit cost) nets: ``futures_costs`` fills, taker fees on both
     legs and the funding of the holding time. Same accounting as ``futures_simulator.Book._settle``."""
     with localcontext() as ctx:
@@ -378,8 +380,11 @@ def settle(product, position, ref_price, reason, end_ms, funding, notional=D(100
             entry_value = D(position.entry_execution["notional_usd"])
             gross = execution.notional - entry_value if long else entry_value - execution.notional
         else:
-            px = exit_fill(D(repr(float(ref_price))), position.side, product, reason)
-            fees = (position.entry_px + px) * position.qty * fee_rate("taker")
+            px = exit_fill(D(repr(float(ref_price))), position.side, product, "target" if maker_exit else reason)
+            if maker_exit:        # waiting limit order filled at its level: no impact, maker fee on the exit leg only
+                fees = position.entry_px * position.qty * fee_rate("taker") + px * position.qty * fee_rate("maker")
+            else:
+                fees = (position.entry_px + px) * position.qty * fee_rate("taker")
             gross = (px - position.entry_px) * position.qty if long else (position.entry_px - px) * position.qty
         paid, covered = funding.accrue_position(position.entry_ms, end_ms, position.entry_px * position.qty,
                                                position.qty, long, position.funding_model) \
@@ -644,8 +649,12 @@ class Trader:
         self.idle_since_ms = None         # reference when nothing was opened yet (process start / last opening in the database)
         self.last_open_ms = None
         self.window = None                # opportunity window: {"start_ms", "looks", "best"} while open
-        if "execution" in cfg and cfg["execution"] != {"model": book_execution.MODEL}:
+        if "execution" in cfg and {k: v for k, v in cfg["execution"].items() if k != "exit"} != {"model": book_execution.MODEL}:
             raise TraderError("Modelo de ejecución no reconocido.")
+        try:
+            self.maker_exit = maker_exit.settings(cfg)
+        except maker_exit.MakerExitError as error:
+            raise TraderError(str(error)) from error
 
     # ---- data
 
@@ -988,6 +997,9 @@ class Trader:
         if self.position is not None:
             try:
                 events += self._guardrails(t_ms)
+                if (self.position is not None and self.position.exit_plan is not None
+                        and self.book_execution is None):             # velas: la espera avanza con cada vela
+                    events += self._advance_exit_candle(t_ms)
             except WakeSkipped as skip:
                 return [{"type": "skipped", "t_ms": t_ms, "wake": ["proteccion"],
                          "kind": skip.kind, "detail": skip.detail}]
@@ -1000,6 +1012,8 @@ class Trader:
             return priority_events
         if events and self.position is None:
             return events
+        if self.position is not None and self.position.exit_plan is not None:
+            return events                       # ya está saliendo: no se decide otra cosa hasta que se cierre
         if self.position is None and t_ms < self.cooldown_until:
             return events
         reasons = self.wake_reasons(t_ms)
@@ -1050,12 +1064,103 @@ class Trader:
 
     def _close(self, t_ms, ref_price, cost_reason, closed_by, exit_reason):
         position = self._require_position()
-        execution = self._book_exit(t_ms) if position.entry_execution is not None else None
+        if position.exit_plan is not None:
+            if closed_by in maker_exit.ELIGIBLE:
+                return []                           # ya hay una orden esperando: no se duplica
+            return self._finish_close(t_ms, ref_price, cost_reason, closed_by, exit_reason,
+                                      outcome="mercado:emergencia_" + str(closed_by))
+        if self.maker_exit is not None and closed_by in maker_exit.ELIGIBLE:
+            return self._begin_exit(t_ms, ref_price, closed_by, exit_reason)
+        return self._finish_close(t_ms, ref_price, cost_reason, closed_by, exit_reason)
+
+    def _begin_exit(self, t_ms, ref_price, closed_by, exit_reason):
+        """Decided to close: leave a post-only order waiting at the best price of our side instead of crossing the spread."""
+        position = self._require_position()
+        if position.entry_execution is not None:
+            if self.book_execution is None:
+                raise WakeSkipped("libro_no_disponible", "Falta el libro público para esta posición.")
+            try:
+                quote, now, _ = self.book_execution._quote(self.product, t_ms, "exit")
+            except book_execution.BookError as error:
+                raise WakeSkipped(error.kind, error.detail) from error
+            bid, ask, started = quote.bids[0][0], quote.asks[0][0], now
+        else:
+            bid = ask = D(repr(float(ref_price)))
+            started = t_ms
+        try:
+            plan = maker_exit.start(position.side, started, bid, ask, self.maker_exit,
+                                    closed_by=closed_by, exit_reason=exit_reason)
+        except maker_exit.MakerExitError as error:
+            raise WakeSkipped("libro_invalido", str(error)) from error
+        position.exit_plan = plan
+        return [{"type": "exit_plan", "t_ms": started, "action": "colocada", "trade_no": position.trade_no,
+                 "plan": dict(plan), "price": plan["limit"]}]
+
+    def _advance_exit_candle(self, t_ms):
+        """Candles (Estrategias): the order fills only if the candle goes PAST its price; it follows the close."""
+        position = self._require_position()
+        close = D(repr(self.c[-1]))
+        through = D(repr(self.h[-1] if position.side == "LONG" else self.l[-1]))
+        plan, action = maker_exit.step(position.exit_plan, t_ms, close, close, through, strict=True, gap_ms=None)
+        return self._apply_exit_action(plan, action, t_ms, self.c[-1], None)
+
+    def service_exit(self, now_ms):
+        """Terminal: one pass over the waiting order with a fresh public book (called every few seconds)."""
+        position = self.position
+        if position is None or position.exit_plan is None:
+            return []
+        if self.book_execution is None:
+            raise WakeSkipped("libro_no_disponible", "Falta el libro público para esta posición.")
+        try:
+            quote, now, _ = self.book_execution._quote(self.product, now_ms, "mark")
+        except book_execution.BookError as error:
+            raise WakeSkipped(error.kind, error.detail) from error
+        bid, ask = quote.bids[0][0], quote.asks[0][0]
+        through = bid if position.side == "LONG" else ask
+        plan, action = maker_exit.step(position.exit_plan, now, bid, ask, through, strict=False)
+        return self._apply_exit_action(plan, action, now, float(quote.mid), quote)
+
+    def _apply_exit_action(self, plan, action, now, ref_price, quote):
+        position = self._require_position()
+        position.exit_plan = plan
+        kind = action["kind"]
+        if kind == "hold":
+            return []
+        if kind == "reprice":
+            return [{"type": "exit_plan", "t_ms": now, "action": "movida", "trade_no": position.trade_no,
+                     "plan": dict(plan), "price": str(action["price"])}]
+        if kind == "fill":
+            summary = maker_exit.summary(plan, "maker", now, fill_price=action["price"])
+            execution = None
+            if quote is not None:
+                try:
+                    execution = book_execution.maker_exit_fill(
+                        quote, position.side, position.qty, action["price"], signal_at_ms=plan["started_ms"],
+                        decision_at_ms=plan["placed_ms"], executed_at_ms=now, order=summary)
+                except book_execution.BookError as error:
+                    raise WakeSkipped(error.kind, error.detail) from error
+            return self._finish_close(now, float(action["price"]), "target", plan["closed_by"], plan["exit_reason"],
+                                      execution=execution, maker=True, outcome="maker")
+        return self._finish_close(now, ref_price, "strategy_exit", plan["closed_by"], plan["exit_reason"],
+                                  outcome="mercado:" + action["reason"])
+
+    def _finish_close(self, t_ms, ref_price, cost_reason, closed_by, exit_reason, *, execution=None, maker=False,
+                      outcome=None):
+        position = self._require_position()
+        plan = position.exit_plan
+        if execution is None and position.entry_execution is not None:
+            execution = self._book_exit(t_ms)
         done = settle(self.product, position, ref_price, cost_reason, t_ms, self.funding,
-                      position.notional_usd or self.notional, execution=execution)
+                      position.notional_usd or self.notional, execution=execution, maker_exit=maker)
+        summary = None
+        if plan is not None:
+            summary = maker_exit.summary(plan, outcome or "mercado", done["executed_at_ms"],
+                                         fill_price=done["exit_px"] if maker else None)
         if done["execution"] is not None:
             done["execution"]["signal_reference_price"] = self.signal_price_text
             done["execution"]["signal_reference_kind"] = "official_candle_close"
+            if summary is not None and not maker:
+                done["execution"]["exit_plan"] = summary
         t_ms = done["executed_at_ms"]
         trade = {"trade_no": position.trade_no, "product": self.product, "side": position.side,
                  "entry_ms": position.entry_ms, "exit_ms": t_ms, "entry_px": float(position.entry_px),
@@ -1069,7 +1174,7 @@ class Trader:
                 "notional_usd": str(position.notional_usd or self.notional), "funding_model": position.funding_model,
                 "net_complete_usd": None if done["net_complete_usd"] is None else str(done["net_complete_usd"]),
                 "exit_fill": str(done["exit_px"]), "entry_execution": position.entry_execution,
-                "exit_execution": done["execution"]}
+                "exit_execution": done["execution"], "exit_plan": summary}
         if self.cfg.get("cuenta") == "entera":
             self.notional += done["net_usd"]
         self.position = None
@@ -2192,7 +2297,7 @@ def _quick_variant_config(cfg, variant) -> dict:
     from .futures_qwen_exigencia import apply_env
     from . import futures_qwen_rebote as rebote
     from . import futures_walkforward as walkforward
-    cfg = analista_env(apply_env(cfg))
+    cfg = maker_exit.apply_env(analista_env(apply_env(cfg)))
     if rebote.from_env() == "formula_eth":
         return dict(cfg, entrada="formula_eth")
     if variant["kind"] == "formula" and walkforward.medicion_from_env() == "honesta":

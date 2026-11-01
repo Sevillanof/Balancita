@@ -96,9 +96,23 @@ export interface QwenSkipped {
   readonly detail: string
 }
 
+/** The resting exit order of a close: still waiting (`outcome` null), filled as maker, or sent to market (and why). */
+export interface QwenExitPlan {
+  readonly mode: 'fija' | 'sigue'
+  readonly started_ms: number
+  readonly ttl_ms: number
+  readonly tope_bp: string
+  /** The price the order rests at now (or rested at when it ended). */
+  readonly price: string
+  readonly reprices: number
+  readonly outcome: string | null
+  readonly ended_ms: number | null
+}
+
 export interface QwenExecutionPhase {
   readonly receipt_id: string
   readonly cost_model_hash: string
+  readonly fee_kind: 'taker' | 'maker'
   readonly price: string
   readonly quantity: string
   readonly fee_rate: string
@@ -119,6 +133,7 @@ export interface QwenExecution {
   readonly mark: QwenExecutionPhase | null
   readonly funding_receipt_id: string | null
   readonly error: string | null
+  readonly exit_plan: QwenExitPlan | null
 }
 
 export interface QwenTrade {
@@ -294,22 +309,34 @@ function executionOf(db: DatabaseSync, trade: Row): QwenExecution | null {
       canonicalHash(body) !== receipt.evidence_hash
     )
       throw new Error('execution_receipt_hash_invalid')
-    const profile = {
-      model: body.model,
-      product: body.product,
-      taker_rate: body.taker_rate,
-      decimal_precision: body.decimal_precision,
-      static_impact_applied: body.static_impact_applied,
-      walk_rounding: body.walk_rounding,
-      fee_rounding: body.fee_rounding,
-    }
+    const maker = body.fee_kind === 'maker'
+    const profile = maker
+      ? {
+          model: body.model,
+          product: body.product,
+          maker_rate: body.maker_rate,
+          decimal_precision: body.decimal_precision,
+          static_impact_applied: body.static_impact_applied,
+          fill_rule: body.fill_rule,
+          fee_rounding: body.fee_rounding,
+        }
+      : {
+          model: body.model,
+          product: body.product,
+          taker_rate: body.taker_rate,
+          decimal_precision: body.decimal_precision,
+          static_impact_applied: body.static_impact_applied,
+          walk_rounding: body.walk_rounding,
+          fee_rounding: body.fee_rounding,
+        }
     if (
       body.model !== trade.execution_model ||
       body.product !== trade.product ||
-      body.fee_kind !== 'taker' ||
+      (maker
+        ? purpose !== 'exit' || body.fill_rule !== MAKER_FILL_RULE
+        : body.fee_kind !== 'taker' || body.walk_rounding !== 'ROUND_DOWN') ||
       body.decimal_precision !== 28 ||
       body.static_impact_applied !== false ||
-      body.walk_rounding !== 'ROUND_DOWN' ||
       body.fee_rounding !== 'ROUND_HALF_EVEN' ||
       body.classification !== 'paper_simulated_from_displayed_depth' ||
       canonicalHash(profile) !== body.cost_model_hash
@@ -340,9 +367,10 @@ function executionOf(db: DatabaseSync, trade: Row): QwenExecution | null {
     const out: QwenExecutionPhase = {
       receipt_id: receiptId,
       cost_model_hash: String(body.cost_model_hash),
+      fee_kind: maker ? 'maker' : 'taker',
       price: money(body.price),
       quantity: money(body.quantity),
-      fee_rate: money(body.taker_rate),
+      fee_rate: money(maker ? body.maker_rate : body.taker_rate),
       fee_usd: money(body.fee_usd),
       source: quote.source,
       signal_at_ms: stamp(body.signal_at_ms),
@@ -380,6 +408,70 @@ function executionOf(db: DatabaseSync, trade: Row): QwenExecution | null {
     mark: phase(trade.mark_receipt_id, 'mark'),
     funding_receipt_id: text(trade.funding_receipt_id),
     error: text(trade.execution_error),
+    exit_plan: exitPlanOf(db, trade),
+  }
+}
+
+const MAKER_FILL_RULE =
+  'resting_post_only_limit_filled_when_the_opposite_best_reaches_the_limit'
+
+/**
+ * The resting exit order: for an open trade the live plan the operator keeps (`exit_plan_json`), for a closed one what its
+ * exit receipt recorded (the maker order that filled, or the plan that fell to market). Null when the trade never waited.
+ */
+function exitPlanOf(db: DatabaseSync, trade: Row): QwenExitPlan | null {
+  const stamp = (value: unknown): number => {
+    if (typeof value !== 'number' || !Number.isSafeInteger(value) || value <= 0)
+      throw new Error('execution_exit_plan_invalid')
+    return value
+  }
+  const fromOrders = (body: Record<string, unknown>, ended: number | null) => {
+    const orders = Array.isArray(body.orders) ? body.orders : []
+    const last = rowOf(orders[orders.length - 1])
+    const price = decimalFromPython(last.price)
+    const tope = decimalFromPython(body.tope_bp)
+    if (
+      (body.modo !== 'fija' && body.modo !== 'sigue') ||
+      price === null ||
+      tope === null ||
+      orders.length === 0
+    )
+      throw new Error('execution_exit_plan_invalid')
+    const mode: 'fija' | 'sigue' = body.modo
+    return {
+      mode,
+      started_ms: stamp(body.started_ms),
+      ttl_ms: stamp(body.ttl_ms),
+      tope_bp: tope,
+      price,
+      reprices: orders.length - 1,
+      ended_ms: ended,
+    }
+  }
+  if (trade.status === 'open') {
+    if (trade.exit_plan_json == null) return null
+    const plan = objectOf(trade.exit_plan_json)
+    if (!plan) throw new Error('execution_exit_plan_invalid')
+    return { ...fromOrders(plan, null), outcome: null }
+  }
+  if (typeof trade.exit_receipt_id !== 'string') return null
+  const receipt = rowOf(
+    db
+      .prepare(
+        'SELECT evidence_json FROM execution_receipts WHERE receipt_id=?',
+      )
+      .get(trade.exit_receipt_id),
+  )
+  const body = objectOf(receipt.evidence_json)
+  const plan =
+    body && (body.fee_kind === 'maker' ? body.maker_order : body.exit_plan)
+  if (!plan || typeof plan !== 'object') return null
+  const record = plan as Record<string, unknown>
+  if (typeof record.outcome !== 'string')
+    throw new Error('execution_exit_plan_invalid')
+  return {
+    ...fromOrders(record, stamp(record.ended_ms)),
+    outcome: record.outcome,
   }
 }
 

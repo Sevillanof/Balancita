@@ -4,6 +4,7 @@ import type {
   Entrada,
   ExigenciaLevels,
   Medicion,
+  Salida,
 } from '../infrastructure/quick-api.ts'
 
 /** The level paper operates with: the sliders start here, and it is marked on them. */
@@ -86,6 +87,28 @@ export const ENTRADAS: Array<{ modo: Entrada; label: string; detail: string }> =
         'Igual, pero solo si ETH cayó 2 puntos más que BTC en esa hora, y sale a las 4 h.',
     },
   ]
+
+/** How an exit is executed (mirrors `CHOICES` in futures_maker_exit.py): paper leaves a maker order that follows the best price. */
+export const SALIDAS: Array<{ modo: Salida; label: string; detail: string }> = [
+  {
+    modo: 'mercado',
+    label: 'A mercado',
+    detail:
+      'Cierra de una al mejor precio del otro lado: paga la comisión de tomador (0,05 %) y el salto del precio.',
+  },
+  {
+    modo: 'fija',
+    label: 'Maker fija',
+    detail:
+      'Deja una orden esperando al precio del cierre, sin moverla: comisión de maker (0,02 %) si el precio llega. Si pasan 45 min o el precio se aleja 40 pb en contra, sale a mercado.',
+  },
+  {
+    modo: 'sigue',
+    label: 'Maker que sigue',
+    detail:
+      'La orden se corre siguiendo el mejor precio para llenarse rápido: comisión de maker (0,02 %). Sale a mercado a los 45 min, si el precio se aleja 40 pb en contra, o de una ante un stop o una noticia fuerte.',
+  },
+]
 
 /** How big each trade is when the result is added up: the same trades, only the USD change. */
 export const CUENTAS: Array<{ modo: Cuenta; label: string; detail: string }> = [

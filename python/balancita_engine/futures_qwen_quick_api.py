@@ -8,6 +8,7 @@ import json
 import os
 import threading
 
+from . import futures_maker_exit as maker_exit
 from . import futures_qwen_analista as analista
 from . import futures_qwen_exigencia as exigencia
 from . import futures_qwen_rebote as rebote
@@ -93,12 +94,12 @@ class QuickTestApi:
         """``exigencia_levels``: ``{maestro, portero}`` 0-10 for this test only (5 and 5 = what paper operates)."""
         self._check(strategy_id)
         asked = exigencia_levels or {}
-        if not isinstance(asked, dict) or set(asked) - {"maestro", "portero", "analista", "medicion", "entrada", "cuenta"}:
+        if not isinstance(asked, dict) or set(asked) - {"maestro", "portero", "analista", "medicion", "entrada", "cuenta", "salida"}:
             raise GateApiError("invalid_exigencia", "La exigencia lleva 'maestro' y 'portero' (de 0 a 10), 'analista', 'medicion' y 'entrada'.", 422)
         try:
             levels_env = dict(exigencia.env_for(asked.get("maestro"), asked.get("portero")),
                               **analista.env_for(asked.get("analista")), **walkforward.env_for(asked.get("medicion")),
-                              **rebote.env_for(asked.get("entrada")))
+                              **rebote.env_for(asked.get("entrada")), **maker_exit.env_for(asked.get("salida")))
         except ValueError as error:
             raise GateApiError("invalid_exigencia", str(error), 422) from error
         # a rebound entry has its own variant (no maestro, no portero, no Qwen)

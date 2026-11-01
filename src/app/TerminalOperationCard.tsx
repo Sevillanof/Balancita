@@ -1,7 +1,7 @@
 import type { QwenTrade, QwenTradesSource } from './useQwenTrades.ts'
-import { useState } from 'react'
+import { Fragment, useState } from 'react'
 import ModalFrame from '../features/strategy-lab/presentation/ModalFrame.tsx'
-import { signedUsd } from './qwen-trades-text.ts'
+import { exitPlanText, signedUsd } from './qwen-trades-text.ts'
 import { amount, usd, utcDateTime } from '../shared/finance/format.ts'
 import { tradeTone } from '../features/trading-view/domain/terminal-trade-model.ts'
 import {
@@ -9,13 +9,28 @@ import {
   TERMINAL_FRAME,
 } from '../shared/design-system/terminal-styles.ts'
 
-function ExecutionDetails({ trade }: { trade: QwenTrade }) {
+/** The wait between the decision and the fill: milliseconds for a market order, minutes for an order that waited. */
+const delayText = (ms: number): string =>
+  ms < 60_000 ? `${ms} ms` : `${Math.round(ms / 60_000)} min`
+
+/** `flat`: inside the grid of the details dialog the rows are loose `dt`/`dd`; in the compact list each row is a `div`. */
+function ExecutionDetails({
+  trade,
+  nowMs,
+  flat = false,
+}: {
+  trade: QwenTrade
+  nowMs: number
+  flat?: boolean
+}) {
   const execution = trade.execution
   if (!execution) return null
+  const exitText = exitPlanText(trade, nowMs)
   const phase =
     (trade.open ? execution.mark : execution.exit) ?? execution.entry
+  const Rows = flat ? Fragment : 'div'
   return (
-    <div>
+    <Rows>
       <dt>Modelo de ejecución</dt>
       <dd>Libro público · simulación paper</dd>
       <dt>Recibo de entrada</dt>
@@ -24,22 +39,28 @@ function ExecutionDetails({ trade }: { trade: QwenTrade }) {
       </dd>
       <dt>Costes congelados</dt>
       <dd title={phase.costModelHash}>
-        Taker {amount(phase.feeRate * 100)} % ·{' '}
-        {phase.costModelHash.slice(0, 12)}
+        {phase.feeKind === 'maker' ? 'Maker' : 'Taker'}{' '}
+        {amount(phase.feeRate * 100)} % · {phase.costModelHash.slice(0, 12)}
       </dd>
       <dt>Recepción / ejecución UTC</dt>
       <dd>
         {utcDateTime(phase.receivedMs)} / {utcDateTime(phase.executedMs)}
       </dd>
       <dt>Demora desde la señal</dt>
-      <dd>{phase.executedMs - phase.signalMs} ms</dd>
+      <dd>{delayText(phase.executedMs - phase.signalMs)}</dd>
+      {exitText && (
+        <>
+          <dt>Salida</dt>
+          <dd>{exitText}</dd>
+        </>
+      )}
       {execution.error && (
         <dd role="status" className="text-warn">
           No hay precio ejecutable vigente ({execution.error}); se conserva el
           último recibo válido.
         </dd>
       )}
-    </div>
+    </Rows>
   )
 }
 
@@ -241,7 +262,7 @@ export default function TerminalOperationCard({
               </dd>
               <dt>Apalancamiento</dt>
               <dd>{amount(trade.leverage)}×</dd>
-              <ExecutionDetails trade={trade} />
+              <ExecutionDetails trade={trade} nowMs={nowMs} flat />
             </dl>
             <button type="button" onClick={() => setDetailsOpen(false)}>
               Cerrar
@@ -322,7 +343,7 @@ export default function TerminalOperationCard({
             {amount(trade.notionalUsd)} / {amount(trade.marginUsd)} USD
           </dd>
         </div>
-        <ExecutionDetails trade={trade} />
+        <ExecutionDetails trade={trade} nowMs={nowMs} />
       </dl>
       <div
         className="my-4.5 flex items-center gap-2 text-chart-info child-span:grid child-span:size-6.5 child-span:place-items-center child-span:rounded-full child-span:border child-span:border-solid child-span:border-line child-i:flex-1 child-i:border-t child-i:border-t-solid child-i:border-t-chart-info"

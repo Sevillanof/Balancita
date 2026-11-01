@@ -86,7 +86,8 @@ class ExigenciaWiringTest(unittest.TestCase):
         env = GateApi.exigencia_env({"exigencia": {"maestro": 3}}, models.QWEN_LIVE_ID)
         self.assertEqual(
             env,
-            {ex.ENV_MAESTRO: "3", ex.ENV_PORTERO: "5", "QWEN_ANALISTA": "apagado", "QWEN_MEDICION": "honesta", "QWEN_ENTRADA": "formula"},
+            {ex.ENV_MAESTRO: "3", ex.ENV_PORTERO: "5", "QWEN_ANALISTA": "apagado", "QWEN_MEDICION": "honesta", "QWEN_ENTRADA": "formula",
+         "QWEN_SALIDA": "sigue"},
         )
         self.assertEqual(GateApi.exigencia_env({}, models.QWEN_LIVE_ID), {})
         with self.assertRaises(GateApiError):
