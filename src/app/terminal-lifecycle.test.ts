@@ -184,3 +184,83 @@ describe('lifecycleView', () => {
     expect(maker.meter?.value).toBeCloseTo(19 / 45)
   })
 })
+
+describe('lifecycleView · decisión óptima', () => {
+  const MIN = 60_000
+  // A price that rises 20 bp every 10 minutes from 30 minutes before NOW.
+  const rising = Array.from({ length: 120 }, (_, i) => ({
+    timeMs: NOW - (119 - i) * MIN,
+    close: 2000 * (1 + (i * 2) / 10_000),
+  }))
+  const strongShort = (at: number) =>
+    look(at, 'CORTO', {
+      maestro: -2,
+      puntaje: -1.4,
+      portero_si: true,
+      portero_p: 0.6,
+      portero_autonomo: { side: -1 },
+      noticias_si: false,
+      noticias: { priority: { status: 'none' } },
+    })
+
+  it('judges a strong call 30 minutes later: wrong when the price went the other way', () => {
+    const view = lifecycleView({
+      analyses: [strongShort(NOW - 90 * MIN)],
+      openTrade: null,
+      nowMs: NOW,
+      prices: rising,
+    })!
+    const master = view.steps.find((step) => step.id === 'master')!
+    expect(master.checks).toHaveLength(1)
+    expect(master.checks![0]).toMatchObject({ state: 'wrong' })
+    expect(master.checks![0]!.moveBp).toBeGreaterThan(0)
+  })
+
+  it('leaves a look of the last 30 minutes pending and a fixed rule without a row', () => {
+    const view = lifecycleView({
+      analyses: [strongShort(NOW - 10 * MIN)],
+      openTrade: null,
+      nowMs: NOW,
+      prices: rising,
+    })!
+    expect(view.steps.find((s) => s.id === 'master')!.checks![0]!.state).toBe(
+      'pending',
+    )
+    expect(view.steps.find((s) => s.id === 'look')!.checks).toBeNull()
+  })
+
+  it('counts a "no entrar" as right when the move did not cover the costs', () => {
+    const flat = rising.map((p) => ({ ...p, close: 2000 }))
+    const view = lifecycleView({
+      analyses: [
+        look(NOW - 90 * MIN, 'ESPERAR', {
+          maestro: 1,
+          puntaje: 0.3,
+          portero_si: false,
+          noticias_si: false,
+        }),
+      ],
+      openTrade: null,
+      nowMs: NOW,
+      prices: flat,
+    })!
+    expect(view.steps.find((s) => s.id === 'enter')!.checks![0]!.state).toBe(
+      'right',
+    )
+  })
+
+  it('judges the exit rules by the open position and skips looks before it opened', () => {
+    const view = lifecycleView({
+      analyses: [
+        look(NOW - 100 * MIN, 'MANTENER', { maestro: -2 }),
+        look(NOW - 90 * MIN, 'MANTENER', { maestro: -2 }),
+      ],
+      openTrade: trade({ entryMs: NOW - 95 * MIN }),
+      nowMs: NOW,
+      prices: rising,
+    })!
+    const flip = view.steps.find((step) => step.id === 'flip')!
+    expect(flip.checks!.map((check) => check.state)).toEqual(['none', 'wrong'])
+    expect(view.steps.find((s) => s.id === 'cap')!.checks).toBeNull()
+  })
+})

@@ -350,6 +350,28 @@ test('without an open operation the strip shows the entry steps', async ({
     })
   await page.keyboard.press('Escape')
   await expect(detail).toBeHidden()
+  // Every past look is judged against the price 30 minutes later; a click on a dot keeps the detail open.
+  await strip.getByRole('button', { name: /^Maestro/ }).click()
+  const master = page.getByRole('dialog', {
+    name: /Maestro: última evaluación/,
+  })
+  const dots = master.getByRole('button', { name: /^Ir a la mirada/ })
+  await expect(dots).toHaveCount(5)
+  await expect(dots.last()).toHaveAttribute(
+    'title',
+    /todavía no pasaron 30 min/,
+  )
+  await expect(dots.first()).toHaveAttribute('title', /acertó|falló/)
+  if (SHOTS)
+    await page.screenshot({
+      path: `${SHOTS}/decision-optima-${test.info().project.name}.png`,
+    })
+  await dots.first().click()
+  await expect(master).toBeVisible()
+  if (SHOTS)
+    await page.screenshot({
+      path: `${SHOTS}/decision-optima-salto-${test.info().project.name}.png`,
+    })
   // A grey step is not a failure: it says what it is waiting for.
   await strip.getByRole('button', { name: /^Noticias/ }).click()
   const news = page.getByRole('dialog', { name: /Noticias: última evaluación/ })

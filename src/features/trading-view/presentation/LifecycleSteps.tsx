@@ -4,6 +4,7 @@ import {
   type LifecycleStep,
   type LifecycleView,
   type StepIcon,
+  type StepCheck,
   type StepTone,
 } from '../../../app/terminal-lifecycle.ts'
 
@@ -122,12 +123,33 @@ function Icon({ name }: { name: StepIcon }) {
   )
 }
 
+function checkText(check: StepCheck): string {
+  const when = madridTime(check.atMs)
+  if (check.state === 'none')
+    return `${when} · este paso no opinó sobre el precio`
+  if (check.state === 'pending') return `${when} · todavía no pasaron 30 min`
+  const move =
+    check.moveBp === null
+      ? ''
+      : ` · el precio se movió ${check.moveBp >= 0 ? '+' : '−'}${Math.abs(check.moveBp).toFixed(0)} pb`
+  return `${when}${move} · ${check.state === 'right' ? 'acertó' : 'falló'}`
+}
+
+const CHECK_FILL: Record<StepCheck['state'], string> = {
+  right: 'bg-long',
+  wrong: 'bg-short',
+  pending: 'bg-line-strong',
+  none: 'bg-line',
+}
+
 function Detail({
   step,
   evaluatedMs,
+  onJump,
 }: {
   step: LifecycleStep
   evaluatedMs: number
+  onJump: ((ms: number) => void) | undefined
 }) {
   return (
     <div
@@ -196,6 +218,31 @@ function Detail({
           </div>
         </div>
       )}
+      {step.checks && step.checks.length > 1 && (
+        <div className="grid gap-1">
+          <span className="text-label text-ink-2">Decisión óptima</span>
+          <div className="flex gap-0.5">
+            {step.checks.map((check) => (
+              <button
+                key={check.atMs}
+                type="button"
+                title={checkText(check)}
+                aria-label={`Ir a la mirada: ${checkText(check)}`}
+                onClick={() => onJump?.(check.atMs)}
+                className="grid h-4 w-4 cursor-pointer place-items-center border-0 bg-transparent p-0"
+              >
+                <i
+                  className={`h-2.5 w-2.5 rounded-full ${CHECK_FILL[check.state]}`}
+                />
+              </button>
+            ))}
+          </div>
+          <span className="text-label text-ink-2">
+            Verde acertó, rojo falló, gris todavía no se sabe. Mide el precio 30
+            min después de cada mirada.
+          </span>
+        </div>
+      )}
       <p className="m-0 border-0 border-t border-solid border-line pt-2 text-label text-ink-2">
         {step.rule}
       </p>
@@ -211,7 +258,13 @@ function Detail({
  * steps while nothing is open, the exit rules while an operation is. A click
  * opens the last evaluation of that step.
  */
-export default function LifecycleSteps({ view }: { view: LifecycleView }) {
+export default function LifecycleSteps({
+  view,
+  onJump,
+}: {
+  view: LifecycleView
+  onJump?: (ms: number) => void
+}) {
   const [openId, setOpenId] = useState<string | null>(null)
   const root = useRef<HTMLDivElement>(null)
   useEffect(() => {
@@ -267,7 +320,9 @@ export default function LifecycleSteps({ view }: { view: LifecycleView }) {
           </div>
         ))}
       </div>
-      {open && <Detail step={open} evaluatedMs={view.evaluatedMs} />}
+      {open && (
+        <Detail step={open} evaluatedMs={view.evaluatedMs} onJump={onJump} />
+      )}
     </div>
   )
 }

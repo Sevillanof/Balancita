@@ -522,6 +522,10 @@ export default function TerminalChartPanel({
 }) {
   const [settings, setSettings] = useState<Settings>(loadSettings)
   const [now, setNow] = useState(() => Date.now())
+  const [timeFocus, setTimeFocus] = useState<{
+    ms: number
+    revision: number
+  } | null>(null)
   // When each live pane was asked for (per product and timeframe): a pane whose
   // data has not arrived shows «Cargando…» first and «Sin datos» after a while.
   const [askedAt, setAskedAt] = useState<Record<string, number>>({})
@@ -962,7 +966,17 @@ export default function TerminalChartPanel({
             </ChartStat>
           </ChartStats>
         </ChartMenu>
-        {viewport && lifecycle && <LifecycleSteps view={lifecycle} />}
+        {viewport && lifecycle && (
+          <LifecycleSteps
+            view={lifecycle}
+            onJump={(ms) =>
+              setTimeFocus((value) => ({
+                ms,
+                revision: (value?.revision ?? 0) + 1,
+              }))
+            }
+          />
+        )}
       </div>
       {!live && (
         <p className="m-0 px-3 py-0 text-hint text-ink-2">
@@ -1003,6 +1017,7 @@ export default function TerminalChartPanel({
           tradesConfirmed={tradesConfirmed}
           selectedTradeId={selectedTradeId}
           tradeFocus={tradeFocus}
+          timeFocus={timeFocus}
           onSelectTrade={onSelectTrade}
           onSelect={(time, markerId) => {
             if (markerId) {
