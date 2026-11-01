@@ -1,6 +1,7 @@
 import type { DatabaseSync } from 'node:sqlite'
 import { withDb, num, rowOf, type Row } from './observability-health.ts'
 import { addDecimal, decimalFromPython } from './decimal-string.ts'
+import { canonicalHash } from '../paper-futures/futures-canonical.ts'
 
 /**
  * Qwen operador en vivo, solo lectura: sus decisiones (una por producto cada
@@ -95,6 +96,31 @@ export interface QwenSkipped {
   readonly detail: string
 }
 
+export interface QwenExecutionPhase {
+  readonly receipt_id: string
+  readonly cost_model_hash: string
+  readonly price: string
+  readonly quantity: string
+  readonly fee_rate: string
+  readonly fee_usd: string
+  readonly source: string
+  readonly signal_at_ms: number
+  readonly decision_at_ms: number
+  readonly requested_at_ms: number
+  readonly received_at_ms: number
+  readonly server_at_ms: number
+  readonly executed_at_ms: number
+}
+
+export interface QwenExecution {
+  readonly model: string
+  readonly entry: QwenExecutionPhase
+  readonly exit: QwenExecutionPhase | null
+  readonly mark: QwenExecutionPhase | null
+  readonly funding_receipt_id: string | null
+  readonly error: string | null
+}
+
 export interface QwenTrade {
   readonly product: string
   readonly trade_no: number
@@ -122,6 +148,7 @@ export interface QwenTrade {
   readonly hold_min: number | null
   readonly mark_price: number | null
   readonly mark_ms: number | null
+  readonly execution?: QwenExecution
 }
 
 /** Last sign of life of the operator process (table `meta`); null on a base that never wrote it. */
@@ -239,6 +266,120 @@ function objectOf(value: unknown): Record<string, unknown> | null {
       : null
   } catch {
     return null
+  }
+}
+
+function executionOf(db: DatabaseSync, trade: Row): QwenExecution | null {
+  if (trade.execution_model == null) return null
+  if (trade.execution_model !== 'kraken-futures-book.v1')
+    throw new Error('execution_model_unknown')
+  const phase = (
+    receiptId: unknown,
+    purpose: 'entry' | 'exit' | 'mark',
+  ): QwenExecutionPhase | null => {
+    if (receiptId == null) return null
+    if (typeof receiptId !== 'string' || !/^[a-f0-9]{64}$/.test(receiptId))
+      throw new Error('execution_receipt_invalid')
+    const receipt = rowOf(
+      db
+        .prepare('SELECT * FROM execution_receipts WHERE receipt_id=?')
+        .get(receiptId),
+    )
+    const body = objectOf(receipt.evidence_json)
+    if (
+      !body ||
+      receipt.product !== trade.product ||
+      receipt.trade_no !== trade.trade_no ||
+      receipt.purpose !== purpose ||
+      canonicalHash(body) !== receipt.evidence_hash
+    )
+      throw new Error('execution_receipt_hash_invalid')
+    const profile = {
+      model: body.model,
+      product: body.product,
+      taker_rate: body.taker_rate,
+      decimal_precision: body.decimal_precision,
+      static_impact_applied: body.static_impact_applied,
+      walk_rounding: body.walk_rounding,
+      fee_rounding: body.fee_rounding,
+    }
+    if (
+      body.model !== trade.execution_model ||
+      body.product !== trade.product ||
+      body.fee_kind !== 'taker' ||
+      body.decimal_precision !== 28 ||
+      body.static_impact_applied !== false ||
+      body.walk_rounding !== 'ROUND_DOWN' ||
+      body.fee_rounding !== 'ROUND_HALF_EVEN' ||
+      body.classification !== 'paper_simulated_from_displayed_depth' ||
+      canonicalHash(profile) !== body.cost_model_hash
+    )
+      throw new Error('execution_cost_profile_invalid')
+    const quote = rowOf(body.quote)
+    if (
+      quote.product !== trade.product ||
+      quote.source !==
+        'https://futures.kraken.com/derivatives/api/v3/orderbook?symbol=PF_ETHUSD' ||
+      quote.server_time_kind !== 'response_generation_not_book_event'
+    )
+      throw new Error('execution_source_invalid')
+    const money = (value: unknown): string => {
+      const out = decimalFromPython(value)
+      if (out === null) throw new Error('execution_decimal_invalid')
+      return out
+    }
+    const stamp = (value: unknown): number => {
+      if (
+        typeof value !== 'number' ||
+        !Number.isSafeInteger(value) ||
+        value <= 0
+      )
+        throw new Error('execution_timestamp_invalid')
+      return value
+    }
+    const out: QwenExecutionPhase = {
+      receipt_id: receiptId,
+      cost_model_hash: String(body.cost_model_hash),
+      price: money(body.price),
+      quantity: money(body.quantity),
+      fee_rate: money(body.taker_rate),
+      fee_usd: money(body.fee_usd),
+      source: quote.source,
+      signal_at_ms: stamp(body.signal_at_ms),
+      decision_at_ms: stamp(body.decision_at_ms),
+      requested_at_ms: stamp(quote.requested_at_ms),
+      received_at_ms: stamp(quote.received_at_ms),
+      server_at_ms: stamp(quote.server_at_ms),
+      executed_at_ms: stamp(body.executed_at_ms),
+    }
+    if (
+      out.signal_at_ms > out.decision_at_ms ||
+      out.decision_at_ms > out.executed_at_ms ||
+      out.requested_at_ms > out.received_at_ms ||
+      out.received_at_ms > out.executed_at_ms ||
+      out.quantity !== text(trade.qty) ||
+      (purpose === 'entry' &&
+        (out.price !== text(trade.entry_px) ||
+          out.executed_at_ms !== num(trade.entry_ms))) ||
+      (purpose === 'exit' &&
+        (out.price !== text(trade.exit_px) ||
+          out.executed_at_ms !== num(trade.exit_ms)))
+    )
+      throw new Error('execution_projection_invalid')
+    return out
+  }
+  const entry = phase(trade.entry_receipt_id, 'entry')
+  if (entry === null) throw new Error('execution_entry_receipt_missing')
+  const exit = phase(trade.exit_receipt_id, 'exit')
+  if (trade.status === 'closed' && exit === null)
+    throw new Error('execution_exit_receipt_missing')
+  return {
+    model: trade.execution_model,
+    entry,
+    exit,
+    mark: phase(trade.mark_receipt_id, 'mark'),
+    funding_receipt_id: text(trade.funding_receipt_id),
+    error: text(trade.execution_error),
   }
 }
 
@@ -428,19 +569,26 @@ export function createQwenDecisions(options: {
     trades(product, limit = DEFAULT_LIMIT) {
       const bad = invalid(product, limit)
       if (bad) return bad
-      const opened = withDb(options.liveDbPath, (db) =>
-        db
+      const opened = withDb(options.liveDbPath, (db) => {
+        db.exec('BEGIN')
+        return db
           .prepare(
             `SELECT * FROM trades WHERE product=?
               ORDER BY (status='open') DESC, entry_ms DESC LIMIT ?`,
           )
           .all(product, limit)
-          .map((row) => rowOf(row)),
-      )
+          .map((value) => {
+            const row = rowOf(value)
+            return { row, execution: executionOf(db, row) }
+          })
+      })
       if (opened.state !== 'read')
-        return { status: 'off', reason: opened.detail }
+        return {
+          status: opened.detail.startsWith('execution_') ? 'error' : 'off',
+          reason: opened.detail,
+        }
       const trades: QwenTrade[] = []
-      for (const row of opened.value as Row[]) {
+      for (const { row, execution } of opened.value) {
         const tradeNo = num(row.trade_no)
         const entry = num(row.entry_ms)
         const side =
@@ -478,6 +626,7 @@ export function createQwenDecisions(options: {
           hold_min: num(row.hold_min),
           mark_price: open ? num(row.mark_px) : null,
           mark_ms: open ? num(row.mark_ms) : null,
+          ...(execution === null ? {} : { execution }),
         })
       }
       return { status: 'ok', trades }

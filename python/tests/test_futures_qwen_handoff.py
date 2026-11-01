@@ -2,6 +2,7 @@ import copy
 import hashlib
 import json
 import os
+import tempfile
 import unittest
 from decimal import Decimal
 from unittest import mock
@@ -12,6 +13,39 @@ from test_futures_qwen_live import LIVE_CFG, Policy, make
 
 
 class HandoffTests(unittest.TestCase):
+    def test_approved_absolute_funding_target_preserves_legacy_trade_and_account(self):
+        source = qt.load_config(qt.CONFIG_PATH_LIVE)
+        target = live.pending_config(source, source["runtime"]["pending_config"])
+        live.validate_activation(target, now_ms=qt.date_ms("2026-11-01"))
+        self.assertEqual(target["funding_model"], qt.exact_funding.EXACT_MODEL)
+        with tempfile.TemporaryDirectory() as folder:
+            store = live.LiveStore(os.path.join(folder, "live.sqlite"))
+            try:
+                store.check_identity(source)
+                with store.db:
+                    store.put_trade(
+                        "PF_ETHUSD", 7, status="open", side="SHORT", entry_ms=100,
+                        entry_px="2241.6574077", qty="0.45", notional_usd="1000",
+                        funding_model=qt.exact_funding.LEGACY_MODEL,
+                    )
+                before = [dict(r) for r in store.db.execute("SELECT * FROM trades")]
+                with self.assertRaises(qt.TraderError):
+                    store.activate_flat_config(target, now_ms=200)
+                self.assertEqual([dict(r) for r in store.db.execute("SELECT * FROM trades")], before)
+                with store.db:
+                    store.update_trade("PF_ETHUSD", 7, status="closed", exit_ms=200, net_usd="0.125")
+                closed = [dict(r) for r in store.db.execute("SELECT * FROM trades")]
+                cash = store.cash_balance_usd()
+                store.activate_flat_config(target, now_ms=300)
+                self.assertEqual(store.cash_balance_usd(), cash)
+                self.assertEqual([dict(r) for r in store.db.execute("SELECT * FROM trades")], closed)
+                self.assertEqual(closed[0]["funding_model"], qt.exact_funding.LEGACY_MODEL)
+                self.assertEqual(store.meta()["config_hash"], qt.config_hash(target))
+                resumed = live.active_config(store, source)
+                self.assertEqual(resumed["funding_model"], qt.exact_funding.EXACT_MODEL)
+            finally:
+                store.close()
+
     def request(self, env, *, wrong_hash=False):
         path = os.path.join(env.tmp, "pending.json")
         overlay = {

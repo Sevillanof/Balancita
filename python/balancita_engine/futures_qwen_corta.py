@@ -288,9 +288,8 @@ def _position_line(trader, t_ms, verdict_now):
     position = trader.position
     if position is None:
         return "4. Posición: ninguna."
-    last = trader.c[-1]
     pos_notional = position.notional_usd or trader.notional
-    now = qt.settle(trader.product, position, last, "strategy_exit", t_ms, trader.funding, pos_notional)
+    now = trader.mark(t_ms)
     side = 1 if position.side == "LONG" else -1
     aligned = side * verdict_now
     if aligned == 0:

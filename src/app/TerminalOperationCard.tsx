@@ -9,6 +9,40 @@ import {
   TERMINAL_FRAME,
 } from '../shared/design-system/terminal-styles.ts'
 
+function ExecutionDetails({ trade }: { trade: QwenTrade }) {
+  const execution = trade.execution
+  if (!execution) return null
+  const phase =
+    (trade.open ? execution.mark : execution.exit) ?? execution.entry
+  return (
+    <div>
+      <dt>Modelo de ejecución</dt>
+      <dd>Libro público · simulación paper</dd>
+      <dt>Recibo de entrada</dt>
+      <dd title={execution.entry.receiptId}>
+        {execution.entry.receiptId.slice(0, 12)}
+      </dd>
+      <dt>Costes congelados</dt>
+      <dd title={phase.costModelHash}>
+        Taker {amount(phase.feeRate * 100)} % ·{' '}
+        {phase.costModelHash.slice(0, 12)}
+      </dd>
+      <dt>Recepción / ejecución UTC</dt>
+      <dd>
+        {utcDateTime(phase.receivedMs)} / {utcDateTime(phase.executedMs)}
+      </dd>
+      <dt>Demora desde la señal</dt>
+      <dd>{phase.executedMs - phase.signalMs} ms</dd>
+      {execution.error && (
+        <dd role="status" className="text-warn">
+          No hay precio ejecutable vigente ({execution.error}); se conserva el
+          último recibo válido.
+        </dd>
+      )}
+    </div>
+  )
+}
+
 export default function TerminalOperationCard({
   trade,
   source,
@@ -50,7 +84,7 @@ export default function TerminalOperationCard({
         </p>
       </section>
     )
-  const confirmed = source.state === 'ok'
+  const confirmed = source.state === 'ok' && !trade.execution?.error
   const tone = tradeTone(trade, confirmed)
   const end = trade.open ? nowMs : trade.exitMs
   const minutes =
@@ -207,6 +241,7 @@ export default function TerminalOperationCard({
               </dd>
               <dt>Apalancamiento</dt>
               <dd>{amount(trade.leverage)}×</dd>
+              <ExecutionDetails trade={trade} />
             </dl>
             <button type="button" onClick={() => setDetailsOpen(false)}>
               Cerrar
@@ -287,6 +322,7 @@ export default function TerminalOperationCard({
             {amount(trade.notionalUsd)} / {amount(trade.marginUsd)} USD
           </dd>
         </div>
+        <ExecutionDetails trade={trade} />
       </dl>
       <div
         className="my-4.5 flex items-center gap-2 text-chart-info child-span:grid child-span:size-6.5 child-span:place-items-center child-span:rounded-full child-span:border child-span:border-solid child-span:border-line child-i:flex-1 child-i:border-t child-i:border-t-solid child-i:border-t-chart-info"

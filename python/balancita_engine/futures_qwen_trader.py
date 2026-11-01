@@ -52,11 +52,12 @@ import sys
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
-from decimal import Decimal, ROUND_DOWN, localcontext
+from decimal import Decimal, ROUND_DOWN, ROUND_HALF_EVEN, localcontext
 from typing import Callable, Optional, TYPE_CHECKING
 
 from . import futures_llm_decisions as llm
 from . import futures_qwen_funding as exact_funding
+from . import futures_book_execution as book_execution
 from .futures_costs import COST_MODEL_VERSION, entry_fill, exit_fill, fee_rate, round_trip_cost_bps, side_impact_bps
 from .futures_history import DAY_MS, HOUR_MS, MINUTE_MS, CandleCache, HistoryError, fetch_funding, fill_gaps
 from .futures_simulator import accrue_funding
@@ -338,7 +339,7 @@ class FundingLine:
 
 class Position:
     __slots__ = ("side", "entry_ms", "entry_ref", "entry_px", "qty", "stop_px", "stop_pct", "max_hold_ms", "entry_p",
-                 "entry_reason", "trade_no", "mfe_bp", "mae_bp", "notional_usd", "funding_model")
+                 "entry_reason", "trade_no", "mfe_bp", "mae_bp", "notional_usd", "funding_model", "entry_execution")
 
     def __init__(self, **kwargs):
         for name in self.__slots__:
@@ -357,25 +358,57 @@ def funding_status(held_ms, covered_ms):
     return "partial" if covered_ms > 0 else "unknown"
 
 
-def settle(product, position, ref_price, reason, end_ms, funding, notional=D(100)):
+def settle(product, position, ref_price, reason, end_ms, funding, notional=D(100), *, execution=None):
     """What closing ``position`` at ``ref_price`` (before the exit cost) nets: ``futures_costs`` fills, taker fees on both
     legs and the funding of the holding time. Same accounting as ``futures_simulator.Book._settle``."""
-    long = position.side == "LONG"
-    px = exit_fill(D(repr(float(ref_price))), position.side, product, reason)
-    gross = (px - position.entry_px) * position.qty if long else (position.entry_px - px) * position.qty
-    fees = (position.entry_px + px) * position.qty * fee_rate("taker")
-    paid, covered = funding.accrue_position(position.entry_ms, end_ms, position.entry_px * position.qty,
-                                           position.qty, long, position.funding_model) \
-        if funding is not None else (D(0), 0)
-    held = max(0, end_ms - position.entry_ms)
-    status = funding_status(held, covered)
-    net = gross - fees - paid
-    return {"exit_px": px, "net_bp": float(net / notional * 10_000), "gross_bp": float(gross / notional * 10_000),
-            "funding_bp": float(paid / notional * 10_000), "funding_status": status,
-            # the same figures in exact USD (Decimal), for the live books
-            "net_usd": net, "gross_usd": gross, "fees_usd": fees, "funding_usd": paid,
-            "net_complete_usd": net if status == "complete" or held == 0 else None,
-            "funding_model": position.funding_model}
+    with localcontext() as ctx:
+        long = position.side == "LONG"
+        if position.entry_execution is not None and execution is None:
+            raise TraderError("La posición de libro requiere evidencia de ejecución para valorar o cerrar.")
+        if execution is not None:
+            ctx.prec, ctx.rounding = book_execution.PRECISION, ROUND_HALF_EVEN
+            if (position.entry_execution is None or execution.quantity != position.qty
+                    or execution.quote.product != product
+                    or execution.side != ("SHORT" if long else "LONG")
+                    or execution.executed_at_ms < position.entry_ms):
+                raise TraderError("La ejecución no corresponde a la posición.")
+            px = execution.price
+            end_ms = execution.executed_at_ms
+            fees = D(position.entry_execution["fee_usd"]) + execution.fee
+            entry_value = D(position.entry_execution["notional_usd"])
+            gross = execution.notional - entry_value if long else entry_value - execution.notional
+        else:
+            px = exit_fill(D(repr(float(ref_price))), position.side, product, reason)
+            fees = (position.entry_px + px) * position.qty * fee_rate("taker")
+            gross = (px - position.entry_px) * position.qty if long else (position.entry_px - px) * position.qty
+        paid, covered = funding.accrue_position(position.entry_ms, end_ms, position.entry_px * position.qty,
+                                               position.qty, long, position.funding_model) \
+            if funding is not None else (D(0), 0)
+        held = max(0, end_ms - position.entry_ms)
+        status = funding_status(held, covered)
+        net = gross - fees - paid
+        receipt = None if execution is None else execution.evidence()
+        if receipt is not None:
+            periods = funding.absolute.periods if funding is not None and funding.absolute is not None else ()
+            receipt["settlement"] = {
+                "position_side": position.side, "entry_at_ms": position.entry_ms,
+                "entry_execution_hash": book_execution.canonical_hash(position.entry_execution),
+                "funding_model": position.funding_model,
+                "funding_periods": [
+                    dict(vars(period)) for period in periods
+                    if period.start_ms < end_ms and period.end_ms > position.entry_ms
+                ],
+                "expected": {
+                    "net_usd": str(net), "gross_usd": str(gross), "fees_usd": str(fees), "funding_usd": str(paid),
+                    "funding_status": status, "net_complete_usd": str(net) if status == "complete" or held == 0 else None,
+                },
+            }
+        return {"exit_px": px, "net_bp": float(net / notional * 10_000), "gross_bp": float(gross / notional * 10_000),
+                "funding_bp": float(paid / notional * 10_000), "funding_status": status,
+                "net_usd": net, "gross_usd": gross, "fees_usd": fees, "funding_usd": paid,
+                "net_complete_usd": net if status == "complete" or held == 0 else None,
+                "funding_model": position.funding_model, "executed_at_ms": end_ms,
+                "execution": receipt}
 
 
 # --------------------------------------------------------------------------- questions and the decider
@@ -588,6 +621,7 @@ class Trader:
         self.questions = questions_for(cfg, product)
         self.notional = D(cfg["notional_usd"])
         self.t, self.o, self.h, self.l, self.c, self.v, self.lc = [], [], [], [], [], [], []
+        self.signal_price_text = None
         self.data_gap_ms, self.last_observed_ms = None, None
         self.context = {}                 # other products' closes {product: {bar end ms: close}} (``state_extras``: otros_activos)
         self.positioning = None           # ``positioning_data.PositioningFeed`` of this product (``state_ficha``: renglón F6)
@@ -595,6 +629,8 @@ class Trader:
         self.news_consumed = set()
         self.execution_check: Optional[Callable[[], int]] = None
         self.entry_check: Optional[Callable[[], None]] = None
+        self.book_execution = None
+        self.last_mark_execution = None
         self.movement: Optional["Movement"] = None
         self.position: Optional[Position] = None
         self.cooldown_until = 0
@@ -608,10 +644,13 @@ class Trader:
         self.idle_since_ms = None         # reference when nothing was opened yet (process start / last opening in the database)
         self.last_open_ms = None
         self.window = None                # opportunity window: {"start_ms", "looks", "best"} while open
+        if "execution" in cfg and cfg["execution"] != {"model": book_execution.MODEL}:
+            raise TraderError("Modelo de ejecución no reconocido.")
 
     # ---- data
 
     def _append(self, candle):
+        self.signal_price_text = str(candle["close"])
         close = float(candle["close"])
         self.t.append(int(candle["bucket_start"]))
         self.o.append(float(candle["open"]))
@@ -864,7 +903,7 @@ class Trader:
         if position is None:
             lines.append(self._NO_POSITION_LINE)
         else:
-            now = settle(self.product, position, last, "strategy_exit", t_ms, self.funding, self.notional)
+            now = self.mark(t_ms)
             to_stop = (last - position.stop_px) / last if position.side == "LONG" else (position.stop_px - last) / last
             left = position.entry_ms + position.max_hold_ms - t_ms
             lines.append("Posicion: {} abierta hace {}. Resultado si cerras ahora (ya con costos): {} %. Distancia al "
@@ -887,7 +926,7 @@ class Trader:
         if position is None:
             lines.append(self._NO_POSITION_LINE)
             return "\n".join(lines)
-        now = settle(self.product, position, last, "strategy_exit", t_ms, self.funding, self.notional)
+        now = self.mark(t_ms)
         exit_cost = float(fee_rate("taker") * 10_000 + side_impact_bps(self.product)) / 100.0
         sign = 1.0 if position.side == "LONG" else -1.0
         captured = sign * (last / position.entry_ref - 1.0) * 100.0
@@ -917,7 +956,7 @@ class Trader:
         if position is None:
             lines.append(self._NO_POSITION_LINE)
             return "\n".join(lines)
-        now = settle(self.product, position, last, "strategy_exit", t_ms, self.funding, self.notional)
+        now = self.mark(t_ms)
         exit_cost = float(fee_rate("taker") * 10_000 + side_impact_bps(self.product)) / 100.0
         sign = 1.0 if position.side == "LONG" else -1.0
         captured = sign * (last / position.entry_ref - 1.0) * 100.0
@@ -947,7 +986,11 @@ class Trader:
             return []
         events = []
         if self.position is not None:
-            events += self._guardrails(t_ms)
+            try:
+                events += self._guardrails(t_ms)
+            except WakeSkipped as skip:
+                return [{"type": "skipped", "t_ms": t_ms, "wake": ["proteccion"],
+                         "kind": skip.kind, "detail": skip.detail}]
         if self.data_gap_ms is not None:
             return events + [{"type": "skipped", "t_ms": t_ms, "wake": ["datos"],
                               "kind": "datos_incompletos",
@@ -1007,8 +1050,13 @@ class Trader:
 
     def _close(self, t_ms, ref_price, cost_reason, closed_by, exit_reason):
         position = self._require_position()
+        execution = self._book_exit(t_ms) if position.entry_execution is not None else None
         done = settle(self.product, position, ref_price, cost_reason, t_ms, self.funding,
-                      position.notional_usd or self.notional)
+                      position.notional_usd or self.notional, execution=execution)
+        if done["execution"] is not None:
+            done["execution"]["signal_reference_price"] = self.signal_price_text
+            done["execution"]["signal_reference_kind"] = "official_candle_close"
+        t_ms = done["executed_at_ms"]
         trade = {"trade_no": position.trade_no, "product": self.product, "side": position.side,
                  "entry_ms": position.entry_ms, "exit_ms": t_ms, "entry_px": float(position.entry_px),
                  "exit_px": float(done["exit_px"]), "net_bp": done["net_bp"], "gross_bp": done["gross_bp"],
@@ -1019,7 +1067,9 @@ class Trader:
                 "net_usd": str(done["net_usd"]), "gross_usd": str(done["gross_usd"]), "fees_usd": str(done["fees_usd"]),
                 "funding_usd": str(done["funding_usd"]), "qty": str(position.qty), "entry_fill": str(position.entry_px),
                 "notional_usd": str(position.notional_usd or self.notional), "funding_model": position.funding_model,
-                "net_complete_usd": None if done["net_complete_usd"] is None else str(done["net_complete_usd"])}
+                "net_complete_usd": None if done["net_complete_usd"] is None else str(done["net_complete_usd"]),
+                "exit_fill": str(done["exit_px"]), "entry_execution": position.entry_execution,
+                "exit_execution": done["execution"]}
         if self.cfg.get("cuenta") == "entera":
             self.notional += done["net_usd"]
         self.position = None
@@ -1035,6 +1085,22 @@ class Trader:
         if self.position is None:
             raise TraderError("No hay una posición abierta para gestionar o cerrar.")
         return self.position
+
+    def _book_exit(self, t_ms, *, purpose="exit"):
+        position = self._require_position()
+        if self.book_execution is None:
+            raise WakeSkipped("libro_no_disponible", "Falta el libro público para esta posición.")
+        try:
+            return self.book_execution.exit(self.product, position.side, position.qty, t_ms, purpose=purpose)
+        except book_execution.BookError as error:
+            raise WakeSkipped(error.kind, error.detail) from error
+
+    def mark(self, t_ms):
+        position = self._require_position()
+        execution = self._book_exit(t_ms, purpose="mark") if position.entry_execution is not None else None
+        self.last_mark_execution = None if execution is None else execution.evidence()
+        return settle(self.product, position, self.c[-1], "strategy_exit", t_ms, self.funding,
+                      position.notional_usd or self.notional, execution=execution)
 
     def _check_execution_deadline(self, t_ms, expires_at_ms=None):
         now = t_ms if self.execution_check is None else self.execution_check()
@@ -1072,13 +1138,27 @@ class Trader:
                 qty = notional / entry
         else:
             qty = notional / entry
+        execution = None
+        if self.cfg.get("execution"):
+            if self.book_execution is None:
+                raise WakeSkipped("libro_no_disponible", "No hay libro público; no se usa el cierre de vela como sustituto.")
+            try:
+                fill = self.book_execution.entry(self.product, side, notional, t_ms)
+            except book_execution.BookError as error:
+                raise WakeSkipped(error.kind, error.detail) from error
+            self._check_execution_deadline(t_ms, expires_at_ms)
+            entry, qty, notional, t_ms = fill.price, fill.quantity, fill.notional, fill.executed_at_ms
+            execution = fill.evidence()
+            execution.update(signal_reference_price=self.signal_price_text,
+                             signal_reference_kind="official_candle_close", funding_model=funding_model)
         self.last_open_ms = t_ms
         self.trade_seq += 1
         self.position = Position(
             side=side, entry_ms=t_ms, entry_ref=last, entry_px=entry, qty=qty,
             stop_px=stop_px,
             stop_pct=stop_pct, max_hold_ms=None if guard["max_hold_min"] is None else guard["max_hold_min"] * MINUTE_MS, entry_p=probability, entry_reason=reason,
-            trade_no=self.trade_seq, mfe_bp=0.0, mae_bp=0.0, notional_usd=notional, funding_model=funding_model)
+            trade_no=self.trade_seq, mfe_bp=0.0, mae_bp=0.0, notional_usd=notional, funding_model=funding_model,
+            entry_execution=execution)
         return self.position
 
     def _passes_mirror(self, t_ms, reasons, action, event):
@@ -1286,8 +1366,7 @@ class Trader:
         kind = "position" if in_position else "flat"
         position = self._require_position() if in_position else None
         snapshot = position.snapshot() if position is not None else None
-        net_now = settle(self.product, position, self.c[-1], "strategy_exit", t_ms, self.funding,
-                         position.notional_usd or self.notional)["net_bp"] if position is not None else None
+        net_now = self.mark(t_ms)["net_bp"] if position is not None else None
         return {"type": "decision", "kind": kind, "t_ms": t_ms, "wake": list(reasons), "state_text": state,
                 "state_hash": llm.text_hash(state)[:16], "position": snapshot, "net_bp_now": net_now,
                 "threshold": None if in_position else self.threshold, "answer": None, "model_action": None,

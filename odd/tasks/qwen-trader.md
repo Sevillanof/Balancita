@@ -72,6 +72,13 @@ heredadas mantienen `kraken-relative-entry-notional.v1`, sin recotizar resultado
 cerrados ni redimensionar la posición actual. Cada posición y operación guarda su modelo.
 Un resultado sin cobertura completa lleva `net_complete_usd = null`.
 
+La preparación y la activación son pasos distintos. La petición de costes del
+31/10 conserva la posición heredada y prepara las mejoras en orden; ninguna
+transición fuerza un cierre. La prueba de la superposición aprobada real
+(`test_futures_qwen_handoff`) valida los candidatos y el funding absoluto,
+rechaza activar con una operación abierta y comprueba que el cierre normal,
+la activación y el reinicio conservan el saldo y la operación heredada.
+
 El archivo público local de Kraken permite recuperar etiquetas desde 2025-10-29.
 Los 8.835 ejemplos del nuevo par tienen funding cubierto; sus 27.360 velas del período
 2025-10-29 a 2026-02-01 están observadas, sin huecos. Los intervalos anteriores sin
@@ -80,6 +87,84 @@ su funding no sustituye pagos de Kraken.
 
 Fuentes primarias: [API histórica de Kraken](https://docs.kraken.com/api-reference/historical-funding-rates/historical-funding-rates)
 y [ejemplos oficiales](https://support.mtf.kraken.com/hc/en-us/articles/29694821654685-Funding-Rate-Examples).
+
+### Precios ejecutables de ETH (preparados, activación diferida)
+
+`execution.model = "kraken-futures-book.v1"` usa el libro REST público de
+`PF_ETHUSD`: entradas largas en asks, cortas en bids y cierres por la cantidad
+exacta de la posición en el lado opuesto. Los niveles se ordenan numéricamente;
+no se confía en el orden de los arrays del proveedor. El presupuesto incluye
+la comisión de entrada y no se abren posiciones parciales por falta de liquidez.
+
+Los importes y el VWAP se calculan con Decimal; no se añade el impacto fijo ni
+otro spread a un precio que ya recorrió el libro. La comisión sigue siendo taker.
+Solicitud, recepción y decisión son tiempos separados. `serverTime` identifica
+la generación de la respuesta, no demuestra el tiempo de cada nivel ni continuidad
+del libro. Es una simulación contra profundidad publicada, no un fill real.
+
+El libro vence a los 3 s y una entrada o cierre decidido vence a los 15 s,
+incluido el tiempo de HTTP. Un fallo, libro cruzado o profundidad insuficiente
+se registra sin sustituirlo por el cierre de vela. Si no hay precio para marcar,
+el neto queda desconocido; no se redefine la cobertura del funding.
+Las operaciones heredadas conservan su ejecución anterior.
+
+### Recibos de ejecución y replay
+
+`execution_receipts` es append-only. Cada entrada, marca y salida guarda
+producto, cantidad, precios, profundidad usada, comisión, modelo y hash de
+costes, precisión Decimal y tiempos de señal, decisión, solicitud, recepción
+y ejecución. El SHA-256 de la respuesta original identifica la procedencia;
+se conserva el tope del libro y la profundidad consumida, no un archivo del
+libro completo. La operación y sus recibos se comprometen en la misma transacción.
+Un retry idéntico reutiliza su recibo; otro contenido con la misma identidad
+se rechaza.
+
+Las liquidaciones guardan los periodos absolutos de funding y su cobertura.
+Cuando llegan periodos faltantes se añade un recibo `funding`: los recibos de
+entrada y salida no cambian. El neto completo sigue siendo null sin cobertura.
+El gateway verifica los hashes con el mismo canonicalizador que Python y
+Terminal muestra el modelo, recibo, comisión y tiempos en Datos y costes.
+
+```bash
+PYTHONPATH=python python3 -m balancita_engine.futures_qwen_live \
+  --db server/data/dev-live/qwen-live/live.sqlite --replay-trade NUMERO
+```
+
+Ese replay abre SQLite en solo lectura y reproduce el resultado con profundidad,
+tarifas y periodos guardados. No consulta Kraken, tablas de costes actuales ni
+el modelo. Las operaciones legadas sin recibos se rechazan, no se les inventan
+cotizaciones. Los guards y hashes protegen la operación normal; no garantizan
+inmutabilidad física contra un dueño que controle SQLite.
+
+### Experimento maker aislado
+
+`futures_maker_experiment` registra y congela el producto, tamaño, tarifas,
+fuente de señales, TTL, latencia y criterio de evidencia antes de capturar.
+Su SQLite es independiente de la cuenta; no contiene posiciones ni modifica
+el ejecutor taker. Reutiliza las políticas emparejadas de `book_costs`:
+mercado inmediato, límite sin perseguir y límite seguido de mercado si vence.
+Optimista y conservador son hipótesis de relleno, no fills reales ni
+probabilidades calibradas.
+
+La captura acotada usa el mismo lector REST público de ETH y registra solicitud,
+recepción, generación del servidor, profundidad y fallos como huecos. No
+atribuye continuidad ni secuencias a un REST que no las demuestra. Los datos,
+parámetros e informes son append-only. La latencia se aplica una sola vez a
+ambos brazos y el horizonte termina después del TTL; el análisis mide costes
+de entrada, no el neto de cartera con salida y funding.
+
+```bash
+PYTHONPATH=python python3 -m balancita_engine.futures_maker_experiment register --db EXPERIMENTO.sqlite
+PYTHONPATH=python python3 -m balancita_engine.futures_maker_experiment collect --db EXPERIMENTO.sqlite --experiment ID --seconds 180
+PYTHONPATH=python python3 -m balancita_engine.futures_maker_experiment evaluate --db EXPERIMENTO.sqlite --experiment ID --out informe.json
+```
+
+El modo `--signal-source receipts` se registra por separado y exige
+`--execution-db` al evaluar; no cae silenciosamente a una rejilla. El piloto
+del 31/10 registró 36 snapshots de ETH, 6 entradas hipotéticas y 2 evaluables,
+con un solo grupo horario: `insufficient_data`. Se exigen al menos 30 grupos
+horarios; aun entonces una mejora de costes no declara rentable una estrategia.
+`promotion_allowed` permanece false y `complete_net_pnl` es null.
 
 ### Traspaso pendiente, sobre la misma cuenta
 
@@ -100,9 +185,9 @@ Una configuración pendiente inválida no fuerza el cierre ni permite reabrir si
 con el flujo anterior.
 
 La prueba histórica del flujo mide **solo los expertos y la ejecución**: no inventa
-noticias, escudo ni giros del período reservado. La protección de capital tras pérdidas,
-la recuperación de estado corrupto y la ejecución con precios más recientes siguen
-fuera de este cambio, como acordó el usuario.
+noticias, escudo ni giros del período reservado. La protección de capital tras pérdidas y la recuperación de estado corrupto
+siguen fuera de este cambio. Los precios ejecutables se preparan por la petición
+posterior de costes, sin anticipar la activación ni recotizar la posición heredada.
 
 ## Contrato preparado para Terminal (2026-10-30)
 
