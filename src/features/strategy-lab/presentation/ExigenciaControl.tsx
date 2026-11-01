@@ -6,6 +6,7 @@ import {
   EXIGENCIA_PAPER,
   MEDICIONES,
   EXIGENCIA_PAPER_LEVELS,
+  SALIDAS,
 } from './exigencia-levels.ts'
 
 /** Share of the signals the maestro calls strong at each level (mirrors `STRONG_SHARE` in futures_qwen_exigencia.py). */
@@ -47,13 +48,15 @@ export default function ExigenciaControl({ value, onChange, disabled }: Props) {
   const medicion = value.medicion ?? 'honesta'
   const entrada = value.entrada ?? 'formula'
   const cuenta = value.cuenta ?? 'fija'
+  const salida = value.salida ?? 'sigue'
   // A rebound entry does not use the maestro, the portero, the movement analyst or the way of measuring
   const rebote = entrada.startsWith('rebote')
   const changed =
     value.maestro !== EXIGENCIA_PAPER ||
     value.portero !== EXIGENCIA_PAPER ||
     value.analista !== EXIGENCIA_PAPER_LEVELS.analista ||
-    entrada !== 'formula'
+    entrada !== 'formula' ||
+    salida !== 'sigue'
   return (
     <div
       role="group"
@@ -170,6 +173,20 @@ export default function ExigenciaControl({ value, onChange, disabled }: Props) {
         value={cuenta}
         onChange={(modo) => onChange({ ...value, cuenta: modo })}
         detail={CUENTAS.find((o) => o.modo === cuenta)!.detail}
+      />
+      <Choice
+        testId="salida"
+        label="Cómo sale"
+        name="salida"
+        options={SALIDAS.map((o) => ({
+          id: o.modo,
+          label: o.label,
+          suffix: o.modo === 'sigue' ? ' · paper' : '',
+        }))}
+        value={salida}
+        onChange={(modo) => onChange({ ...value, salida: modo })}
+        detail={SALIDAS.find((o) => o.modo === salida)!.detail}
+        disabled={disabled}
       />
       {changed && (
         <button

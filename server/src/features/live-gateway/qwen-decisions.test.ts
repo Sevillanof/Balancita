@@ -164,6 +164,203 @@ describe('immutable execution evidence', () => {
   })
 })
 
+describe('resting maker exit', () => {
+  const SOURCE =
+    'https://futures.kraken.com/derivatives/api/v3/orderbook?symbol=PF_ETHUSD'
+  const quote = {
+    product: 'PF_ETHUSD',
+    source: SOURCE,
+    requested_at_ms: 4100,
+    received_at_ms: 4200,
+    server_at_ms: 4190,
+    server_time_kind: 'response_generation_not_book_event',
+  }
+  const takerProfile = {
+    model: 'kraken-futures-book.v1',
+    product: 'PF_ETHUSD',
+    taker_rate: '0.0005',
+    decimal_precision: 28,
+    static_impact_applied: false,
+    walk_rounding: 'ROUND_DOWN',
+    fee_rounding: 'ROUND_HALF_EVEN',
+  }
+  const makerProfile = {
+    model: 'kraken-futures-book.v1',
+    product: 'PF_ETHUSD',
+    maker_rate: '0.0002',
+    decimal_precision: 28,
+    static_impact_applied: false,
+    fill_rule:
+      'resting_post_only_limit_filled_when_the_opposite_best_reaches_the_limit',
+    fee_rounding: 'ROUND_HALF_EVEN',
+  }
+  const plan = {
+    modo: 'sigue',
+    started_ms: 2000,
+    ttl_ms: 2_700_000,
+    tope_bp: '40',
+    orders: [
+      { at_ms: 2000, price: '104' },
+      { at_ms: 3000, price: '103.8' },
+    ],
+  }
+
+  function build(status: 'open' | 'closed', outcome: 'maker' | 'tope') {
+    const path = seed(
+      [],
+      [
+        {
+          product: 'PF_ETHUSD',
+          trade_no: 1,
+          status,
+          side: 'LONG',
+          entry_ms: 1300,
+          exit_ms: status === 'closed' ? 4200 : null,
+          entry_px: '101',
+          exit_px: status === 'closed' ? '103.8' : null,
+          qty: '1',
+          notional_usd: '101',
+          funding_status: 'unknown',
+        },
+      ],
+    )
+    const db = new DatabaseSync(path)
+    db.exec(`ALTER TABLE trades ADD COLUMN execution_model TEXT;
+      ALTER TABLE trades ADD COLUMN entry_receipt_id TEXT;
+      ALTER TABLE trades ADD COLUMN exit_receipt_id TEXT;
+      ALTER TABLE trades ADD COLUMN mark_receipt_id TEXT;
+      ALTER TABLE trades ADD COLUMN funding_receipt_id TEXT;
+      ALTER TABLE trades ADD COLUMN execution_error TEXT;
+      ALTER TABLE trades ADD COLUMN exit_plan_json TEXT;
+      CREATE TABLE execution_receipts(receipt_id TEXT,product TEXT,trade_no INTEGER,purpose TEXT,
+      signal_ms INTEGER,recorded_at_ms INTEGER,evidence_hash TEXT,evidence_json TEXT)`)
+    const put = (
+      purpose: string,
+      signal: number,
+      evidence: Record<string, unknown>,
+    ) => {
+      const id = canonicalHash({
+        product: 'PF_ETHUSD',
+        trade_no: 1,
+        purpose,
+        signal_ms: signal,
+      })
+      db.prepare('INSERT INTO execution_receipts VALUES(?,?,?,?,?,?,?,?)').run(
+        id,
+        'PF_ETHUSD',
+        1,
+        purpose,
+        signal,
+        5000,
+        canonicalHash(evidence),
+        JSON.stringify(evidence),
+      )
+      return id
+    }
+    const entry = put('entry', 1000, {
+      ...takerProfile,
+      cost_model_hash: canonicalHash(takerProfile),
+      fee_kind: 'taker',
+      price: '101',
+      quantity: '1',
+      notional_usd: '101',
+      fee_usd: '0.0505',
+      purpose: 'entry',
+      signal_at_ms: 1000,
+      decision_at_ms: 1100,
+      executed_at_ms: 1300,
+      classification: 'paper_simulated_from_displayed_depth',
+      quote: {
+        ...quote,
+        requested_at_ms: 1100,
+        received_at_ms: 1200,
+        server_at_ms: 1190,
+      },
+    })
+    let exit: string | null = null
+    if (status === 'closed') {
+      const base = {
+        price: '103.8',
+        quantity: '1',
+        notional_usd: '103.8',
+        purpose: 'exit',
+        signal_at_ms: 2000,
+        decision_at_ms: 3000,
+        executed_at_ms: 4200,
+        classification: 'paper_simulated_from_displayed_depth',
+        quote,
+      }
+      exit =
+        outcome === 'maker'
+          ? put('exit', 2000, {
+              ...makerProfile,
+              ...base,
+              cost_model_hash: canonicalHash(makerProfile),
+              fee_kind: 'maker',
+              fee_usd: '0.02076',
+              maker_order: { ...plan, outcome: 'maker', ended_ms: 4200 },
+            })
+          : put('exit', 2000, {
+              ...takerProfile,
+              ...base,
+              cost_model_hash: canonicalHash(takerProfile),
+              fee_kind: 'taker',
+              fee_usd: '0.05190',
+              exit_plan: { ...plan, outcome: 'mercado:tope', ended_ms: 4200 },
+            })
+    }
+    db.prepare(
+      'UPDATE trades SET execution_model=?,entry_receipt_id=?,exit_receipt_id=?,exit_plan_json=?',
+    ).run(
+      'kraken-futures-book.v1',
+      entry,
+      exit,
+      status === 'open' ? JSON.stringify({ ...plan, limit: '103.8' }) : null,
+    )
+    db.close()
+    return createQwenDecisions({ liveDbPath: path }).trades('PF_ETHUSD')
+  }
+
+  it('shows an order still waiting, with the number of times it moved', () => {
+    const result = build('open', 'maker')
+    if (result.status !== 'ok') throw new Error(result.reason)
+    expect(result.trades[0].execution?.exit_plan).toEqual({
+      mode: 'sigue',
+      started_ms: 2000,
+      ttl_ms: 2_700_000,
+      tope_bp: '40',
+      price: '103.8',
+      reprices: 1,
+      outcome: null,
+      ended_ms: null,
+    })
+  })
+
+  it('verifies a maker exit receipt and reports it as the way the trade left', () => {
+    const result = build('closed', 'maker')
+    if (result.status !== 'ok') throw new Error(result.reason)
+    expect(result.trades[0].execution?.exit).toMatchObject({
+      fee_kind: 'maker',
+      fee_rate: '0.0002',
+      price: '103.8',
+    })
+    expect(result.trades[0].execution?.exit_plan).toMatchObject({
+      outcome: 'maker',
+      price: '103.8',
+      ended_ms: 4200,
+    })
+  })
+
+  it('reports an order that fell to market and why', () => {
+    const result = build('closed', 'tope')
+    if (result.status !== 'ok') throw new Error(result.reason)
+    expect(result.trades[0].execution?.exit).toMatchObject({
+      fee_kind: 'taker',
+    })
+    expect(result.trades[0].execution?.exit_plan?.outcome).toBe('mercado:tope')
+  })
+})
+
 describe('createQwenDecisions: why it waited', () => {
   it('delivers probabilities, override and mirror when the base has them, null when not', () => {
     const dir = mkdtempSync(join(tmpdir(), 'qwen-live-'))

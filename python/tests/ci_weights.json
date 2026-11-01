@@ -36,6 +36,7 @@
   "test_futures_llm_scores": 4,
   "test_futures_log_strategies": 8,
   "test_futures_maker": 1,
+  "test_futures_maker_exit": 1,
   "test_futures_news": 9,
   "test_futures_operative_ledger": 1,
   "test_futures_paper_books": 1,

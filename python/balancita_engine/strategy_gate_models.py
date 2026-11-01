@@ -201,7 +201,8 @@ def scheme_replay(product_id, funding, start_ms, end_ms):
     # niveles de la prueba (5 y 5: paper) y modo del analista de movimiento (apagado: paper)
     from . import futures_qwen_rebote as rebote
     from . import futures_walkforward as walkforward
-    cfg: dict = analista.apply_env(exigencia.apply_env(live.apply_overrides(qt.load_config(qt.CONFIG_PATH_LIVE))))
+    from . import futures_maker_exit as maker_exit
+    cfg: dict = maker_exit.apply_env(analista.apply_env(exigencia.apply_env(live.apply_overrides(qt.load_config(qt.CONFIG_PATH_LIVE)))))
     if rebote.from_env() == "formula_eth":
         pares = walkforward.ensure_eth_pairs(qt.DEFAULT_CACHE, log=lambda *a: None)
         cfg = walkforward.with_eth_formulas(cfg, walkforward.medicion_from_env(), pares=pares)

@@ -109,6 +109,24 @@ export type ExigenciaLevels = {
   entrada?: Entrada
   /** Executed by the server: fixed notional or the whole available account, with entry fees reserved. */
   cuenta?: Cuenta
+  /** How the exits are executed: at market, a resting maker order that stays put, or one that follows the best price (paper). */
+  salida?: Salida
+}
+
+export type Salida = 'mercado' | 'fija' | 'sigue'
+
+/** What the exits of a test did: how many left as maker and how many fell to market (and why). */
+export type SalidaUsada = {
+  modo: Salida
+  ttl_min: number | null
+  tope_pb: number | null
+  maker: number
+  mercado: number
+  mercado_tiempo: number
+  mercado_tope: number
+  mercado_emergencia: number
+  /** Taker minus maker fee on the exits that left as maker, in USD (text). */
+  comision_ahorrada_usd: string
 }
 
 export type Entrada = 'formula' | 'formula_eth' | 'rebote' | 'rebote_btc'
@@ -172,6 +190,8 @@ export type QuickTrade = {
   notional_usd?: string
   entrada_px?: string
   salida_px?: string
+  /** How the exit left: `maker`, `mercado` or `mercado:<why>` (absent in results made before). */
+  salida?: string
   funding_usd?: string
   funding_status?: string
   funding_model?: string
@@ -210,6 +230,8 @@ export type QuickFormula = {
   honestidad?: HonestyMeter | null
   exigencia?: Exigencia | null
   analista?: AnalistaUsado | null
+  /** How the exits were executed (absent in results made before: at market). */
+  salida?: SalidaUsada | null
   /** Entries with movement / in calm / without enough history: count and net bp at size 1 (before the analyst's weight). */
   por_movimiento?: Record<
     'con' | 'calma' | 'sin_dato',

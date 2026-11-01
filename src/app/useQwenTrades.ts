@@ -3,9 +3,22 @@ import { record } from '../shared/wire/decode.ts'
 
 const POLL_MS = 15_000
 
+/** The resting exit order: still waiting (`outcome` null), filled as maker, or sent to market (`mercado:<why>`). */
+export interface QwenExitPlan {
+  mode: 'fija' | 'sigue'
+  startedMs: number
+  ttlMs: number
+  topeBp: number
+  price: number
+  reprices: number
+  outcome: string | null
+  endedMs: number | null
+}
+
 export interface QwenExecutionPhase {
   receiptId: string
   costModelHash: string
+  feeKind: 'taker' | 'maker'
   price: number
   quantity: number
   feeUsd: number
@@ -26,6 +39,7 @@ export interface QwenExecution {
   mark: QwenExecutionPhase | null
   fundingReceiptId: string | null
   error: string | null
+  exitPlan: QwenExitPlan | null
 }
 
 /** One operation of Qwen operador (paper), as the gateway serves it. */
@@ -74,6 +88,7 @@ function executionPhase(value: unknown): QwenExecutionPhase | null {
   const quantity = number(row.quantity)
   const feeUsd = number(row.fee_usd)
   const feeRate = number(row.fee_rate)
+  const feeKind = row.fee_kind
   const times = [
     row.signal_at_ms,
     row.decision_at_ms,
@@ -87,6 +102,7 @@ function executionPhase(value: unknown): QwenExecutionPhase | null {
     !/^[a-f0-9]{64}$/.test(row.receipt_id) ||
     typeof row.cost_model_hash !== 'string' ||
     !/^[a-f0-9]{64}$/.test(row.cost_model_hash) ||
+    (feeKind !== 'taker' && feeKind !== 'maker') ||
     row.source !==
       'https://futures.kraken.com/derivatives/api/v3/orderbook?symbol=PF_ETHUSD' ||
     price === null ||
@@ -107,6 +123,7 @@ function executionPhase(value: unknown): QwenExecutionPhase | null {
   const out: QwenExecutionPhase = {
     receiptId: row.receipt_id,
     costModelHash: row.cost_model_hash,
+    feeKind,
     price,
     quantity,
     feeUsd,
@@ -129,11 +146,43 @@ function executionPhase(value: unknown): QwenExecutionPhase | null {
   return out
 }
 
+function exitPlanOf(value: unknown): QwenExitPlan | null {
+  const row = record(value)
+  const price = number(row.price)
+  const topeBp = number(row.tope_bp)
+  const times = [row.started_ms, row.ttl_ms]
+  if (
+    (row.mode !== 'fija' && row.mode !== 'sigue') ||
+    price === null ||
+    price <= 0 ||
+    topeBp === null ||
+    topeBp <= 0 ||
+    !times.every((time) => typeof time === 'number' && time > 0) ||
+    typeof row.reprices !== 'number' ||
+    row.reprices < 0 ||
+    (row.outcome != null && typeof row.outcome !== 'string') ||
+    (row.ended_ms != null && typeof row.ended_ms !== 'number')
+  )
+    return null
+  return {
+    mode: row.mode,
+    startedMs: Number(row.started_ms),
+    ttlMs: Number(row.ttl_ms),
+    topeBp,
+    price,
+    reprices: row.reprices,
+    outcome: typeof row.outcome === 'string' ? row.outcome : null,
+    endedMs: typeof row.ended_ms === 'number' ? row.ended_ms : null,
+  }
+}
+
 function executionOf(value: unknown): QwenExecution | null {
   const row = record(value)
   const entry = executionPhase(row.entry)
   const exit = row.exit == null ? null : executionPhase(row.exit)
   const mark = row.mark == null ? null : executionPhase(row.mark)
+  const exitPlan = row.exit_plan == null ? null : exitPlanOf(row.exit_plan)
+  if (row.exit_plan != null && exitPlan === null) return null
   if (
     row.model !== 'kraken-futures-book.v1' ||
     entry === null ||
@@ -155,6 +204,7 @@ function executionOf(value: unknown): QwenExecution | null {
         ? row.funding_receipt_id
         : null,
     error: typeof row.error === 'string' ? row.error : null,
+    exitPlan,
   }
 }
 

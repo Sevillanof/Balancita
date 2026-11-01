@@ -39,6 +39,7 @@ describe('Terminal operation card', () => {
             entry: {
               receiptId: 'a'.repeat(64),
               costModelHash: 'b'.repeat(64),
+              feeKind: 'taker',
               price: 2241.6,
               quantity: 0.45,
               feeUsd: 0.5,
@@ -56,6 +57,7 @@ describe('Terminal operation card', () => {
             mark: null,
             fundingReceiptId: null,
             error: null,
+            exitPlan: null,
           },
         }}
         source={{ state: 'ok' }}

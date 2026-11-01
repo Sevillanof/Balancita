@@ -21,6 +21,7 @@ describe('qwenTrades', () => {
     const entry = {
       receipt_id: 'a'.repeat(64),
       cost_model_hash: 'b'.repeat(64),
+      fee_kind: 'taker',
       price: '101',
       quantity: '1',
       fee_usd: '0.0505',
@@ -41,6 +42,7 @@ describe('qwenTrades', () => {
       mark: null,
       funding_receipt_id: null,
       error: 'libro_no_disponible',
+      exit_plan: null,
     }
     const valid = row({
       product: 'PF_ETHUSD',
@@ -80,6 +82,87 @@ describe('qwenTrades', () => {
           status: 'ok',
           trades: [{ ...valid, execution: broken }],
         }),
+      ).toEqual([])
+    }
+  })
+
+  it('reads the resting exit order and a maker receipt, and rejects a broken plan', () => {
+    const phase = {
+      receipt_id: 'a'.repeat(64),
+      cost_model_hash: 'b'.repeat(64),
+      fee_kind: 'maker',
+      price: '103.8',
+      quantity: '1',
+      fee_usd: '0.02',
+      fee_rate: '0.0002',
+      source:
+        'https://futures.kraken.com/derivatives/api/v3/orderbook?symbol=PF_ETHUSD',
+      signal_at_ms: 2000,
+      decision_at_ms: 3000,
+      requested_at_ms: 4100,
+      received_at_ms: 4200,
+      server_at_ms: 4190,
+      executed_at_ms: 4200,
+    }
+    const plan = {
+      mode: 'sigue',
+      started_ms: 2000,
+      ttl_ms: 2_700_000,
+      tope_bp: '40',
+      price: '103.8',
+      reprices: 2,
+      outcome: 'maker',
+      ended_ms: 4200,
+    }
+    const execution = {
+      model: 'kraken-futures-book.v1',
+      entry: {
+        ...phase,
+        fee_kind: 'taker',
+        price: '101',
+        executed_at_ms: 1300,
+        signal_at_ms: 1000,
+        decision_at_ms: 1100,
+        requested_at_ms: 1100,
+        received_at_ms: 1200,
+        server_at_ms: 1190,
+      },
+      exit: phase,
+      mark: null,
+      funding_receipt_id: null,
+      error: null,
+      exit_plan: plan,
+    }
+    const trade = row({
+      product: 'PF_ETHUSD',
+      entry_ms: 1300,
+      entry_price: '101',
+      net_usd: '1',
+      execution,
+    })
+    const out = qwenTrades({ status: 'ok', trades: [trade] })
+    expect(out[0].execution?.exit).toMatchObject({
+      feeKind: 'maker',
+      feeRate: 0.0002,
+    })
+    expect(out[0].execution?.exitPlan).toEqual({
+      mode: 'sigue',
+      startedMs: 2000,
+      ttlMs: 2_700_000,
+      topeBp: 40,
+      price: 103.8,
+      reprices: 2,
+      outcome: 'maker',
+      endedMs: 4200,
+    })
+    for (const bad of [
+      { ...plan, mode: 'rapida' },
+      { ...plan, price: '0' },
+      { ...plan, reprices: -1 },
+    ]) {
+      const broken = { ...execution, exit_plan: bad }
+      expect(
+        qwenTrades({ status: 'ok', trades: [{ ...trade, execution: broken }] }),
       ).toEqual([])
     }
   })

@@ -13,7 +13,7 @@ import urllib.error
 import urllib.request
 
 from .canonical import canonical_hash
-from .futures_costs import TAKER_RATE
+from .futures_costs import MAKER_RATE, TAKER_RATE
 from . import system_trust
 
 MODEL = "kraken-futures-book.v1"
@@ -21,6 +21,7 @@ MAX_QUOTE_AGE_MS = 3000
 MAX_SIGNAL_AGE_MS = 15000
 PRECISION = 28
 URL = "https://futures.kraken.com/derivatives/api/v3/orderbook?symbol=PF_ETHUSD"
+MAKER_RULE = "resting_post_only_limit_filled_when_the_opposite_best_reaches_the_limit"
 
 
 class BookError(ValueError):
@@ -145,6 +146,8 @@ class BookFill:
     decision_at_ms: int
     executed_at_ms: int
     purpose: str
+    fee_kind: str = "taker"
+    maker_order: dict | None = None
 
     @property
     def fee(self) -> Decimal:
@@ -154,6 +157,8 @@ class BookFill:
             return self.notional * self.fee_rate
 
     def evidence(self) -> dict:
+        if self.fee_kind == "maker":
+            return self._maker_evidence()
         profile = {"model": MODEL, "product": self.quote.product, "taker_rate": str(self.fee_rate),
                    "decimal_precision": PRECISION, "static_impact_applied": False,
                    "walk_rounding": "ROUND_DOWN", "fee_rounding": "ROUND_HALF_EVEN"}
@@ -167,6 +172,23 @@ class BookFill:
             "decision_at_ms": self.decision_at_ms, "executed_at_ms": self.executed_at_ms,
             "quote": self.quote.evidence(), "reference_mid": str(self.quote.mid),
             "consumed_levels": [[str(p), str(q)] for p, q in self.levels],
+            "classification": "paper_simulated_from_displayed_depth",
+        }
+
+
+    def _maker_evidence(self) -> dict:
+        profile = {"model": MODEL, "product": self.quote.product, "maker_rate": str(self.fee_rate),
+                   "decimal_precision": PRECISION, "static_impact_applied": False,
+                   "fill_rule": MAKER_RULE, "fee_rounding": "ROUND_HALF_EVEN"}
+        return {
+            **profile, "cost_model_hash": canonical_hash(profile), "fee_kind": "maker",
+            "quantity": str(self.quantity), "price": str(self.price), "notional_usd": str(self.notional),
+            "requested_amount": str(self.requested_amount), "size_kind": "quantity",
+            "fee_usd": str(self.fee), "side": self.side, "purpose": self.purpose,
+            "signal_at_ms": self.signal_at_ms,
+            "decision_at_ms": self.decision_at_ms, "executed_at_ms": self.executed_at_ms,
+            "quote": self.quote.evidence(), "reference_mid": str(self.quote.mid),
+            "consumed_levels": [], "maker_order": self.maker_order,
             "classification": "paper_simulated_from_displayed_depth",
         }
 
@@ -229,9 +251,83 @@ class BookExecution:
                           quantity, signal_ms, by_quantity=True, purpose=purpose)
 
 
+def _maker_reached(side: str, limit: Decimal, quote: BookSnapshot) -> bool:
+    """A resting sell (fill side SHORT) is taken once the best bid reaches it; a resting buy once the best ask does."""
+    return quote.bids[0][0] >= limit if side == "SHORT" else quote.asks[0][0] <= limit
+
+
+def maker_exit_fill(quote: BookSnapshot, position_side: str, quantity, limit, *, signal_at_ms: int,
+                    decision_at_ms: int, executed_at_ms: int, order: dict, fee_rate=None) -> BookFill:
+    """The paper fill of a resting post-only exit order, proven by the book that reached its price. No exchange order."""
+    if position_side not in ("LONG", "SHORT"):
+        raise BookError("libro_invalido", "Lado de posición inválido.")
+    side = "SHORT" if position_side == "LONG" else "LONG"
+    quantity, limit = _decimal(quantity), _decimal(limit)
+    if quantity <= 0 or limit <= 0:
+        raise BookError("liquidez_insuficiente", "El tamaño y el precio de la orden deben ser positivos.")
+    if not _maker_reached(side, limit, quote):
+        raise BookError("orden_no_alcanzada", "El libro no llegó al precio de la orden: no hay relleno.")
+    if not 0 < signal_at_ms <= decision_at_ms <= executed_at_ms:
+        raise BookError("libro_invalido", "Tiempos de la orden inválidos.")
+    with localcontext() as ctx:
+        ctx.prec = PRECISION
+        ctx.rounding = ROUND_DOWN
+        notional = quantity * limit
+    rate = Decimal(MAKER_RATE) if fee_rate is None else _decimal(fee_rate)
+    return BookFill(quote, side, quantity, limit, notional, rate, (), quantity, signal_at_ms,
+                    decision_at_ms, executed_at_ms, "exit", "maker", order)
+
+
+def _replay_maker(evidence: dict) -> BookFill:
+    profile_keys = ("model", "product", "maker_rate", "decimal_precision", "static_impact_applied",
+                    "fill_rule", "fee_rounding")
+    profile = {key: evidence[key] for key in profile_keys}
+    if (evidence["model"] != MODEL or evidence["product"] != "PF_ETHUSD" or evidence["fee_kind"] != "maker"
+            or evidence["decimal_precision"] != PRECISION or evidence["static_impact_applied"] is not False
+            or evidence["fill_rule"] != MAKER_RULE or evidence["fee_rounding"] != "ROUND_HALF_EVEN"
+            or canonical_hash(profile) != evidence["cost_model_hash"]
+            or evidence["classification"] != "paper_simulated_from_displayed_depth"
+            or evidence["purpose"] != "exit" or evidence["size_kind"] != "quantity"
+            or evidence["consumed_levels"] != []):
+        raise BookError("recibo_invalido", "El recibo maker no declara un modelo de costes válido.")
+    q = evidence["quote"]
+    times = [evidence[key] for key in ("signal_at_ms", "decision_at_ms", "executed_at_ms")]
+    if (any(type(value) is not int or value <= 0 for value in times) or not times[0] <= times[1] <= times[2]
+            or q["source"] != URL or q["product"] != evidence["product"]
+            or q["server_time_kind"] != "response_generation_not_book_event"
+            or not 0 < q["requested_at_ms"] <= q["received_at_ms"] <= times[2]
+            or len(bytes.fromhex(q["response_sha256"])) != 32):
+        raise BookError("recibo_invalido", "Tiempos o procedencia del recibo maker inválidos.")
+    snapshot = BookSnapshot(
+        evidence["product"], tuple(_levels(q["bids"], reverse=True)), tuple(_levels(q["asks"], reverse=False)),
+        q["requested_at_ms"], q["received_at_ms"], q["server_at_ms"], q["response_sha256"])
+    if not snapshot.bids or not snapshot.asks or snapshot.bids[0][0] >= snapshot.asks[0][0]:
+        raise BookError("recibo_invalido", "El recibo contiene un libro vacío o cruzado.")
+    order = evidence["maker_order"]
+    if (not isinstance(order, dict) or not order.get("orders") or order["orders"][-1]["price"] != evidence["price"]
+            or order["orders"][-1]["at_ms"] > times[2] or order.get("started_ms") != times[0]):
+        raise BookError("recibo_invalido", "La orden maker del recibo no coincide con el precio llenado.")
+    rate = _decimal(evidence["maker_rate"])
+    if not 0 <= rate < 1:
+        raise BookError("recibo_invalido", "Comisión del recibo inválida.")
+    side = evidence["side"]
+    if side not in ("LONG", "SHORT"):
+        raise BookError("recibo_invalido", "Acción de recibo inválida.")
+    fill = maker_exit_fill(snapshot, "LONG" if side == "SHORT" else "SHORT", evidence["requested_amount"],
+                           evidence["price"], signal_at_ms=times[0], decision_at_ms=times[1],
+                           executed_at_ms=times[2], order=order, fee_rate=rate)
+    recalculated = fill.evidence()
+    for key in ("price", "quantity", "notional_usd", "fee_usd", "cost_model_hash"):
+        if recalculated[key] != evidence[key]:
+            raise BookError("recibo_invalido", "El cálculo del recibo no coincide: " + key)
+    return fill
+
+
 def replay_fill(evidence: dict) -> BookFill:
     """Recompute a recorded fill with its own depth, clock and fee, never today's market."""
     try:
+        if evidence.get("fee_kind") == "maker":
+            return _replay_maker(evidence)
         profile_keys = ("model", "product", "taker_rate", "decimal_precision",
                         "static_impact_applied", "walk_rounding", "fee_rounding")
         profile = {key: evidence[key] for key in profile_keys}

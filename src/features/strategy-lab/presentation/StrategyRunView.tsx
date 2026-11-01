@@ -1846,9 +1846,14 @@ const MAIN_TRADES = (items: QuickTrade[] | undefined): VisualTrade[] =>
     exitMs: trade.salida_ms,
     bp: trade.neto_bp,
     why:
-      trade.motivo === 'tiempo'
+      (trade.motivo === 'tiempo'
         ? 'cerró por tiempo'
-        : 'cerró porque el maestro se dio vuelta',
+        : 'cerró porque el maestro se dio vuelta') +
+      (trade.salida === undefined || trade.salida === 'mercado'
+        ? ''
+        : trade.salida === 'maker'
+          ? ' · salió como maker'
+          : ` · salió a mercado (${trade.salida.replace('mercado:', '').replace('emergencia_', 'emergencia: ')})`),
   }))
 
 /** The formula alone, no Qwen: everything as pictures; the table is under «Ver el detalle». */
@@ -1917,6 +1922,36 @@ function WaysBars({ formula }: { formula: QuickFormula }) {
   )
 }
 
+/** One line about how the exits left: as a resting maker order or at market (and why). Nothing for results made before. */
+function ExitSummary({ exits }: { exits: QuickFormula['salida'] }) {
+  if (!exits) return null
+  const total =
+    exits.maker +
+    exits.mercado +
+    exits.mercado_tiempo +
+    exits.mercado_tope +
+    exits.mercado_emergencia
+  if (exits.modo === 'mercado' || total === 0)
+    return (
+      <p className="m-0 text-note text-ink-2" data-testid="formula-exits">
+        Salidas: todas a mercado (comisión de tomador).
+      </p>
+    )
+  const fell = total - exits.maker
+  return (
+    <p className="m-0 text-note text-ink-2" data-testid="formula-exits">
+      Salidas (
+      {exits.modo === 'sigue' ? 'orden que sigue el precio' : 'orden fija'},
+      espera máx. {exits.ttl_min} min, tope {exits.tope_pb} pb): {exits.maker}{' '}
+      de {total} salieron como maker
+      {fell > 0
+        ? `; ${fell} fueron a mercado (${exits.mercado_tope} por tope, ${exits.mercado_tiempo} por tiempo, ${exits.mercado_emergencia} por emergencia${exits.mercado > 0 ? `, ${exits.mercado} sin orden` : ''})`
+        : ''}
+      . Comisión ahorrada: {amount(Number(exits.comision_ahorrada_usd), 2)} USD.
+    </p>
+  )
+}
+
 function FormulaResult({ formula }: { formula: QuickFormula }) {
   return (
     <div className="grid gap-3" data-testid="formula-result">
@@ -1939,6 +1974,7 @@ function FormulaResult({ formula }: { formula: QuickFormula }) {
           ? ' Funding incompleto: el resultado es provisional.'
           : ''}
       </p>
+      <ExitSummary exits={formula.salida} />
       <WaysBars formula={formula} />
     </div>
   )
