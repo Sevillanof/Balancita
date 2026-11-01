@@ -186,6 +186,8 @@ export type QuickTrade = {
   salida_ms: number
   neto_bp: number
   motivo: string
+  /** The rule that closed it (`noticia_12h`, `maestro_vuelta`, `maestro_agotado`), when the engine says (absent before). */
+  razon?: string | null
   pnl_usd?: string
   notional_usd?: string
   entrada_px?: string

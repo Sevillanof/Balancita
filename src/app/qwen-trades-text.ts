@@ -55,3 +55,16 @@ export function exitPlanText(trade: QwenTrade, nowMs: number): string | null {
     : (MARKET_REASON[why] ?? why)
   return `Salió a mercado porque ${reason} (esperó ${waited}; ${moved}).`
 }
+
+const EXIT_REASON: Record<string, string> = {
+  noticia_12h:
+    'Cerró antes de las 12 h: la noticia ya no tenía al maestro fuerte detrás',
+  maestro_vuelta: 'El maestro se dio vuelta en contra',
+  maestro_agotado: 'A las 24 h el maestro ya no estaba a favor',
+}
+
+/** Why a closed trade closed, in one sentence; null while it is open or when the reason is not one the rules write. */
+export function exitReasonText(trade: QwenTrade): string | null {
+  if (trade.open || !trade.exitReason) return null
+  return EXIT_REASON[trade.exitReason] ?? null
+}

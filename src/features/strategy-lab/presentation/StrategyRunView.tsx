@@ -1848,7 +1848,9 @@ const MAIN_TRADES = (items: QuickTrade[] | undefined): VisualTrade[] =>
     why:
       (trade.motivo === 'tiempo'
         ? 'cerró por tiempo'
-        : 'cerró porque el maestro se dio vuelta') +
+        : trade.razon === 'noticia_12h'
+          ? 'cerró antes de las 12 h porque la noticia ya no tenía al maestro fuerte detrás'
+          : 'cerró porque el maestro se dio vuelta') +
       (trade.salida === undefined || trade.salida === 'mercado'
         ? ''
         : trade.salida === 'maker'

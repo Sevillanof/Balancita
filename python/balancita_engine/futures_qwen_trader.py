@@ -341,7 +341,7 @@ class FundingLine:
 class Position:
     __slots__ = ("side", "entry_ms", "entry_ref", "entry_px", "qty", "stop_px", "stop_pct", "max_hold_ms", "entry_p",
                  "entry_reason", "trade_no", "mfe_bp", "mae_bp", "notional_usd", "funding_model", "entry_execution",
-                 "exit_plan")
+                 "exit_plan", "news_armed")
 
     def __init__(self, **kwargs):
         for name in self.__slots__:
@@ -1384,7 +1384,9 @@ class Trader:
             held_min = (t_ms - self.position.entry_ms) // MINUTE_MS
         exhaust_min = (self.cfg.get("guardrails") or {}).get("exhaust_hold_min")
         readings = corta.readings(self, t_ms)
-        action, why = corta.formula_action(readings, pos_side, held_min=held_min, exhaust_min=exhaust_min)
+        news_armed = self._arm_news_watch(readings)
+        action, why = corta.formula_action(readings, pos_side, held_min=held_min, exhaust_min=exhaust_min,
+                                           news_armed=news_armed)
         from . import futures_qwen_noticias as noticias
         if noticias.priority_enabled(self.cfg) and self.position is None:
             action, why = self._independent_formula_action(readings)
@@ -1396,12 +1398,51 @@ class Trader:
             self.execution_check()
         if action in ("LARGO", "CORTO"):
             position = self._open(t_ms, "LONG" if action == "LARGO" else "SHORT", readings["portero_p"], "formula")
+            if not readings.get("portero_si") and readings.get("portero_direccion") is None and readings.get("noticias_si"):
+                position.news_armed = True          # entró por noticia con el maestro fuerte: rige el cierre de 12 h
             event["trade_no"] = position.trade_no
             return [event]
         if action == "CERRAR":
-            reason = "maestro_agotado" if "perdió fuerza" in why else "maestro_vuelta"
+            reason = ("noticia_12h" if why.startswith(corta.NEWS_EXIT_WHY) else
+                      "maestro_agotado" if "perdió fuerza" in why else "maestro_vuelta")
             return [event] + self._close(t_ms, self.c[-1], "strategy_exit", "formula", reason)
         return [event]
+
+    def _arm_news_watch(self, readings):
+        """Estado del cierre de 12 h de una operación por noticia: ``None`` si no es de noticia; ``True`` cuando el maestro
+        ya se vio fuerte a favor (desde ahí, si deja de verlo en las primeras 12 h, se cierra); ``False`` si todavía no."""
+        position = self.position
+        if position is None or position.news_armed is None:
+            return None
+        side = 1 if position.side == "LONG" else -1
+        if side * readings["veredicto"] >= 2:
+            position.news_armed = True
+        return position.news_armed
+
+    def _news_early_exit(self, t_ms, reasons):
+        """Operación abierta por noticia (modo prioridad): si en las primeras 12 h el maestro deja de ver el movimiento fuerte,
+        se cierra (salida maker con respaldo a mercado). Sin cambios para las 24 h y las 36 h."""
+        from . import futures_qwen_corta as corta
+        position = self.position
+        if position is None or position.news_armed is None:
+            return None
+        if t_ms - position.entry_ms > corta.NEWS_EXIT_MIN * MINUTE_MS:
+            return None
+        try:
+            readings = corta.readings(self, t_ms)
+        except WakeSkipped:
+            return None
+        side = 1 if position.side == "LONG" else -1
+        armed = self._arm_news_watch(readings)
+        if not armed or side * readings["veredicto"] >= 2:
+            return None
+        why = corta.NEWS_EXIT_WHY + " (primeras 12 h)"
+        event = self._init_decision_event(t_ms, reasons, "Noticias verificadas", True)
+        event.update(formula_action="CERRAR", formula=corta.formula_json(readings, why), action="CERRAR",
+                     reason="noticia_12h")
+        if self.execution_check is not None:
+            self.execution_check()
+        return [event] + self._close(t_ms, self.c[-1], "strategy_exit", "formula", "noticia_12h")
 
     @staticmethod
     def _independent_formula_action(readings):
@@ -1451,6 +1492,12 @@ class Trader:
             event["action"] = "CERRAR"
         position = self._open(t_ms, side, None, "noticias", expires_at_ms=signal["expires_at"])
         position.max_hold_ms = noticias.NEWS_HOLD_MIN * MINUTE_MS
+        position.news_armed = False
+        try:
+            from . import futures_qwen_corta as corta
+            self._arm_news_watch(corta.readings(self, t_ms))
+        except WakeSkipped:
+            pass                                    # sin lectura del maestro: se arma en la primera mirada que lo vea fuerte
         event["trade_no"] = position.trade_no
         event["action"] = "LARGO" if signal["side"] == 1 else "CORTO"
         formula["reversal"] = previous is not None
@@ -1505,6 +1552,9 @@ class Trader:
         in_position = position is not None
         from . import futures_qwen_noticias as noticias
         if position is not None and position.entry_reason == "noticias" and noticias.priority_enabled(self.cfg):
+            early = self._news_early_exit(t_ms, reasons)
+            if early is not None:
+                return early
             return self._decide_news_priority(t_ms, {
                 "wake": reasons, "reason": "operación de noticias: salida propia a las 24 h",
             })

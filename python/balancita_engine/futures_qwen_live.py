@@ -312,6 +312,8 @@ def position_to_json(position):
             "mae_bp": position.mae_bp, "funding_model": position.funding_model}
     if position.notional_usd is not None:
         body["notional_usd"] = str(position.notional_usd)
+    if position.news_armed is not None:
+        body["news_armed"] = position.news_armed
     if position.entry_execution is not None:
         body["entry_execution"] = position.entry_execution
     if position.exit_plan is not None:

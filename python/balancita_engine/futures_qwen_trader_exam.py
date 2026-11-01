@@ -956,6 +956,8 @@ def _collect_replay_trades(trader, bars, start, holdout_ms):
 def _replay_stat_item(trade):
     side = 1 if trade["side"] == "LONG" else -1
     why = {"tiempo": OP_WHY_TIME, "maestro_vuelta": OP_WHY_FLIP}.get(trade["closed_by"], trade["closed_by"])
+    if trade.get("exit_reason") == "noticia_12h":
+        why = OP_WHY_FLIP                       # el maestro dejó de ver el movimiento fuerte: cuenta como vuelta
     result = {"neto_bp": trade["net_bp"], "motivo": why, "horas": trade["hold_min"] / 60}
     return {"t_ms": trade["entry_ms"], "operacion": {"largo" if side > 0 else "corto": result}}, side
 
@@ -964,7 +966,7 @@ def _replay_curve(trade, product):
     return {
         "producto": product, "lado": 1 if trade["side"] == "LONG" else -1,
         "entrada_ms": trade["entry_ms"], "salida_ms": trade["exit_ms"],
-        "neto_bp": trade["net_bp"], "motivo": trade["closed_by"], "pnl_usd": trade["net_usd"],
+        "neto_bp": trade["net_bp"], "motivo": trade["closed_by"], "razon": trade.get("exit_reason"), "pnl_usd": trade["net_usd"],
         "notional_usd": trade["notional_usd"], "entrada_px": trade["entry_fill"], "salida_px": str(trade["exit_px"]),
         "funding_usd": trade["funding_usd"], "funding_status": trade["funding_status"], "funding_model": trade["funding_model"],
         "salida": (trade.get("exit_plan") or {}).get("outcome", "mercado"),
