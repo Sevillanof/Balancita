@@ -1,7 +1,7 @@
 import type { QwenTrade, QwenTradesSource } from './useQwenTrades.ts'
 import { Fragment, useState } from 'react'
 import ModalFrame from '../features/strategy-lab/presentation/ModalFrame.tsx'
-import { exitPlanText, signedUsd } from './qwen-trades-text.ts'
+import { exitPlanText, exitReasonText, signedUsd } from './qwen-trades-text.ts'
 import { amount, usd, utcDateTime } from '../shared/finance/format.ts'
 import { tradeTone } from '../features/trading-view/domain/terminal-trade-model.ts'
 import {
@@ -262,6 +262,14 @@ export default function TerminalOperationCard({
               </dd>
               <dt>Apalancamiento</dt>
               <dd>{amount(trade.leverage)}×</dd>
+              {exitReasonText(trade) && (
+                <>
+                  <dt>Por qué cerró</dt>
+                  <dd data-testid="operation-exit-reason">
+                    {exitReasonText(trade)}
+                  </dd>
+                </>
+              )}
               <ExecutionDetails trade={trade} nowMs={nowMs} flat />
             </dl>
             <button type="button" onClick={() => setDetailsOpen(false)}>
@@ -343,6 +351,12 @@ export default function TerminalOperationCard({
             {amount(trade.notionalUsd)} / {amount(trade.marginUsd)} USD
           </dd>
         </div>
+        {exitReasonText(trade) && (
+          <div>
+            <dt>Por qué cerró</dt>
+            <dd data-testid="operation-exit-reason">{exitReasonText(trade)}</dd>
+          </div>
+        )}
         <ExecutionDetails trade={trade} nowMs={nowMs} />
       </dl>
       <div

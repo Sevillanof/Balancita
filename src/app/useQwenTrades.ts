@@ -62,6 +62,8 @@ export interface QwenTrade {
   configHash?: string | null
   markMs?: number | null
   closedBy: string | null
+  /** Why the exit rule closed it (`noticia_12h`, `maestro_vuelta`…), when the gateway sends it. */
+  exitReason?: string | null
   holdMin: number | null
   markPrice: number | null
   notionalUsd: number | null
@@ -255,6 +257,8 @@ export function qwenTrades(payload: unknown): QwenTrade[] {
           typeof row.config_hash === 'string' ? row.config_hash : null,
         markMs: number(row.mark_ms),
         closedBy: typeof row.closed_by === 'string' ? row.closed_by : null,
+        exitReason:
+          typeof row.exit_reason === 'string' ? row.exit_reason : null,
         holdMin: number(row.hold_min),
         markPrice: number(row.mark_price),
         notionalUsd: number(row.notional_usd),

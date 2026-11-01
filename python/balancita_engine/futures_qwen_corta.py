@@ -183,7 +183,11 @@ def _flat_action(r):
     return "ESPERAR", "el portero dice que no conviene"
 
 
-def formula_action(r, side, *, held_min=0, exhaust_min=None):
+NEWS_EXIT_MIN = 720          # cierre por noticia: solo rige en las primeras 12 h de la operación
+NEWS_EXIT_WHY = "la noticia ya no tiene al maestro fuerte detrás"
+
+
+def formula_action(r, side, *, held_min=0, exhaust_min=None, news_armed=None):
     """Lo que deciden las fórmulas (versión 9). ``r``: ``readings``. ``side``: 1 / -1 si hay posición abierta (largo / corto),
     ``None`` si no. Sin posición: ``LARGO`` / ``CORTO`` cuando el maestro dice FUERTE y el portero o el analista de noticias dicen
     que conviene entrar (del lado del maestro); si no, ``ESPERAR``. Con posición: ``CERRAR`` cuando el maestro se da vuelta en contra
@@ -193,6 +197,8 @@ def formula_action(r, side, *, held_min=0, exhaust_min=None):
         return _flat_action(r)
     if side * r["veredicto"] <= -1:
         return "CERRAR", "el maestro se dio vuelta en contra"
+    if news_armed and held_min <= NEWS_EXIT_MIN and side * r["veredicto"] < 2:
+        return "CERRAR", NEWS_EXIT_WHY + " (primeras 12 h)"
     if exhaust_min is not None and held_min >= exhaust_min and side * r.get("puntaje", r["veredicto"]) <= 0:
         return "CERRAR", "pasaron {} h y el maestro perdió fuerza a favor".format(int(exhaust_min // 60))
     return "MANTENER", "el maestro no se dio vuelta"

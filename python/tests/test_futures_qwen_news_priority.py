@@ -226,17 +226,49 @@ class NewsExecutionTests(unittest.TestCase):
         env.op.start()
         seed(store, 1, BASE + 5 * MIN, BASE + 6 * MIN, BASE + 7 * MIN, direction="bullish")
         env.advance(5)
-        with mock.patch.object(sheet, "readings", side_effect=AssertionError("news exits depend on candle experts")) as experts:
-            env.advance(60)
+        with mock.patch.object(sheet, "readings", return_value=reading(veredicto=0)):
+            env.advance(60)                             # el maestro nunca estuvo fuerte: el cierre de 12 h no se arma
             self.assertEqual(len(env.rows("SELECT * FROM trades WHERE status='open'")), 1)
             self.assertTrue(env.rows("SELECT * FROM decisions WHERE action='MANTENER' AND t_ms>=?", BASE + 45 * MIN))
-            env.advance(23 * 60)
+            env.advance(11 * 60)
+        with mock.patch.object(sheet, "readings", side_effect=AssertionError("después de 12 h no se mira al maestro")) as experts:
+            env.advance(12 * 60)
             experts.assert_not_called()
         rows = env.rows("SELECT * FROM trades")
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["status"], "closed")
         self.assertEqual(rows[0]["hold_min"], 1440)
         self.assertEqual(env.provider.calls, 0)
+
+    def test_news_position_closes_when_the_master_stops_seeing_the_strong_move_within_12_hours(self):
+        env, store = self.env()
+        env.op.start()
+        seed(store, 1, BASE + 5 * MIN, BASE + 6 * MIN, BASE + 7 * MIN, direction="bullish")
+        env.advance(5)
+        with mock.patch.object(sheet, "readings", return_value=reading(veredicto=2)):
+            env.advance(60)
+            self.assertEqual(len(env.rows("SELECT * FROM trades WHERE status='open'")), 1)
+        with mock.patch.object(sheet, "readings", return_value=reading(veredicto=1)):
+            env.advance(30)
+        row = env.rows("SELECT * FROM trades")[0]
+        self.assertEqual((row["status"], row["closed_by"], row["exit_reason"]), ("closed", "formula", "noticia_12h"))
+        self.assertLess(row["hold_min"], 12 * 60)
+        self.assertTrue(env.rows("SELECT * FROM decisions WHERE action='CERRAR' AND reason='noticia_12h'"))
+
+    def test_news_early_exit_state_survives_a_restart_and_stops_after_12_hours(self):
+        env, store = self.env()
+        env.op.start()
+        seed(store, 1, BASE + 5 * MIN, BASE + 6 * MIN, BASE + 7 * MIN, direction="bullish")
+        env.advance(5)
+        with mock.patch.object(sheet, "readings", return_value=reading(veredicto=2)):
+            env.advance(30)
+        env.restart().start()
+        self.addCleanup(env.store.close)
+        with mock.patch.object(sheet, "readings", return_value=reading(veredicto=2)):
+            env.advance(12 * 60)                         # pasaron las 12 h con el maestro fuerte
+        with mock.patch.object(sheet, "readings", return_value=reading(veredicto=0)):
+            env.advance(60)                              # ya no rige: sigue abierta hasta las 24 h
+        self.assertEqual(len(env.rows("SELECT * FROM trades WHERE status='open'")), 1)
 
     def test_coordinator_does_not_invent_an_independent_keepers_vote(self):
         env, _ = self.env()

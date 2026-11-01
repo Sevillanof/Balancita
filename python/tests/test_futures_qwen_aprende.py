@@ -68,6 +68,18 @@ class LabelTests(unittest.TestCase):
         self.assertEqual(result["state"], "failed")
         self.assertIsNone(result["summary"])
 
+    def test_a_news_entry_closes_in_the_first_12_hours_when_the_master_stops_being_strong(self):
+        r = {"veredicto": 1, "puntaje": 0.1, "portero_si": False}
+        action = corta.formula_action(r, 1, held_min=180, news_armed=True)
+        self.assertEqual(action[0], "CERRAR")
+        self.assertTrue(action[1].startswith(corta.NEWS_EXIT_WHY))
+        self.assertEqual(corta.formula_action(dict(r, veredicto=2), 1, held_min=180, news_armed=True)[0], "MANTENER")
+        self.assertEqual(corta.formula_action(r, 1, held_min=180, news_armed=False)[0], "MANTENER")      # todavía no se vio fuerte
+        self.assertEqual(corta.formula_action(r, 1, held_min=180)[0], "MANTENER")                        # no entró por noticia
+        self.assertEqual(corta.formula_action(r, 1, held_min=721, news_armed=True)[0], "MANTENER")       # pasaron las 12 h
+        self.assertEqual(corta.formula_action(dict(r, veredicto=-1), 1, held_min=180, news_armed=True)[1],
+                         "el maestro se dio vuelta en contra")                                           # la vuelta conserva su motivo
+
     def test_the_formula_action_of_the_trader_is_the_same_rule_with_and_without_a_position(self):
         r = {"veredicto": 2, "portero_si": True}
         self.assertEqual(corta.formula_action(r, None)[0], "LARGO")

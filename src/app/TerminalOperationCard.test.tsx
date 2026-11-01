@@ -93,6 +93,39 @@ describe('Terminal operation card', () => {
     expect(screen.queryByRole('dialog')).toBeNull()
   })
 
+  it('tells in plain words why a news trade closed early, only once it is closed', () => {
+    const closed = {
+      ...trade,
+      open: false,
+      exitMs: 3_600_000,
+      closedBy: 'formula',
+      exitReason: 'noticia_12h',
+    }
+    const { unmount } = render(
+      <TerminalOperationCard
+        compact
+        trade={closed}
+        source={{ state: 'ok' }}
+        nowMs={4_000_000}
+        onFocus={vi.fn()}
+      />,
+    )
+    fireEvent.click(screen.getByRole('button', { name: /Datos y costes/ }))
+    expect(screen.getByTestId('operation-exit-reason')).toHaveTextContent(
+      'la noticia ya no tenía al maestro fuerte detrás',
+    )
+    unmount()
+    render(
+      <TerminalOperationCard
+        trade={{ ...closed, open: true }}
+        source={{ state: 'ok' }}
+        nowMs={4_000_000}
+        onFocus={vi.fn()}
+      />,
+    )
+    expect(screen.queryByTestId('operation-exit-reason')).toBeNull()
+  })
+
   it('never labels a compact cached position confirmed after a source error', () => {
     render(
       <TerminalOperationCard
