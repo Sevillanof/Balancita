@@ -2,10 +2,13 @@
   "schema": "balancita-qwen-flow-transition.v1",
   "base_config_hash": "423e23f849d1aba3819dca524420db9153de714f132d06d83a80af0b4012ba3a",
   "changes": {
-    "note": "Independent cold ETH experts, exact Kraken funding and verified news priority. Exploratory candidates; no profitability guarantee. Flat-only transition on the existing permanent paper account.",
+    "note": "Independent cold ETH experts, absolute Kraken funding, public-depth taker paper execution and immutable cost receipts. Verified news priority; maker remains a separate controlled entry-cost experiment. Candidates were trained with candle execution assumptions, not historical order books: no profitability guarantee. Flat-only transition on the existing permanent paper account.",
     "decide_by": "formula",
     "opinion_enabled": false,
     "funding_model": "kraken-absolute-quantity.v2",
+    "execution": {
+      "model": "kraken-futures-book.v1"
+    },
     "corta": {
       "maestro": "candidates/maestro-eth-cold-funding-v2-20261031.json",
       "maestro_hash": "881cbc1083a5",
