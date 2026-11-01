@@ -57,6 +57,12 @@ export type ApprovedTerminalMarker = {
   count?: number
   /** Every id a grouped marker stands for (selecting any one highlights it). */
   memberIds?: readonly string[]
+  /**
+   * Painted as a tinted band behind the candle instead of a glyph with a
+   * label (a gate that blocks several candles in a row would pile text up).
+   * The glyph and the full text only show while the marker is selected.
+   */
+  band?: boolean
 }
 
 const stands = (marker: ApprovedTerminalMarker, id: string): boolean =>
@@ -267,6 +273,8 @@ export default function ApprovedTerminalChart({
   const overlaySeries = useRef(new Map<string, ISeriesApi<'Line'>>())
   const profileRef = useRef<ApprovedVolumeProfile | null>(null)
   const profileRedraw = useRef<(() => void) | null>(null)
+  const bandTimesRef = useRef<ReadonlySet<number>>(new Set())
+  const bandRedraw = useRef<(() => void) | null>(null)
   const paneSeries = useRef<ISeriesApi<'Line' | 'Histogram'>[]>([])
   const paneKey = useRef('')
   const fixedPriceLines = useRef<
@@ -465,8 +473,18 @@ export default function ApprovedTerminalChart({
               state.intervalSeconds,
             marker.id,
           )
-      } else if (!param.point && typeof param.time === 'number') {
-        state.onSelect(param.time)
+      } else if (typeof param.time === 'number') {
+        const bucket =
+          Math.floor(param.time / state.intervalSeconds) * state.intervalSeconds
+        const band = state.markers.find(
+          (item) =>
+            item.band === true &&
+            Math.floor(item.time / state.intervalSeconds) *
+              state.intervalSeconds ===
+              bucket,
+        )
+        if (band) state.onSelect(bucket, band.id)
+        else if (!param.point) state.onSelect(param.time)
       }
     }
     chart.subscribeClick(handleClick)
@@ -545,6 +563,43 @@ export default function ApprovedTerminalChart({
       }
       series.attachPrimitive(primitive)
       profileRedraw.current = () => requestUpdate?.()
+    }
+    if (typeof series.attachPrimitive === 'function') {
+      let requestBands: (() => void) | undefined
+      series.attachPrimitive({
+        attached: (param) => {
+          requestBands = param.requestUpdate
+        },
+        detached: () => {
+          requestBands = undefined
+        },
+        updateAllViews: () => undefined,
+        paneViews: () => [
+          {
+            zOrder: () => 'bottom' as const,
+            renderer: () => ({
+              draw: (target) =>
+                target.useMediaCoordinateSpace(({ context, mediaSize }) => {
+                  const times = bandTimesRef.current
+                  if (times.size === 0) return
+                  const width = Math.max(
+                    2,
+                    chart.timeScale().options().barSpacing,
+                  )
+                  for (const time of times) {
+                    const x = chart.timeScale().timeToCoordinate(time as Time)
+                    if (x === null) continue
+                    context.fillStyle = 'rgba(245, 158, 11, 0.13)'
+                    context.fillRect(x - width / 2, 0, width, mediaSize.height)
+                    context.fillStyle = 'rgba(245, 158, 11, 0.7)'
+                    context.fillRect(x - width / 2, 0, width, 3)
+                  }
+                }),
+            }),
+          },
+        ],
+      } satisfies ISeriesPrimitive<Time>)
+      bandRedraw.current = () => requestBands?.()
     }
     chartRef.current = chart
     candleSeriesRef.current = series
@@ -732,6 +787,7 @@ export default function ApprovedTerminalChart({
         const bucket =
           Math.floor(marker.time / intervalSeconds) * intervalSeconds
         if (!candleTimes.has(bucket)) return []
+        if (marker.band === true && !stands(marker, selectedId)) return []
         const appearance = markerPresentation(marker, markerColors)
         const strategyColor = strategyMarkerColor(marker.strategyId)
         return [
@@ -751,6 +807,14 @@ export default function ApprovedTerminalChart({
     const painted = visibleMarkers
       .sort((left, right) => Number(left.time) - Number(right.time))
       .slice(-200)
+    bandTimesRef.current = new Set(
+      markers.flatMap((marker) =>
+        marker.band === true
+          ? [Math.floor(marker.time / intervalSeconds) * intervalSeconds]
+          : [],
+      ),
+    )
+    bandRedraw.current?.()
     markerRef.current?.setMarkers(painted)
     paintedRef.current = painted
     publishRef.current?.()

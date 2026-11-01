@@ -159,6 +159,7 @@ export default function TerminalMarketChart({
                   time: renderTime,
                   type: 'discard',
                   label: 'Portero ✕',
+                  band: true,
                   detail:
                     'El maestro vio señal, pero el portero frenó la entrada',
                 })
