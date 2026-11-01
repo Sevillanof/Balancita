@@ -29,6 +29,8 @@ export interface LifecycleStep {
   icon: StepIcon
   label: string
   tone: StepTone
+  /** The state word of the pill when the tone's own word does not fit. */
+  word?: string
   /** One short line: what this step said at its last evaluation. */
   headline: string
   /** The numbers behind it, label / value pairs. */
@@ -213,6 +215,12 @@ function entryStepsOf(analysis: Record<string, unknown>): LifecycleStep[] {
       icon: 'news',
       label: 'Noticias',
       tone: newsTone,
+      word:
+        r.news === true || r.newsStatus === 'conflict'
+          ? undefined
+          : r.newsStatus === 'unavailable'
+            ? 'sin dato'
+            : 'sin señal',
       headline:
         r.news === true
           ? 'Hay catalizador a favor'
@@ -243,6 +251,7 @@ function entryStepsOf(analysis: Record<string, unknown>): LifecycleStep[] {
       icon: 'enter',
       label: 'Entrada',
       tone: entered ? 'ok' : 'na',
+      word: entered ? undefined : 'en espera',
       headline: entered ? view.label : 'Espera: no hay entrada',
       rows: [
         ...(r.motivo ? [{ label: 'Motivo', value: r.motivo }] : []),

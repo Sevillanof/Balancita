@@ -145,7 +145,7 @@ function Detail({
         <span
           className={`ml-auto rounded-full border border-solid px-2 text-badge ${TONE_RING[step.tone]}`}
         >
-          {TONE_WORD[step.tone]}
+          {step.word ?? TONE_WORD[step.tone]}
         </span>
       </div>
       <p className="m-0 text-ink">{step.headline}</p>

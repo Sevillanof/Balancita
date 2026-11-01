@@ -59,6 +59,10 @@ describe('lifecycleView', () => {
       'enter',
     ])
     const tone = Object.fromEntries(view.steps.map((s) => [s.id, s.tone]))
+    expect(view.steps.find((step) => step.id === 'news')?.word).toBe(
+      'sin señal',
+    )
+    expect(view.steps.at(-1)?.word).toBe('en espera')
     expect(tone).toEqual({
       look: 'ok',
       master: 'ok',
