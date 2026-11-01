@@ -43,6 +43,8 @@ import {
   type TerminalChartTrade,
 } from '../domain/terminal-trade-model.ts'
 import { signedUsd } from '../../../app/qwen-trades-text.ts'
+import type { LifecycleView } from '../../../app/terminal-lifecycle.ts'
+import LifecycleSteps from './LifecycleSteps.tsx'
 
 const SUMMARY_CLASSES =
   'inline-flex min-h-7.5 items-center rounded-lg border border-solid border-line px-chart-control py-0 text-ink-2 cursor-pointer chart-desktop:min-h-6.5 chart-desktop:whitespace-nowrap'
@@ -484,6 +486,7 @@ export default function TerminalChartPanel({
   tradeFocus = null,
   onSelectTrade,
   viewport = false,
+  lifecycle = null,
 }: {
   /** Live 1m candles from the terminal stream (seconds). */
   candles: readonly ApprovedTerminalCandle[]
@@ -514,6 +517,8 @@ export default function TerminalChartPanel({
   tradeFocus?: { id: string; revision: number } | null
   onSelectTrade?: (id: string) => void
   viewport?: boolean
+  /** Steps of the entry (no open operation) or exit cycle, shown at the right of the bar. */
+  lifecycle?: LifecycleView | null
 }) {
   const [settings, setSettings] = useState<Settings>(loadSettings)
   const [now, setNow] = useState(() => Date.now())
@@ -776,7 +781,7 @@ export default function TerminalChartPanel({
       <div
         className={
           viewport
-            ? 'flex flex-none items-center gap-2 px-2'
+            ? 'flex flex-none flex-wrap items-center gap-x-2 gap-y-1 px-2'
             : 'flex flex-wrap items-center gap-x-4 gap-y-2 px-3 py-0 chart-phone:flex-nowrap chart-phone:gap-x-3 chart-phone:overflow-x-auto chart-phone:pb-1 chart-desktop:gap-x-3 chart-desktop:gap-y-1 chart-desktop:px-2'
         }
       >
@@ -957,6 +962,7 @@ export default function TerminalChartPanel({
             </ChartStat>
           </ChartStats>
         </ChartMenu>
+        {viewport && lifecycle && <LifecycleSteps view={lifecycle} />}
       </div>
       {!live && (
         <p className="m-0 px-3 py-0 text-hint text-ink-2">

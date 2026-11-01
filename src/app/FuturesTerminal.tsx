@@ -44,6 +44,7 @@ import {
   utcTime,
 } from './terminal-labels.ts'
 import { record } from '../shared/wire/decode.ts'
+import { lifecycleView } from './terminal-lifecycle.ts'
 import { useHealth } from '../features/observability/presentation/useHealth.ts'
 import { latestDecision } from '../features/observability/presentation/latest-decision.ts'
 import ObserverPanel from '../features/observability/presentation/ObserverPanel.tsx'
@@ -480,6 +481,16 @@ export default function FuturesTerminal({
                   onSelect={selectAnalysis}
                   trades={liveGateway ? ownTrades : undefined}
                   viewport={liveGateway}
+                  lifecycle={
+                    liveGateway
+                      ? lifecycleView({
+                          analyses,
+                          openTrade:
+                            ownTrades.find((trade) => trade.open) ?? null,
+                          nowMs: displayClock,
+                        })
+                      : null
+                  }
                   tradesConfirmed={tradeRead.source.state === 'ok'}
                   selectedTradeId={selectedTradeId}
                   tradeFocus={tradeFocus}
