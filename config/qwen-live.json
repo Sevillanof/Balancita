@@ -206,8 +206,8 @@
   "runtime": {
     "opinion_enabled": false,
     "pending_config": {
-      "path": "qwen-live-next.json",
-      "sha256": "3a5c87c291204c570117ae036dd7879ad85956c295e883f45379ed9e374669e7"
+      "path": "qwen-live-posiciones.json",
+      "sha256": "f7f64f5c99974b8a0997133d74c27e349eaeb90781f0a35961b942ba7860d67e"
     },
     "concurrent_orders": true,
     "skip_entry_reason": true

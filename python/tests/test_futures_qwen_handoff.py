@@ -15,6 +15,10 @@ from test_futures_qwen_live import LIVE_CFG, Policy, make
 class HandoffTests(unittest.TestCase):
     def test_approved_absolute_funding_target_preserves_legacy_trade_and_account(self):
         source = qt.load_config(qt.CONFIG_PATH_LIVE)
+        # the funding handoff (already consumed live) is checked against its own file, not the current request
+        source["runtime"]["pending_config"] = {
+            "path": "qwen-live-next.json",
+            "sha256": "18aa3236463fa77a8da0f59eadfd2d7865a2032b8cbc271895dedf817b14e43b"}
         target = live.pending_config(source, source["runtime"]["pending_config"])
         live.validate_activation(target, now_ms=qt.date_ms("2026-11-01"))
         self.assertEqual(target["funding_model"], qt.exact_funding.EXACT_MODEL)
