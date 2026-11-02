@@ -86,6 +86,11 @@ SKIP_TEXT = {
     "libro_obsoleto": "el libro público perdió vigencia",
     "liquidez_insuficiente": "el libro no cubre toda la operación",
     "ejecucion_tarde": "la decisión venció antes de ejecutarse",
+    "lugares_ocupados": "ya están ocupados todos los lugares de posiciones",
+    "lado_contrario": "hay una posición del maestro abierta del lado contrario",
+    "cierre_en_la_mirada": "se cerró otra posición en esta misma mirada",
+    "una_entrada_por_mirada": "ya se abrió otra posición en esta misma mirada",
+    "mismo_episodio": "la señal sigue en el mismo episodio",
 }
 
 
@@ -291,7 +296,7 @@ _ADDED_COLUMNS = {
     "decisions": (("lean", "REAL"), ("lean_m", "REAL"), ("lean_num", "REAL"), ("score", "REAL"), ("best_score", "REAL"),
                   ("look_n", "INTEGER"), ("mirror_ok", "INTEGER"), ("factors_json", "TEXT"),
                   ("formula_action", "TEXT"), ("formula_json", "TEXT"), ("opinion_agrees", "INTEGER"), ("opinion_error", "TEXT")),
-    "trader_state": (("window_json", "TEXT"),),
+    "trader_state": (("window_json", "TEXT"), ("positions_json", "TEXT"), ("memo_json", "TEXT")),
     "trades": (("funding_model", "TEXT"), ("net_complete_usd", "TEXT"), ("config_hash", "TEXT"),
                ("execution_model", "TEXT"), ("entry_receipt_id", "TEXT"), ("exit_receipt_id", "TEXT"),
                ("mark_receipt_id", "TEXT"), ("funding_receipt_id", "TEXT"), ("execution_error", "TEXT"),
@@ -460,10 +465,14 @@ class LiveStore:
     def save_state(self, product, trader, last_fed_ms, now_ms):
         self.db.execute(
             "INSERT OR REPLACE INTO trader_state(product, last_fed_ms, trade_seq, cooldown_until, last_call_ms, position_json, "
-            "updated_ms, window_json) VALUES(?,?,?,?,?,?,?,?)",
+            "updated_ms, window_json, positions_json, memo_json) VALUES(?,?,?,?,?,?,?,?,?,?)",
             (product, last_fed_ms, trader.trade_seq, trader.cooldown_until, trader.last_call_ms,
              None if trader.position is None else position_to_json(trader.position), now_ms,
-             None if trader.window is None else json.dumps(trader.window)))
+             None if trader.window is None else json.dumps(trader.window),
+             # several places: the newer open positions; ``position_json`` stays the oldest, as in every older database
+             json.dumps([position_to_json(other) for other in trader.extra_positions]) if trader.extra_positions else None,
+             # several places: the maestro's episode edge and the rebound expert's rest (a restart must not repeat an entry)
+             json.dumps(trader.memo(), sort_keys=True) if trader.max_positions > 1 else None))
 
     # ---- decisions and skipped wakes
 
@@ -927,6 +936,10 @@ class LiveOperator:
             trader.last_call_ms = state["last_call_ms"]
             if state["position_json"]:
                 trader.position = position_from_json(state["position_json"])
+            if state.get("positions_json") and trader.position is not None:
+                trader.extra_positions = [position_from_json(text) for text in json.loads(state["positions_json"])]
+            if state.get("memo_json"):
+                trader.load_memo(json.loads(state["memo_json"]))
             if state.get("window_json"):
                 trader.window = json.loads(state["window_json"])
             last_fed = state["last_fed_ms"]
@@ -1342,12 +1355,14 @@ class LiveOperator:
 
     def _record(self, product, trader, t_ms, events, now, *, observed=True):
         meta = {"prompt_version": self.cfg["prompt"]["version"], "model": self.model, "config_hash": self.config_hash}
-        mark, mark_error = None, None
+        marks, mark_error = {}, None
         if trader.position is not None and observed:
-            try:
-                mark = trader.mark(t_ms)
-            except qt.WakeSkipped as error:
-                mark_error = error
+            for position in trader.positions:
+                try:
+                    marks[position.trade_no] = trader.mark(t_ms, position)
+                except qt.WakeSkipped as error:
+                    mark_error = mark_error or error
+                    marks[position.trade_no] = None
         if self.book_enabled:
             now = self.now_ms()
         with self.store.db:
@@ -1365,15 +1380,18 @@ class LiveOperator:
                     self._record_decision(product, event, meta, now)
                 elif kind == "exit_plan":
                     self._log_exit_plan(product, event)
-            position = trader.position
-            if position is not None and observed:
-                self._write_open(product, trader, position, t_ms, now, mark=mark)
-                if position.exit_plan is not None or self.book_enabled:
-                    self.store.update_trade(product, position.trade_no, exit_plan_json=(
-                        None if position.exit_plan is None else json.dumps(position.exit_plan, sort_keys=True)))
-                if mark_error is not None:
-                    self.store.update_trade(product, position.trade_no, net_now_usd=None, net_complete_usd=None,
-                                            execution_error=mark_error.kind)
+                elif kind == "rebote":
+                    self._log_rebote(product, event)
+            if trader.position is not None and observed:
+                for position in trader.positions:
+                    mark = marks.get(position.trade_no)
+                    self._write_open(product, trader, position, t_ms, now, mark=mark)
+                    if position.exit_plan is not None or self.book_enabled:
+                        self.store.update_trade(product, position.trade_no, exit_plan_json=(
+                            None if position.exit_plan is None else json.dumps(position.exit_plan, sort_keys=True)))
+                    if mark is None and mark_error is not None:
+                        self.store.update_trade(product, position.trade_no, net_now_usd=None, net_complete_usd=None,
+                                                execution_error=mark_error.kind)
             self.store.save_state(product, trader, t_ms - BAR_MS, now)
         if mark_error is not None:
             self._failure("ejecucion", product, mark_error)
@@ -1384,6 +1402,14 @@ class LiveOperator:
         if events and self.cfg.get("decide_by") == "formula":          # el auditor no necesita la opinión de Qwen
             self._audit(product, trader, events, now)
 
+    def _log_rebote(self, product, event):
+        head = "{} {}: Experto rebotes — caída de {} % desde el máximo de la ventana (umbral {} %)".format(
+            _hhmm(event["t_ms"]), product, event["caida_pct"], event["umbral_pct"])
+        if event["action"] == "abierta":
+            self.log("{}: compra LARGO a mercado (operación n.º {}).".format(head, event["trade_no"]))
+        else:
+            self.log("{}: no compra ({}).".format(head, SKIP_TEXT.get(event["motivo"], event.get("detalle") or event["motivo"])))
+
     def _log_exit_plan(self, product, event):
         plan = event["plan"]
         self.log("{} {}: orden de salida {} a {} (espera máx. {} min, tope {} pb).".format(
@@ -1393,8 +1419,7 @@ class LiveOperator:
     def _service_exit(self, product, now):
         """Every poll, between candles: the waiting exit order follows the public book (fills, moves or goes to market)."""
         trader = self.traders[product]
-        position = trader.position
-        if position is None or position.exit_plan is None:
+        if not any(position.exit_plan is not None for position in trader.positions):
             return
         try:
             events = trader.service_exit(now)
@@ -1409,8 +1434,10 @@ class LiveOperator:
         with self.store.db:
             for event in events:
                 self._log_exit_plan(product, event)
-            self.store.update_trade(product, trader.position.trade_no, exit_plan_json=json.dumps(
-                trader.position.exit_plan, sort_keys=True))
+            for position in trader.positions:
+                if position.exit_plan is not None:
+                    self.store.update_trade(product, position.trade_no, exit_plan_json=json.dumps(
+                        position.exit_plan, sort_keys=True))
             self.store.save_state(product, trader, trader.t[-1], self.now_ms())
 
     def _record_decision(self, product, event, meta, now):
@@ -1542,7 +1569,13 @@ CHANGE_CLOSE = "cambio_de_version"                # exit_reason of a position cl
 def _restore_open_position(store, product, row):
     state = store.load_state(product)
     if state and state.get("position_json"):
-        return position_from_json(state["position_json"])
+        saved = [state["position_json"]] + (json.loads(state["positions_json"]) if state.get("positions_json") else [])
+        for text in saved:                                  # several places: the saved position of THIS trade
+            position = position_from_json(text)
+            if position.trade_no == row["trade_no"]:
+                return position
+        if len(saved) == 1:
+            return position_from_json(saved[0])
     return qt.Position(
         side=row["side"], entry_ms=row["entry_ms"], entry_ref=float(row["entry_px"]), entry_px=D(row["entry_px"]),
         qty=D(row["qty"]), stop_px=row["stop_px"], stop_pct=None, max_hold_ms=row["max_hold_ms"],
@@ -1565,8 +1598,9 @@ def _close_open_trades(db_path, cfg, funding_for, now_ms, log):
     done = []
     try:
         open_rows = [dict(r) for r in store.db.execute("SELECT * FROM trades WHERE status='open' ORDER BY product, trade_no")]
-        for row in open_rows:
+        for index, row in enumerate(open_rows):
             product = row["product"]
+            last_of_product = not any(other["product"] == product for other in open_rows[index + 1:])
             position = _restore_open_position(store, product, row)
             mark_px = row["mark_px"] or position.entry_ref
             mark_ms = row["mark_ms"] or now_ms
@@ -1580,8 +1614,9 @@ def _close_open_trades(db_path, cfg, funding_for, now_ms, log):
             leverage = D(row["leverage"] or "1")
             with store.db:
                 store.put_trade(product, row["trade_no"], **closed_fields(trade, notional, leverage, notional / leverage, now_ms))
-                store.db.execute("UPDATE trader_state SET position_json=NULL, window_json=NULL, updated_ms=? WHERE product=?",
-                                 (now_ms, product))
+                if last_of_product:                 # several places: the saved positions are cleared after the last one
+                    store.db.execute("UPDATE trader_state SET position_json=NULL, positions_json=NULL, window_json=NULL, "
+                                     "updated_ms=? WHERE product=?", (now_ms, product))
             done.append((product, row["trade_no"], trade["net_usd"]))
             side_label = "LARGO" if row["side"] == "LONG" else "CORTO"
             log("Qwen en vivo: la posición {} de {} (n.º {}) estaba abierta en la base vieja: se cerró como fin_de_bloque / {} a "
@@ -1741,7 +1776,8 @@ def pending_config(cfg, spec) -> dict:
             or overlay.get("base_config_hash") != qt.config_hash(cfg)):
         raise qt.TraderError("Traspaso: la configuración de origen no coincide.")
     changes = overlay.get("changes")
-    allowed = {"note", "corta", "noticias", "funding_model", "opinion_enabled", "live", "decide_by", "mirror", "execution"}
+    allowed = {"note", "corta", "noticias", "funding_model", "opinion_enabled", "live", "decide_by", "mirror", "execution",
+               "posiciones", "rebotes"}
     if not isinstance(changes, dict) or not changes or set(changes) - allowed:
         raise qt.TraderError("Traspaso: cambios inválidos; no se redefine la cuenta ni su capital.")
     target = copy.deepcopy(cfg)

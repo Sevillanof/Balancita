@@ -41,6 +41,7 @@ from . import futures_qwen_destila as destila
 from . import futures_qwen_exigencia as exigencia
 from . import futures_qwen_maestro as maestro
 from . import futures_qwen_portero as portero
+from . import futures_qwen_posiciones as posiciones
 from . import futures_qwen_trader as qt
 from . import futures_qwen_trader_exam as exam
 from .futures_strategy_reliability import deflated_probability
@@ -102,7 +103,8 @@ def test_spec(cfg, env=None):
     """La hipótesis que prueba un «Testear»: producto(s), tope, tamaño y exigencia de esa config y de las variables de la prueba (sin
     fechas ni resultados: el mismo ajuste en otra etapa no es una variante nueva)."""
     got = exigencia.from_env(env)
-    spec = variant(cfg["products"], cfg["guardrails"]["max_hold_min"], analista.from_env(env), (got["maestro"], got["portero"]))
+    spec = variant(cfg["products"], cfg["guardrails"]["max_hold_min"], analista.from_env(env), (got["maestro"], got["portero"]),
+                   posiciones.settings(cfg)["max"], posiciones.rebotes_of(cfg) is not None)
     entrada = cfg.get("entrada") or (os.environ if env is None else env).get("QWEN_ENTRADA")
     if entrada == "formula_eth":
         spec["entrada"] = "formula_eth"
@@ -326,8 +328,14 @@ def build_all_photos(cache_dir, work_dir, pares=PARES_PATH, jobs=1, log=print):
 # --------------------------------------------------------------------------- 3. a variant over the photos
 
 
-def variant(products: Sequence[str] = ("PF_ETHUSD",), cap_min: Optional[int] = 2160, size="apagado", levels=(5, 5)) -> dict:
-    return {"productos": sorted(products), "tope_min": cap_min, "tamano": size, "exigencia": list(levels)}
+def variant(products: Sequence[str] = ("PF_ETHUSD",), cap_min: Optional[int] = 2160, size="apagado", levels=(5, 5),
+            positions: int = 1, rebotes: bool = False) -> dict:
+    out = {"productos": sorted(products), "tope_min": cap_min, "tamano": size, "exigencia": list(levels)}
+    if positions > 1:                       # una sola posición no agrega la clave: las variantes de siempre conservan su id
+        out["posiciones"] = positions
+    if rebotes:
+        out["rebotes"] = True
+    return out
 
 
 BASELINE = variant()                              # el esquema congelado (v9): ETH, tope 36 h, tamaño 1, exigencia 5/5
@@ -339,9 +347,10 @@ def variant_id(v):
 
 def variant_text(v: dict):
     names = {"PF_ETHUSD": "ETH", "PF_XBTUSD": "BTC"}
-    return "{} · {} · tamaño {} · exigencia {}/{}".format(
+    return "{} · {} · tamaño {} · exigencia {}/{}{}{}".format(
         "+".join(names.get(p, p) for p in v["productos"]), "tope {} h".format(v["tope_min"] // 60) if v["tope_min"] else "sin tope",
-        v["tamano"], *v["exigencia"])
+        v["tamano"], *v["exigencia"], " · {} posiciones".format(v["posiciones"]) if v.get("posiciones", 1) > 1 else "",
+        " · con experto rebotes" if v.get("rebotes") else "")
 
 
 class _Stored:
@@ -388,7 +397,8 @@ def trades_for(photos, product, v, pares=PARES_PATH):
             op = analista.sized(size_cfg, op, _Stored(p.get("mov")), t_ms)
         flagged.append({"product": product, "t_ms": t_ms, "operacion": op})
     out = []
-    for row, side in exam.formula_entries(flagged):
+    places = v.get("posiciones", 1)
+    for row, side in exam.formula_entries(flagged, places, posiciones.DEFAULT_FRACTION if places == 3 else round(1 / places, 4)):
         o = exam._op_side(row, side)
         out.append({"product": product, "t_in": row["t_ms"], "t_out": o["salida_ms"], "side": side, "net": o["neto_bp"],
                     "motivo": o["motivo"], "tamano": row["operacion"].get("tamano", 1.0)})
@@ -399,7 +409,7 @@ def variant_trades(photo_sets, v, pares=PARES_PATH, cache=None):
     """Las operaciones de la variante en todos sus productos. ``cache`` evita repetir producto+tope+tamaño+exigencia."""
     out = []
     for product in v["productos"]:
-        key = (product, v["tope_min"], v["tamano"], tuple(v["exigencia"]))
+        key = (product, v["tope_min"], v["tamano"], tuple(v["exigencia"]), v.get("posiciones", 1))
         if cache is not None and key in cache:
             part = cache[key]
         else:

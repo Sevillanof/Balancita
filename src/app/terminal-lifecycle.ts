@@ -27,6 +27,7 @@ export type StepIcon =
   | 'clock24'
   | 'cap'
   | 'maker'
+  | 'rebound'
   | 'alert'
   | 'audit'
 
@@ -761,6 +762,138 @@ function auditorStepOf(
   }
 }
 
+/** «1,5 %»: a percentage with a comma. */
+const percent = (value: number): string =>
+  `${value.toFixed(1).replace('.', ',')} %`
+
+/** The places the shared account has (`formula.posiciones`): open now, the most allowed, and the money they hold. */
+export interface PositionsReading {
+  open: number
+  max: number
+  usedUsd: number | null
+  balanceUsd: number | null
+}
+
+export function positionsReading(
+  analyses: readonly unknown[],
+): PositionsReading | null {
+  const latest = qwenLooks(analyses).at(-1)
+  const places = record(record(latest?.formula).posiciones)
+  const max = num(places.max)
+  if (max === null || max < 1) return null
+  const parse = (value: unknown): number | null => {
+    const parsed = Number(value)
+    return value === null || value === undefined || !Number.isFinite(parsed)
+      ? null
+      : parsed
+  }
+  return {
+    open: num(places.abiertas) ?? 0,
+    max,
+    usedUsd: parse(places.usado_usd),
+    balanceUsd: parse(places.saldo_usd),
+  }
+}
+
+/**
+ * The «Experto rebotes» step: how far the close is below the window's high, the
+ * threshold and the level (0 / 1); the maestro and the portero are shown for
+ * information only (the expert does not ask them); the places in use and when
+ * its open positions leave. `null` when the expert is off (older looks, or a
+ * live config without it): the strip then stays as it was.
+ */
+function reboundStepOf(
+  analysis: Record<string, unknown>,
+  openTrades: readonly QwenTrade[],
+): LifecycleStep | null {
+  const formula = record(analysis.formula)
+  const rebound = record(formula.rebote)
+  if (rebound.activo !== true) return null
+  const drop = num(rebound.caida_pct) ?? 0
+  const threshold = num(rebound.umbral_pct) ?? 5
+  const level = rebound.nivel === 1 ? 1 : 0
+  const windowMin = num(rebound.ventana_min) ?? 60
+  const exitMin = num(rebound.salida_min) ?? 240
+  const rest = num(rebound.descanso_hasta_ms)
+  const r = read(analysis)
+  const places = positionsReading([analysis])
+  const mine = openTrades.filter((t) => t.entryReason === 'rebote')
+  const exits = mine.map((t) => t.entryMs + (t.maxHoldMs ?? exitMin * 60_000))
+  const full = places !== null && places.open >= places.max
+  const tone: StepTone =
+    mine.length > 0 ? 'info' : level === 1 ? (full ? 'warn' : 'ok') : 'na'
+  const windowText =
+    windowMin >= 60 ? `${windowMin / 60} h` : `${windowMin} min`
+  return {
+    id: 'rebote',
+    icon: 'rebound',
+    label: 'Experto rebotes',
+    tone,
+    word:
+      mine.length > 0
+        ? 'en curso'
+        : level === 1
+          ? full
+            ? 'sin lugar'
+            : 'compra'
+          : 'nivel 0',
+    headline:
+      mine.length > 0
+        ? `Tiene ${mine.length} posición${mine.length > 1 ? 'es' : ''} abierta${mine.length > 1 ? 's' : ''}`
+        : level === 1
+          ? 'Cayó lo suficiente: compra largo'
+          : `Caída de ${percent(drop)}: espera ${percent(threshold)}`,
+    rows: [
+      { label: 'Caída desde el máximo', value: percent(drop) },
+      { label: 'Umbral', value: `${percent(threshold)} en ${windowText}` },
+      { label: 'Nivel', value: `${level} de 1` },
+      {
+        label: 'Maestro (informativo)',
+        value:
+          r.master === null
+            ? 'sin dato'
+            : `${masterGlyph(r.master)} (${r.master > 0 ? '+' : ''}${r.master})`,
+      },
+      {
+        label: 'Portero (informativo)',
+        value: r.gate === null ? 'sin voto' : r.gate ? 'aprueba' : 'frena',
+      },
+      ...(places === null
+        ? []
+        : [
+            {
+              label: 'Posiciones',
+              value: `${places.open}/${places.max}${places.usedUsd === null ? '' : ` · saldo usado ${comma(places.usedUsd)} USD`}`,
+            },
+          ]),
+      ...(exits.length > 0
+        ? [
+            {
+              label: 'Sale a las',
+              value: exits
+                .sort((a, b) => a - b)
+                .map((ms) => madridTime(ms))
+                .join(' · '),
+            },
+          ]
+        : []),
+      ...(rest !== null &&
+      rest > (num(analysis.decision_time_ms) ?? 0) &&
+      mine.length === 0
+        ? [{ label: 'Descanso hasta', value: madridTime(rest) }]
+        : []),
+    ],
+    meter: {
+      value: Math.min(1, drop / (threshold * 2)),
+      mark: 0.5,
+      caption: `Caída desde el máximo (marca: ${percent(threshold)})`,
+    },
+    history: [],
+    rule: `Compra largo a mercado cuando una vela de 5 min cierra ${percent(threshold)} o más bajo el máximo de ${windowText}, sin consultar al maestro ni al portero. Sale a las ${exitMin / 60} h, sin stop. Descansa ${num(rebound.enfriamiento_min) ?? 240} min entre disparos. Comparte los lugares con el maestro.`,
+    checks: null,
+  }
+}
+
 /** The auditor step goes second to last of each phase (before the entry itself, before the emergency). */
 function withAuditor(
   steps: readonly LifecycleStep[],
@@ -912,6 +1045,22 @@ export function lifecycleView(input: {
   const latest = looks.at(-1)
   if (!latest) return null
   const prices = input.prices ?? []
+  const openTrades = (input.trades ?? []).filter((t) => t.open)
+  const rebound = reboundStepOf(latest, openTrades)
+  // The rebound expert goes right before the auditor; its tone at past looks is its history.
+  const withRebound = (steps: LifecycleStep[]): LifecycleStep[] =>
+    rebound === null
+      ? steps
+      : [
+          ...steps.slice(0, -2),
+          {
+            ...rebound,
+            history: recent.map(
+              (look) => reboundStepOf(look, [])?.tone ?? 'na',
+            ),
+          },
+          ...steps.slice(-2),
+        ]
   const auditor = auditorStepOf(input.trades ?? [], looks)
   const evaluatedMs = Number(latest.decision_time_ms)
   const recent = looks.slice(-HISTORY)
@@ -946,7 +1095,11 @@ export function lifecycleView(input: {
           })
         : null,
     }))
-    return { phase: 'exit', steps: withAuditor(steps, auditor), evaluatedMs }
+    return {
+      phase: 'exit',
+      steps: withRebound(withAuditor(steps, auditor)),
+      evaluatedMs,
+    }
   }
   const entryContext = (analysis: Record<string, unknown>) => {
     const r = read(analysis)
@@ -978,5 +1131,9 @@ export function lifecycleView(input: {
         })
       : null,
   }))
-  return { phase: 'entry', steps: withAuditor(steps, auditor), evaluatedMs }
+  return {
+    phase: 'entry',
+    steps: withRebound(withAuditor(steps, auditor)),
+    evaluatedMs,
+  }
 }

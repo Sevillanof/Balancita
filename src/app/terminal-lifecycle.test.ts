@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { lifecycleView } from './terminal-lifecycle.ts'
+import { lifecycleView, positionsReading } from './terminal-lifecycle.ts'
 import type { QwenTrade, QwenTradeAudit } from './useQwenTrades.ts'
 
 const HOUR = 3_600_000
@@ -623,5 +623,106 @@ describe('lifecycleView · paso Auditor', () => {
     ])
     // The looks without an operation do not set the step's tone.
     expect(step.tone).toBe('na')
+  })
+
+  describe('Experto rebotes', () => {
+    const rebound = (over: Record<string, unknown> = {}) => ({
+      activo: true,
+      caida_pct: 5.4,
+      umbral_pct: 5,
+      nivel: 1,
+      ventana_min: 60,
+      salida_min: 240,
+      enfriamiento_min: 240,
+      descanso_hasta_ms: null,
+      abiertas: 0,
+      ...over,
+    })
+    const places = {
+      abiertas: 1,
+      max: 3,
+      usado_usd: '333.3',
+      saldo_usd: '1000',
+    }
+
+    it('adds the step before the auditor, with the drop, the level and the places', () => {
+      const view = lifecycleView({
+        analyses: [
+          look(NOW, 'ESPERAR', {
+            maestro: -2,
+            portero_si: false,
+            rebote: rebound(),
+            posiciones: places,
+          }),
+        ],
+        openTrade: null,
+        nowMs: NOW,
+      })!
+      expect(view.steps.map((step) => step.id)).toEqual([
+        'look',
+        'master',
+        'gate',
+        'news',
+        'rebote',
+        'auditor',
+        'enter',
+      ])
+      const step = view.steps.find((s) => s.id === 'rebote')!
+      expect(step).toMatchObject({ tone: 'ok', word: 'compra' })
+      const rows = Object.fromEntries(step.rows.map((r) => [r.label, r.value]))
+      expect(rows['Caída desde el máximo']).toBe('5,4 %')
+      expect(rows['Nivel']).toBe('1 de 1')
+      expect(rows['Portero (informativo)']).toBe('frena')
+      expect(rows['Posiciones']).toBe('1/3 · saldo usado 333,30 USD')
+    })
+
+    it('stays at level 0 under the threshold and says when its position leaves', () => {
+      const flat = lifecycleView({
+        analyses: [
+          look(NOW, 'ESPERAR', {
+            rebote: rebound({ caida_pct: 1.2, nivel: 0 }),
+          }),
+        ],
+        openTrade: null,
+        nowMs: NOW,
+      })!
+      expect(flat.steps.find((s) => s.id === 'rebote')).toMatchObject({
+        tone: 'na',
+        word: 'nivel 0',
+      })
+      const mine = trade({
+        side: 'LONG',
+        entryMs: NOW - HOUR,
+        entryReason: 'rebote',
+        maxHoldMs: 4 * HOUR,
+      })
+      const open = lifecycleView({
+        analyses: [
+          look(NOW, 'MANTENER', { maestro: 0, rebote: rebound({ nivel: 0 }) }),
+        ],
+        openTrade: mine,
+        nowMs: NOW,
+        trades: [mine],
+      })!
+      const step = open.steps.find((s) => s.id === 'rebote')!
+      expect(step).toMatchObject({ tone: 'info', word: 'en curso' })
+      expect(step.rows.find((r) => r.label === 'Sale a las')).toBeDefined()
+    })
+
+    it('does not touch the strip when the expert is off', () => {
+      const view = lifecycleView({
+        analyses: [look(NOW, 'ESPERAR', { maestro: 0 })],
+        openTrade: null,
+        nowMs: NOW,
+      })!
+      expect(view.steps.some((s) => s.id === 'rebote')).toBe(false)
+    })
+
+    it('reads the places of the latest look', () => {
+      expect(
+        positionsReading([look(NOW, 'ESPERAR', { posiciones: places })]),
+      ).toEqual({ open: 1, max: 3, usedUsd: 333.3, balanceUsd: 1000 })
+      expect(positionsReading([look(NOW, 'ESPERAR', {})])).toBeNull()
+    })
   })
 })

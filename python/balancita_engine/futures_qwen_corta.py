@@ -317,9 +317,12 @@ def rules_line(trader):
     stop = ("sin stop automático" if guard.get("stop_sigma_24h") is None else
             "stop automático a {} x la volatilidad diaria".format(qt.es(guard["stop_sigma_24h"], 1)))
     limit = "cierre obligatorio a las {} h".format(guard["max_hold_min"] // 60) if guard.get("max_hold_min") else "sin límite de tiempo"
+    places = getattr(trader, "max_positions", 1)
+    many = ("hasta {} posiciones a la vez, cada una con el {} % del saldo".format(places, qt.es(trader.fraction * 100, 0))
+            if places > 1 else "una sola posición")
     return ("Reglas fijas que no podés cambiar: {}; {}; espera de {} min después de cerrar; tamaño fijo "
-            "de {} USD; una sola posición; sin límite de operaciones por día. Solo te consultamos cada {} min.".format(
-                stop, limit, guard["cooldown_min"], format(trader.notional.normalize(), "f"),
+            "de {} USD; {}; sin límite de operaciones por día. Solo te consultamos cada {} min.".format(
+                stop, limit, guard["cooldown_min"], format(trader.notional.normalize(), "f"), many,
                 wake["position_every_min"]))
 
 

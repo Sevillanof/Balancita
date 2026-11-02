@@ -1976,6 +1976,19 @@ function FormulaResult({ formula }: { formula: QuickFormula }) {
           ? ' Funding incompleto: el resultado es provisional.'
           : ''}
       </p>
+      {formula.posiciones && (
+        <p className="m-0 text-note text-ink-2" data-testid="posiciones-usadas">
+          Hasta {formula.posiciones.max} posiciones a la vez (
+          {Math.round(formula.posiciones.fraccion * 100)} % del saldo cada una)
+          · llegó a tener {formula.posiciones.maximo_abiertas} abiertas ·
+          maestro {formula.posiciones.por_origen.maestro}
+          {formula.posiciones.rebotes
+            ? ` · experto rebotes ${formula.posiciones.por_origen.rebotes}`
+            : ''}{' '}
+          · {String(formula.posiciones.operaciones_por_mes).replace('.', ',')}{' '}
+          operaciones por mes.
+        </p>
+      )}
       <ExitSummary exits={formula.salida} />
       <WaysBars formula={formula} />
     </div>

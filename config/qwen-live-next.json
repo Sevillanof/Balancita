@@ -41,6 +41,17 @@
     "live": {
       "poll_seconds": 5,
       "max_late_seconds": 15
+    },
+    "posiciones": {
+      "max": 3,
+      "fraccion": 0.33,
+      "espera_entre_entradas_min": 0
+    },
+    "rebotes": {
+      "caida_pct": 5.0,
+      "ventana_min": 60,
+      "salida_min": 240,
+      "enfriamiento_min": 240
     }
   }
 }

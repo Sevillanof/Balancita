@@ -64,8 +64,25 @@ function ExecutionDetails({
   )
 }
 
+/** Where this operation stands among the open ones that share the account (1/3, 2/3, 3/3). */
+export interface PositionPlace {
+  /** 1-based position of the shown operation among the open ones; 0 when it is closed. */
+  index: number
+  open: number
+  max: number
+  /** Balance held by the open positions, USD; null when unknown. */
+  usedUsd: number | null
+  /** Show the next open position. */
+  onNext?: () => void
+}
+
+function placeText(place: PositionPlace): string {
+  return `Posición ${place.index}/${place.max}`
+}
+
 export default function TerminalOperationCard({
   trade,
+  place,
   source,
   nowMs,
   onFocus,
@@ -73,6 +90,8 @@ export default function TerminalOperationCard({
   notice,
 }: {
   trade: QwenTrade | null
+  /** Only with several places: which of the open positions this is and the balance in use. */
+  place?: PositionPlace | null
   source: QwenTradesSource
   nowMs: number
   onFocus: () => void
@@ -141,6 +160,8 @@ export default function TerminalOperationCard({
             >
               {trade.side === 'LONG' ? '▲' : '▼'} {trade.side} · #
               {trade.tradeNo}
+              {place && place.index > 0 ? ` · ${place.index}/${place.max}` : ''}
+              {trade.entryReason === 'rebote' ? ' · rebote' : ''}
             </strong>
             <span
               className={`text-badge ${notice ? 'text-warn' : 'text-ink-2'}`}
@@ -203,6 +224,28 @@ export default function TerminalOperationCard({
                 Funding incompleto · provisional
               </span>
             )}
+            {place && place.open > 0 && (
+              <div
+                className="flex items-center justify-between gap-2 text-badge leading-4 text-ink-2 terminal-condensed:sr-only"
+                data-testid="operation-places"
+              >
+                <span>
+                  Abiertas <b>{place.open}</b> de {place.max}
+                  {place.usedUsd === null
+                    ? ''
+                    : ` · saldo usado ${amount(place.usedUsd)} USD`}
+                </span>
+                {place.open > 1 && place.onNext && (
+                  <button
+                    type="button"
+                    onClick={place.onNext}
+                    className="cursor-pointer border-0 bg-transparent p-0 text-badge text-chart-info"
+                  >
+                    Ver otra ▸
+                  </button>
+                )}
+              </div>
+            )}
           </div>
           <div className="flex justify-between gap-2 text-label">
             <button
@@ -262,6 +305,20 @@ export default function TerminalOperationCard({
               </dd>
               <dt>Apalancamiento</dt>
               <dd>{amount(trade.leverage)}×</dd>
+              {trade.entryReason === 'rebote' && (
+                <>
+                  <dt>Quién la abrió</dt>
+                  <dd>
+                    Experto rebotes · sale a las{' '}
+                    {new Date(
+                      trade.entryMs + (trade.maxHoldMs ?? 4 * 3_600_000),
+                    )
+                      .toISOString()
+                      .slice(11, 16)}{' '}
+                    UTC
+                  </dd>
+                </>
+              )}
               {exitReasonText(trade) && (
                 <>
                   <dt>Por qué cerró</dt>
@@ -285,7 +342,11 @@ export default function TerminalOperationCard({
       aria-label="Operación seleccionada"
       data-testid="terminal-operation-card"
     >
-      <p className={TERMINAL_CARD_LABEL}>Operación #{trade.tradeNo} · paper</p>
+      <p className={TERMINAL_CARD_LABEL}>
+        Operación #{trade.tradeNo} · paper
+        {place && place.index > 0 ? ` · ${placeText(place)}` : ''}
+        {trade.entryReason === 'rebote' ? ' · experto rebotes' : ''}
+      </p>
       <div className="flex items-center justify-between gap-2">
         <strong
           className={`text-value font-bold ${trade.side === 'LONG' ? 'text-long' : 'text-short'}`}
@@ -351,6 +412,17 @@ export default function TerminalOperationCard({
             {amount(trade.notionalUsd)} / {amount(trade.marginUsd)} USD
           </dd>
         </div>
+        {place && place.open > 0 && (
+          <div>
+            <dt>Abiertas</dt>
+            <dd data-testid="operation-places">
+              {place.open} de {place.max}
+              {place.usedUsd === null
+                ? ''
+                : ` · saldo usado ${amount(place.usedUsd)} USD`}
+            </dd>
+          </div>
+        )}
         {exitReasonText(trade) && (
           <div>
             <dt>Por qué cerró</dt>

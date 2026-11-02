@@ -99,6 +99,12 @@ const PATHS: Record<StepIcon, ReactNode> = {
       <path d="M17 14l3 3-3 3" />
     </>
   ),
+  rebound: (
+    <>
+      <path d="M3 5l6 12 4-7" />
+      <path d="M13 10l8-5M21 5v6M21 5h-6" />
+    </>
+  ),
   alert: (
     <>
       <path d="M12 3l10 18H2z" />

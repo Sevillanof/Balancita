@@ -5,6 +5,8 @@ import {
   ENTRADAS,
   EXIGENCIA_PAPER,
   MEDICIONES,
+  POSICIONES,
+  REBOTES,
   EXIGENCIA_PAPER_LEVELS,
   SALIDAS,
 } from './exigencia-levels.ts'
@@ -49,6 +51,8 @@ export default function ExigenciaControl({ value, onChange, disabled }: Props) {
   const entrada = value.entrada ?? 'formula'
   const cuenta = value.cuenta ?? 'fija'
   const salida = value.salida ?? 'sigue'
+  const posiciones = value.posiciones ?? 1
+  const rebotes = value.rebotes ?? 'apagado'
   // A rebound entry does not use the maestro, the portero, the movement analyst or the way of measuring
   const rebote = entrada.startsWith('rebote')
   const changed =
@@ -56,7 +60,9 @@ export default function ExigenciaControl({ value, onChange, disabled }: Props) {
     value.portero !== EXIGENCIA_PAPER ||
     value.analista !== EXIGENCIA_PAPER_LEVELS.analista ||
     entrada !== 'formula' ||
-    salida !== 'sigue'
+    salida !== 'sigue' ||
+    posiciones !== 1 ||
+    rebotes !== 'apagado'
   return (
     <div
       role="group"
@@ -188,6 +194,43 @@ export default function ExigenciaControl({ value, onChange, disabled }: Props) {
         detail={SALIDAS.find((o) => o.modo === salida)!.detail}
         disabled={disabled}
       />
+      {!rebote && (
+        <Choice
+          testId="posiciones"
+          label="Posiciones a la vez"
+          name="posiciones"
+          options={POSICIONES.map((o) => ({
+            id: String(o.modo),
+            label: o.label,
+            suffix: o.modo === 1 ? ' · hasta ahora' : '',
+          }))}
+          value={String(posiciones)}
+          onChange={(modo) =>
+            onChange({ ...value, posiciones: modo === '3' ? 3 : 1 })
+          }
+          detail={POSICIONES.find((o) => o.modo === posiciones)!.detail}
+          disabled={disabled}
+        />
+      )}
+      {!rebote && (
+        <Choice
+          testId="rebotes"
+          label="Experto rebotes"
+          name="rebotes"
+          options={REBOTES.map((o) => ({
+            id: o.modo,
+            label: o.label,
+            suffix: o.modo === 'apagado' ? ' · hasta ahora' : '',
+          }))}
+          value={rebotes}
+          onChange={(modo) => onChange({ ...value, rebotes: modo })}
+          detail={REBOTES.find((o) => o.modo === rebotes)!.detail}
+          disabled={disabled}
+        />
+      )}
+      {!rebote && (posiciones > 1 || rebotes === 'encendido') && (
+        <PlacesDetail places={posiciones} rebotes={rebotes === 'encendido'} />
+      )}
       {changed && (
         <button
           type="button"
@@ -200,6 +243,66 @@ export default function ExigenciaControl({ value, onChange, disabled }: Props) {
         </button>
       )}
     </div>
+  )
+}
+
+/**
+ * How the shared places work, closed by default: the slots as boxes (the maestro's in one colour, the expert's in
+ * another) and the rules that avoid piling up entries.
+ */
+function PlacesDetail({
+  places,
+  rebotes,
+}: {
+  places: number
+  rebotes: boolean
+}) {
+  return (
+    <details
+      data-testid="posiciones-detalle"
+      className="border-0 border-t border-solid border-line pt-2 text-note text-ink"
+    >
+      <summary className="cursor-pointer text-ink-2">
+        Cómo se reparten los lugares
+      </summary>
+      <div className="mt-2 grid gap-2">
+        <div
+          className="flex gap-2"
+          role="img"
+          aria-label={`${places} lugares con el 33 % del saldo cada uno`}
+        >
+          {Array.from({ length: places }, (_, index) => (
+            <span
+              key={index}
+              className={`grid h-9 flex-1 place-items-center rounded-sm border border-solid text-hint ${index === 1 && rebotes ? 'border-info text-info' : 'border-line-strong text-ink-2'}`}
+            >
+              {index === 1 && rebotes ? 'rebote' : 'maestro'} · 33 %
+            </span>
+          ))}
+        </div>
+        <ul className="m-0 grid gap-1 pl-4 text-ink-2">
+          <li>
+            Cada operación usa un tercio del saldo del momento, sin pasar del
+            saldo libre. Nunca se usa más saldo del que hay.
+          </li>
+          <li>
+            El maestro abre otra solo con una señal nueva: si la anterior mirada
+            ya tenía señal de ese lado, no entra (así no se amontonan entradas
+            iguales). Como máximo una por mirada.
+          </li>
+          <li>
+            Del lado contrario no abre mientras haya posiciones del maestro
+            abiertas.
+          </li>
+          {rebotes && (
+            <li>
+              Las del experto rebotes son siempre largas y comparten los
+              lugares; no frenan al maestro del lado contrario.
+            </li>
+          )}
+        </ul>
+      </div>
+    </details>
   )
 }
 
