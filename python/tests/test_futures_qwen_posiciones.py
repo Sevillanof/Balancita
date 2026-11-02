@@ -229,6 +229,46 @@ class ReboundTests(unittest.TestCase):
         self.assertEqual([e for e in out if e["type"] == "rebote"], [])       # < 4 h since the first episode
         self.assertEqual(len(m.trader.positions), 1)
 
+    def test_a_failed_buy_does_not_spend_the_episode_and_is_retried_while_the_drop_lasts(self):
+        m = self.drop_market()
+        real_open = m.trader._open
+        def late(*args, **kwargs):
+            raise qt.WakeSkipped("ejecucion_tarde", "vela tardía")
+        m.trader._open = late
+        events = [e for e in m.step(close=94.0) if e["type"] == "rebote"]
+        self.assertEqual((events[0]["action"], events[0]["motivo"]), ("reintento", "ejecucion_tarde"))
+        self.assertIsNone(m.trader.rebote_last_ms)                          # the 4 h rest was NOT started
+        m.trader._open = real_open
+        events = [e for e in m.step(close=93.5) if e["type"] == "rebote"]   # next candle, still down (not an edge any more)
+        self.assertEqual(events[0]["action"], "abierta")
+        self.assertEqual(events[0]["episodio_ms"], m.trader.rebote_last_ms - 5 * MIN)
+        self.assertEqual(len(m.trader.positions), 1)
+        self.assertEqual([e for e in m.step(close=93.0) if e["type"] == "rebote"], [])   # now it is rested
+
+    def test_the_retry_stops_when_the_drop_is_gone_or_after_half_an_hour(self):
+        m = self.drop_market()
+        def late(*args, **kwargs):
+            raise qt.WakeSkipped("libro_no_disponible", "")
+        m.trader._open = late
+        m.step(close=94.0)
+        self.assertIsNotNone(m.trader.rebote_retry_ms)
+        m.step(close=100.0)                                                 # recovered: the episode is dropped
+        self.assertIsNone(m.trader.rebote_retry_ms)
+        self.assertEqual([e for e in m.step(close=94.0) if e["type"] == "rebote"][0]["action"], "reintento")  # a new edge
+        for _ in range(7):
+            m.step(close=94.0)                                              # > 30 min later: no more retries
+        self.assertIsNone(m.trader.rebote_retry_ms)
+
+    def test_the_memo_keeps_a_pending_retry_across_a_restart(self):
+        m = self.drop_market()
+        def late(*args, **kwargs):
+            raise qt.WakeSkipped("ejecucion_tarde", "")
+        m.trader._open = late
+        m.step(close=94.0)
+        memo = m.trader.memo()
+        self.assertEqual(memo["rebote_retry_ms"], m.trader.rebote_retry_ms)
+        self.assertIsNotNone(memo["rebote_retry_ms"])
+
     def test_shares_the_three_places_with_the_maestro(self):
         m = Market(config(3, rebotes=True))
         for _ in range(3):
