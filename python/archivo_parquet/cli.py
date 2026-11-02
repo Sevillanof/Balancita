@@ -1,4 +1,4 @@
-"""Linea de comandos: exportar | verificar | buscar | medir | respaldar | restaurar-prueba. Salida JSON. Codigos: 0 ok, 1 hay dias/archivos sin confirmar, 2 uso o copia invalida."""
+"""Linea de comandos: nocturno | exportar | verificar | buscar | medir | respaldar | restaurar-prueba. Salida JSON. Codigos: 0 ok, 1 hay dias/archivos sin confirmar, 2 uso o copia invalida, 3 (nocturno) no corrio a proposito."""
 from __future__ import annotations
 
 import argparse
@@ -19,6 +19,11 @@ def _tablas(valor: Optional[str]) -> Optional[List[str]]:
 def _parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="python -m archivo_parquet", description=__doc__)
     sub = p.add_subparsers(dest="cmd", required=True)
+    n = sub.add_parser("nocturno", help="exportacion nocturna: ultima copia buena de cada base de server/data/backups, exporta, verifica y deja nocturno.jsonl")
+    n.add_argument("--destino", help="carpeta del archivo (por defecto $BALANCITA_ARCHIVO_DESTINO o ~/balancita-data.noindex/archivo-parquet)")
+    n.add_argument("--respaldos", help="carpeta de copias diarias (por defecto $BALANCITA_RESPALDOS_DIR o server/data/backups del repo)")
+    n.add_argument("--bases", help="lista separada por comas; por defecto todas las del archivo")
+    n.add_argument("--dry-run", action="store_true", help="solo lista que se exportaria; no escribe nada")
     e = sub.add_parser("exportar", help="exporta a Parquet los dias UTC cerrados de una COPIA de SQLite")
     e.add_argument("--copia", required=True)
     e.add_argument("--base", required=True)
@@ -72,6 +77,12 @@ def _imprimir(obj) -> None:
 def main(argv: Optional[List[str]] = None) -> int:
     args = _parser().parse_args(argv)
     try:
+        if args.cmd == "nocturno":
+            from .nocturno import BASES, correr, destino_por_defecto, respaldos_por_defecto
+            rep = correr(args.destino or destino_por_defecto(), args.respaldos or respaldos_por_defecto(), args.dry_run,
+                         tuple(_tablas(args.bases) or BASES), log=lambda m: print(m, file=sys.stderr))
+            _imprimir(rep)
+            return rep["codigo"]
         if args.cmd == "exportar":
             from .exportar import exportar
             rep = exportar(args.copia, args.base, args.destino, _tablas(args.tablas), args.dry_run, args.copia_confirmada,

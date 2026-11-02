@@ -19,6 +19,7 @@
     "preview": "vite preview",
     "db:snapshot": "pnpm --dir server db:snapshot",
     "db:rebuild": "pnpm --dir server db:rebuild",
+    "db:compact": "pnpm --dir server db:compact",
     "test:server": "pnpm --dir server test",
     "typecheck:server": "pnpm --dir server typecheck"
   },

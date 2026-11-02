@@ -1,6 +1,6 @@
-# Archivo Parquet a largo plazo (fases 1 y 2)
+# Archivo Parquet a largo plazo (fases 1 a 3)
 
-Diseño: `analisis/archivo-parquet/informe.md`. Es un exportador **offline**: lee una **copia** de SQLite, escribe archivos Parquet verificados y un manifiesto; la fase 2 suma más tablas, grupos de filas chicos y el respaldo fuera del VPS. No borra nada en SQLite, no toca la captura ni cambia ninguna lectura existente. Código en `python/archivo_parquet/`.
+Diseño: `analisis/archivo-parquet/informe.md`. Es un exportador **offline**: lee una **copia** de SQLite, escribe archivos Parquet verificados y un manifiesto; la fase 2 suma más tablas, grupos de filas chicos y el respaldo fuera del VPS. El exportador (fases 1 y 2) no borra nada ni toca la captura. La fase 3 suma la **exportación nocturna automática** (parte A) y el **borrado seguro de lo ya archivado** (parte B, apagado por defecto). Código en `python/archivo_parquet/` y `server/src/features/archive-prune/`.
 
 ## Instalar (una vez, fuera del repo)
 
@@ -47,6 +47,44 @@ Tablas soportadas (cada una es una entrada en `python/archivo_parquet/config.py`
 | `news_analysis`                                                             | `paper_futures_news_analysis`                                                                         | futures-news            | `analyzed_at`                                                 | mes       |
 
 Cada tabla declara su `granularidad`: `dia` (carpeta `anio=/mes=/dia=`) o `mes` (carpeta `anio=/mes=`, un archivo por mes; para tablas chicas). Un mes se exporta cuando terminó hace al menos 1 día (mismo margen de 1 día que los días). En el manifiesto, `dia` de un archivo mensual es el día 1 del mes y la línea trae `granularidad`. Los puntajes de pronóstico usan el minuto de la decisión: un puntaje de 24 h se escribe al día siguiente pero cae en el día de la decisión, por eso el margen importa. Las noticias no tienen producto (las búsquedas por producto no aplican). La base SQLite de noticias se conserva: nada la borra.
+
+## Exportación nocturna automática (fase 3, parte A)
+
+Un solo comando, en la Mac, sin `sudo` (crea el entorno aparte con pyarrow y hashes, genera el agente de launchd y hace una corrida de prueba `--dry-run`; se puede repetir sin problema):
+
+```sh
+bash ops/launchd/instalar-archivo-parquet.sh
+```
+
+Lo que queda instalado: `~/.venvs/archivo-parquet` (fuera del repo), `~/Library/LaunchAgents/com.balancita.archivo-parquet.plist` (plantilla en `ops/launchd/`) y una corrida **todas las noches a las 04:30 hora local de la Mac** (si la Mac duerme a esa hora, launchd la corre al despertar). Prioridad baja (`Nice`, `LowPriorityIO`). El resultado va a `~/balancita-data.noindex/archivo-parquet`.
+
+`python -m archivo_parquet nocturno [--destino D] [--respaldos R] [--bases a,b] [--dry-run]` (destino: `--destino`, o `BALANCITA_ARCHIVO_DESTINO`, o `~/balancita-data.noindex/archivo-parquet`; copias: `--respaldos`, o `BALANCITA_RESPALDOS_DIR`, o `server/data/backups`):
+
+- Por cada base elige la copia diaria **más reciente que pase `quick_check`** (nunca la base viva), exporta todas las tablas que tenga, corre `verificar` sobre todo el archivo y agrega una línea de resumen a `nocturno.jsonl` en el destino.
+- No usa una copia con menos de 5 min de vida ni si hay un `.tmp` de copia en curso (de menos de 2 h): lo deja para otra noche. Una base sin ninguna copia (no se usa) se omite sin error; una copia ilegible o con `quick_check` malo cuenta como sin confirmar.
+- Un solo proceso a la vez (`flock` sobre `.nocturno.lock`); es idempotente (lo ya confirmado se salta).
+- No corre en los 10 min posteriores a un despertar: en macOS lo sabe por `sysctl kern.waketime`; en otros sistemas no hay forma simple y no se aplica.
+- Códigos: `0` todo confirmado; `1` algo quedó **sin confirmar** (día, copia mala o `verificar` con problemas); `2` uso incorrecto o sin pyarrow; `3` no corrió a propósito (otra corrida en curso o despertar reciente; no es un fallo, la noche siguiente lo recupera).
+- Con `--dry-run` no escribe nada (ni el log) y no toma el candado.
+
+## Borrado seguro de lo ya archivado (fase 3, parte B)
+
+**Apagado por defecto y NO lo enciende el instalador.** Fran lo activa a mano cuando quiera, con `FUTURES_ARCHIVE_DELETE=1` en el proceso dueño de la base (`=dry-run` solo informa en `retention.jsonl` qué borraría). Para apagarlo: quitar la variable y reiniciar ese proceso.
+
+Quién borra: solo el proceso que ya es dueño de cada base.
+
+| Tabla                                     | Dueño de la base                                           | ¿Borra por archivo?                                                                                          |
+| ----------------------------------------- | ---------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| `positioning`, `premium`                  | recolector de posicionamiento (`pnpm positioning:collect`) | **Sí** (ventana 30 días, por mes)                                                                            |
+| `verdicts`, `llm_decisions`, `forecasts*` | procesos Python; tienen trigger `no_delete` (inmutables)   | **No**: otro proceso la escribe y el trigger impide borrar sin desactivarlo                                  |
+| `market_events`                           | captura                                                    | **No**: la retención de la captura ya la recorta (7 días) y tiene triggers; el archivo no cambia esa ventana |
+| `news_items`, `news_analysis`             | Python (inmutable)                                         | **Nunca**: las noticias no se borran                                                                         |
+
+La puerta (`archive-gate.ts`, solo lectura) deja borrar un día/mes únicamente si: está confirmado en `manifiesto.jsonl` **con `verificacion_ida_vuelta: true` y `formato_version` al menos el mínimo** (`MIN_FORMAT_VERSION`; el exportador actual no escribe esos campos, así que **nada de lo archivado hoy se puede borrar** hasta que el exportador nuevo lo certifique y se suba esa constante); el archivo existe con el mismo tamaño y sha256 del manifiesto (sha256 en streaming con tope de 5 s, cacheado por mtime); terminó hace más que la ventana de la tabla **más 1 día de margen**; y la base no tiene más filas del período que el archivo. Con `FUTURES_ARCHIVE_REQUIRE_OFFSITE=1` también exige `confirmado_fuera` en `respaldo-estado.jsonl` (apagado mientras no haya VPS). Si el manifiesto falta, no se lee o hay cualquier duda: no se borra nada. Antes de empezar cada período se verifica que exista una copia diaria buena de la base de menos de 30 h.
+
+El ejecutor borra por rango de tiempo en transacciones cortas (100 a 1.000 filas), anota cada paso en `retention.jsonl` (`kind: archive-delete`, tabla, día, filas), y es idempotente (si se corta a la mitad, la próxima vez sigue). Si una tabla tiene trigger de borrado, no la toca ni lo desactiva. El hook `archive` del `retention-runner` comparte presupuesto de 6 s por ciclo, `canRun`, despertar y checkpoint; el recolector de posicionamiento (que no tiene runner) usa `runArchiveCycle` con el mismo presupuesto y lee de `db-health-state.json` si hubo un despertar hace menos de 10 min o la base está dañada.
+
+Después de borrar, SQLite no devuelve el espacio al disco: ver «Compactar» en `docs/operacion-base-de-datos.md` (`pnpm db:compact`).
 
 ## Qué se guarda
 
@@ -129,9 +167,9 @@ Mirar el código de salida: distinto de 0 debe avisar a alguien. Una vez al mes 
 
 ## Qué NO hace todavía
 
-- **No borra nada** en SQLite ni cambia ventanas de retención. Falta el **borrado verificado** (fase 3): leer `respaldo-estado.jsonl`, reverificar antes de borrar y recién entonces recortar SQLite. Hasta entonces el respaldo solo suma.
+- **El borrado está apagado** y, con el exportador actual, la puerta no deja borrar nada (faltan `verificacion_ida_vuelta` y `formato_version` en el manifiesto: los traerá el exportador con el formato óptimo por tabla). Veredictos, decisiones, puntajes y noticias no se borran por archivo (ver la tabla de arriba).
 - **No hay rotación ni compactación** (fase 4): ni compactar días en archivos más grandes, ni rotar o limitar lo que ya está en el remoto, ni rotar las claves del remoto cifrado.
-- No corre solo: los ejemplos de cron/systemd/launchd de arriba son para cuando exista el VPS. No se probó con rclone real ni con un remoto real (las pruebas usan un remoto falso en una carpeta local), ni con una copia real.
+- La exportación nocturna corre sola en la Mac solo después de ejecutar el instalador; los ejemplos de cron/systemd/launchd del VPS siguen siendo ejemplos. No se probó con una copia real (todo con datos sintéticos). No se probó con rclone real ni con un remoto real (las pruebas usan un remoto falso en una carpeta local), ni con una copia real.
 - La verificación depende de lo que el remoto sepa hacer: sin sha256 se usa `rclone check --download`. Un remoto que miente sobre lo que guarda no está probado; por eso existe `restaurar-prueba`.
 - Es confirmación lógica: un disco que miente en `fsync` no está probado. Si el manifiesto local se pierde, hay que reexportar (los archivos sin línea se descartan al reexportar ese día); el manifiesto del remoto sirve de copia del catálogo.
 - El lector no une todavía SQLite reciente con Parquet histórico.

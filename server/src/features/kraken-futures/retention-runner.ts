@@ -17,6 +17,8 @@ export interface RetentionCycle {
   /** Longest single synchronous call: how long the event loop was held at worst. */
   readonly maxStepMs: number
   readonly batchSize: number
+  /** Filas borradas porque ya están archivadas en Parquet (borrado verificado); 0 si está apagado. */
+  readonly archived?: number
 }
 
 /**
@@ -49,6 +51,14 @@ export interface RetentionRunnerOptions {
   readonly cycleBudgetMs?: number
   /** `legacy` reproduces the former single call of 20 batches of 5 000 rows (for before/after measurement). */
   readonly mode?: 'incremental' | 'legacy'
+  /**
+   * Borrado de lo ya archivado y verificado (ver features/archive-prune). Solo entra cuando la limpieza de
+   * eventos terminó y comparte el mismo presupuesto, pausas, `canRun` y despertar que ella. Apagado: no se pasa.
+   */
+  readonly archive?: {
+    prepare(): Promise<void>
+    step(batch: number): { deleted: number; done: boolean }
+  }
   readonly onCycle?: (cycle: RetentionCycle) => void
 }
 
@@ -111,8 +121,30 @@ export function createRetentionRunner(options: RetentionRunnerOptions) {
     let slimmed = 0
     let maxStepMs = 0
     let done = false
+    let trimDone = false
+    let archived = 0
+    let archiveReady = false
     while (!stopped && allowed()) {
       const started = now()
+      if (trimDone && options.archive) {
+        if (!archiveReady) {
+          await options.archive.prepare()
+          archiveReady = true
+          if (stopped || !allowed()) break
+        }
+        const result = options.archive.step(batch)
+        const elapsed = now() - started
+        steps += 1
+        archived += result.deleted
+        maxStepMs = Math.max(maxStepMs, elapsed)
+        if (elapsed > target * 1.5)
+          batch = Math.max(minBatch, Math.floor(batch / 2))
+        done = result.done
+        if (steps % checkpointEvery === 0) checkpoint()
+        if (done || now() - cycleStart > budget) break
+        await yieldLoop()
+        continue
+      }
       // A small pass over the freed pages per step (no-op unless auto_vacuum=INCREMENTAL).
       const result = options.store.trimRawEvents(
         { now: clock(), ...options.policy },
@@ -128,12 +160,13 @@ export function createRetentionRunner(options: RetentionRunnerOptions) {
         batch = Math.max(minBatch, Math.floor(batch / 2))
       else if (elapsed < target / 4)
         batch = Math.min(maxBatch, Math.ceil(batch * 1.5))
-      done = result.done
+      trimDone = result.done
+      done = result.done && !options.archive
       if (steps % checkpointEvery === 0) checkpoint()
       if (done || now() - cycleStart > budget) break
       await yieldLoop()
     }
-    if (deleted > 0 || slimmed > 0) checkpoint()
+    if (deleted > 0 || slimmed > 0 || archived > 0) checkpoint()
     return {
       at,
       mode: 'incremental',
@@ -144,6 +177,7 @@ export function createRetentionRunner(options: RetentionRunnerOptions) {
       totalMs: now() - cycleStart,
       maxStepMs,
       batchSize: batch,
+      ...(options.archive ? { archived } : {}),
     }
   }
 

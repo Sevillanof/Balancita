@@ -1,4 +1,20 @@
+import { appendFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { serverConfigFrom } from '../../platform/config.ts'
+import { defaultBackupDir } from '../../platform/sqlite-safety.ts'
+import {
+  archiveDirFromEnv,
+  archiveModeFromEnv,
+  requireOffsiteFromEnv,
+} from '../archive-prune/archive-env.ts'
+import {
+  createArchivePruner,
+  makeBackupGuard,
+  recentWakeFromState,
+  runArchiveCycle,
+} from '../archive-prune/archive-pruner.ts'
+import { POSITIONING_TABLES } from '../archive-prune/archive-tables.ts'
 import { acquireWriterLock } from '../../platform/writer-lock.ts'
 import { resolveFuturesProducts } from '../kraken-futures/futures-products.ts'
 import { DEFAULT_CATALOG_URL, loadCatalog } from './catalog.ts'
@@ -33,6 +49,51 @@ const collector = new PositioningCollector({
   ),
   log,
 })
+// Borrado de lo ya archivado en Parquet (solo posicionamiento y premium; este proceso es el dueño de esta base).
+// APAGADO salvo FUTURES_ARCHIVE_DELETE=1 (o =dry-run). Copia diaria buena y despertar se leen de db-health-state.json de la captura.
+const archiveMode = archiveModeFromEnv(process.env)
+const marketDbPath = serverConfigFrom(process.env).futuresMarketDbPath
+const healthStatePath = join(dirname(marketDbPath), 'db-health-state.json')
+const archivePruner = createArchivePruner({
+  db: store.db,
+  archiveDir: archiveDirFromEnv(process.env),
+  specs: POSITIONING_TABLES,
+  mode: archiveMode,
+  requireOffsite: requireOffsiteFromEnv(process.env),
+  backupOk: makeBackupGuard({
+    backupDir:
+      process.env.FUTURES_DB_BACKUP_DIR ?? defaultBackupDir(marketDbPath),
+    name: 'positioning',
+    statePath: healthStatePath,
+  }),
+  record: (entry) => {
+    try {
+      appendFileSync(
+        join(dirname(out), 'retention.jsonl'),
+        `${JSON.stringify({ db: 'positioning', ...entry })}\n`,
+      )
+    } catch {
+      // Diagnostics never take the collector down.
+    }
+  },
+})
+let archiveRunning = false
+if (archiveMode !== 'off') {
+  log(`archive delete: ${archiveMode}`)
+  const archiveTimer = setInterval(() => {
+    if (archiveRunning || closing) return
+    archiveRunning = true
+    void runArchiveCycle(archivePruner, {
+      canRun: () =>
+        !closing && !recentWakeFromState(healthStatePath, Date.now()),
+    })
+      .catch((error: unknown) => log(`archive delete failed: ${String(error)}`))
+      .finally(() => {
+        archiveRunning = false
+      })
+  }, 30_000)
+  archiveTimer.unref()
+}
 let timer: ReturnType<typeof setTimeout> | undefined
 let running: Promise<void> = Promise.resolve()
 let closing = false

@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Plantilla: la rellena ops/launchd/instalar-archivo-parquet.sh (no editar a mano: __REPO__, __PYTHON__, __DESTINO__, __RESPALDOS__).
+     Exportacion nocturna a Parquet, 04:30 hora LOCAL de la Mac (Madrid). Si la Mac duerme a esa hora, launchd la corre al despertar.
+     No borra nada de SQLite: el borrado es otro interruptor, apagado por defecto (docs/archivo-parquet.md). -->
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.balancita.archivo-parquet</string>
+  <key>WorkingDirectory</key><string>__REPO__/python</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PYTHONPATH</key><string>__REPO__/python</string>
+    <key>BALANCITA_ARCHIVO_DESTINO</key><string>__DESTINO__</string>
+    <key>BALANCITA_RESPALDOS_DIR</key><string>__RESPALDOS__</string>
+  </dict>
+  <key>ProgramArguments</key>
+  <array>
+    <string>__PYTHON__</string>
+    <string>-m</string><string>archivo_parquet</string>
+    <string>nocturno</string>
+    <string>--destino</string><string>__DESTINO__</string>
+    <string>--respaldos</string><string>__RESPALDOS__</string>
+  </array>
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Hour</key><integer>4</integer>
+    <key>Minute</key><integer>30</integer>
+  </dict>
+  <key>RunAtLoad</key><false/>
+  <key>Nice</key><integer>10</integer>
+  <key>LowPriorityIO</key><true/>
+  <key>ProcessType</key><string>Background</string>
+  <key>StandardOutPath</key><string>__DESTINO__/nocturno.out.log</string>
+  <key>StandardErrorPath</key><string>__DESTINO__/nocturno.err.log</string>
+</dict>
+</plist>
