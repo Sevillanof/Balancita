@@ -2,11 +2,18 @@ import type { DatabaseSync } from 'node:sqlite'
 import { withDb, num, rowOf, type Row } from './observability-health.ts'
 import { addDecimal, decimalFromPython } from './decimal-string.ts'
 import { canonicalHash } from '../paper-futures/futures-canonical.ts'
-import { readAuditorVerdicts, type QwenAuditoria } from './auditor-verdicts.ts'
+import {
+  readAuditorTrades,
+  readAuditorVerdicts,
+  type QwenAuditoria,
+  type QwenTradeAudit,
+} from './auditor-verdicts.ts'
 
 export type {
   QwenAfter,
   QwenAuditoria,
+  QwenHorizon,
+  QwenTradeAudit,
   QwenVerdict,
 } from './auditor-verdicts.ts'
 
@@ -173,6 +180,8 @@ export interface QwenTrade {
   readonly mark_price: number | null
   readonly mark_ms: number | null
   readonly execution?: QwenExecution
+  /** How the auditor judged this operation (`auditor.sqlite`); null while it has not seen it or cannot be read. */
+  readonly auditoria: QwenTradeAudit | null
 }
 
 /** Last sign of life of the operator process (table `meta`); null on a base that never wrote it. */
@@ -747,8 +756,23 @@ export function createQwenDecisions(options: {
           mark_price: open ? num(row.mark_px) : null,
           mark_ms: open ? num(row.mark_ms) : null,
           ...(execution === null ? {} : { execution }),
+          auditoria: null,
         })
       }
+      // One query for the whole list; any failure reads as no audit at all.
+      const audits = readAuditorTrades(
+        options.liveDbPath,
+        product,
+        trades.map((trade) => trade.trade_no),
+      )
+      if (audits)
+        for (let i = 0; i < trades.length; i++) {
+          const current = trades[i]!
+          trades[i] = {
+            ...current,
+            auditoria: audits.get(current.trade_no) ?? null,
+          }
+        }
       return { status: 'ok', trades }
     },
     account() {

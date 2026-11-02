@@ -140,3 +140,109 @@ export function readAuditorVerdicts(
   }
   return out
 }
+
+export type QwenHorizon = '12h' | '24h' | '36h'
+
+/** The verdict that counts for one look: the longest horizon that has one (36 h over 24 h over 12 h). */
+function bestVerdict(row: Record<string, unknown>): {
+  verdict: QwenVerdict
+  horizon: QwenHorizon
+} | null {
+  for (const [key, horizon] of [
+    ['veredicto_36h_json', '36h'],
+    ['veredicto_24h_json', '24h'],
+    ['veredicto_12h_json', '12h'],
+  ] as const) {
+    const verdict = verdictOf(row[key])
+    if (verdict) return { verdict, horizon }
+  }
+  return null
+}
+
+/** How the auditor judged one operation: its entry, its exit and the looks it held through. */
+export interface QwenTradeAudit {
+  /** Verdict of the look that opened it, at the longest horizon available; null while it has none. */
+  readonly entrada: QwenVerdict | null
+  readonly entrada_horizonte: QwenHorizon | null
+  /** What the auditor saw that look do (ENTRAR, ENTRAR_noticias); null when it has no entry look. */
+  readonly entrada_accion: string | null
+  /** Verdict of the look that closed it; null while open, unjudged or without one (a fixed rule has `acerto` null). */
+  readonly salida: QwenVerdict | null
+  readonly salida_horizonte: QwenHorizon | null
+  /** How the close was classified (SALIR_vuelta, SALIR_36h, ...); null while open or unseen. */
+  readonly salida_accion: string | null
+  /** Looks that kept the operation open and already have a verdict: how many were right out of how many judged. */
+  readonly mantener: { readonly aciertos: number; readonly total: number }
+  /** All the looks the auditor saw of this operation. */
+  readonly miradas: number
+}
+
+/**
+ * The audit of each operation asked for, keyed by `trade_no`, in ONE query
+ * over the looks that carry that operation number. An operation the auditor
+ * has not seen is absent from the map. Null when the auditor cannot be read
+ * (no file, no table, a failing query): the caller then shows no audit.
+ */
+export function readAuditorTrades(
+  liveDbPath: string | undefined,
+  product: string,
+  tradeNos: readonly number[],
+): ReadonlyMap<number, QwenTradeAudit> | null {
+  if (tradeNos.length === 0) return new Map()
+  const opened = withDb(auditorDbPath(liveDbPath), (db) =>
+    db
+      .prepare(
+        `SELECT trade_no, accion, t_ms, veredicto_12h_json, veredicto_24h_json,
+                veredicto_36h_json
+           FROM miradas
+          WHERE product=? AND trade_no IN (${tradeNos.map(() => '?').join(',')})
+          ORDER BY t_ms`,
+      )
+      .all(product, ...tradeNos)
+      .map((row) => rowOf(row)),
+  )
+  if (opened.state !== 'read') return null
+  type Draft = {
+    -readonly [K in keyof QwenTradeAudit]: QwenTradeAudit[K]
+  } & { mantener: { aciertos: number; total: number } }
+  const out = new Map<number, Draft>()
+  for (const row of opened.value) {
+    const tradeNo = num(row.trade_no)
+    if (tradeNo === null || typeof row.accion !== 'string') continue
+    let audit = out.get(tradeNo)
+    if (!audit) {
+      audit = {
+        entrada: null,
+        entrada_horizonte: null,
+        entrada_accion: null,
+        salida: null,
+        salida_horizonte: null,
+        salida_accion: null,
+        mantener: { aciertos: 0, total: 0 },
+        miradas: 0,
+      }
+      out.set(tradeNo, audit)
+    }
+    audit.miradas += 1
+    const best = bestVerdict(row)
+    if (row.accion.startsWith('ENTRAR')) {
+      // Rows come oldest first: the first entry look is the one that opened it.
+      if (audit.entrada_accion === null) {
+        audit.entrada_accion = row.accion
+        audit.entrada = best?.verdict ?? null
+        audit.entrada_horizonte = best?.horizon ?? null
+      }
+    } else if (row.accion.startsWith('SALIR')) {
+      audit.salida_accion = row.accion
+      audit.salida = best?.verdict ?? null
+      audit.salida_horizonte = best?.horizon ?? null
+    } else if (
+      row.accion === 'MANTENER' &&
+      typeof best?.verdict.acerto === 'boolean'
+    ) {
+      audit.mantener.total += 1
+      if (best.verdict.acerto) audit.mantener.aciertos += 1
+    }
+  }
+  return out
+}

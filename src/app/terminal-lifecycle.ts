@@ -1,6 +1,11 @@
 import { record } from '../shared/wire/decode.ts'
+import { tradeIdentity } from '../features/trading-view/domain/terminal-trade-model.ts'
 import { decisionView, masterGlyph } from './terminal-decision-view.ts'
-import type { QwenTrade } from './useQwenTrades.ts'
+import type {
+  QwenAuditHorizon,
+  QwenTrade,
+  QwenTradeVerdict,
+} from './useQwenTrades.ts'
 
 /**
  * The lifecycle strip of the chart bar: the steps a new entry goes through
@@ -23,6 +28,7 @@ export type StepIcon =
   | 'cap'
   | 'maker'
   | 'alert'
+  | 'audit'
 
 /** Who judged a look: the price 30 minutes later, or the auditor at 12, 24 or 36 hours (the longest one available wins). */
 export type CheckSource =
@@ -44,6 +50,32 @@ export interface StepCheck {
   text: string | null
 }
 
+/** One side of an operation's judgment (its entry or its exit). */
+export interface TradeMark {
+  /** `pending`: the auditor saw it but has no verdict yet; `none`: no judgment (not seen, or a fixed rule). */
+  state: 'right' | 'wrong' | 'pending' | 'none'
+  /** The auditor's short text («si entraba: +23 pb»), or what is missing. */
+  text: string
+  /** True while only the 12 h or 24 h verdict exists (the 36 h one is the definitive). */
+  provisional: boolean
+}
+
+/** One operation judged by the auditor: how its entry, its exit and the looks it held turned out. */
+export interface TradeJudgment {
+  tradeNo: number
+  /** The operation's identity in the Terminal (`tradeIdentity`), to select it. */
+  id: string
+  side: 'LONG' | 'SHORT'
+  entryMs: number
+  exitMs: number | null
+  open: boolean
+  /** Closed: the final net. Open: what closing now would net. */
+  netUsd: number | null
+  entrada: TradeMark
+  salida: TradeMark
+  mantener: { aciertos: number; total: number }
+}
+
 export interface LifecycleStep {
   id: string
   icon: StepIcon
@@ -63,6 +95,10 @@ export interface LifecycleStep {
   rule: string
   /** The last looks judged against the price 30 minutes later (same order as `history`); null when the step is a fixed rule. */
   checks: readonly StepCheck[] | null
+  /** Only the auditor step: the last judged operations, oldest first (empty when there are none). */
+  judgments?: readonly TradeJudgment[] | null
+  /** Only the auditor step: the last looks without an operation (NO_ENTRAR_*) that carry an auditor verdict, oldest first. */
+  flatJudgments?: readonly StepCheck[]
 }
 
 export interface LifecycleView {
@@ -562,6 +598,177 @@ function priceAt(prices: readonly PricePoint[], ms: number): number | null {
   return found
 }
 
+/** Operations the auditor step shows (the last ones it judged). */
+const JUDGED_TRADES = 8
+
+const stamp = new Intl.DateTimeFormat('es-ES', {
+  timeZone: 'Europe/Madrid',
+  day: 'numeric',
+  month: 'short',
+  hour: '2-digit',
+  minute: '2-digit',
+  hour12: false,
+})
+
+/** «31-oct 01:00», Madrid time. */
+function dayTime(ms: number): string {
+  const parts = Object.fromEntries(
+    stamp.formatToParts(new Date(ms)).map((part) => [part.type, part.value]),
+  )
+  return `${parts.day}-${String(parts.month).replace('.', '')} ${parts.hour}:${parts.minute}`
+}
+
+/** A verdict (or its absence) as one mark of a ficha. `seen`: the auditor saw that decision. */
+function markOf(
+  verdict: QwenTradeVerdict | null,
+  horizon: QwenAuditHorizon | null,
+  seen: boolean,
+): TradeMark {
+  if (!verdict)
+    return seen
+      ? { state: 'pending', text: 'todavía sin veredicto', provisional: false }
+      : { state: 'none', text: 'sin juicio', provisional: false }
+  return {
+    state:
+      verdict.acerto === true
+        ? 'right'
+        : verdict.acerto === false
+          ? 'wrong'
+          : 'none',
+    text: verdict.texto ?? 'regla fija, no se juzga',
+    provisional: horizon !== '36h',
+  }
+}
+
+function judgmentOf(trade: QwenTrade): TradeJudgment | null {
+  const audit = trade.auditoria
+  if (!audit) return null
+  return {
+    tradeNo: trade.tradeNo,
+    id: tradeIdentity(trade),
+    side: trade.side,
+    entryMs: trade.entryMs,
+    exitMs: trade.exitMs,
+    open: trade.open,
+    netUsd: trade.netUsd,
+    entrada: markOf(
+      audit.entrada,
+      audit.entradaHorizonte,
+      audit.entradaAccion !== null,
+    ),
+    salida: markOf(
+      audit.salida,
+      audit.salidaHorizonte,
+      audit.salidaAccion !== null,
+    ),
+    mantener: audit.mantener,
+  }
+}
+
+const sideWord = (side: 'LONG' | 'SHORT') =>
+  side === 'LONG' ? 'largo' : 'corto'
+
+/** A mark as a row value: «si entraba: +23 pb · acertó (provisorio)». */
+function markLine(mark: TradeMark): string {
+  if (mark.state === 'pending' || mark.state === 'none') return mark.text
+  const outcome = mark.state === 'right' ? 'acertó' : 'falló'
+  return `${mark.text} · ${outcome}${mark.provisional ? ' (provisorio)' : ''}`
+}
+
+/**
+ * The «Auditor» step: the verdicts of the last operations judged by the
+ * auditor (entry, exit, looks held) and of the looks that did not enter. The
+ * step is the judgment itself, so it carries no `checks` of its own.
+ */
+function auditorStepOf(
+  trades: readonly QwenTrade[],
+  looks: readonly Record<string, unknown>[],
+): LifecycleStep {
+  const judgments = [...trades]
+    .sort((a, b) => a.entryMs - b.entryMs)
+    .flatMap((trade) => judgmentOf(trade) ?? [])
+    .slice(-JUDGED_TRADES)
+  const costs = [...trades]
+    .filter((trade) => judgments.some((j) => j.tradeNo === trade.tradeNo))
+    .flatMap((trade) => [trade.auditoria?.entrada, trade.auditoria?.salida])
+    .filter((verdict) => verdict?.acerto === false)
+  const cost = costs.reduce(
+    (sum, verdict) => sum + (verdict?.costoErrorPb ?? 0),
+    0,
+  )
+  const flat = looks
+    .filter((look) =>
+      String(record(look.auditoria).accion ?? '').startsWith('NO_ENTRAR'),
+    )
+    .flatMap((look) => auditorCheck(look, Number(look.decision_time_ms)) ?? [])
+    .slice(-JUDGED_TRADES)
+  const last = judgments.at(-1)
+  const decided = last
+    ? [last.salida, last.entrada].find(
+        (mark) => mark.state === 'right' || mark.state === 'wrong',
+      )
+    : undefined
+  const tone: StepTone = !last
+    ? 'na'
+    : decided
+      ? decided.state === 'right'
+        ? 'ok'
+        : 'no'
+      : 'info'
+  const entriesRight = judgments.filter(
+    (j) => j.entrada.state === 'right',
+  ).length
+  const exitsRight = judgments.filter((j) => j.salida.state === 'right').length
+  const count = judgments.length
+  return {
+    id: 'auditor',
+    icon: 'audit',
+    label: 'Auditor',
+    tone,
+    word: !last
+      ? 'sin juicios'
+      : tone === 'ok'
+        ? 'acertó'
+        : tone === 'no'
+          ? 'falló'
+          : 'pendiente',
+    headline: !last
+      ? 'Todavía no hay juicios (el primero llega 12 h después de la primera mirada)'
+      : `${count === 1 ? 'Última operación' : `Últimas ${count} operaciones`}: ${entriesRight} ${entriesRight === 1 ? 'entrada' : 'entradas'} y ${exitsRight} ${exitsRight === 1 ? 'salida acertada' : 'salidas acertadas'}${costs.length > 0 ? ` · errores costaron ${Math.round(cost)} pb` : ' · sin errores'}`,
+    rows: last
+      ? [
+          {
+            label: 'Operación',
+            value: `#${last.tradeNo} ${sideWord(last.side)}, ${dayTime(last.entryMs)}`,
+          },
+          { label: 'Entrada', value: markLine(last.entrada) },
+          { label: 'Salida', value: markLine(last.salida) },
+          {
+            label: 'Mantener',
+            value:
+              last.mantener.total === 0
+                ? 'sin miradas juzgadas'
+                : `${last.mantener.aciertos} de ${last.mantener.total} miradas acertadas`,
+          },
+        ]
+      : [],
+    meter: null,
+    history: [],
+    rule: 'Juzga cada decisión con lo que pasó de verdad: a las 12 h un veredicto provisorio, a las 36 h el definitivo.',
+    checks: null,
+    judgments,
+    flatJudgments: flat,
+  }
+}
+
+/** The auditor step goes second to last of each phase (before the entry itself, before the emergency). */
+function withAuditor(
+  steps: readonly LifecycleStep[],
+  auditor: LifecycleStep,
+): LifecycleStep[] {
+  return [...steps.slice(0, -1), auditor, ...steps.slice(-1)]
+}
+
 function claimOf(
   step: LifecycleStep,
   side: number,
@@ -690,18 +897,22 @@ function checkOf(
  * while one is. `null` when Qwen has not looked yet (nothing to evaluate).
  * `prices` (1 minute candles) lets each past look be judged against what the
  * price did in the next 30 minutes, until the look carries an auditor verdict
- * (`auditoria`, 12 / 24 / 36 h), which then decides.
+ * (`auditoria`, 12 / 24 / 36 h), which then decides. The «Auditor» step, second
+ * to last in both phases, lists the operations in `trades` the auditor judged.
  */
 export function lifecycleView(input: {
   analyses: readonly unknown[]
   openTrade: QwenTrade | null
   nowMs: number
   prices?: readonly PricePoint[]
+  /** Every operation of the product, open and closed: the auditor step judges them. */
+  trades?: readonly QwenTrade[]
 }): LifecycleView | null {
   const looks = qwenLooks(input.analyses)
   const latest = looks.at(-1)
   if (!latest) return null
   const prices = input.prices ?? []
+  const auditor = auditorStepOf(input.trades ?? [], looks)
   const evaluatedMs = Number(latest.decision_time_ms)
   const recent = looks.slice(-HISTORY)
   const trade = input.openTrade
@@ -735,7 +946,7 @@ export function lifecycleView(input: {
           })
         : null,
     }))
-    return { phase: 'exit', steps, evaluatedMs }
+    return { phase: 'exit', steps: withAuditor(steps, auditor), evaluatedMs }
   }
   const entryContext = (analysis: Record<string, unknown>) => {
     const r = read(analysis)
@@ -767,5 +978,5 @@ export function lifecycleView(input: {
         })
       : null,
   }))
-  return { phase: 'entry', steps, evaluatedMs }
+  return { phase: 'entry', steps: withAuditor(steps, auditor), evaluatedMs }
 }

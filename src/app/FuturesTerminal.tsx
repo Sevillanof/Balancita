@@ -489,6 +489,7 @@ export default function FuturesTerminal({
                             ownTrades.find((trade) => trade.open) ?? null,
                           nowMs: displayClock,
                           prices: minutePrices(market.candles),
+                          trades: ownTrades,
                         })
                       : null
                   }

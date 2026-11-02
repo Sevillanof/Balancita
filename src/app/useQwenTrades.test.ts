@@ -204,4 +204,37 @@ describe('qwenTrades', () => {
       }),
     ).toEqual([])
   })
+
+  it('reads the auditor judgment of an operation and leaves a missing or damaged one null', () => {
+    const audit = {
+      entrada: { acerto: true, costo_error_pb: 0, texto: 'si entraba: +23 pb' },
+      entrada_horizonte: '36h',
+      entrada_accion: 'ENTRAR',
+      salida: { acerto: false, costo_error_pb: 41, texto: 'quedaban +41 pb' },
+      salida_horizonte: '12h',
+      salida_accion: 'SALIR_vuelta',
+      mantener: { aciertos: 7, total: 9 },
+      miradas: 11,
+    }
+    const [judged, unseen, damaged] = qwenTrades({
+      status: 'ok',
+      trades: [
+        row({ trade_no: 1, auditoria: audit }),
+        row({ trade_no: 2, auditoria: null }),
+        row({ trade_no: 3, auditoria: 'x' }),
+      ],
+    })
+    expect(judged!.auditoria).toEqual({
+      entrada: { acerto: true, costoErrorPb: 0, texto: 'si entraba: +23 pb' },
+      entradaHorizonte: '36h',
+      entradaAccion: 'ENTRAR',
+      salida: { acerto: false, costoErrorPb: 41, texto: 'quedaban +41 pb' },
+      salidaHorizonte: '12h',
+      salidaAccion: 'SALIR_vuelta',
+      mantener: { aciertos: 7, total: 9 },
+      miradas: 11,
+    })
+    expect(unseen!.auditoria).toBeNull()
+    expect(damaged!.auditoria).toBeNull()
+  })
 })

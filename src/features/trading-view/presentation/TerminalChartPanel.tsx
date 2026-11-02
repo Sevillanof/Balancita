@@ -975,6 +975,16 @@ export default function TerminalChartPanel({
                 revision: (value?.revision ?? 0) + 1,
               }))
             }
+            onJumpTrade={(id, ms) => {
+              // Selecting the operation already frames it on the chart (as its card does);
+              // without that handler the chart is only moved to its entry.
+              if (onSelectTrade) onSelectTrade(id)
+              else
+                setTimeFocus((value) => ({
+                  ms,
+                  revision: (value?.revision ?? 0) + 1,
+                }))
+            }}
           />
         )}
       </div>

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { lifecycleView } from './terminal-lifecycle.ts'
-import type { QwenTrade } from './useQwenTrades.ts'
+import type { QwenTrade, QwenTradeAudit } from './useQwenTrades.ts'
 
 const HOUR = 3_600_000
 const NOW = Date.UTC(2026, 10, 1, 14, 0)
@@ -56,6 +56,7 @@ describe('lifecycleView', () => {
       'master',
       'gate',
       'news',
+      'auditor',
       'enter',
     ])
     const tone = Object.fromEntries(view.steps.map((s) => [s.id, s.tone]))
@@ -68,6 +69,7 @@ describe('lifecycleView', () => {
       master: 'ok',
       gate: 'no',
       news: 'na',
+      auditor: 'na',
       enter: 'na',
     })
   })
@@ -88,7 +90,7 @@ describe('lifecycleView', () => {
     expect(view.steps.at(-1)).toMatchObject({ id: 'enter', tone: 'ok' })
   })
 
-  it('shows the six exit steps while an operation is open', () => {
+  it('shows the seven exit steps while an operation is open', () => {
     const view = lifecycleView({
       analyses: [
         look(NOW, 'MANTENER', {
@@ -107,6 +109,7 @@ describe('lifecycleView', () => {
       'exhaust24',
       'cap',
       'maker',
+      'auditor',
       'emergency',
     ])
     expect(view.steps[0]).toMatchObject({ tone: 'ok' })
@@ -376,5 +379,249 @@ describe('lifecycleView · veredicto del auditor', () => {
       state: 'right',
       source: 'auditor_12h',
     })
+  })
+})
+
+describe('lifecycleView · paso Auditor', () => {
+  const verdict = (
+    acerto: boolean | null,
+    texto: string | null,
+    costoErrorPb = 0,
+  ) => ({ acerto, costoErrorPb, texto })
+  const audit = (over: Partial<QwenTradeAudit> = {}): QwenTradeAudit => ({
+    entrada: null,
+    entradaHorizonte: null,
+    entradaAccion: 'ENTRAR',
+    salida: null,
+    salidaHorizonte: null,
+    salidaAccion: null,
+    mantener: { aciertos: 0, total: 0 },
+    miradas: 1,
+    ...over,
+  })
+  const closed = (tradeNo: number, over: Partial<QwenTrade> = {}) =>
+    trade({
+      tradeNo,
+      open: false,
+      entryMs: NOW - (60 - tradeNo * 10) * HOUR,
+      exitMs: NOW - (50 - tradeNo * 10) * HOUR,
+      netUsd: -12.9,
+      ...over,
+    })
+  const hold = (at: number, auditoria?: unknown) => ({
+    ...look(at, 'MANTENER', { maestro: -2, puntaje: -1.2, noticias_si: false }),
+    auditoria,
+  })
+  const stepOf = (
+    trades: QwenTrade[],
+    openTrade: QwenTrade | null = null,
+    analyses: unknown[] = [hold(NOW)],
+  ) =>
+    lifecycleView({ analyses, openTrade, nowMs: NOW, trades })!.steps.find(
+      (step) => step.id === 'auditor',
+    )!
+
+  it('is second to last in both phases', () => {
+    const entry = lifecycleView({
+      analyses: [look(NOW, 'ESPERAR', { maestro: 0 })],
+      openTrade: null,
+      nowMs: NOW,
+    })!
+    expect(entry.steps.at(-2)?.id).toBe('auditor')
+    expect(entry.steps.at(-1)?.id).toBe('enter')
+    const exit = lifecycleView({
+      analyses: [hold(NOW)],
+      openTrade: trade(),
+      nowMs: NOW,
+    })!
+    expect(exit.steps.at(-2)?.id).toBe('auditor')
+    expect(exit.steps.at(-1)?.id).toBe('emergency')
+  })
+
+  it('has no judgments before the auditor has seen any operation', () => {
+    const step = stepOf([closed(1), closed(2, { auditoria: null })])
+    expect(step).toMatchObject({
+      icon: 'audit',
+      label: 'Auditor',
+      tone: 'na',
+      word: 'sin juicios',
+      judgments: [],
+      flatJudgments: [],
+      rows: [],
+      checks: null,
+      meter: null,
+    })
+    expect(step.headline).toBe(
+      'Todavía no hay juicios (el primero llega 12 h después de la primera mirada)',
+    )
+  })
+
+  it('judges the last operation with the definitive verdicts and totals the cost of errors', () => {
+    const step = stepOf([
+      closed(1, {
+        auditoria: audit({
+          entrada: verdict(true, 'si entraba: +23 pb'),
+          entradaHorizonte: '36h',
+          salida: verdict(true, 'quedaban −8 pb'),
+          salidaHorizonte: '36h',
+          salidaAccion: 'SALIR_vuelta',
+        }),
+      }),
+      closed(2, {
+        side: 'SHORT',
+        auditoria: audit({
+          entrada: verdict(true, 'si entraba: +9 pb'),
+          entradaHorizonte: '36h',
+          salida: verdict(false, 'quedaban +41 pb', 41),
+          salidaHorizonte: '36h',
+          salidaAccion: 'SALIR_vuelta',
+          mantener: { aciertos: 7, total: 9 },
+        }),
+      }),
+    ])
+    expect(step).toMatchObject({ tone: 'no', word: 'falló' })
+    expect(step.headline).toBe(
+      'Últimas 2 operaciones: 2 entradas y 1 salida acertada · errores costaron 41 pb',
+    )
+    expect(step.rows).toEqual([
+      {
+        label: 'Operación',
+        value: expect.stringMatching(/^#2 corto, \d+-\w+ \d\d:\d\d$/),
+      },
+      { label: 'Entrada', value: 'si entraba: +9 pb · acertó' },
+      { label: 'Salida', value: 'quedaban +41 pb · falló' },
+      { label: 'Mantener', value: '7 de 9 miradas acertadas' },
+    ])
+    expect(step.judgments!.map((j) => j.tradeNo)).toEqual([1, 2])
+    expect(step.judgments![1]).toMatchObject({
+      id: 'terminal:PF_ETHUSD:2',
+      entrada: { state: 'right', provisional: false },
+      salida: { state: 'wrong', text: 'quedaban +41 pb', provisional: false },
+      mantener: { aciertos: 7, total: 9 },
+    })
+  })
+
+  it('marks 12 h verdicts as provisional and an open operation as pending', () => {
+    const step = stepOf(
+      [
+        closed(1, {
+          auditoria: audit({
+            entrada: verdict(true, 'si entraba: +9 pb'),
+            entradaHorizonte: '12h',
+            salidaAccion: 'SALIR_24h',
+          }),
+        }),
+        trade({ tradeNo: 3, auditoria: audit() }),
+      ],
+      trade({ tradeNo: 3, auditoria: audit() }),
+    )
+    const [done, open] = step.judgments!
+    expect(done!.entrada).toMatchObject({ state: 'right', provisional: true })
+    // Seen by the auditor but without a verdict yet.
+    expect(done!.salida).toMatchObject({ state: 'pending' })
+    expect(open).toMatchObject({ tradeNo: 3, open: true })
+    expect(open!.entrada.state).toBe('pending')
+    // Last judged operation has nothing decided: pending.
+    expect(step).toMatchObject({ tone: 'info', word: 'pendiente' })
+    expect(step.rows.find((r) => r.label === 'Mantener')?.value).toBe(
+      'sin miradas juzgadas',
+    )
+  })
+
+  it('reads a fixed rule as none and the last decided mark sets the tone', () => {
+    const step = stepOf([
+      closed(1, {
+        auditoria: audit({
+          entrada: verdict(true, 'si entraba: +9 pb'),
+          entradaHorizonte: '36h',
+          salida: verdict(null, null),
+          salidaHorizonte: '36h',
+          salidaAccion: 'SALIR_36h',
+        }),
+      }),
+    ])
+    expect(step.judgments![0]!.salida).toMatchObject({
+      state: 'none',
+      text: 'regla fija, no se juzga',
+    })
+    expect(step).toMatchObject({ tone: 'ok', word: 'acertó' })
+    expect(step.headline).toBe(
+      'Última operación: 1 entrada y 0 salidas acertadas · sin errores',
+    )
+  })
+
+  it('keeps only the last 8 judged operations, oldest first', () => {
+    const many = Array.from({ length: 10 }, (_, i) =>
+      closed(i + 1, {
+        entryMs: NOW - (100 - i) * HOUR,
+        auditoria: audit({
+          entrada: verdict(true, 'x'),
+          entradaHorizonte: '36h',
+        }),
+      }),
+    )
+    const step = stepOf(many.reverse())
+    expect(step.judgments!.map((j) => j.tradeNo)).toEqual([
+      3, 4, 5, 6, 7, 8, 9, 10,
+    ])
+  })
+
+  it('lists only the judged looks that did not enter in flatJudgments', () => {
+    const flat = (at: number, accion: string, auditoria?: unknown) => ({
+      ...look(at, 'ESPERAR', { maestro: 1, noticias_si: false }),
+      auditoria:
+        auditoria === undefined
+          ? {
+              accion,
+              veredicto_12h: null,
+              veredicto_24h: null,
+              veredicto_36h: null,
+              despues: null,
+            }
+          : auditoria,
+    })
+    const judged = {
+      accion: 'NO_ENTRAR_portero',
+      veredicto_12h: { acerto: false, texto: 'quedaba +41 pb' },
+      veredicto_24h: null,
+      veredicto_36h: null,
+      despues: null,
+    }
+    const step = stepOf([], null, [
+      flat(NOW - 4 * HOUR, 'NO_ENTRAR_portero', judged),
+      // Not judged yet: no verdict at any horizon.
+      flat(NOW - 3 * HOUR, 'NO_ENTRAR_maestro'),
+      // A hold is not a look without an operation.
+      hold(NOW - 2 * HOUR, {
+        accion: 'MANTENER',
+        veredicto_12h: { acerto: true, texto: 'bien' },
+        veredicto_24h: null,
+        veredicto_36h: null,
+        despues: null,
+      }),
+      flat(NOW - HOUR, 'NO_ENTRAR_maestro', {
+        ...judged,
+        accion: 'NO_ENTRAR_maestro',
+        veredicto_36h: { acerto: true, texto: 'no ganaba' },
+      }),
+    ])
+    expect(step.flatJudgments).toEqual([
+      {
+        state: 'wrong',
+        atMs: NOW - 4 * HOUR,
+        moveBp: null,
+        source: 'auditor_12h',
+        text: 'quedaba +41 pb',
+      },
+      {
+        state: 'right',
+        atMs: NOW - HOUR,
+        moveBp: null,
+        source: 'auditor_36h',
+        text: 'no ganaba',
+      },
+    ])
+    // The looks without an operation do not set the step's tone.
+    expect(step.tone).toBe('na')
   })
 })
