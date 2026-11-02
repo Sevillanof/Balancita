@@ -273,6 +273,107 @@ function openTrade(entryAgoMin: number, withPlan: boolean) {
   }
 }
 
+/** The auditor's judgment of one operation as the gateway serves it (`auditoria`). */
+function tradeAudit(over: Record<string, unknown> = {}) {
+  return {
+    entrada: null,
+    entrada_horizonte: null,
+    entrada_accion: 'ENTRAR',
+    salida: null,
+    salida_horizonte: null,
+    salida_accion: null,
+    mantener: { aciertos: 0, total: 0 },
+    miradas: 1,
+    ...over,
+  }
+}
+
+/** A closed operation, `entryAgoMin` minutes back, held 60 minutes. */
+function closedTrade(
+  tradeNo: number,
+  side: 'LONG' | 'SHORT',
+  entryAgoMin: number,
+  net: number,
+  auditoria: unknown,
+) {
+  const entry = NOW - entryAgoMin * 60_000
+  return {
+    product: PRODUCT,
+    trade_no: tradeNo,
+    status: 'closed',
+    side,
+    entry_ms: entry,
+    entry_price: 2210,
+    exit_ms: entry + 60 * 60_000,
+    exit_price: 2200,
+    net_usd: net,
+    net_complete_usd: net,
+    fees_usd: 1,
+    funding_usd: 0.1,
+    funding_status: 'complete',
+    closed_by: 'qwen',
+    hold_min: 60,
+    notional_usd: 999,
+    margin_usd: 999,
+    leverage: 1,
+    auditoria,
+  }
+}
+
+/**
+ * Operations the auditor judged: #1 fully at 36 h, #2 with a wrong exit,
+ * #3 only at 12 h (provisional entry, exit still without a verdict).
+ */
+function judgedTrades() {
+  return [
+    closedTrade(
+      3,
+      'SHORT',
+      200,
+      4.2,
+      tradeAudit({
+        entrada: verdict(true, 'si entraba: +9 pb'),
+        entrada_horizonte: '12h',
+        salida_accion: 'SALIR_vuelta',
+        miradas: 4,
+      }),
+    ),
+    closedTrade(
+      2,
+      'LONG',
+      300,
+      -12.9,
+      tradeAudit({
+        entrada: {
+          ...verdict(false, 'si entraba: −31 pb'),
+          costo_error_pb: 31,
+        },
+        entrada_horizonte: '36h',
+        salida: { ...verdict(false, 'quedaban +41 pb'), costo_error_pb: 41 },
+        salida_horizonte: '36h',
+        salida_accion: 'SALIR_vuelta',
+        mantener: { aciertos: 3, total: 5 },
+        miradas: 8,
+      }),
+    ),
+    closedTrade(
+      1,
+      'SHORT',
+      400,
+      21.6,
+      tradeAudit({
+        entrada: verdict(true, 'si entraba: +23 pb'),
+        entrada_horizonte: '36h',
+        salida: verdict(true, 'quedaban −8 pb'),
+        salida_horizonte: '36h',
+        salida_accion: 'SALIR_24h',
+        mantener: { aciertos: 7, total: 9 },
+        miradas: 12,
+      }),
+    ),
+  ]
+}
+
 async function openFixture(
   page: Page,
   { decisions, trades }: { decisions: unknown[]; trades: unknown[] },
@@ -374,12 +475,26 @@ async function openFixture(
 test('without an open operation the strip shows the entry steps', async ({
   page,
 }) => {
-  await openFixture(page, { decisions: withAuditor(entryLooks()), trades: [] })
+  await openFixture(page, {
+    decisions: withAuditor(entryLooks()),
+    trades: judgedTrades(),
+  })
   const strip = page.getByRole('group', {
     name: 'Pasos para entrar a una operación',
   })
   await expect(strip).toBeVisible()
-  await expect(strip.getByRole('button')).toHaveCount(5)
+  await expect(strip.getByRole('button')).toHaveCount(6)
+  // The auditor step sits second to last, right before the entry itself.
+  await expect(strip.getByRole('button').nth(-2)).toHaveAccessibleName(
+    /^Auditor:/,
+  )
+  await expect(strip.getByRole('button').last()).toHaveAccessibleName(
+    /^Entrada:/,
+  )
+  if (SHOTS)
+    await strip.screenshot({
+      path: `${SHOTS}/cinta-entrada-${test.info().project.name}.png`,
+    })
   await strip.getByRole('button', { name: /^Portero/ }).click()
   const detail = page.getByRole('dialog', {
     name: /Portero: última evaluación/,
@@ -463,13 +578,32 @@ test('with an open operation the strip shows the exit steps', async ({
 }) => {
   await openFixture(page, {
     decisions: exitLooks(),
-    trades: [openTrade(5 * 60, true)],
+    trades: [
+      {
+        ...openTrade(5 * 60, true),
+        auditoria: tradeAudit({
+          entrada: verdict(true, 'si entraba: +5 pb'),
+          entrada_horizonte: '12h',
+        }),
+      },
+      ...judgedTrades().slice(-1),
+    ],
   })
   const strip = page.getByRole('group', {
     name: 'Pasos para salir de la operación',
   })
   await expect(strip).toBeVisible()
-  await expect(strip.getByRole('button')).toHaveCount(6)
+  await expect(strip.getByRole('button')).toHaveCount(7)
+  await expect(strip.getByRole('button').nth(-2)).toHaveAccessibleName(
+    /^Auditor:/,
+  )
+  await expect(strip.getByRole('button').last()).toHaveAccessibleName(
+    /^Emergencia:/,
+  )
+  if (SHOTS)
+    await strip.screenshot({
+      path: `${SHOTS}/cinta-salida-${test.info().project.name}.png`,
+    })
   await strip.getByRole('button', { name: /^Salida maker/ }).click()
   const detail = page.getByRole('dialog', {
     name: /Salida maker: última evaluación/,
@@ -480,4 +614,120 @@ test('with an open operation the strip shows the exit steps', async ({
     await page.screenshot({
       path: `${SHOTS}/salida-${test.info().project.name}.png`,
     })
+})
+
+test('the Auditor step shows one card per judged operation and a click goes to that operation', async ({
+  page,
+}) => {
+  await openFixture(page, {
+    decisions: withAuditor(entryLooks()),
+    trades: judgedTrades(),
+  })
+  const strip = page.getByRole('group', {
+    name: 'Pasos para entrar a una operación',
+  })
+  const step = strip.getByRole('button', { name: /^Auditor/ })
+  // The last judged operation (#3, only at 12 h) is pending: nothing decided on its exit.
+  await expect(step).toHaveAccessibleName(/Últimas 3 operaciones/)
+  await step.click()
+  const detail = page.getByRole('dialog', {
+    name: /Auditor: última evaluación/,
+  })
+  await expect(detail).toContainText('errores costaron 72 pb')
+  await expect(detail).toContainText('Operación')
+  await expect(detail).toContainText('#3 corto')
+  await expect(detail).toContainText('todavía sin veredicto')
+  // Oldest first, the newest at the right; one button per operation.
+  const fichas = detail
+    .getByRole('group', { name: 'Operaciones' })
+    .getByRole('button')
+  await expect(fichas).toHaveCount(3)
+  await expect(fichas.nth(0)).toHaveAccessibleName(/^#1 corto/)
+  await expect(fichas.nth(2)).toHaveAccessibleName(/^#3 corto/)
+  await expect(fichas.nth(0)).toHaveAttribute(
+    'title',
+    '#1 corto · entrada acertó (si entraba: +23 pb) · salida acertó (quedaban −8 pb) · neto +21,6 USD · clic: ir a la operación',
+  )
+  await expect(fichas.nth(1)).toHaveAttribute(
+    'title',
+    /#2 largo · entrada falló \(si entraba: −31 pb\) · salida falló \(quedaban \+41 pb\) · neto −12,9 USD/,
+  )
+  await expect(fichas.nth(2)).toHaveAttribute(
+    'title',
+    /entrada acertó \(si entraba: \+9 pb, provisorio\) · salida todavía no · neto \+4,2 USD/,
+  )
+  // Top bar = entry, bottom bar = exit; a provisional verdict is dimmed.
+  const bars = (index: number) => fichas.nth(index).locator('i')
+  await expect(bars(0).nth(0)).toHaveAttribute('data-state', 'right')
+  await expect(bars(0).nth(1)).toHaveAttribute('data-state', 'right')
+  await expect(bars(1).nth(0)).toHaveAttribute('data-state', 'wrong')
+  await expect(bars(1).nth(1)).toHaveAttribute('data-state', 'wrong')
+  await expect(bars(2).nth(0)).toHaveAttribute('data-provisional', 'true')
+  await expect(bars(2).nth(0)).toHaveClass(/border-long/)
+  await expect(bars(2).nth(0)).not.toHaveClass(/bg-long/)
+  await expect(bars(2).nth(1)).toHaveAttribute('data-state', 'pending')
+  await expect(bars(1).nth(0)).toHaveClass(/bg-short/)
+  await expect(bars(0).nth(0)).toHaveClass(/bg-long/)
+  await expect(fichas.nth(1)).toContainText('−13')
+  // The looks without an operation keep the same dots as «Decisión óptima».
+  await expect(detail).toContainText('Miradas sin operación')
+  const flat = detail.getByRole('button', { name: /^Ir a la mirada/ })
+  await expect(flat).toHaveCount(2)
+  await expect(flat.first()).toHaveAttribute(
+    'title',
+    /Auditor a 12 h \(provisorio\): quedaba: −41 pb · falló/,
+  )
+  await expect(detail).toContainText(
+    'Arriba la entrada, abajo la salida: verde acertó, rojo falló, gris todavía no. Clic en una ficha lleva a esa operación. Barra hueca: veredicto provisorio (12 o 24 h).',
+  )
+  // The cards fit the popover: nothing spills out of it.
+  const box = await detail.boundingBox()
+  const last = await fichas.nth(2).boundingBox()
+  expect(last!.x + last!.width).toBeLessThanOrEqual(box!.x + box!.width)
+  if (SHOTS) {
+    await detail.screenshot({
+      path: `${SHOTS}/auditor-desplegable-${test.info().project.name}.png`,
+    })
+    await page.screenshot({
+      path: `${SHOTS}/auditor-abierto-${test.info().project.name}.png`,
+    })
+  }
+  // A click selects the judged operation (its card is pressed) and moves the chart to it.
+  const cards = page.getByLabel('Operaciones registradas')
+  const card = (no: number) =>
+    cards.getByRole('button', { name: new RegExp(`#${no} `) })
+  await expect(card(3)).toHaveAttribute('aria-pressed', 'true')
+  await expect(card(1)).toHaveAttribute('aria-pressed', 'false')
+  const surface = page.getByTestId('terminal-chart-surface')
+  const before = await surface.screenshot()
+  await fichas.nth(0).click()
+  await expect(card(1)).toHaveAttribute('aria-pressed', 'true')
+  await expect(card(3)).toHaveAttribute('aria-pressed', 'false')
+  await expect(detail).toBeVisible()
+  // The chart moved to frame that operation.
+  await expect
+    .poll(async () => (await surface.screenshot()).equals(before))
+    .toBe(false)
+  if (SHOTS)
+    await page.screenshot({
+      path: `${SHOTS}/auditor-salto-${test.info().project.name}.png`,
+    })
+})
+
+test('without judged operations the Auditor step says so and shows no cards', async ({
+  page,
+}) => {
+  await openFixture(page, { decisions: entryLooks(), trades: [] })
+  const strip = page.getByRole('group', {
+    name: 'Pasos para entrar a una operación',
+  })
+  await strip.getByRole('button', { name: /^Auditor/ }).click()
+  const detail = page.getByRole('dialog', {
+    name: /Auditor: última evaluación/,
+  })
+  await expect(detail).toContainText('sin juicios')
+  await expect(detail).toContainText('Todavía no hay juicios')
+  await expect(detail.getByRole('group', { name: 'Operaciones' })).toHaveCount(
+    0,
+  )
 })

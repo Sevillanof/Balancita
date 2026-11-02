@@ -42,6 +42,33 @@ export interface QwenExecution {
   exitPlan: QwenExitPlan | null
 }
 
+/** The auditor's verdict of one decision; `acerto` null = a fixed rule, not judged. */
+export interface QwenTradeVerdict {
+  acerto: boolean | null
+  /** What the mistake cost, in basis points; null when not given. */
+  costoErrorPb: number | null
+  /** Short Spanish text, e.g. «si entraba: +23 pb». */
+  texto: string | null
+}
+
+export type QwenAuditHorizon = '12h' | '24h' | '36h'
+
+/** How the auditor judged one operation: its entry, its exit and the looks it held through. */
+export interface QwenTradeAudit {
+  entrada: QwenTradeVerdict | null
+  entradaHorizonte: QwenAuditHorizon | null
+  /** What the auditor saw the opening look do (ENTRAR, ENTRAR_noticias); null when it has no such look. */
+  entradaAccion: string | null
+  salida: QwenTradeVerdict | null
+  salidaHorizonte: QwenAuditHorizon | null
+  /** How the close was classified (SALIR_vuelta, SALIR_36h…); null while open or unseen. */
+  salidaAccion: string | null
+  /** Held looks that already have a verdict: right out of judged. */
+  mantener: { aciertos: number; total: number }
+  /** Every look the auditor saw of this operation. */
+  miradas: number
+}
+
 /** One operation of Qwen operador (paper), as the gateway serves it. */
 export interface QwenTrade {
   product: string
@@ -70,6 +97,8 @@ export interface QwenTrade {
   leverage: number | null
   marginUsd: number | null
   execution?: QwenExecution | null
+  /** The auditor's judgment of this operation; null while it has not seen it. */
+  auditoria?: QwenTradeAudit | null
 }
 
 export type QwenTradesSource =
@@ -178,6 +207,45 @@ function exitPlanOf(value: unknown): QwenExitPlan | null {
   }
 }
 
+function verdictOf(value: unknown): QwenTradeVerdict | null {
+  if (typeof value !== 'object' || value === null) return null
+  const row = record(value)
+  return {
+    acerto: typeof row.acerto === 'boolean' ? row.acerto : null,
+    costoErrorPb: number(row.costo_error_pb),
+    texto:
+      typeof row.texto === 'string' && row.texto.length > 0 ? row.texto : null,
+  }
+}
+
+const horizonOf = (value: unknown): QwenAuditHorizon | null =>
+  value === '12h' || value === '24h' || value === '36h' ? value : null
+
+const actionOf = (value: unknown): string | null =>
+  typeof value === 'string' && value.length > 0 ? value : null
+
+/** The gateway's `auditoria` of an operation; anything malformed reads as no audit. */
+function auditOf(value: unknown): QwenTradeAudit | null {
+  if (typeof value !== 'object' || value === null) return null
+  const row = record(value)
+  const held = record(row.mantener)
+  const right = number(held.aciertos)
+  const total = number(held.total)
+  return {
+    entrada: verdictOf(row.entrada),
+    entradaHorizonte: horizonOf(row.entrada_horizonte),
+    entradaAccion: actionOf(row.entrada_accion),
+    salida: verdictOf(row.salida),
+    salidaHorizonte: horizonOf(row.salida_horizonte),
+    salidaAccion: actionOf(row.salida_accion),
+    mantener: {
+      aciertos: right ?? 0,
+      total: total ?? 0,
+    },
+    miradas: number(row.miradas) ?? 0,
+  }
+}
+
 function executionOf(value: unknown): QwenExecution | null {
   const row = record(value)
   const entry = executionPhase(row.entry)
@@ -265,6 +333,7 @@ export function qwenTrades(payload: unknown): QwenTrade[] {
         leverage: number(row.leverage),
         marginUsd: number(row.margin_usd),
         execution,
+        auditoria: auditOf(row.auditoria),
       },
     ]
   })
