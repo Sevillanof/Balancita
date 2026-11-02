@@ -156,7 +156,7 @@ describe('archive gate', () => {
     const r = await gate(f)
     expect(r.deletable).toEqual([])
     expect(r.blocked).toHaveLength(3)
-    // el exportador actual no escribe ninguno de los dos campos: nada archivado hoy se puede borrar
+    // las líneas de las fases 1 y 2 no traen ninguno de los dos campos: no se pueden borrar hasta reexportarse
     f.manifest.forEach((e) => {
       delete e.verificacion_ida_vuelta
       delete e.formato_version

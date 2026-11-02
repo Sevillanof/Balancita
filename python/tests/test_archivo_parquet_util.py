@@ -79,14 +79,52 @@ class DiasYResumenTests(unittest.TestCase):
         self.assertFalse(b.ordenado)
         self.assertEqual((a.como_dict()["producto_min"], a.como_dict()["tiempo_max"]), ("A", 2))
 
-    def test_sin_hash_usa_hash_canonico_de_filas(self):
+    def test_el_hash_de_fila_cubre_todas_las_columnas_no_solo_la_columna_hash(self):
+        """Punto debil de la fase 1-2: con columna hash solo se comparaba ese hash y un payload corrupto pasaba. Ahora cambia el control."""
         cfg = TABLAS["market_events"]
-        self.assertIsNone(None if cfg.hash else 1)  # market_events trae content_hash
-        r1, r2 = Resumen(cfg), Resumen(cfg)
+        self.assertEqual(cfg.hash, "content_hash")  # la tabla trae content_hash y aun asi se hashea todo
+        r1, r2, v1 = Resumen(cfg), Resumen(cfg), Resumen(cfg, legado=True)
         base = ("e1", "ticker", "P", 1, 1, 1, 5, 6, None, "{}", "{}", "h")
+        otra = base[:10] + ('{"x":1}',) + base[11:]
         r1.agregar([base])
-        r2.agregar([base[:10] + ("{\"x\":1}",) + base[11:]])
-        self.assertEqual(r1.como_dict()["checksum_contenido"], r2.como_dict()["checksum_contenido"])  # solo cuenta content_hash
+        r2.agregar([otra])
+        self.assertNotEqual(r1.como_dict()["checksum_contenido"], r2.como_dict()["checksum_contenido"])
+        v2 = Resumen(cfg, legado=True)
+        v1.agregar([base])
+        v2.agregar([otra])
+        self.assertEqual(v1.como_dict()["checksum_contenido"], v2.como_dict()["checksum_contenido"])  # el formato 1 NO lo veia
+
+    def test_canonica_distingue_tipos_y_bits(self):
+        from archivo_parquet.util import canonica, hash_fila
+        valores = [None, 0, 7, "7", b"7", "", b"", 0.0, -0.0, 5e-324, float("inf"), 1e308, 2 ** 63 - 1, -(2 ** 63), "a\x00b"]
+        canon = [canonica(v) for v in valores]
+        self.assertEqual(len(set(canon)), len(canon))  # todas distintas: 0 != 0.0 != -0.0, "" != NULL, texto != blob, "7" != 7
+        self.assertEqual(canonica(7), b"I7")
+        self.assertEqual(canonica("a"), b"T1:a")
+        self.assertEqual(canonica(1.0), b"R3ff0000000000000")
+        self.assertNotEqual(hash_fila(("ab", "c")), hash_fila(("a", "bc")))  # el largo evita la ambiguedad entre columnas
+        with self.assertRaises(ErrorArchivo):
+            canonica(True)
+
+    def test_hashes_se_comparan_posicion_a_posicion(self):
+        from archivo_parquet.util import diferencias_hashes
+        cfg = TABLAS["verdicts"]
+        f = [("A", i, 60000, 1, "r", "LONG", "x", "h%d" % i, "{}", 2) for i in range(3)]
+        a, b = Resumen(cfg), Resumen(cfg)
+        a.agregar(f)
+        b.agregar([f[1], f[0], f[2]])  # mismas filas, otra posicion: la SUMA coincide, la lista no
+        self.assertEqual(a.como_dict()["checksum_contenido"], b.como_dict()["checksum_contenido"])
+        self.assertIn("posicion 0", diferencias_hashes(bytes(a.hashes), bytes(b.hashes))[0])
+        self.assertEqual(diferencias_hashes(bytes(a.hashes), bytes(a.hashes)), [])
+
+    def test_validar_tipos_informa_fila_y_columna(self):
+        from archivo_parquet.util import ErrorTipo, validar_tipos
+        cfg = TABLAS["verdicts"]
+        validar_tipos(cfg, ("A", 1, 60000, 1, "r", "LONG", "x", "h", "{}", 2), 1)
+        with self.assertRaises(ErrorTipo) as cm:
+            validar_tipos(cfg, ("A", 1, 60000, 1, "r", "LONG", "x", "h", "{}", "2"), 7)
+        self.assertIn("fila 7", str(cm.exception))
+        self.assertIn("written_at", str(cm.exception))
 
 
 class CatalogoTests(unittest.TestCase):

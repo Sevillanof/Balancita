@@ -1,6 +1,6 @@
 # Archivo Parquet a largo plazo (fases 1 a 3)
 
-Diseño: `analisis/archivo-parquet/informe.md`. Es un exportador **offline**: lee una **copia** de SQLite, escribe archivos Parquet verificados y un manifiesto; la fase 2 suma más tablas, grupos de filas chicos y el respaldo fuera del VPS. El exportador (fases 1 y 2) no borra nada ni toca la captura. La fase 3 suma la **exportación nocturna automática** (parte A) y el **borrado seguro de lo ya archivado** (parte B, apagado por defecto). Código en `python/archivo_parquet/` y `server/src/features/archive-prune/`.
+Diseño: `analisis/archivo-parquet/informe.md` y, para el formato por tabla (formato 2), `analisis/archivo-parquet/formatos-por-tabla.md`. Es un exportador **offline**: lee una **copia** de SQLite, escribe archivos Parquet verificados y un manifiesto; la fase 2 suma más tablas, grupos de filas chicos y el respaldo fuera del VPS. El exportador (fases 1 y 2) no borra nada ni toca la captura. La fase 3 suma la **exportación nocturna automática** (parte A) y el **borrado seguro de lo ya archivado** (parte B, apagado por defecto). Código en `python/archivo_parquet/` y `server/src/features/archive-prune/`.
 
 ## Instalar (una vez, fuera del repo)
 
@@ -45,6 +45,11 @@ Tablas soportadas (cada una es una entrada en `python/archivo_parquet/config.py`
 | `premium`                                                                   | `premium`                                                                                             | positioning             | `bucket_ms`                                                   | mes       |
 | `news_items`                                                                | `paper_futures_news_items`                                                                            | futures-news            | `received_at` (siempre existe; `published_at` puede ser NULL) | mes       |
 | `news_analysis`                                                             | `paper_futures_news_analysis`                                                                         | futures-news            | `analyzed_at`                                                 | mes       |
+| `funding_responses`                                                         | `paper_futures_funding_responses`                                                                     | futures-market          | `received_at`                                                 | mes       |
+| `candle_revisions`                                                          | `paper_futures_candle_revisions`                                                                      | futures-market          | `bucket_start` (la vela y sus revisiones caen juntas)         | mes       |
+| `forecast_verdicts`                                                         | `paper_futures_forecast_verdicts`                                                                     | futures-forecast-scores | `bucket_start`                                                | mes       |
+| `llm_skips`                                                                 | `paper_futures_llm_skips`                                                                             | futures-llm-decisions   | `bucket_start`                                                | mes       |
+| `premium_1m`                                                                | `premium` (solo `interval_ms = 60000`)                                                                | positioning             | `bucket_ms`                                                   | día       |
 
 Cada tabla declara su `granularidad`: `dia` (carpeta `anio=/mes=/dia=`) o `mes` (carpeta `anio=/mes=`, un archivo por mes; para tablas chicas). Un mes se exporta cuando terminó hace al menos 1 día (mismo margen de 1 día que los días). En el manifiesto, `dia` de un archivo mensual es el día 1 del mes y la línea trae `granularidad`. Los puntajes de pronóstico usan el minuto de la decisión: un puntaje de 24 h se escribe al día siguiente pero cae en el día de la decisión, por eso el margen importa. Las noticias no tienen producto (las búsquedas por producto no aplican). La base SQLite de noticias se conserva: nada la borra.
 
@@ -80,39 +85,118 @@ Quién borra: solo el proceso que ya es dueño de cada base.
 | `market_events`                           | captura                                                    | **No**: la retención de la captura ya la recorta (7 días) y tiene triggers; el archivo no cambia esa ventana |
 | `news_items`, `news_analysis`             | Python (inmutable)                                         | **Nunca**: las noticias no se borran                                                                         |
 
-La puerta (`archive-gate.ts`, solo lectura) deja borrar un día/mes únicamente si: está confirmado en `manifiesto.jsonl` **con `verificacion_ida_vuelta: true` y `formato_version` al menos el mínimo** (`MIN_FORMAT_VERSION`; el exportador actual no escribe esos campos, así que **nada de lo archivado hoy se puede borrar** hasta que el exportador nuevo lo certifique y se suba esa constante); el archivo existe con el mismo tamaño y sha256 del manifiesto (sha256 en streaming con tope de 5 s, cacheado por mtime); terminó hace más que la ventana de la tabla **más 1 día de margen**; y la base no tiene más filas del período que el archivo. Con `FUTURES_ARCHIVE_REQUIRE_OFFSITE=1` también exige `confirmado_fuera` en `respaldo-estado.jsonl` (apagado mientras no haya VPS). Si el manifiesto falta, no se lee o hay cualquier duda: no se borra nada. Antes de empezar cada período se verifica que exista una copia diaria buena de la base de menos de 30 h.
+La puerta (`archive-gate.ts`, solo lectura) deja borrar un día/mes únicamente si: está confirmado en `manifiesto.jsonl` **con `verificacion_ida_vuelta: true` y `formato_version` al menos el mínimo** (`MIN_FORMAT_VERSION` = 2; el exportador del formato 2 escribe esos campos solo después de la prueba de no pérdida, y **lo archivado con las fases 1 y 2 sigue bloqueado** hasta que se reexporte); el archivo existe con el mismo tamaño y sha256 del manifiesto (sha256 en streaming con tope de 5 s, cacheado por mtime); terminó hace más que la ventana de la tabla **más 1 día de margen**; y la base no tiene más filas del período que el archivo. Con `FUTURES_ARCHIVE_REQUIRE_OFFSITE=1` también exige `confirmado_fuera` en `respaldo-estado.jsonl` (apagado mientras no haya VPS). Si el manifiesto falta, no se lee o hay cualquier duda: no se borra nada. Antes de empezar cada período se verifica que exista una copia diaria buena de la base de menos de 30 h.
 
 El ejecutor borra por rango de tiempo en transacciones cortas (100 a 1.000 filas), anota cada paso en `retention.jsonl` (`kind: archive-delete`, tabla, día, filas), y es idempotente (si se corta a la mitad, la próxima vez sigue). Si una tabla tiene trigger de borrado, no la toca ni lo desactiva. El hook `archive` del `retention-runner` comparte presupuesto de 6 s por ciclo, `canRun`, despertar y checkpoint; el recolector de posicionamiento (que no tiene runner) usa `runArchiveCycle` con el mismo presupuesto y lee de `db-health-state.json` si hubo un despertar hace menos de 10 min o la base está dañada.
 
 Después de borrar, SQLite no devuelve el espacio al disco: ver «Compactar» en `docs/operacion-base-de-datos.md` (`pnpm db:compact`).
 
-## Qué se guarda
+## Qué se guarda (formato 2)
 
 ```
-<destino>/<base>/<tabla>/anio=YYYY/mes=MM/dia=DD/part-<sha8>.parquet
+<destino>/<base>/<tabla>/anio=YYYY/mes=MM/[dia=DD/]part-<sha8>.parquet
+<destino>/<base>/<tabla>/anio=YYYY/mes=MM/[dia=DD/]part-<sha8>.hashes   (32 bytes por fila; ver «No pérdida»)
 <destino>/manifiesto.jsonl
+<destino>/manifiesto-reemplazadas.jsonl                                  (auditoría de líneas viejas reemplazadas)
 ```
 
-- Un archivo por día UTC (o por mes, en las tablas mensuales) y tabla; zstd nivel 3; ordenado por clave (producto y tiempo primero). **Grupos de filas**: ~2 000 filas en las tablas con filas pesadas (JSON de ~10 KB: `verdicts`, `llm_decisions`, `market_events`, noticias) y ~128 000 en las chicas; se cambia con `filas_por_grupo` en la configuración de cada tabla. En `market_events` la clave es `(product_id, received_at, event_id)`: lleva `event_id` para tener un orden total.
-- Tiempos como entero en milisegundos UTC. `payload_json` (y los demás textos) se guardan tal cual, sin reinterpretar. `schema_version` va en los metadatos del archivo y en el manifiesto.
-- Una línea de manifiesto por archivo: base, tabla, día, ruta, filas, clave mín/máx, tiempo mín/máx, producto mín/máx, grupos de filas, bytes, sha256, suma de control, `schema_version`, fecha de exportación. Es el **catálogo**.
+Reglas comunes (todas en `config.py` por tabla y aplicadas en `formato.py`):
+
+- Un archivo por período (día o mes) y tabla, **ordenado por clave** (declarado en `sorting_columns`), con **un grupo de filas por producto** donde la tabla tiene producto (`grupo_por`), partido en trozos si pasa el tope `filas_por_grupo`.
+- Tiempos `int64` ms UTC, enteros `int64`, reales `float64` (bit a bit; `byte_stream_split` solo en positioning/premium, donde se midió −7 %), texto `string` sin reinterpretar, blob `binary`. Los precios y tasas que SQLite guarda como TEXT quedan como texto.
+- **Todas las columnas son nullable en el archivo**: un NULL inesperado en una columna NOT NULL no tira el período, se guarda y queda en `avisos` del manifiesto.
+- **Diccionario solo en las columnas de pocos valores** (`product_id`, `action`, `regime`, `reason_code`, `coverage`, `j_*` de texto corto); nunca en hashes ni JSON. **Estadísticas apagadas en JSON y texto largo** (el min/max de 11 KB no sirve). **Índice de páginas** y **checksum de páginas** siempre. zstd 3 en las tablas chicas, **9 en las pesadas** y **19 solo en `funding_responses`**. pyarrow 21 no tiene bloom filters.
+- **Metadatos del archivo**: `sqlite_ddl` (el `CREATE TABLE` original, para recrear la tabla sin el repo de esa época), `ddl_sha256`, `schema_version`, `formato_version`, `clave`, `grupo_por`, `columnas_sqlite`, `derivadas`.
+- **JSON original íntegro** (`payload_json`, etc.) más columnas derivadas `j_*` **solo para lo que el código consulta** (después de las originales; no existen en SQLite y se verifican contra el JSON releído). Un JSON roto o una ruta ausente da NULL en la derivada, nunca un error.
+- Columnas `mixto` (bases no STRICT como `qwen-live`, donde una columna puede traer cualquier tipo): se guardan como texto más una columna `tipo_<col>` con el `typeof()` de cada valor. Hoy ninguna tabla de `TABLAS` las usa (el motor y las pruebas sí; ver «Segunda tanda»).
+
+### Las tres tablas pesadas
+
+| Tabla               | Período                  | Orden y grupos                                                                                | Detalles                                                                                                                                                                                            |
+| ------------------- | ------------------------ | --------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `verdicts`          | día                      | `(product_id, bucket_start)`; **un grupo por producto** (tope 2 000 filas)                    | zstd 9; `payload_json` íntegro sin diccionario ni estadísticas; derivadas `j_selected_strategy_id`, `j_knowledge_lag_ms`, `j_previous_regime`, `j_config_hash`, `j_schema_version`, `j_proposals_n` |
+| `funding_responses` | mes                      | `(received_at, sha256)`; grupos de 16 filas (~16 MB)                                          | **zstd 19**, páginas de 64 MB para que zstd vea cuerpos enteros; `raw_response` sin diccionario ni estadísticas; sin producto                                                                       |
+| `candle_revisions`  | mes (por `bucket_start`) | `(interval_ms, bucket_start, candle_id, revision)`; un grupo por intervalo, tope 50 000 filas | zstd 9; **todas las revisiones** (no se pierde historia); precios como texto; diccionario solo en `coverage`                                                                                        |
+
+Las rutas de las `j_*` salen de `evaluate_verdict` (`python/balancita_engine/futures_verdicts.py`) y de quienes leen el JSON (`paper-engine-follower.ts`, `futures_forecast_scores.py`); **no se confirmaron con un `payload_json` real**: por confirmar con datos reales (muestra de 3 filas, informe sección 12). Si una ruta no existiera, la derivada queda en NULL y se corrige en `config.py` re-exportando; la verificación de no pérdida **no depende de las `j_*`**.
+
+### Resto de las tablas (formato del informe, a afinar con datos reales)
+
+`llm_decisions`, `llm_skips`, `forecast_verdicts`, `forecasts*`, `positioning`, `premium`, `news_*` y `market_events` ya pasan por el mismo motor (formato 2, hash por fila completo, diccionario/estadísticas por columna, un grupo por producto). Sus parámetros son los del informe; no se afinaron con datos reales.
+
+- **`premium_1m`** (nuevo, por día): la serie de 1 minuto se recorta a 7 días en SQLite, así que el archivo mensual llega tarde y no la tiene. `premium_1m` filtra `interval_ms = 60000`, se exporta **al día siguiente (margen 0)** y es la que hay que encender para no perder esa serie. El `premium` mensual sigue **sin filtro** (no se pierde lo ya archivado; los minutos que aún existían quedan duplicados ahí).
+- **`market_events`**: ver «Pendiente de Fran: `market_events` y la retención».
+
+## Prueba de NO pérdida (fila a fila, columna a columna)
+
+Antes de escribir una línea en el manifiesto, el exportador hace esto con **todas** las columnas de SQLite (no solo `verdict_hash` o `content_hash`):
+
+1. **Representación canónica por `typeof()`**: `N` nulo; `I` + entero decimal; `R` + los 8 bytes IEEE-754 en hex (distingue 0.0, inf y cualquier bit); `T`/`B` + largo en bytes + `:` + bytes tal cual (el JSON es el texto original byte a byte). `''` ≠ NULL, texto `'7'` ≠ entero `7`, texto ≠ blob. En Python el tipo de la celda **es** el `typeof()` de SQLite.
+2. **Hash por fila** = SHA-256 de las canónicas de todas las columnas separadas por `0x1f`. Se toma al leer la copia (esa es la lista «de la copia»).
+3. Se relee el Parquet recién escrito **fila a fila con checksum de páginas** y se calcula el mismo hash. La lista de hashes se compara **posición a posición** (la suma no ve filas cambiadas de lugar, duplicadas o intercambiadas; la lista sí). Además: `COUNT(*)` del rango, clave mín/máx, orden estricto por clave, metadatos (`schema_version`, `formato_version`, `sqlite_ddl`, `clave`), pie del archivo, índice de páginas y cada `j_*` contra el JSON releído.
+4. Una celda cuyo `typeof()` no sea el declarado (p. ej. texto en una columna REAL de una base no STRICT) **falla ese período con fila y columna** (salvo columnas `mixto`).
+5. **Solo si todo coincide** se escriben `formato_version: 2` y `verificacion_ida_vuelta: true`, más `hash_filas_sha256` (hash de la lista de hashes), `ruta_hashes`, `ddl_sha256`, `derivadas`, `avisos` y `tiempo_copia`. Si algo difiere: el archivo no se promueve, el período queda en `no_confirmados` y el código de salida es 1.
+
+`verificar` repite todo lo anterior sobre lo ya archivado (hash por fila, lista lateral `.hashes` si existe —si falta vale el hash del manifiesto—, derivadas, metadatos). Las líneas del formato 1 (sin `formato_version`) se siguen revalidando como antes y se listan en `formato_viejo`.
+
+Lo que SQLite ya pierde antes de llegar al archivo (no es del Parquet): `NaN` → NULL en STRICT y `'12'` → `12` en columna INTEGER. **Prueba de arranque** (`test_archivo_parquet_formato2`): se restaura el archivo en una SQLite nueva con el `sqlite_ddl` de sus metadatos y se compara `typeof(col), col` celda a celda con la copia original (int64 extremos, `5e-324`, `1e308`, `inf`, `''` vs NULL, texto vs blob, NUL dentro de texto).
+
+**Todavía no está** el paso 7.3.5 del informe (repetir el hash de fila contra la **base viva** justo antes de borrar y comparar con la lista `.hashes`): está en «Segunda tanda». Hasta entonces la puerta de TypeScript sigue con «la base no tiene más filas que el archivo».
+
+## Reemplazar un período del formato viejo
+
+Un período cuya línea de manifiesto no tiene `formato_version` (fases 1 y 2) **no cuenta como hecho**: el exportador lo reexporta y lo reemplaza, de forma segura:
+
+1. Escribe un archivo nuevo (`part-<sha8>` distinto), lo verifica entero y recién entonces lo promueve.
+2. **No reemplaza si la copia tiene menos filas** que el archivo viejo o si el rango de claves no lo cubre (se perderían filas): lo informa en `reemplazos_omitidos` y deja el viejo intacto.
+3. Reemplaza la línea vieja por la nueva **en forma atómica** (archivo temporal + fsync + rename; la nueva trae `reemplaza: <ruta vieja>`). La vieja se anota antes en `manifiesto-reemplazadas.jsonl`. Siempre hay **una sola línea por período** (la puerta de TypeScript bloquea períodos repetidos).
+4. El archivo viejo (y su `.hashes`) queda huérfano y se borra. Si el proceso muere antes del rename, el manifiesto viejo sigue válido y el archivo nuevo es un huérfano que `verificar` lista y la próxima corrida descarta.
+
+El reporte trae `reemplazados` aparte de `exportados`, y `nocturno.jsonl` los cuenta.
 
 ## Qué garantiza
 
 - Lee solo una copia: la abre en solo lectura, rechaza `server/data/dev-live/*` y exige una carpeta `snapshots/` o `backups/` (o `--copia-confirmada` si es una copia en otro sitio). Antes corre `quick_check`; si falla, no exporta.
-- Solo días cerrados con 1 día de margen; los que ya están en el manifiesto se saltan (idempotente).
-- Por cada día: escribe `.tmp`, lo relee entero con verificación de checksum de páginas y compara con la copia (cantidad de filas = `COUNT(*)` del rango, clave mín/máx, suma de control del contenido: el conjunto de `verdict_hash`/`content_hash` cuando existe, el hash de cada fila si no). Recién entonces renombra y agrega la línea al manifiesto. Si algo difiere: no se promueve, el día queda en `no_confirmados` del reporte y el código de salida es 1.
-- Memoria acotada: lotes de ~50 000 filas al leer la copia, un grupo de filas (2 000 o 128 000 según la tabla) al escribir.
-- `verificar` vuelve a comprobar sha256, relectura, filas, claves y suma de control de cada línea, y lista archivos `part-*` que no están en el manifiesto.
+- Solo períodos cerrados con su margen (1 día por defecto; 0 en `market_events` y `premium_1m`); los que ya están en el manifiesto con formato 2 se saltan (idempotente).
+- Por cada período: escribe `.tmp`, lo relee entero con checksum de páginas y compara fila a fila (ver «Prueba de NO pérdida»). Recién entonces renombra y agrega la línea al manifiesto.
+- Columnas nuevas en SQLite que la configuración no conoce: se avisan (`avisos` del reporte) y **no se archivan** hasta sumarlas (subir `schema_version`); si **falta** una columna, no se exporta.
+- Memoria acotada: lotes de a lo sumo un grupo de filas al leer SQLite y al releer (con filas de 1 MB, 16 filas). Medido (sintético): ~330 MB de RSS en 11 520 veredictos y ~380 MB en 120 cuerpos de funding de 1 MB; no correr dos exportaciones pesadas en paralelo.
+- `verificar` vuelve a comprobar sha256, relectura, hash de cada fila, derivadas y metadatos de cada línea, y lista archivos `part-*` que no están en el manifiesto.
+
+## Pendiente de Fran: `market_events` y la retención
+
+La retención de la captura borra los tickers con más de 24 h y recorta `normalized_json` (`futures-market-store.ts`, retención de 24 h para tickers y 7 días para el resto). **El informe suponía un margen de 22 h; es al revés**: el día D termina a las 00:00 UTC y cuando una copia lo ve (aunque sea a las 02:00), la retención ya borró lo que tenía más de 24 h, o sea **las primeras horas del día D**. Un día completo solo se podría exportar con una copia tomada justo después de las 00:00 UTC y antes de la primera pasada de retención.
+
+Qué hace el exportador hoy (sin tocar la captura): `market_events` usa margen 0 y **exige que el período conserve su inicio** (la primera fila a menos de 10 minutos de las 00:00). Si la copia ya lo perdió, **no certifica un «día completo» incompleto**: el período va a `omitidos_por_retencion` del reporte (y de `nocturno.jsonl`), sin fallo y sin código 1. Los períodos ya archivados en el formato viejo de esta tabla siguen bloqueados para el borrado.
+
+Para que `market_events` se archive de verdad hace falta una decisión de Fran, porque toca la captura (no se tocó): (a) tomar la copia entre las 00:00 UTC y la primera retención del día, (b) subir la retención de tickers a 48 h o más, o (c) archivar desde la captura. Hasta entonces: nada de `market_events` pasa la puerta.
+
+## Medición (datos sintéticos; esta máquina; no extrapolar)
+
+`python -m archivo_parquet medir --base x --sintetico-dias N --productos P --tablas verdicts|funding_responses|candle_revisions` (ahora mide la exportación por tabla). Los datos sintéticos tienen la forma real de las tablas (payload de veredictos con `selected`, 6 `proposals` y 3×90 features de ~9 KB; cuerpos de funding de 1 MB que son el anterior con un período nuevo al final; velas con revisiones por trade) pero precios y features al azar: la compresión con datos reales puede variar ±30 %.
+
+| Tabla (sintético)                                               | Filas   | SQLite (contenido) | Parquet                | Razón                                          | Exportar + verificar     | Una hora de un producto             | Un día / una fila                      |
+| --------------------------------------------------------------- | ------- | ------------------ | ---------------------- | ---------------------------------------------- | ------------------------ | ----------------------------------- | -------------------------------------- |
+| `verdicts` (8 productos, 3 días, 1/min)                         | 34 560  | 271 MB             | 38,2 MB (≈12,7 MB/día) | 7,1×                                           | 39 s (≈13 s/día)         | 21 ms, 1 de 8 grupos, 1,6 MB leídos | 389 ms (día completo con JSON) / 30 ms |
+| `funding_responses` (2 días × 24, cuerpo ~1 MB)                 | 48      | 49,6 MB            | 0,33 MB                | ≈150× (con 120 filas: 137×)                    | 2,3 s (120 filas: 6,6 s) | —                                   | 235 ms (24 cuerpos) / 82 ms            |
+| `candle_revisions` (1 producto, 3 días, 60 revisiones por vela) | 259 200 | 48,7 MB            | 11,3 MB                | 4,3× (precios al azar; los reales repiten más) | 11 s                     | 20 ms, 1 de 6 grupos, 2,2 MB leídos | 60 ms (un día) / 27 ms                 |
+
+Con `verdicts` el ahorro real sale de borrar de SQLite (el Parquet pesa ≈1/7). En `funding_responses` la razón depende de cuánto se parezcan los cuerpos reales: con 672 filas de 1 MB (lo que hay hoy) la exportación tardaría ≈35 s en esta máquina. Los tiempos de búsqueda son medianas de 3 corridas con archivo caliente en el sistema operativo.
+
+## Segunda tanda (no hecho en este cambio)
+
+- Configurar y probar con datos reales: `official_candles` + `official_candle_responses`, `funding_periods`, `funding_sightings`, `funding_polls`, `funding_ws_*` (fusión en un solo archivo), `analytics_*`, `news_briefings`, `news_polls` y las bases chicas / `qwen-live` cerrada (columnas `mixto`; el motor ya las soporta).
+- **Paso 7.3.5**: repetir el hash de fila contra la base viva justo antes de borrar (`archive-pruner.ts`) y comparar con `.hashes`; ampliar `archive-tables.ts` (especificaciones para verdicts, scores, llm, news y market con `dropTriggers` y `children`) y el borrado por transacción levantando y reponiendo los triggers `_no_delete`. **El borrado sigue apagado** (`FUTURES_ARCHIVE_DELETE` sin definir) y `MIN_FORMAT_VERSION` **no se tocó** (ya era 2): el exportador nuevo escribe de verdad ese formato y `test_archivo_parquet_formato2.PuertaTypeScriptTests` corre la puerta real contra un archivo certificado (pasa) y contra la misma línea sin los dos campos (queda bloqueada).
+- Confirmar las rutas `j_*` y la compresión con muestras reales (informe sección 12) y decidir las propuestas del informe que cambian la captura o los esquemas (guardar menos cuerpos de funding, menos revisiones de velas, quitar tablas vacías, fusiones): todas siguen sin hacerse.
 
 ## Encontrar datos rápido
 
 1. El **catálogo** (manifiesto) elige solo los archivos del rango de tiempo y del producto pedidos; no se abre ningún otro.
-2. Dentro de cada archivo, el orden por producto y tiempo y las **estadísticas de grupo de filas** (mín/máx por columna) dejan saltar los bloques que no pueden contener lo pedido.
+2. Dentro de cada archivo, el orden por producto y tiempo, el **grupo de filas por producto**, las **estadísticas de grupo** (mín/máx por columna) y el índice de páginas dejan saltar lo que no puede contener lo pedido. Las columnas `j_*` permiten filtrar (`--donde j_selected_strategy_id=breakout`) sin abrir el JSON; en un archivo del formato 1 salen como NULL.
 3. `buscar` imprime el informe (archivos elegidos y en catálogo, grupos de filas leídos y en total, bytes leídos) y las filas. En Python: `archivo_parquet.leer.buscar_archivo(...)` y `leer_archivo(destino, base, tabla, desde_ms, hasta_ms, columnas=None)`; el rango es `[desde, hasta)`.
 4. Consulta DuckDB equivalente, sin instalar DuckDB: `buscar ... --duckdb` (o `leer.consulta_duckdb(...)`) imprime un `SELECT ... FROM read_parquet('.../anio=*/mes=*/dia=*/part-*.parquet', hive_partitioning = true) WHERE ...` con filtro de partición. Está probada solo como texto; no se ejecutó contra DuckDB.
 
-**Por qué grupos chicos.** Con un solo grupo por día (9,5 mil filas de ~11 KB), buscar un producto en 1 hora leía el día completo (0,24 s medidos). Con grupos de 2 000 filas, las estadísticas (mín/máx de producto y de tiempo por grupo) dejan saltar los grupos que no pueden contener lo pedido. Prueba (`test_archivo_parquet_fase2`, datos sintéticos): de 5 grupos se leen 1 o 2 y los bytes leídos bajan a ~20 %. Medición sintética con filas de 11 KB (4 productos × 2 400 filas, un producto en 1 hora, mejor de 5): 2 de 5 grupos, 23 MB leídos y ~158 ms, contra 1 grupo, 56 MB y ~395 ms. Son números de esta máquina con datos sintéticos incompresibles: no extrapolar. Los grupos que mezclan el final de un producto con el inicio del siguiente no se pueden descartar por tiempo, por eso a veces se leen 2.
+**Por qué grupos chicos.** (Con el formato 2 el grupo es el del producto; el razonamiento y los números de abajo son de la fase 2.) Con un solo grupo por día (9,5 mil filas de ~11 KB), buscar un producto en 1 hora leía el día completo (0,24 s medidos). Con grupos de 2 000 filas, las estadísticas (mín/máx de producto y de tiempo por grupo) dejan saltar los grupos que no pueden contener lo pedido. Prueba (`test_archivo_parquet_fase2`, datos sintéticos): de 5 grupos se leen 1 o 2 y los bytes leídos bajan a ~20 %. Medición sintética con filas de 11 KB (4 productos × 2 400 filas, un producto en 1 hora, mejor de 5): 2 de 5 grupos, 23 MB leídos y ~158 ms, contra 1 grupo, 56 MB y ~395 ms. Son números de esta máquina con datos sintéticos incompresibles: no extrapolar. Los grupos que mezclan el final de un producto con el inicio del siguiente no se pueden descartar por tiempo, por eso a veces se leen 2.
 
 `medir` cronometra cuatro búsquedas típicas (un producto en 1 hora, un día completo, una semana filtrando por una columna, una fila por clave) e informa mediana de tiempo, archivos y bytes leídos. Con `--sintetico-dias 30` lo hace sobre datos sintéticos grandes. Esos tiempos son de una máquina y un corpus sintético: no extrapolar a producción.
 
@@ -167,10 +251,10 @@ Mirar el código de salida: distinto de 0 debe avisar a alguien. Una vez al mes 
 
 ## Qué NO hace todavía
 
-- **El borrado está apagado** y, con el exportador actual, la puerta no deja borrar nada (faltan `verificacion_ida_vuelta` y `formato_version` en el manifiesto: los traerá el exportador con el formato óptimo por tabla). Veredictos, decisiones, puntajes y noticias no se borran por archivo (ver la tabla de arriba).
+- **El borrado está apagado** (`FUTURES_ARCHIVE_DELETE` sin definir). Los archivos nuevos del formato 2 ya pasan la puerta; los de las fases 1 y 2 siguen bloqueados hasta reexportarse (se reemplazan solos en la próxima corrida). Veredictos, decisiones, puntajes, funding y noticias no se borran por archivo (ver la tabla de arriba y «Segunda tanda»).
 - **No hay rotación ni compactación** (fase 4): ni compactar días en archivos más grandes, ni rotar o limitar lo que ya está en el remoto, ni rotar las claves del remoto cifrado.
 - La exportación nocturna corre sola en la Mac solo después de ejecutar el instalador; los ejemplos de cron/systemd/launchd del VPS siguen siendo ejemplos. No se probó con una copia real (todo con datos sintéticos). No se probó con rclone real ni con un remoto real (las pruebas usan un remoto falso en una carpeta local), ni con una copia real.
 - La verificación depende de lo que el remoto sepa hacer: sin sha256 se usa `rclone check --download`. Un remoto que miente sobre lo que guarda no está probado; por eso existe `restaurar-prueba`.
 - Es confirmación lógica: un disco que miente en `fsync` no está probado. Si el manifiesto local se pierde, hay que reexportar (los archivos sin línea se descartan al reexportar ese día); el manifiesto del remoto sirve de copia del catálogo.
 - El lector no une todavía SQLite reciente con Parquet histórico.
-- Los esquemas de las tablas nuevas salen del código de captura (no se leyó ninguna base real); si una columna cambia, la exportación se rechaza hasta subir `schema_version`.
+- Los esquemas de las tablas nuevas salen del código de captura (no se leyó ninguna base real); si **falta** una columna, la exportación se rechaza hasta subir `schema_version`; una columna **extra** solo avisa.

@@ -15,11 +15,15 @@ from .leer import buscar_archivo
 from .util import abrir_copia, dia_de, inicio_dia_ms, leer_manifiesto, rango_periodo
 
 
+GENERADORES_F2 = ("verdicts", "funding_responses", "candle_revisions")  # tablas con generador sintetico fiel al formato 2 (sintetico.py)
+
+
 def _bytes_logicos(con, cfg, d0: int, d1: int) -> int:
     """Bytes de contenido de las filas del dia (texto = su largo en bytes, numeros = 8). No incluye indices ni paginas de SQLite."""
-    partes = ["LENGTH(CAST(\"%s\" AS BLOB))" % c.nombre if c.tipo == "text" else "8" for c in cfg.columnas]
-    sql = 'SELECT COALESCE(SUM(%s), 0) FROM "%s" WHERE "%s" >= ? AND "%s" < ?' % (" + ".join("COALESCE(%s,0)" % p for p in partes),
-                                                                                  cfg.sqlite, cfg.tiempo, cfg.tiempo)
+    partes = ["LENGTH(CAST(\"%s\" AS BLOB))" % c.nombre if c.tipo in ("text", "blob", "mixto") else "8" for c in cfg.columnas]
+    f = " AND (%s)" % cfg.filtro_sql if cfg.filtro_sql else ""
+    sql = 'SELECT COALESCE(SUM(%s), 0) FROM "%s" WHERE "%s" >= ? AND "%s" < ?%s' % (" + ".join("COALESCE(%s,0)" % p for p in partes),
+                                                                                    cfg.sqlite, cfg.tiempo, cfg.tiempo, f)
     return int(con.execute(sql, (d0, d1)).fetchone()[0])
 
 
@@ -111,14 +115,26 @@ def medir(destino: str, base: str, copia: Optional[str] = None, copia_confirmada
             copia = os.path.join(snap, "sintetico.sqlite")
             dia0 = inicio_dia_ms(dia_de(1_700_000_000_000))
             prods = ["PF_SYN%02d" % i for i in range(productos)]
-            filas = sintetico.crear_copia(copia, dia0, sintetico_dias, prods, paso_s * 1000, tablas)
+            filas = 0
+            viejas = [t for t in tablas if t not in GENERADORES_F2]
+            if viejas:
+                filas += sintetico.crear_copia(copia, dia0, sintetico_dias, prods, paso_s * 1000, viejas)
+            if "verdicts" in tablas and "verdicts" in GENERADORES_F2:
+                filas += sintetico.crear_copia_veredictos(copia, dia0, sintetico_dias, prods, paso_s * 1000)
+            if "funding_responses" in tablas:
+                filas += sintetico.crear_copia_funding(copia, dia0, sintetico_dias)
+            if "candle_revisions" in tablas:
+                filas += sintetico.crear_copia_velas(copia, dia0, sintetico_dias, prods[:1], revisiones=max(1, 3600 // paso_s))
             dest = os.path.join(tmp, "archivo")
-            t0 = time.perf_counter()
-            rep = exportar(copia, base, dest, tablas, ahora_ms=dia0 + (sintetico_dias + 3) * DAY_MS)
-            segs = round(time.perf_counter() - t0, 2)
+            segs, no_conf = {}, []
+            for t in tablas:
+                t0 = time.perf_counter()
+                rep = exportar(copia, base, dest, [t], ahora_ms=dia0 + (sintetico_dias + 40) * DAY_MS)
+                segs[t] = round(time.perf_counter() - t0, 2)
+                no_conf += rep["no_confirmados"]
             res = _medir_en(dest, base, copia, tablas, repeticiones)
             res["sintetico"] = {"dias": sintetico_dias, "productos": productos, "paso_s": paso_s, "filas": filas, "segundos_exportar": segs,
-                                "no_confirmados": rep["no_confirmados"]}
+                                "no_confirmados": no_conf}
             return res
     if not copia:
         raise ValueError("medir necesita --copia (y --destino) o --sintetico-dias")
