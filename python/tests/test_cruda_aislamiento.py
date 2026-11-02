@@ -7,6 +7,8 @@ import unittest
 ROOT = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
 EXPERIMENT = os.path.join(ROOT, "python", "experimentos", "cruda_parquet")
 FORBIDDEN = {"pyarrow", "duckdb"}
+# The Parquet archive (python/archivo_parquet) may import pyarrow in ONE module only (checked in test_archivo_parquet_aislamiento.py).
+ARCHIVO_FORMATO = os.path.join(ROOT, "python", "archivo_parquet", "formato.py")
 
 
 def python_files():
@@ -33,7 +35,7 @@ class IsolationTests(unittest.TestCase):
     def test_only_the_experiment_may_import_pyarrow_or_duckdb(self):
         offenders = []
         for path in python_files():
-            if path.startswith(EXPERIMENT + os.sep):
+            if path.startswith(EXPERIMENT + os.sep) or path == ARCHIVO_FORMATO:
                 continue
             for module, line in imports(path):
                 if module in FORBIDDEN:
