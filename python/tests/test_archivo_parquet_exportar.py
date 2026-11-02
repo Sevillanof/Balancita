@@ -1,6 +1,7 @@
 """Archivo Parquet (fase 1): exportar, verificar, leer, buscar y medir sobre SQLite sintetica temporal. Se SALTA si pyarrow no esta instalado
 (igual que #248: dependencia opcional fijada con hashes, entorno aparte)."""
 import contextlib
+import dataclasses
 import hashlib
 import io
 import json
@@ -133,7 +134,7 @@ class ArchivoParquetTests(unittest.TestCase):
         self.assertIn("no existe", verificar(self.destino)["problemas"][0]["problema"])
 
     def test_buscar_usa_el_catalogo_y_salta_grupos(self):
-        with mock.patch.object(formato, "FILAS_POR_GRUPO", 500):
+        with mock.patch.dict(TABLAS, {"verdicts": dataclasses.replace(TABLAS["verdicts"], filas_por_grupo=500)}):
             self.exp(AHORA_TODO, tablas=["verdicts"])
         total, dia0 = DIA0 + 2 * DAY_MS, DIA0
         _, rep = buscar_archivo(self.destino, "futures-verdicts", "verdicts", dia0, dia0 + DAY_MS)
@@ -180,7 +181,8 @@ class ArchivoParquetTests(unittest.TestCase):
         otra = os.path.join(self.tmp.name, "snapshots", "v.sqlite")
         sintetico.crear_copia(otra, DIA0, 1, tablas=("verdicts",))
         r = exportar(otra, "b", self.destino, ahora_ms=AHORA_TODO)
-        self.assertEqual(sorted(r["tablas_ausentes"]), ["llm_decisions", "market_events"])
+        self.assertTrue({"llm_decisions", "market_events"} <= set(r["tablas_ausentes"]))
+        self.assertNotIn("verdicts", r["tablas_ausentes"])
 
 
 if __name__ == "__main__":

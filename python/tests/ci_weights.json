@@ -1,6 +1,8 @@
 {
   "test_archivo_parquet_aislamiento": 1,
   "test_archivo_parquet_exportar": 1,
+  "test_archivo_parquet_fase2": 1,
+  "test_archivo_parquet_respaldo": 1,
   "test_archivo_parquet_util": 1,
   "test_book_costs": 1,
   "test_capture_candle_values": 3,

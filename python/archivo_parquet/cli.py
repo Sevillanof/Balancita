@@ -1,4 +1,4 @@
-"""Linea de comandos: exportar | verificar | buscar | medir. Salida JSON. Codigos: 0 ok, 1 hay dias/archivos sin confirmar, 2 uso o copia invalida."""
+"""Linea de comandos: exportar | verificar | buscar | medir | respaldar | restaurar-prueba. Salida JSON. Codigos: 0 ok, 1 hay dias/archivos sin confirmar, 2 uso o copia invalida."""
 from __future__ import annotations
 
 import argparse
@@ -51,6 +51,17 @@ def _parser() -> argparse.ArgumentParser:
     m.add_argument("--productos", type=int, default=4, help="productos sinteticos")
     m.add_argument("--paso-s", type=int, default=60, help="segundos entre filas sinteticas")
     m.add_argument("--repeticiones", type=int, default=3)
+    r = sub.add_parser("respaldar", help="sube a un remoto de rclone los archivos confirmados que faltan (nunca borra) y verifica")
+    r.add_argument("--destino", required=True, help="carpeta del archivo (la que tiene manifiesto.jsonl)")
+    r.add_argument("--remoto", required=True, help="nombre:ruta de un remoto ya configurado con 'rclone config' (recomendado: tipo crypt)")
+    r.add_argument("--dry-run", action="store_true", help="solo lista que se subiria (lee el remoto, no escribe nada)")
+    q = sub.add_parser("restaurar-prueba", help="baja un dia (al azar o el indicado) a una carpeta temporal y lo verifica contra el manifiesto")
+    q.add_argument("--destino", required=True)
+    q.add_argument("--remoto", required=True)
+    q.add_argument("--dia", help="YYYY-MM-DD (en tablas mensuales, el dia 1 del mes); por defecto uno al azar")
+    q.add_argument("--base")
+    q.add_argument("--tabla")
+    q.add_argument("--semilla", type=int, help="para que el dia al azar sea repetible")
     return p
 
 
@@ -95,6 +106,16 @@ def main(argv: Optional[List[str]] = None) -> int:
             _imprimir(medir(args.destino, args.base, args.copia, args.copia_confirmada, _tablas(args.tablas), args.sintetico_dias,
                             args.productos, args.paso_s, args.repeticiones))
             return 0
+        if args.cmd == "respaldar":
+            from .respaldo import codigo_salida, respaldar
+            rep = respaldar(args.destino, args.remoto, args.dry_run, log=lambda m: print(m, file=sys.stderr))
+            _imprimir(rep)
+            return codigo_salida(rep)
+        if args.cmd == "restaurar-prueba":
+            from .respaldo import restaurar_prueba
+            rep = restaurar_prueba(args.destino, args.remoto, args.dia, args.base, args.tabla, args.semilla)
+            _imprimir(rep)
+            return 1 if rep["problemas"] else 0
     except ErrorArchivo as exc:
         print("error: %s" % exc, file=sys.stderr)
         return 2

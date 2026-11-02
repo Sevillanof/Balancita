@@ -12,7 +12,7 @@ from . import sintetico
 from .config import DAY_MS, TABLAS
 from .exportar import exportar
 from .leer import buscar_archivo
-from .util import abrir_copia, dia_de, inicio_dia_ms, leer_manifiesto
+from .util import abrir_copia, dia_de, inicio_dia_ms, leer_manifiesto, rango_periodo
 
 
 def _bytes_logicos(con, cfg, d0: int, d1: int) -> int:
@@ -40,8 +40,8 @@ def tamanos(copia: str, destino: str, base: str, copia_confirmada: bool = False)
                 continue
             cfg = TABLAS[e["tabla"]]
             dia = dt.date.fromisoformat(e["dia"])
-            d0 = inicio_dia_ms(dia)
-            logico = _bytes_logicos(con, cfg, d0, d0 + DAY_MS)
+            d0, d1 = rango_periodo(dia, cfg.granularidad)
+            logico = _bytes_logicos(con, cfg, d0, d1)
             t = por_tabla.setdefault(e["tabla"], {"dias": [], "sqlite_bytes_logicos": 0, "parquet_bytes": 0})
             t["dias"].append({"dia": e["dia"], "filas": e["filas"], "sqlite_bytes_logicos": logico, "parquet_bytes": e["bytes"],
                               "razon": round(logico / e["bytes"], 2) if e["bytes"] else None})
