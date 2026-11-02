@@ -17,7 +17,7 @@ from archivo_parquet import cli, formato, respaldo, sintetico
 from archivo_parquet.config import DAY_MS, GRUPO_PESADO, TABLAS
 from archivo_parquet.exportar import exportar
 from archivo_parquet.leer import buscar_archivo, consulta_duckdb
-from archivo_parquet.util import dia_de, inicio_dia_ms, leer_manifiesto
+from archivo_parquet.util import a_archivo, dia_de, inicio_dia_ms, leer_manifiesto
 from archivo_parquet.verificar import verificar
 from test_archivo_parquet_respaldo import RemotoFalso
 
@@ -31,7 +31,7 @@ class ConfigTests(unittest.TestCase):
         for t in NUEVAS:
             self.assertIn(t, TABLAS)
             self.assertEqual(TABLAS[t].granularidad, "mes" if t in MENSUALES else "dia", t)
-        self.assertEqual([t for t in TABLAS if TABLAS[t].filas_por_grupo], ["verdicts", "llm_decisions", "market_events", "news_items", "news_analysis"])
+        self.assertTrue({"verdicts", "llm_decisions", "market_events", "news_items", "news_analysis"} <= {t for t in TABLAS if TABLAS[t].filas_por_grupo})
         self.assertTrue(all(TABLAS[t].filas_por_grupo == GRUPO_PESADO == 2000 for t in ("verdicts", "llm_decisions", "market_events")))
         with self.assertRaises(ValueError):
             dataclasses.replace(TABLAS["verdicts"], granularidad="semana")
@@ -61,7 +61,7 @@ class TablasNuevasTests(unittest.TestCase):
     def test_cada_tabla_se_exporta_verifica_y_coincide_con_sqlite(self):
         filas = self.crea(DIA0, 3)
         r = self.exp(DIA0 + 40 * DAY_MS)
-        self.assertEqual((r["no_confirmados"], sorted(r["tablas_ausentes"])), ([], ["llm_decisions", "market_events", "verdicts"]))
+        self.assertEqual((r["no_confirmados"], set(r["tablas_ausentes"])), ([], set(TABLAS) - set(NUEVAS) - {"premium_1m"}))  # premium_1m comparte tabla con premium y no tiene filas de 1 min
         self.assertEqual(verificar(self.destino)["problemas"], [])
         entradas = leer_manifiesto(self.destino)
         con = sqlite3.connect("file:%s?mode=ro" % self.copia, uri=True)
@@ -138,18 +138,19 @@ class GruposChicosTests(unittest.TestCase):
                 payload = "".join(rng.choice("0123456789abcdef") for _ in range(self.PAYLOAD))  # incompresible a proposito
                 filas.append((p, b, 60_000, b + 63_000, "range", "HOLD", "no_edge", "h-%s-%d" % (p, b), payload, b + 64_000))
         filas.sort()
+        filas = [a_archivo(cfg, f) for f in filas]
         ruta = os.path.join(carpeta, "d.parquet")
-        formato.escribir(ruta, cfg, iter([filas[i:i + 3000] for i in range(0, len(filas), 3000)]), {"schema_version": 1})
+        formato.escribir(ruta, cfg, iter([filas[i:i + 3000] for i in range(0, len(filas), 3000)]), {"schema_version": 2})
         return ruta
 
     def test_busqueda_de_una_hora_salta_grupos_y_bytes(self):
         base = TABLAS["verdicts"]
         self.assertEqual(formato.filas_por_grupo(base), 2000)
-        grande = dataclasses.replace(base, filas_por_grupo=1_000_000)  # como la fase 1: todo el dia en 1 grupo
+        grande = dataclasses.replace(base, filas_por_grupo=1_000_000, grupo_por=())  # como la fase 1: todo el dia en 1 grupo
         with tempfile.TemporaryDirectory() as tmp:
             os.makedirs(os.path.join(tmp, "a")), os.makedirs(os.path.join(tmp, "b"))
             chico_r, grande_r = self._escribe(os.path.join(tmp, "a"), base), self._escribe(os.path.join(tmp, "b"), grande)
-            self.assertEqual(formato.metadatos(chico_r)["grupos"], 5)  # 9600 filas / 2000
+            self.assertEqual(formato.metadatos(chico_r)["grupos"], 8)  # un grupo por producto (1.200 filas cada uno)
             self.assertEqual(formato.metadatos(grande_r)["grupos"], 1)
             h0 = DIA0 + 10 * 3_600_000
             res = {}

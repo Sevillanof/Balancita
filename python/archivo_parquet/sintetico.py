@@ -1,6 +1,7 @@
 """Datos SINTETICOS con el esquema real (copiado de la captura) para pruebas y para ``medir``. No lee ninguna base real."""
 from __future__ import annotations
 
+import hashlib
 import json
 import random
 import sqlite3
@@ -189,3 +190,151 @@ def crear_copia_fase2(ruta: str, dia0_ms: int, dias: int, productos: Sequence[st
     finally:
         con.close()
     return n
+
+
+# ---- formato 2: veredictos con la forma real del payload, funding_responses y candle_revisions (DDL copiado de futures-market-store.ts) ----
+ESTRATEGIAS = ("trend_follow", "mean_revert", "breakout", "carry", "flow", "range_fade")
+MARCOS = ("1m", "1m_previous", "5m")
+NOMBRES_FEATURES = tuple("%s_%s" % (a, b) for a in ("ema", "rsi", "atr", "adx", "vwap", "obv", "macd", "boll", "stoch", "cci", "roc", "mfi",
+                                                       "willr", "keltner", "donchian", "trix", "cmf", "ppo")
+                         for b in ("5", "9", "14", "21", "50"))  # 90 por marco, como los features reales
+
+
+class _EstadoVeredictos:
+    """Series suaves por producto (como los indicadores reales: minuto a minuto casi iguales) para que el payload se parezca al de verdad."""
+
+    def __init__(self, rng: random.Random):
+        self.rng = rng
+        self.nivel = {}
+        self.previa = {}
+
+    def payload(self, producto: str, bucket: int, accion: str, razon: str) -> str:
+        r = self.rng
+        n = self.nivel.setdefault(producto, [r.uniform(-2, 2) for _ in NOMBRES_FEATURES])
+        for i in range(len(n)):
+            n[i] += r.gauss(0, 0.01)
+        uno = {k: round(v, 6) for k, v in zip(NOMBRES_FEATURES, n)}
+        uno["candidate_bucket_start_ms"] = bucket
+        cinco = {k: round(v * 1.1, 6) for k, v in zip(NOMBRES_FEATURES, n)}
+        previa = self.previa.get(producto, uno)
+        self.previa[producto] = uno
+        propuestas = [{"strategy_id": e, "action": r.choice(ACCIONES), "reason_code": r.choice(RAZONES), "entry": "%.2f" % (100 + n[0]),
+                       "stop": "%.2f" % (99 + n[1]), "target": "%.2f" % (101 + n[2]), "expected_net_bp": round(r.uniform(-5, 9), 4),
+                       "notes": ["risk_cap ok", "funding ok"]} for e in ESTRATEGIAS]
+        elegida = {"strategy_id": r.choice(ESTRATEGIAS), "action": accion, "reason_code": razon}
+        return json.dumps({
+            "schema_version": "futures-verdict.v1", "config_hash": "c" * 64, "product_id": producto, "interval_ms": MINUTO,
+            "bucket_start_ms": bucket, "close_at_ms": bucket + MINUTO, "decision_known_at_ms": bucket + MINUTO + 3000,
+            "knowledge_lag_ms": 3000, "previous_regime": r.choice(("range", "trend_up")), "regime": "range", "action": accion, "reason_code": razon,
+            "selected": elegida, "proposals": propuestas, "features": {"1m": uno, "1m_previous": previa, "5m": cinco},
+            "inputs": {"1m": hashlib.sha256(("1m%d" % bucket).encode()).hexdigest(), "5m": hashlib.sha256(("5m%d" % bucket).encode()).hexdigest()},
+            "verdict_hash": hashlib.sha256(("%s%d" % (producto, bucket)).encode()).hexdigest()})
+
+
+def crear_copia_veredictos(ruta: str, dia0_ms: int, dias: int, productos: Sequence[str] = ("PF_XBTUSD", "PF_ETHUSD"), paso_ms: int = MINUTO,
+                           semilla: int = 7) -> int:
+    """Veredictos con payload de ~8-11 KB y la forma real (selected, proposals, features por marco). Devuelve las filas."""
+    rng = random.Random(semilla)
+    est = _EstadoVeredictos(rng)
+    con = sqlite3.connect(ruta)
+    total = 0
+    try:
+        con.execute(DDL["verdicts"])
+        for d in range(dias):
+            filas = []
+            for p in productos:
+                for b in range(dia0_ms + d * DAY_MS, dia0_ms + (d + 1) * DAY_MS, paso_ms):
+                    a, z = rng.choice(ACCIONES), rng.choice(RAZONES)
+                    pl = est.payload(p, b, a, z)
+                    filas.append((p, b, MINUTO, b + MINUTO + 3000, "range", a, z, hashlib.sha256(pl.encode()).hexdigest(), pl, b + MINUTO + 4000))
+            con.executemany("INSERT INTO paper_futures_verdicts VALUES(?,?,?,?,?,?,?,?,?,?)", filas)
+            total += len(filas)
+        con.commit()
+    finally:
+        con.close()
+    return total
+
+
+DDL.update({
+    "funding_responses": """CREATE TABLE paper_futures_funding_responses(
+        sha256 TEXT PRIMARY KEY, received_at INTEGER NOT NULL, server_time TEXT NOT NULL, raw_response TEXT NOT NULL
+      ) STRICT""",
+    "candle_revisions": """CREATE TABLE paper_futures_candle_revisions (
+        candle_id TEXT NOT NULL, interval_ms INTEGER NOT NULL, bucket_start INTEGER NOT NULL,
+        revision INTEGER NOT NULL, known_at INTEGER NOT NULL, close_at INTEGER,
+        is_closed INTEGER NOT NULL, coverage TEXT NOT NULL, open_price TEXT NOT NULL,
+        high_price TEXT NOT NULL, low_price TEXT NOT NULL, close_price TEXT NOT NULL,
+        volume_btc TEXT NOT NULL, trade_count INTEGER NOT NULL, source_hash TEXT NOT NULL,
+        PRIMARY KEY(candle_id, revision)
+      ) STRICT""",
+})
+TRIGGERS_FUNDING = ("""CREATE TRIGGER paper_futures_funding_responses_no_update BEFORE UPDATE ON paper_futures_funding_responses
+        BEGIN SELECT RAISE(ABORT, 'funding evidence is immutable'); END""",
+                    """CREATE TRIGGER paper_futures_funding_responses_no_delete BEFORE DELETE ON paper_futures_funding_responses
+        BEGIN SELECT RAISE(ABORT, 'funding evidence is immutable'); END""")
+
+
+def crear_copia_funding(ruta: str, dia0_ms: int, dias: int, por_dia: int = 24, periodos: int = 8760, semilla: int = 5) -> int:
+    """Una respuesta por hora de ~1 MB (el ano de funding): cada una es la anterior con un periodo nuevo al final y el mas viejo fuera."""
+    rng = random.Random(semilla)
+    con = sqlite3.connect(ruta)
+    paso = 3_600_000
+    ts0 = dia0_ms - periodos * paso
+    cola = [(ts0 + i * paso, "%.12f" % rng.gauss(0, 3e-5), "%.12f" % rng.gauss(0, 1e-4)) for i in range(periodos)]
+    total = 0
+    try:
+        con.execute(DDL["funding_responses"])
+        for t in TRIGGERS_FUNDING:
+            con.execute(t)
+        for k in range(dias * por_dia):
+            recibido = dia0_ms + k * (DAY_MS // por_dia) + 2_000
+            cola.append((cola[-1][0] + paso, "%.12f" % rng.gauss(0, 3e-5), "%.12f" % rng.gauss(0, 1e-4)))
+            cola.pop(0)
+            cuerpo = json.dumps({"result": "success", "serverTime": "synthetic", "rates": [
+                {"timestamp": dt_iso(t), "fundingRate": a, "relativeFundingRate": b} for t, a, b in cola]})
+            con.execute("INSERT INTO paper_futures_funding_responses VALUES(?,?,?,?)",
+                        (hashlib.sha256(cuerpo.encode()).hexdigest(), recibido, dt_iso(recibido), cuerpo))
+            total += 1
+        con.commit()
+    finally:
+        con.close()
+    return total
+
+
+def dt_iso(ms: int) -> str:
+    import datetime as _dt
+    return _dt.datetime.fromtimestamp(ms / 1000, _dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+
+
+def crear_copia_velas(ruta: str, dia0_ms: int, dias: int, productos: Sequence[str] = ("PF_XBTUSD",), revisiones: int = 30, semilla: int = 9) -> int:
+    """Revisiones de velas de 1 minuto (una por trade): ``revisiones`` por vela (en produccion ~175 en velas activas)."""
+    rng = random.Random(semilla)
+    con = sqlite3.connect(ruta)
+    total = 0
+    try:
+        con.execute(DDL["candle_revisions"])
+        con.execute("""CREATE TRIGGER paper_futures_candle_revisions_no_update BEFORE UPDATE ON paper_futures_candle_revisions
+            BEGIN SELECT RAISE(ABORT, 'market evidence is immutable'); END""")
+        precio = {p: 60_000.0 + 100 * i for i, p in enumerate(productos)}
+        for d in range(dias):
+            filas = []
+            for p in productos:
+                for b in range(dia0_ms + d * DAY_MS, dia0_ms + (d + 1) * DAY_MS, MINUTO):
+                    abre = precio[p]
+                    alto = bajo = cierre = abre
+                    vol = 0.0
+                    for rev in range(1, revisiones + 1):
+                        cierre = round(cierre + rng.gauss(0, 0.8), 1)
+                        alto, bajo = max(alto, cierre), min(bajo, cierre)
+                        vol += rng.uniform(0.001, 0.2)
+                        cerrada = rev == revisiones
+                        filas.append(("%s:%d:%d" % (p, MINUTO, b), MINUTO, b, rev, b + 1000 + rev * (50_000 // revisiones), b + MINUTO if cerrada else None,
+                                      1 if cerrada else 0, "trades", "%.1f" % abre, "%.1f" % alto, "%.1f" % bajo, "%.1f" % cierre, "%.4f" % vol, rev,
+                                      hashlib.sha256(("%s%d%d" % (p, b, rev)).encode()).hexdigest()))
+                    precio[p] = cierre
+            con.executemany("INSERT INTO paper_futures_candle_revisions VALUES(%s)" % ",".join("?" * 15), filas)
+            total += len(filas)
+        con.commit()
+    finally:
+        con.close()
+    return total

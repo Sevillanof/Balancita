@@ -19,9 +19,9 @@ export interface ArchiveTableSpec {
 const DAY = 86_400_000
 
 /**
- * Versión mínima del formato exigida a toda línea del manifiesto. El exportador actual NO escribe `formato_version`
- * ni `verificacion_ida_vuelta`: nada archivado hasta hoy se puede borrar hasta que el exportador nuevo
- * (formato óptimo por tabla) lo certifique y se suba este número en el cambio que lo traiga.
+ * Versión mínima del formato exigida a toda línea del manifiesto. El exportador del formato 2 (`python/archivo_parquet`)
+ * escribe `formato_version: 2` y `verificacion_ida_vuelta: true` solo después de la prueba de no pérdida fila a fila;
+ * lo archivado con las fases 1 y 2 (sin esos campos) sigue bloqueado hasta reexportarse.
  */
 export const MIN_FORMAT_VERSION = 2
 
