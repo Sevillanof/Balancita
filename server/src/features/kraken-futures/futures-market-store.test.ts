@@ -549,7 +549,7 @@ describe('FuturesMarketStore', () => {
     store.close()
   })
 
-  it('no longer writes the redundant ticker snapshot table', () => {
+  it('no longer creates or writes the redundant ticker snapshot table', () => {
     const path = dbPath()
     const store = new FuturesMarketStore(path)
     store.append({
@@ -571,7 +571,9 @@ describe('FuturesMarketStore', () => {
     expect(rows).toBeGreaterThan(0)
     expect(
       check
-        .prepare('SELECT COUNT(*) AS count FROM paper_futures_ticker_snapshots')
+        .prepare(
+          "SELECT COUNT(*) AS count FROM sqlite_master WHERE name LIKE '%ticker_snapshots%'",
+        )
         .get(),
     ).toEqual({ count: 0 })
     check.close()

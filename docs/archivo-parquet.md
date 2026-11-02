@@ -78,12 +78,12 @@ Lo que queda instalado: `~/.venvs/archivo-parquet` (fuera del repo), `~/Library/
 
 Quién borra: solo el proceso que ya es dueño de cada base.
 
-| Tabla                                     | Dueño de la base                                           | ¿Borra por archivo?                                                                                          |
-| ----------------------------------------- | ---------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
-| `positioning`, `premium`                  | recolector de posicionamiento (`pnpm positioning:collect`) | **Sí** (ventana 30 días, por mes)                                                                            |
-| `verdicts`, `llm_decisions`, `forecasts*` | procesos Python; tienen trigger `no_delete` (inmutables)   | **No**: otro proceso la escribe y el trigger impide borrar sin desactivarlo                                  |
-| `market_events`                           | captura                                                    | **No**: la retención de la captura ya la recorta (7 días) y tiene triggers; el archivo no cambia esa ventana |
-| `news_items`, `news_analysis`             | Python (inmutable)                                         | **Nunca**: las noticias no se borran                                                                         |
+| Tabla                                     | Dueño de la base                                           | ¿Borra por archivo?                                                                                                              |
+| ----------------------------------------- | ---------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| `positioning`, `premium`                  | recolector de posicionamiento (`pnpm positioning:collect`) | **Sí** (ventana 30 días, por mes)                                                                                                |
+| `verdicts`, `llm_decisions`, `forecasts*` | procesos Python; tienen trigger `no_delete` (inmutables)   | **No**: otro proceso la escribe y el trigger impide borrar sin desactivarlo                                                      |
+| `market_events`                           | captura                                                    | **No**: la retención de la captura ya la recorta (tickers 48 h, resto 7 días) y tiene triggers; el archivo no cambia esa ventana |
+| `news_items`, `news_analysis`             | Python (inmutable)                                         | **Nunca**: las noticias no se borran                                                                                             |
 
 La puerta (`archive-gate.ts`, solo lectura) deja borrar un día/mes únicamente si: está confirmado en `manifiesto.jsonl` **con `verificacion_ida_vuelta: true` y `formato_version` al menos el mínimo** (`MIN_FORMAT_VERSION` = 2; el exportador del formato 2 escribe esos campos solo después de la prueba de no pérdida, y **lo archivado con las fases 1 y 2 sigue bloqueado** hasta que se reexporte); el archivo existe con el mismo tamaño y sha256 del manifiesto (sha256 en streaming con tope de 5 s, cacheado por mtime); terminó hace más que la ventana de la tabla **más 1 día de margen**; y la base no tiene más filas del período que el archivo. Con `FUTURES_ARCHIVE_REQUIRE_OFFSITE=1` también exige `confirmado_fuera` en `respaldo-estado.jsonl` (apagado mientras no haya VPS). Si el manifiesto falta, no se lee o hay cualquier duda: no se borra nada. Antes de empezar cada período se verifica que exista una copia diaria buena de la base de menos de 30 h.
 
@@ -125,7 +125,7 @@ Las rutas de las `j_*` salen de `evaluate_verdict` (`python/balancita_engine/fut
 `llm_decisions`, `llm_skips`, `forecast_verdicts`, `forecasts*`, `positioning`, `premium`, `news_*` y `market_events` ya pasan por el mismo motor (formato 2, hash por fila completo, diccionario/estadísticas por columna, un grupo por producto). Sus parámetros son los del informe; no se afinaron con datos reales.
 
 - **`premium_1m`** (nuevo, por día): la serie de 1 minuto se recorta a 7 días en SQLite, así que el archivo mensual llega tarde y no la tiene. `premium_1m` filtra `interval_ms = 60000`, se exporta **al día siguiente (margen 0)** y es la que hay que encender para no perder esa serie. El `premium` mensual sigue **sin filtro** (no se pierde lo ya archivado; los minutos que aún existían quedan duplicados ahí).
-- **`market_events`**: ver «Pendiente de Fran: `market_events` y la retención».
+- **`market_events`**: ver «`market_events` y la retención de 48 h».
 
 ## Prueba de NO pérdida (fila a fila, columna a columna)
 
@@ -163,13 +163,20 @@ El reporte trae `reemplazados` aparte de `exportados`, y `nocturno.jsonl` los cu
 - Memoria acotada: lotes de a lo sumo un grupo de filas al leer SQLite y al releer (con filas de 1 MB, 16 filas). Medido (sintético): ~330 MB de RSS en 11 520 veredictos y ~380 MB en 120 cuerpos de funding de 1 MB; no correr dos exportaciones pesadas en paralelo.
 - `verificar` vuelve a comprobar sha256, relectura, hash de cada fila, derivadas y metadatos de cada línea, y lista archivos `part-*` que no están en el manifiesto.
 
-## Pendiente de Fran: `market_events` y la retención
+## `market_events` y la retención de 48 h
 
-La retención de la captura borra los tickers con más de 24 h y recorta `normalized_json` (`futures-market-store.ts`, retención de 24 h para tickers y 7 días para el resto). **El informe suponía un margen de 22 h; es al revés**: el día D termina a las 00:00 UTC y cuando una copia lo ve (aunque sea a las 02:00), la retención ya borró lo que tenía más de 24 h, o sea **las primeras horas del día D**. Un día completo solo se podría exportar con una copia tomada justo después de las 00:00 UTC y antes de la primera pasada de retención.
+La retención de la captura borra los tickers con más de **48 h** (antes 24 h) y recorta `normalized_json` (la copia del mensaje del proveedor que repite `raw_json`) también a las 48 h; los trades y libros duran 7 días (`FUTURES_TICKER_RETENTION_HOURS`, `FUTURES_RAW_COPY_KEEP_HOURS`, `FUTURES_EVENT_RETENTION_DAYS`; valores en `server/src/features/kraken-futures/capture-savings.ts`).
 
-Qué hace el exportador hoy (sin tocar la captura): `market_events` usa margen 0 y **exige que el período conserve su inicio** (la primera fila a menos de 10 minutos de las 00:00). Si la copia ya lo perdió, **no certifica un «día completo» incompleto**: el período va a `omitidos_por_retencion` del reporte (y de `nocturno.jsonl`), sin fallo y sin código 1. Los períodos ya archivados en el formato viejo de esta tabla siguen bloqueados para el borrado.
+Con 48 h, **una sola copia diaria ve entero el día anterior**: el día D termina a las 00:00 UTC de D+1, y su inicio se borra recién a las 00:00 UTC de D+2. Cualquier copia tomada entre esos dos instantes (la copia diaria cae siempre en esa ventana de 24 h) tiene el día D completo y sin recortar. Con 24 h esa ventana no existía (el inicio de D ya se había borrado cuando D terminaba).
 
-Para que `market_events` se archive de verdad hace falta una decisión de Fran, porque toca la captura (no se tocó): (a) tomar la copia entre las 00:00 UTC y la primera retención del día, (b) subir la retención de tickers a 48 h o más, o (c) archivar desde la captura. Hasta entonces: nada de `market_events` pasa la puerta.
+Por eso `market_events` usa **margen 0** (se exporta apenas la copia lo ve cerrado) y dos guardas, para no certificar nunca un día incompleto:
+
+- **Inicio**: la primera fila del día debe estar a menos de 10 minutos de las 00:00. Si la copia ya lo perdió, el período va a `omitidos_por_retencion` del reporte (y de `nocturno.jsonl`), sin fallo y sin código 1.
+- **Fin** (nuevo): la fila más nueva de la tabla en la copia debe estar a menos de 1 minuto del final del día (`tolerancia_fin_ms`). Una copia tomada antes de que el día terminara no lo tiene entero: ese día va a `pendientes_por_abrir` y se exporta con la copia siguiente. Los tickers llegan cada segundo, así que cualquier copia posterior al fin lo cumple.
+
+Qué puede salir mal: si la exportación nocturna corre con una copia tomada después de las 00:00 UTC de D+2 (por ejemplo si la copia diaria se atrasó más de un día, o la Mac estuvo apagada), el día D llega recortado y queda en `omitidos_por_retencion`. No se pierde nada que estuviera archivado; lo que ya no está en la base no se puede recuperar. Mirar `omitidos_por_retencion` en `nocturno.jsonl` tras cada corrida; si aparece algo, subir `FUTURES_TICKER_RETENTION_HOURS`.
+
+Costo de disco: los tickers (1 por segundo y producto) ocupan el doble en la base viva (≈1 GB más). Los períodos ya archivados en el formato viejo de esta tabla siguen bloqueados para el borrado.
 
 ## Medición (datos sintéticos; esta máquina; no extrapolar)
 

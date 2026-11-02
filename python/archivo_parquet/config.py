@@ -64,6 +64,9 @@ class TablaConfig:
     # Series que SQLite recorta (market_events): se exige que el periodo conserve su inicio; si la copia ya lo recorto, NO se confirma.
     exigir_inicio_completo: bool = False
     tolerancia_inicio_ms: int = 600_000
+    # Con ``exigir_inicio_completo`` tambien se exige que la copia llegue al FINAL del periodo: su fila mas nueva (en toda la tabla)
+    # debe estar a menos de esto del fin. Una copia tomada antes de que el dia terminara no lo tiene entero; ese dia queda pendiente.
+    tolerancia_fin_ms: int = 60_000
     filtro_sql: Optional[str] = None  # condicion SQL fija de la configuracion (premium_1m); nunca viene del usuario
 
     def __post_init__(self):
@@ -165,8 +168,10 @@ TABLAS = {
         columnas=_cols("skip_id:int product_id:text bucket_start:int question_id:text question_version:int code:text reason:text written_at:int",
                        dicc=("product_id", "question_id", "code"), sin_stats=("reason",)),
         filtro_tipico="code", grupo_por=("product_id",)),
-    # market_events: la retencion de la captura borra tickers a 24 h y recorta normalized_json: se exige que el periodo conserve su inicio
-    # (si no, se informa en `omitidos_por_retencion` y NO se certifica como dia completo). Ver docs/archivo-parquet.md, "Pendiente de Fran".
+    # market_events: la retencion de la captura borra tickers a 48 h (era 24) y recorta normalized_json a las 48 h. Margen 0: el dia D se
+    # exporta con cualquier copia tomada entre el fin de D y las 48 h de su inicio (o sea, UNA copia diaria siempre lo ve entero). Dos
+    # guardas: se exige que la copia conserve el INICIO del dia (si no, `omitidos_por_retencion`) y que llegue a su FIN (si no, queda
+    # `pendientes_por_abrir` hasta una copia mas nueva); nunca se certifica un dia incompleto. Ver docs/archivo-parquet.md.
     # La clave lleva product_id y event_id ademas de received_at: da un orden total y deja buscar por producto y tiempo.
     "market_events": TablaConfig(
         nombre="market_events", sqlite="paper_futures_market_events", tiempo="received_at",

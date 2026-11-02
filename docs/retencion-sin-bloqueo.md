@@ -17,7 +17,7 @@ Esa parada se registraba como un incidente de red (`poll_stuck`).
 - `trimRawEvents` acepta `batchSize` y `vacuumPages`, y `done` ahora significa de verdad "no queda nada por
   borrar" (antes, con un solo lote por llamada, informaba `false` aunque no quedara trabajo).
 - Las garantías no cambian: los triggers de inmutabilidad se retiran y se restauran dentro de la transacción de
-  cada lote; las ventanas de retención (tickers 24 h, eventos 7 días, copia cruda 24 h) son las mismas; sigue
+  cada lote; las ventanas de retención (tickers 24 h, eventos 7 días, copia cruda 24 h; desde el 2-nov-2026 tickers y copia cruda duran 48 h, ver `docs/operacion-base-de-datos.md`) eran las mismas; sigue
   habiendo un único escritor.
 - `retention.jsonl` (junto a la base de mercado): una línea por ciclo con pasos, filas, duración total, paso más
   largo y tamaño de lote.

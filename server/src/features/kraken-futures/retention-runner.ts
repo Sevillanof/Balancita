@@ -19,6 +19,8 @@ export interface RetentionCycle {
   readonly batchSize: number
   /** Filas borradas porque ya están archivadas en Parquet (borrado verificado); 0 si está apagado. */
   readonly archived?: number
+  /** Revisiones intermedias de velas ya asentadas que se borraron (interruptor FUTURES_CANDLE_REVISIONS_COMPACT); solo aparece si está encendido. */
+  readonly candleRevisionsCompacted?: number
 }
 
 /**
@@ -55,6 +57,13 @@ export interface RetentionRunnerOptions {
    * Borrado de lo ya archivado y verificado (ver features/archive-prune). Solo entra cuando la limpieza de
    * eventos terminó y comparte el mismo presupuesto, pausas, `canRun` y despertar que ella. Apagado: no se pasa.
    */
+  /**
+   * Compactación de revisiones de velas (interruptor, apagado: no se pasa). Entra cuando la limpieza de eventos
+   * terminó, antes del borrado por archivo, con el mismo presupuesto, pausas y `canRun`.
+   */
+  readonly candles?: {
+    step(): { deleted: number; done: boolean }
+  }
   readonly archive?: {
     prepare(): Promise<void>
     step(batch: number): { deleted: number; done: boolean }
@@ -123,9 +132,24 @@ export function createRetentionRunner(options: RetentionRunnerOptions) {
     let done = false
     let trimDone = false
     let archived = 0
+    let compacted = 0
+    let candlesDone = !options.candles
     let archiveReady = false
     while (!stopped && allowed()) {
       const started = now()
+      if (trimDone && !candlesDone && options.candles) {
+        const result = options.candles.step()
+        const elapsed = now() - started
+        steps += 1
+        compacted += result.deleted
+        maxStepMs = Math.max(maxStepMs, elapsed)
+        candlesDone = result.done
+        done = candlesDone && !options.archive
+        if (steps % checkpointEvery === 0) checkpoint()
+        if (done || now() - cycleStart > budget) break
+        await yieldLoop()
+        continue
+      }
       if (trimDone && options.archive) {
         if (!archiveReady) {
           await options.archive.prepare()
@@ -161,12 +185,13 @@ export function createRetentionRunner(options: RetentionRunnerOptions) {
       else if (elapsed < target / 4)
         batch = Math.min(maxBatch, Math.ceil(batch * 1.5))
       trimDone = result.done
-      done = result.done && !options.archive
+      done = result.done && !options.archive && !options.candles
       if (steps % checkpointEvery === 0) checkpoint()
       if (done || now() - cycleStart > budget) break
       await yieldLoop()
     }
-    if (deleted > 0 || slimmed > 0 || archived > 0) checkpoint()
+    if (deleted > 0 || slimmed > 0 || archived > 0 || compacted > 0)
+      checkpoint()
     return {
       at,
       mode: 'incremental',
@@ -178,6 +203,7 @@ export function createRetentionRunner(options: RetentionRunnerOptions) {
       maxStepMs,
       batchSize: batch,
       ...(options.archive ? { archived } : {}),
+      ...(options.candles ? { candleRevisionsCompacted: compacted } : {}),
     }
   }
 

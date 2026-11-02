@@ -8,9 +8,10 @@ export interface TableReport {
    * `ok`: every row copied. `discarded`: reading failed, the table is in the new
    * database with its schema but without rows. `partial`: reading failed and the
    * rows read before the failure were kept (`keepPartial`). `no_schema`: its
-   * CREATE statement could not be applied.
+   * CREATE statement could not be applied. `dropped`: an empty table the caller asked to
+   * leave out (`dropEmpty`); it, its indexes and its triggers are not in the new database.
    */
-  readonly status: 'ok' | 'discarded' | 'partial' | 'no_schema'
+  readonly status: 'ok' | 'discarded' | 'partial' | 'no_schema' | 'dropped'
   readonly rowsCopied: number
   readonly error?: string
 }
@@ -24,6 +25,15 @@ export interface RebuildReport {
   readonly objectsFailed: readonly { name: string; error: string }[]
   readonly integrity: { readonly ok: boolean; readonly detail: string }
 }
+
+/**
+ * Tables with no writer and no reader anywhere in the code (checked 2-nov-2026): `--drop-empty-legacy`
+ * leaves them out of a rebuilt copy when they have 0 rows. Tables that still have a live writer
+ * (book_snapshots, llm_errors, news_errors, qwen errors/news_actions/execution_receipts) are not here.
+ */
+export const LEGACY_EMPTY_TABLES: readonly string[] = [
+  'paper_futures_ticker_snapshots',
+]
 
 const ident = (name: string): string => `"${name.replaceAll('"', '""')}"`
 const message = (error: unknown): string =>
@@ -49,7 +59,7 @@ interface Master {
 export function rebuildDatabase(
   source: string,
   dest: string,
-  options: { keepPartial?: boolean } = {},
+  options: { keepPartial?: boolean; dropEmpty?: readonly string[] } = {},
 ): RebuildReport {
   if (!existsSync(source)) throw new Error(`No existe la base: ${source}`)
   if (existsSync(dest)) throw new Error(`El destino ya existe: ${dest}`)
@@ -68,12 +78,50 @@ export function rebuildDatabase(
       { cause: error },
     )
   }
+  // Tables to leave out: each must exist, have 0 rows and no other table may reference it.
+  const dropped = new Set<string>()
+  try {
+    for (const name of options.dropEmpty ?? []) {
+      if (!master.some((m) => m.type === 'table' && m.name === name)) {
+        if (LEGACY_EMPTY_TABLES.includes(name)) continue // already absent: nothing to leave out
+        throw new Error(`No se puede quitar ${name}: no existe en la base.`)
+      }
+      const count = src
+        .prepare(`SELECT COUNT(*) AS n FROM ${ident(name)}`)
+        .get() as {
+        n: number
+      }
+      if (Number(count.n) !== 0)
+        throw new Error(
+          `No se puede quitar ${name}: tiene ${count.n} filas (solo se quitan tablas vacías).`,
+        )
+      for (const other of master.filter(
+        (m) => m.type === 'table' && m.name !== name,
+      )) {
+        const refs = src
+          .prepare(`PRAGMA foreign_key_list(${ident(other.name)})`)
+          .all() as { table: string }[]
+        if (refs.some((r) => r.table === name))
+          throw new Error(
+            `No se puede quitar ${name}: la referencia la tabla ${other.name}.`,
+          )
+      }
+      dropped.add(name)
+    }
+  } catch (error) {
+    src.close()
+    throw error
+  }
   // Only now is the new file created: an unreadable schema leaves nothing behind.
   const out = new DatabaseSync(dest)
   try {
     out.exec('PRAGMA journal_mode=DELETE; PRAGMA foreign_keys=OFF')
     const tables: TableReport[] = []
     for (const item of master.filter((m) => m.type === 'table')) {
+      if (dropped.has(item.name)) {
+        tables.push({ table: item.name, status: 'dropped', rowsCopied: 0 })
+        continue
+      }
       tables.push(copyTable(src, out, item, options.keepPartial === true))
     }
     // sqlite_sequence (AUTOINCREMENT counters), best effort.
@@ -89,7 +137,9 @@ export function rebuildDatabase(
       // No AUTOINCREMENT tables, or the counters are unreadable: SQLite recomputes them.
     }
     const objectsFailed: { name: string; error: string }[] = []
-    for (const item of master.filter((m) => m.type !== 'table')) {
+    for (const item of master.filter(
+      (m) => m.type !== 'table' && !dropped.has(m.tbl_name),
+    )) {
       try {
         out.exec(item.sql ?? '')
       } catch (error) {
@@ -114,7 +164,12 @@ export function rebuildDatabase(
       dest,
       ok:
         integrity.ok &&
-        tables.every((t) => t.status === 'ok' || t.status === 'discarded'),
+        tables.every(
+          (t) =>
+            t.status === 'ok' ||
+            t.status === 'discarded' ||
+            t.status === 'dropped',
+        ),
       tables,
       objectsFailed,
       integrity,
@@ -204,7 +259,9 @@ export function describeRebuild(report: RebuildReport): string {
         ? 'OK       '
         : t.status === 'partial'
           ? 'PARCIAL  '
-          : 'DESCARTADA'
+          : t.status === 'dropped'
+            ? 'QUITADA   '
+            : 'DESCARTADA'
     return `${mark} ${t.table}: ${t.rowsCopied} filas${t.error ? ` — ${t.error}` : ''}`
   })
   for (const o of report.objectsFailed)

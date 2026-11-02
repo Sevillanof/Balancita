@@ -109,18 +109,12 @@ export function parseHistoricalFundingResponse(
   }
 }
 
-/**
- * Literal text of the response's period objects for the given period starts,
- * one per line after the response's own `serverTime`, with its own SHA-256.
- * It is a verifiable excerpt of the raw body (the body itself is not kept); the
- * full response's hash is `response.sha256`.
- */
-export function fundingLiteralExtract(
-  response: Pick<HistoricalFundingResponse, 'serverTime' | 'rawResponse'>,
+function periodLiterals(
+  rawResponse: string,
   startsMs: ReadonlySet<number>,
-): { text: string; sha256: string; periods: number } {
+): Map<number, string> {
   const literals = new Map<number, string>()
-  for (const match of response.rawResponse.matchAll(/\{[^{}]*\}/g)) {
+  for (const match of rawResponse.matchAll(/\{[^{}]*\}/g)) {
     let parsed: unknown
     try {
       parsed = JSON.parse(match[0])
@@ -132,7 +126,20 @@ export function fundingLiteralExtract(
     if (startsMs.has(startMs) && !literals.has(startMs))
       literals.set(startMs, match[0])
   }
-  const lines = [...literals.entries()]
+  return literals
+}
+
+/**
+ * Literal text of the response's period objects for the given period starts,
+ * one per line after the response's own `serverTime`, with its own SHA-256.
+ * It is a verifiable excerpt of the raw body (the body itself is not kept); the
+ * full response's hash is `response.sha256`.
+ */
+export function fundingLiteralExtract(
+  response: Pick<HistoricalFundingResponse, 'serverTime' | 'rawResponse'>,
+  startsMs: ReadonlySet<number>,
+): { text: string; sha256: string; periods: number } {
+  const lines = [...periodLiterals(response.rawResponse, startsMs).entries()]
     .sort((a, b) => a[0] - b[0])
     .map(([, literal]) => literal)
   const text = [`serverTime=${response.serverTime}`, ...lines].join('\n')
@@ -141,6 +148,40 @@ export function fundingLiteralExtract(
     sha256: createHash('sha256').update(text, 'utf8').digest('hex'),
     periods: lines.length,
   }
+}
+
+/**
+ * Every slim body starts with this text. Readers that only need the rates
+ * (`futures_funding_context.py` reads `["rates"]`) parse it like a real body;
+ * anything that needs the full provider message must check for the mark.
+ */
+export const FUNDING_SLIM_MARK = '{"balancitaSlim":true,'
+
+export function isFundingSlimBody(rawResponse: string): boolean {
+  return rawResponse.startsWith(FUNDING_SLIM_MARK)
+}
+
+/**
+ * Compact stand-in for a funding response body (switch FUTURES_FUNDING_BODY_DAILY):
+ * the literal text of only the periods that were new, the full body's hash and
+ * its size. `fullSha256` is the row's primary key, so the full body stays
+ * identifiable (Kraken still serves that history) but its text is not kept.
+ * The rows of `funding_periods` and `funding_sightings` are untouched.
+ */
+export function fundingSlimBody(
+  response: Pick<
+    HistoricalFundingResponse,
+    'serverTime' | 'rawResponse' | 'sha256'
+  >,
+  startsMs: ReadonlySet<number>,
+): string {
+  const literals = periodLiterals(response.rawResponse, startsMs)
+  if (literals.size !== startsMs.size)
+    throw new Error('Funding response lacks a period it must keep.')
+  const rates = [...literals.entries()]
+    .sort((a, b) => a[0] - b[0])
+    .map(([, literal]) => literal)
+  return `${FUNDING_SLIM_MARK}"fullSha256":${JSON.stringify(response.sha256)},"fullBytes":${Buffer.byteLength(response.rawResponse, 'utf8')},"serverTime":${JSON.stringify(response.serverTime)},"rates":[${rates.join(',')}]}`
 }
 
 export function historicalFundingAt(
