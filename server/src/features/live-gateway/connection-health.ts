@@ -73,6 +73,14 @@ export class ConnectionHealth {
     if (this.incidents.size >= this.o.generalThreshold) this.generalAt = now
   }
 
+  /**
+   * Declares a general connectivity problem without waiting for failures (the machine just woke up:
+   * every pooled socket is dead). HTTP clients open fresh connections for `freshConnectionsMs`.
+   */
+  markGeneral(): void {
+    this.generalAt = this.clock()
+  }
+
   /** True while at least `generalThreshold` distinct sources failed together recently. */
   general(): boolean {
     return this.clock() - this.generalAt <= this.o.generalWindowMs

@@ -1,6 +1,7 @@
 import { closeSync, openSync, readFileSync, readSync, statSync } from 'node:fs'
 import { basename } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
+import { isMalformedError } from '../../platform/sqlite-safety.ts'
 
 /**
  * `GET /api/observability/health` (Mission Control B1): the state of six
@@ -88,6 +89,8 @@ export interface ObservabilityHealthOptions {
   readonly qwenExitOff?: { readonly reason: string; readonly since: string }
   readonly kronosSummaryPath?: string
   readonly resilienceLogPath?: string
+  /** `db-health-state.json` written by the capture: integrity of the market database and its daily backups. */
+  readonly dbHealthStatePath?: string
   /** The capture's own stale limit (`MARKET_STALE_AFTER_MS`, default 15 s). */
   readonly staleAfterMs?: number
   readonly cacheMs?: number
@@ -392,6 +395,140 @@ function processState(c: Collected, name: string): ProcessState {
   return c.processes.get(name) ?? 'absent'
 }
 
+/** Base dañada: what to show and do (replaces the vague "snapshot sin velas verificables"). */
+function damagedMessage(file: string, why: string): string {
+  return `Base dañada: ${file}. Reparación: restaurar la última copia buena (server/data/backups) o reconstruir descartando la tabla dañada con «pnpm db:rebuild <copia>». Detalle: ${why}`
+}
+
+const BACKUP_STALE_FACTOR = 2
+const INTEGRITY_STALE_MS = 45 * MINUTE
+
+/** Integrity and backup rows of «Datos», from the capture's `db-health-state.json`. */
+function databaseChecks(
+  options: ObservabilityHealthOptions,
+  now: number,
+  market: Opened<unknown>,
+): { checks: HealthCheck[]; evidence: HealthEvidence } {
+  const state = readJson(options.dbHealthStatePath)
+  const integrity = rowOf(state?.integrity)
+  const marketFile = options.marketDbPath
+    ? basename(options.marketDbPath)
+    : 'futures-market.sqlite'
+  const file = typeof integrity.file === 'string' ? integrity.file : marketFile
+  const checkedAt = num(integrity.checked_at)
+  const detail = typeof integrity.detail === 'string' ? integrity.detail : ''
+  const stateDamaged = typeof state?.damaged === 'string'
+  const readDamaged =
+    market.state === 'unreadable' && isMalformedError(market.detail)
+  let status: HealthStatus
+  let text: string
+  if (stateDamaged || readDamaged) {
+    status = 'error'
+    text = damagedMessage(
+      stateDamaged ? String(state?.damaged) : marketFile,
+      readDamaged && !stateDamaged
+        ? (market as { detail: string }).detail
+        : detail,
+    )
+  } else if (integrity.ok === true && checkedAt !== null) {
+    const age = now - checkedAt
+    status = age <= INTEGRITY_STALE_MS ? 'ok' : 'warning'
+    text =
+      status === 'ok'
+        ? `${file}: quick_check correcto hace ${Math.round(age / MINUTE)} min.`
+        : `El último chequeo de ${file} fue hace ${Math.round(age / MINUTE)} min (se hace cada 15 min).`
+  } else if (integrity.timed_out === true) {
+    status = 'warning'
+    text = `El chequeo de ${file} tardó demasiado y se detuvo; se repite cada 15 min.`
+  } else {
+    status = 'unknown'
+    text = state
+      ? `${file}: todavía sin chequeo de integridad.`
+      : 'Sin estado de integridad: la captura no lo escribió (¿versión anterior?).'
+  }
+  const wake = rowOf(state?.wake)
+  const wakeAt = num(wake.at)
+  const checks: HealthCheck[] = [
+    check({
+      id: 'database_integrity',
+      label: 'Integridad de la base de captura',
+      required: false,
+      status,
+      value: checkedAt === null ? null : now - checkedAt,
+      rule: 'quick_check cada 15 min (y tras despertar la Mac); error si la base está dañada o una escritura devolvió «malformed»',
+      detail:
+        text +
+        (wakeAt !== null
+          ? ` Último despertar de la Mac: hace ${Math.round((now - wakeAt) / MINUTE)} min (limpieza en pausa, WAL truncado y base revisada).`
+          : ''),
+    }),
+  ]
+  const backups = Object.entries(rowOf(state?.backups)).map(
+    ([name, value]): Row => ({ name, ...rowOf(value) }),
+  )
+  const everyMs = num(state?.backup_every_ms) ?? 24 * 60 * MINUTE
+  if (backups.length === 0) {
+    checks.push(
+      check({
+        id: 'database_backup',
+        label: 'Copia de seguridad diaria',
+        required: false,
+        status: 'unknown',
+        value: null,
+        rule: 'una copia por día de la base de captura y las del paper; se conservan las 3 últimas buenas',
+        detail: 'Todavía no se hizo ninguna copia en esta sesión.',
+      }),
+    )
+  } else {
+    const failedSource = backups.filter((b) => b.source_failed === true)
+    const failed = backups.filter((b) => b.ok !== true)
+    const newest = backups.reduce<number | null>(
+      (acc, b) => Math.max(acc ?? 0, num(b.last_good_at) ?? 0) || acc,
+      null,
+    )
+    const stale =
+      newest === null || now - newest > BACKUP_STALE_FACTOR * everyMs
+    checks.push(
+      check({
+        id: 'database_backup',
+        label: 'Copia de seguridad diaria',
+        required: false,
+        status:
+          failedSource.length > 0
+            ? 'error'
+            : failed.length > 0 || stale
+              ? 'warning'
+              : 'ok',
+        value: newest === null ? null : now - newest,
+        rule: `error si la base a copiar falla su chequeo (no se pisa la última copia buena); warning si una copia falla o la última buena tiene más de ${BACKUP_STALE_FACTOR} días`,
+        detail:
+          failedSource.length > 0
+            ? damagedMessage(
+                failedSource.map((b) => `${b.name}.sqlite`).join(', '),
+                String(failedSource[0]?.detail ?? ''),
+              )
+            : failed.length > 0
+              ? `Falló la copia de: ${failed.map((b) => b.name).join(', ')}. ${String(failed[0]?.detail ?? '')}`
+              : stale
+                ? 'La última copia buena es vieja.'
+                : `${backups.length} base(s) copiadas; la última buena hace ${Math.round((now - (newest ?? now)) / (60 * MINUTE))} h.`,
+      }),
+    )
+  }
+  return {
+    checks,
+    evidence: {
+      source: 'db-health-state.json (integridad y copias)',
+      origin: options.dbHealthStatePath
+        ? basename(options.dbHealthStatePath)
+        : null,
+      last_updated_ms: num(state?.updated_at),
+      state: state ? 'read' : 'missing',
+      ...(state ? {} : { detail: 'file_not_found_or_empty' }),
+    },
+  }
+}
+
 // --- Datos ---------------------------------------------------------------
 
 function dataComponent(
@@ -443,7 +580,13 @@ function dataComponent(
   const checks: HealthCheck[] = []
   const evidence: HealthEvidence[] = [c.supervisorEvidence]
   if (market.state !== 'read') {
-    const detail = `Base de mercado no disponible (${market.detail}).`
+    const detail =
+      market.state === 'unreadable' && isMalformedError(market.detail)
+        ? damagedMessage(
+            basename(options.marketDbPath ?? 'futures-market.sqlite'),
+            market.detail,
+          )
+        : `Base de mercado no disponible (${market.detail}).`
     checks.push(
       check({
         id: 'ticker_freshness',
@@ -601,6 +744,10 @@ function dataComponent(
       ),
     )
   }
+  const database = databaseChecks(options, now, market)
+  // First, so a damaged database leads the component's summary.
+  checks.unshift(...database.checks)
+  evidence.push(database.evidence)
   const resilience = tailJson(options.resilienceLogPath)
   evidence.push({
     source: 'resilience.jsonl (cola de 64 KB)',

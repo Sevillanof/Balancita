@@ -193,7 +193,14 @@ export class FuturesMarketStore {
   private readonly statements = new Map<string, StatementSync>()
   readonly readOnly: boolean
 
-  constructor(path: string, options: { readOnly?: boolean } = {}) {
+  constructor(
+    path: string,
+    options: {
+      readOnly?: boolean
+      /** `FULL` fsyncs every commit (see docs/operacion-base-de-datos.md); default `NORMAL`. */
+      synchronous?: 'NORMAL' | 'FULL'
+    } = {},
+  ) {
     this.readOnly = options.readOnly ?? false
     if (!path || path === ':memory:') {
       if (path !== ':memory:')
@@ -213,7 +220,9 @@ export class FuturesMarketStore {
     if (path !== ':memory:' && !this.readOnly)
       // Every event keeps its own committed transaction; NORMAL in WAL mode
       // avoids an fsync per commit (durable against app crashes).
-      this.db.exec('PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;')
+      this.db.exec(
+        `PRAGMA journal_mode=WAL; PRAGMA synchronous=${options.synchronous === 'FULL' ? 'FULL' : 'NORMAL'}; PRAGMA wal_autocheckpoint=1000;`,
+      )
     if (this.readOnly) {
       // Tolerate the single writer holding a commit lock; never writes.
       this.db.exec('PRAGMA busy_timeout=2000;')
@@ -553,6 +562,24 @@ export class FuturesMarketStore {
    */
   checkpoint(): { busy: boolean; walFrames: number; moved: number } {
     const row = this.db.prepare('PRAGMA wal_checkpoint(PASSIVE)').get() as {
+      busy: number
+      log: number
+      checkpointed: number
+    }
+    return {
+      busy: row.busy !== 0,
+      walFrames: Number(row.log),
+      moved: Number(row.checkpointed),
+    }
+  }
+
+  /**
+   * `wal_checkpoint(TRUNCATE)`: folds the whole WAL into the file and empties
+   * it. Used right after the machine wakes up, before heavy writes resume. It
+   * waits for readers (up to the busy timeout) and reports `busy` if it could not.
+   */
+  checkpointTruncate(): { busy: boolean; walFrames: number; moved: number } {
+    const row = this.db.prepare('PRAGMA wal_checkpoint(TRUNCATE)').get() as {
       busy: number
       log: number
       checkpointed: number

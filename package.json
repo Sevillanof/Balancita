@@ -17,6 +17,8 @@
     "design-system:test": "node --test scripts/design-system/export-tokens.node-test.mjs",
     "design-system:verify": "node scripts/design-system/verify.mjs",
     "preview": "vite preview",
+    "db:snapshot": "pnpm --dir server db:snapshot",
+    "db:rebuild": "pnpm --dir server db:rebuild",
     "test:server": "pnpm --dir server test",
     "typecheck:server": "pnpm --dir server typecheck"
   },
