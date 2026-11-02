@@ -168,6 +168,10 @@ horarios; aun entonces una mejora de costes no declara rentable una estrategia.
 
 ### Traspaso pendiente, sobre la misma cuenta
 
+Ojo: cada traspaso es un archivo nuevo con el hash de la configuración activa en ese momento. Un traspaso ya aplicado
+(`qwen-live-next.json`, 1-nov) no se reutiliza; el de varias posiciones y rebotes es
+[qwen-live-posiciones.json](../../config/qwen-live-posiciones.json), con base `be04298…`.
+
 [qwen-live-next.json](../../config/qwen-live-next.json) es una superposición aprobada por
 SHA-256 sobre el hash de origen, no otra cuenta. Apunta al
 [Maestro funding-v2](../../config/candidates/maestro-eth-cold-funding-v2-20261031.json)

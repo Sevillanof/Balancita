@@ -1,0 +1,18 @@
+{
+  "schema": "balancita-qwen-flow-transition.v1",
+  "base_config_hash": "be042985e3b0447b325225106dd48ea4a7dff6ec889281fc65605a8a2d9b4e80",
+  "changes": {
+    "note": "Varias posiciones (33 % del saldo, hasta 3) y experto rebotes (caída 5 % en 60 min, salida a 4 h).",
+    "posiciones": {
+      "max": 3,
+      "fraccion": 0.33,
+      "espera_entre_entradas_min": 0
+    },
+    "rebotes": {
+      "caida_pct": 5.0,
+      "ventana_min": 60,
+      "salida_min": 240,
+      "enfriamiento_min": 240
+    }
+  }
+}
