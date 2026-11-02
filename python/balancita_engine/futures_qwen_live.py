@@ -259,6 +259,10 @@ CREATE TABLE IF NOT EXISTS examples(
 CREATE TABLE IF NOT EXISTS skipped(
   product TEXT NOT NULL, bucket_ms INTEGER NOT NULL, t_ms INTEGER NOT NULL, at_ms INTEGER NOT NULL, reason TEXT NOT NULL,
   detail TEXT, wake_json TEXT, PRIMARY KEY(product, bucket_ms));
+CREATE TABLE IF NOT EXISTS rebotes(
+  product TEXT NOT NULL, t_ms INTEGER NOT NULL, at_ms INTEGER NOT NULL, episodio_ms INTEGER NOT NULL, caida_pct REAL NOT NULL,
+  umbral_pct REAL NOT NULL, action TEXT NOT NULL, motivo TEXT, detalle TEXT, trade_no INTEGER,
+  PRIMARY KEY(product, t_ms));
 CREATE TABLE IF NOT EXISTS trades(
   product TEXT NOT NULL, trade_no INTEGER NOT NULL, status TEXT NOT NULL, side TEXT NOT NULL, entry_ms INTEGER NOT NULL,
   exit_ms INTEGER, entry_px TEXT, exit_px TEXT, qty TEXT, notional_usd TEXT, gross_usd TEXT, fees_usd TEXT,
@@ -511,6 +515,12 @@ class LiveStore:
     def put_skipped(self, product, t_ms, kind, detail, wake, now_ms):
         self.db.execute("INSERT OR IGNORE INTO skipped VALUES(?,?,?,?,?,?,?)",
                         (product, t_ms - BUCKET_MS, t_ms, now_ms, kind, detail, json.dumps(wake)))
+
+    def put_rebote(self, product, event, now_ms):
+        """Every rebound-expert attempt (bought, no place, retry pending) leaves a row: a 5 % drop that did not buy is not invisible."""
+        self.db.execute("INSERT OR REPLACE INTO rebotes VALUES(?,?,?,?,?,?,?,?,?,?)", (
+            product, event["t_ms"], now_ms, event.get("episodio_ms", event["t_ms"]), event["caida_pct"], event["umbral_pct"],
+            event["action"], event.get("motivo"), event.get("detalle"), event.get("trade_no")))
 
     # ---- trades
 
@@ -1381,6 +1391,7 @@ class LiveOperator:
                 elif kind == "exit_plan":
                     self._log_exit_plan(product, event)
                 elif kind == "rebote":
+                    self.store.put_rebote(product, event, now)
                     self._log_rebote(product, event)
             if trader.position is not None and observed:
                 for position in trader.positions:
@@ -1407,6 +1418,9 @@ class LiveOperator:
             _hhmm(event["t_ms"]), product, event["caida_pct"], event["umbral_pct"])
         if event["action"] == "abierta":
             self.log("{}: compra LARGO a mercado (operación n.º {}).".format(head, event["trade_no"]))
+        elif event["action"] == "reintento":
+            self.log("{}: no pudo comprar ({}); lo vuelvo a intentar en la vela siguiente mientras dure la caída.".format(
+                head, SKIP_TEXT.get(event["motivo"], event.get("detalle") or event["motivo"])))
         else:
             self.log("{}: no compra ({}).".format(head, SKIP_TEXT.get(event["motivo"], event.get("detalle") or event["motivo"])))
 

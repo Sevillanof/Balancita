@@ -123,6 +123,10 @@ class DecisionError(Exception):
     """The model answered something unusable; the decision counts as 'no answer' (flat / hold)."""
 
 
+REBOTE_RETRY_MS = 30 * 60_000                 # a rebound episode whose buy failed for a passing reason is retried this long
+REBOTE_SPENT_KINDS = ("lugares_ocupados", "saldo_insuficiente")   # real lack of place / balance: episode used
+
+
 class WakeSkipped(Exception):
     """A decider could not take this wake at all (live: model down or too slow, wake too old). ``Trader.feed`` turns it into a
     ``skipped`` event: nothing was decided, nothing is opened or closed, and the wake is not asked again. The practice never
@@ -653,6 +657,7 @@ class Trader:
         if self.rebotes is not None and self.max_positions == 1:
             raise TraderError("El experto rebotes comparte cupos con el maestro: necesita posiciones.max mayor que 1.")
         self.rebote_last_ms = None        # last episode of the rebound expert (its 4 h rest counts from here)
+        self.rebote_retry_ms = None       # edge of an episode whose buy failed for a passing reason: retried while the drop lasts
         self.prev_entry_side = 0          # side of the maestro's entry signal at the previous look (+1 / -1 / 0): episode edge
         self.opened_this_look = False
         self.closed_this_look = False
@@ -1609,36 +1614,56 @@ class Trader:
 
     def _check_rebote(self, t_ms):
         """At the close of a candle: the close is ``caida_pct`` or more below the window's high and the previous candle was not (the
-        edge of the episode), and the rest since the last episode is over → LONG at market if a place and balance are free. The
-        episode counts for the rest even when no place was free (as in the measurement). No stop, no take-profit: out at ``salida_min``."""
+        edge of the episode), and the rest since the last episode is over → LONG at market if a place and balance are free.
+        The 4 h rest counts only when the episode was used: it bought, or there was no place / no balance (as in the measurement).
+        If the buy fails for a passing reason (late candle, public book down, pending handover, one entry per look) the episode is
+        NOT spent: it is retried on the next candles while the drop lasts, up to ``REBOTE_RETRY_MS`` after its edge. No stop, no
+        take-profit: out at ``salida_min``."""
         rule = self.rebotes
         bars = rule["ventana_min"] // 5
         if len(self.c) < bars + 1:
             return []
         now, before = self._drop_from_max(bars), self._drop_from_max(bars, 1)
-        if now < rule["caida_pct"] or before >= rule["caida_pct"]:
+        retrying = self.rebote_retry_ms is not None
+        if retrying and (t_ms - self.rebote_retry_ms > REBOTE_RETRY_MS or now < rule["caida_pct"]):
+            self.rebote_retry_ms = None
+            retrying = False
+        if now < rule["caida_pct"] or (before >= rule["caida_pct"] and not retrying):
             return []
         if self.rebote_last_ms is not None and t_ms - self.rebote_last_ms < rule["enfriamiento_min"] * MINUTE_MS:
             return []
-        self.rebote_last_ms = t_ms
-        event = {"type": "rebote", "t_ms": t_ms, "caida_pct": round(now, 2), "umbral_pct": rule["caida_pct"]}
+        edge_ms = self.rebote_retry_ms if retrying else t_ms
+        event = {"type": "rebote", "t_ms": t_ms, "caida_pct": round(now, 2), "umbral_pct": rule["caida_pct"], "episodio_ms": edge_ms}
         try:
             block = self.entry_block(t_ms, "LONG", origin="rebotes")
             if block is not None:
-                return [dict(event, action="sin_cupo", motivo=block[1], detalle=block[0])]
-            position = self._open(t_ms, "LONG", None, posiciones.REBOTE_REASON)
+                kind, detail = block[1], block[0]
+            else:
+                kind = detail = None
+                position = self._open(t_ms, "LONG", None, posiciones.REBOTE_REASON)
         except WakeSkipped as skip:
-            return [dict(event, action="sin_cupo", motivo=skip.kind, detalle=skip.detail)]
-        position.max_hold_ms = rule["salida_min"] * MINUTE_MS
-        return [dict(event, action="abierta", trade_no=position.trade_no)]
+            kind, detail = skip.kind, skip.detail
+        if kind is None:
+            self.rebote_last_ms = t_ms
+            self.rebote_retry_ms = None
+            position.max_hold_ms = rule["salida_min"] * MINUTE_MS
+            return [dict(event, action="abierta", trade_no=position.trade_no)]
+        if kind in REBOTE_SPENT_KINDS:
+            self.rebote_last_ms = t_ms
+            self.rebote_retry_ms = None
+            return [dict(event, action="sin_cupo", motivo=kind, detalle=detail)]
+        self.rebote_retry_ms = edge_ms
+        return [dict(event, action="reintento", motivo=kind, detalle=detail)]
 
     def memo(self):
         """What a restart needs besides the open positions: the episode edge of the maestro and the rebound expert's rest."""
-        return {"prev_entry_side": self.prev_entry_side, "rebote_last_ms": self.rebote_last_ms}
+        return {"prev_entry_side": self.prev_entry_side, "rebote_last_ms": self.rebote_last_ms,
+                "rebote_retry_ms": self.rebote_retry_ms}
 
     def load_memo(self, memo):
         self.prev_entry_side = int(memo.get("prev_entry_side") or 0)
         self.rebote_last_ms = memo.get("rebote_last_ms")
+        self.rebote_retry_ms = memo.get("rebote_retry_ms")
 
     def _arm_news_watch(self, readings, position=None):
         """Estado del cierre de 12 h de una operación por noticia: ``None`` si no es de noticia; ``True`` cuando el maestro
