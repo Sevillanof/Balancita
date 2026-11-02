@@ -1,7 +1,7 @@
 # Dependencia opcional del archivo Parquet (fase 1). NO es dependencia del proyecto: no va en pyproject, lockfiles ni workflows; el CI no la instala.
 # Entorno virtual aparte, FUERA del repositorio:
 #   uv venv ~/.venvs/archivo-pq && uv pip install --python ~/.venvs/archivo-pq/bin/python --require-hashes -r python/archivo_parquet/requisitos.txt
-# Hashes are the sha256 of the wheels published on PyPI for pyarrow 21.0.0 (Linux x86_64; macOS arm64 and x86_64; CPython 3.9, 3.10, 3.11, 3.12, 3.13). Verified against the PyPI release JSON on 2026-11-02..
+# Hashes are the sha256 of the wheels published on PyPI for pyarrow 21.0.0 (Linux x86_64; macOS arm64 and x86_64; CPython 3.9, 3.10, 3.11, 3.12, 3.13). Verified against the PyPI release JSON on 2026-11-02.
 pyarrow==21.0.0 \
     --hash=sha256:898afce396b80fdda05e3086b4256f8677c671f7b1d27a6976fa011d3fd0a86e \
     --hash=sha256:a7f6524e3747e35f80744537c78e7302cd41deee8baa668d56d55f77d9c464b3 \
