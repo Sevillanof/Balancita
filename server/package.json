@@ -19,6 +19,7 @@
     "book:loadtest": "node --experimental-strip-types src/features/orderbook-collector/loadtest.ts",
     "db:snapshot": "node --experimental-strip-types src/features/kraken-futures/db-snapshot-cli.ts",
     "db:rebuild": "node --experimental-strip-types src/features/kraken-futures/db-rebuild-cli.ts",
+    "db:compact": "node --experimental-strip-types src/features/kraken-futures/db-compact-cli.ts",
     "market:prune": "node --experimental-strip-types src/features/kraken-futures/futures-market-prune-cli.ts",
     "retention:bench": "node --experimental-strip-types src/features/kraken-futures/retention-bench.ts"
   },

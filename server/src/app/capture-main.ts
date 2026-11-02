@@ -10,6 +10,7 @@ import {
   RETENTION_CYCLE_BUDGET_MS,
   RETENTION_INTERVAL_MS,
 } from '../features/kraken-futures/retention-runner.ts'
+import { archiveModeFromEnv } from '../features/archive-prune/archive-env.ts'
 import { createWakeGuard } from '../features/kraken-futures/wake-guard.ts'
 import { retryWithBackoff } from '../features/kraken-futures/retry-backoff.ts'
 import {
@@ -155,6 +156,14 @@ async function main(): Promise<void> {
         )
     },
   })
+  // Borrado de lo ya archivado (features/archive-prune): la captura es dueña SOLO de futures-market.sqlite, y su única tabla
+  // archivada (market_events) ya la recorta la retención de arriba y tiene triggers; el resto de las tablas archivadas
+  // las escriben otros procesos (Python, el recolector de posicionamiento) y se borran, si corresponde, desde ellos.
+  // Por eso aquí no se engancha ningún borrado por archivo; el hook `archive` del runner queda listo para cuando haya una tabla.
+  if (archiveModeFromEnv(process.env) !== 'off')
+    log(
+      'archive delete: la captura no es dueña de ninguna tabla borrable por archivo (market_events ya tiene su retención); ver docs/operacion-base-de-datos.md',
+    )
   const trim = () => {
     void retentionRunner.run().catch((error: unknown) => {
       log(

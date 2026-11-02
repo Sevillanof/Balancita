@@ -122,7 +122,8 @@ def _fsync_dir(carpeta: str) -> None:
 
 
 def exportar(copia: str, base: str, destino: str, tablas: Optional[List[str]] = None, dry_run: bool = False,
-             copia_confirmada: bool = False, ahora_ms: Optional[int] = None, log: Callable[[str], None] = lambda m: None) -> dict:
+             copia_confirmada: bool = False, ahora_ms: Optional[int] = None, log: Callable[[str], None] = lambda m: None,
+             con: Optional[sqlite3.Connection] = None) -> dict:
     """Devuelve el reporte: exportados, ya_confirmados, no_confirmados, tablas_ausentes. ``no_confirmados`` no vacio => codigo 1."""
     if ahora_ms is None:
         ahora_ms = int(time.time() * 1000)
@@ -130,7 +131,9 @@ def exportar(copia: str, base: str, destino: str, tablas: Optional[List[str]] = 
     for t in pedidas:
         if t not in TABLAS:
             raise ErrorArchivo("tabla desconocida %r (soportadas: %s)" % (t, ", ".join(TABLAS)))
-    con = abrir_copia(copia, copia_confirmada)
+    # ``con``: conexion de solo lectura ya abierta y chequeada (la entrega ``nocturno`` para no repetir el quick_check); exportar la cierra.
+    if con is None:
+        con = abrir_copia(copia, copia_confirmada)
     reporte: Dict[str, list] = {"exportados": [], "ya_confirmados": [], "no_confirmados": [], "tablas_ausentes": [], "pendientes_por_abrir": [],
                                 "dry_run": [] }
     try:

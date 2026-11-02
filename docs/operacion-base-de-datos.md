@@ -71,6 +71,30 @@ Medido (SQLite WAL, 20.000 commits de una fila de 600 B, Linux, SSD de la VM): `
 
 Se mantiene **`NORMAL`**: en WAL, `NORMAL` no corrompe la base ante un corte (puede perder los últimos commits, no dejarla inconsistente) y el sueño no es un corte de energía. El daño del 2-nov apunta a una limpieza masiva sobre un archivo grande interrumpida por el sueño, que es lo que se ataca arriba. Quien quiera `FULL` lo activa con `FUTURES_DB_SYNCHRONOUS=full` y mira `eventloop.jsonl`. `wal_autocheckpoint` queda explícito en 1.000 páginas (~4 MB).
 
+## Ciclo de vida de los datos
+
+1. **Captura** → escribe en SQLite («mesa de trabajo»: los últimos días).
+2. **Copia diaria** → `server/data/backups` (3 últimas buenas por base, con `quick_check`).
+3. **Parquet** → cada noche (04:30, launchd) la exportación toma la última copia buena de cada base, escribe archivos Parquet verificados en `~/balancita-data.noindex/archivo-parquet` y deja el resumen en `nocturno.jsonl` (`docs/archivo-parquet.md`). Se instala con `bash ops/launchd/instalar-archivo-parquet.sh`.
+4. **Borrado de lo archivado** → **apagado por defecto**. Solo posicionamiento y premium, solo meses ya confirmados y certificados en el manifiesto, fuera de la ventana de 30 días (+1 día de margen), con copia diaria buena de menos de 30 h. Veredictos, decisiones, puntajes y noticias no se borran por archivo (otro proceso las escribe y tienen triggers de inmutabilidad; las noticias no se borran nunca); los eventos crudos ya los recorta la retención de la captura.
+5. **Compactación** → manual, ver abajo.
+
+Qué corre solo: captura, retención suave, copia diaria, chequeos de integridad y (tras el instalador) la exportación nocturna. Qué NO corre solo: el borrado de lo archivado y la compactación.
+
+Variables de entorno de esta parte: `FUTURES_ARCHIVE_DELETE` (`1` borra, `dry-run` solo informa; vacío = apagado), `FUTURES_ARCHIVE_REQUIRE_OFFSITE=1` (además exige «confirmado fuera»; apagado hasta que haya VPS), `BALANCITA_ARCHIVO_DESTINO` (carpeta del archivo), `BALANCITA_RESPALDOS_DIR` (copias, para la exportación). **Para apagar el borrado**: quitar `FUTURES_ARCHIVE_DELETE` y reiniciar el proceso (el recolector de posicionamiento). Cada paso queda en `retention.jsonl` (`kind: archive-delete`; en el recolector, junto a su base, con `db: positioning`).
+
+## Compactar (devolver el espacio libre al disco)
+
+SQLite no devuelve espacio al borrar: las páginas libres quedan «reutilizables» dentro del archivo. Conviene compactar cuando el espacio libre pase de ~30 % de la base. `pnpm db:compact <copia>` lo mide y compacta **una copia**:
+
+```sh
+pnpm db:snapshot server/data/dev-live/positioning.sqlite        # copia consistente
+pnpm db:compact server/data/snapshots/positioning-<fecha>.sqlite
+# -> positioning-<fecha>.compact-<fecha>.sqlite (VACUUM INTO a un archivo nuevo; integrity_check y conteos por tabla iguales)
+```
+
+Para reemplazar la base viva (la compactación nunca toca la viva): 1) **parar `pnpm dev`**; 2) mover la base viva y sus `-wal`/`-shm` a una carpeta aparte (no borrarlos todavía); 3) copiar la compacta al lugar de la viva; 4) levantar `pnpm dev` y mirar `health.jsonl`; 5) borrar lo guardado a mano pasados unos días. Hace falta espacio libre en disco para la copia y la compacta. Todo lo que se escribió en la base viva desde la copia se pierde en ese reemplazo: hacer la copia justo antes de parar. El panel Salud no muestra todavía el espacio libre (no hay un lugar existente que encaje sin agregar vistas); `pnpm db:compact` lo informa.
+
 ## Archivos que genera
 
 `server/data/dev-live/`: `health.jsonl` (cada chequeo y copia), `db-health-state.json` (estado que lee Salud), `resilience.jsonl` (incluye `despertar`), `retention.jsonl`. `server/data/backups/`, `server/data/snapshots/`: todo ignorado por git.
