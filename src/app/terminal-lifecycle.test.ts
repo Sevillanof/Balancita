@@ -264,3 +264,117 @@ describe('lifecycleView · decisión óptima', () => {
     expect(view.steps.find((s) => s.id === 'cap')!.checks).toBeNull()
   })
 })
+
+describe('lifecycleView · veredicto del auditor', () => {
+  const MIN = 60_000
+  const rising = Array.from({ length: 120 }, (_, i) => ({
+    timeMs: NOW - (119 - i) * MIN,
+    close: 2000 * (1 + (i * 2) / 10_000),
+  }))
+  const verdict = (acerto: boolean | null, texto: string) => ({
+    acerto,
+    costo_error_pb: 0,
+    regla: 'x',
+    texto,
+  })
+  // A strong short that the 30 minute judge calls wrong (the price rose).
+  const strongShort = (at: number, auditoria?: unknown) => ({
+    ...look(at, 'CORTO', {
+      maestro: -2,
+      puntaje: -1.4,
+      portero_si: true,
+      portero_p: 0.6,
+      portero_autonomo: { side: -1 },
+      noticias_si: false,
+      noticias: { priority: { status: 'none' } },
+    }),
+    auditoria,
+  })
+  const masterCheck = (auditoria?: unknown) =>
+    lifecycleView({
+      analyses: [strongShort(NOW - 90 * MIN, auditoria)],
+      openTrade: null,
+      nowMs: NOW,
+      prices: rising,
+    })!.steps.find((step) => step.id === 'master')!.checks![0]!
+
+  it('takes the 36 h verdict over the 24 h and 12 h ones', () => {
+    expect(
+      masterCheck({
+        accion: 'ENTRAR',
+        veredicto_12h: verdict(false, 'quedaba: −41 pb'),
+        veredicto_24h: verdict(false, 'quedaba: −10 pb'),
+        veredicto_36h: verdict(true, 'ganó +58 pb'),
+      }),
+    ).toEqual({
+      state: 'right',
+      atMs: NOW - 90 * MIN,
+      moveBp: null,
+      source: 'auditor_36h',
+      text: 'ganó +58 pb',
+    })
+  })
+
+  it('uses the 12 h verdict while it is the only one, and 24 h when 36 h is missing', () => {
+    expect(
+      masterCheck({ veredicto_12h: verdict(false, 'quedaba: −41 pb') }),
+    ).toMatchObject({
+      state: 'wrong',
+      source: 'auditor_12h',
+      text: 'quedaba: −41 pb',
+    })
+    expect(
+      masterCheck({
+        veredicto_12h: verdict(false, 'a'),
+        veredicto_24h: verdict(true, 'b'),
+        veredicto_36h: null,
+      }),
+    ).toMatchObject({ state: 'right', source: 'auditor_24h', text: 'b' })
+  })
+
+  it('falls back to the 30 minute judge without an auditor verdict', () => {
+    const empty = {
+      accion: 'ENTRAR',
+      veredicto_12h: null,
+      veredicto_24h: null,
+      veredicto_36h: null,
+    }
+    for (const auditoria of [undefined, null, empty]) {
+      const check = masterCheck(auditoria)
+      expect(check).toMatchObject({
+        state: 'wrong',
+        source: '30min',
+        text: null,
+      })
+      expect(check.moveBp).toBeGreaterThan(0)
+    }
+  })
+
+  it('reads a fixed rule (acerto null) as none, not as a 30 minute verdict', () => {
+    expect(
+      masterCheck({ veredicto_36h: verdict(null, 'regla fija') }),
+    ).toMatchObject({
+      state: 'none',
+      source: 'auditor_36h',
+      text: 'regla fija',
+    })
+  })
+
+  it('applies the verdict of the look to the exit steps of an open operation', () => {
+    const view = lifecycleView({
+      analyses: [
+        {
+          ...look(NOW - 90 * MIN, 'MANTENER', { maestro: -2 }),
+          auditoria: { veredicto_12h: verdict(true, 'ganó +58 pb') },
+        },
+      ],
+      openTrade: trade({ entryMs: NOW - 95 * MIN }),
+      nowMs: NOW,
+      prices: rising,
+    })!
+    expect(view.steps.find((s) => s.id === 'flip')!.checks![0]).toMatchObject({
+      state: 'right',
+      source: 'auditor_12h',
+    })
+  })
+})

@@ -24,13 +24,24 @@ export type StepIcon =
   | 'maker'
   | 'alert'
 
-/** How one look turned out 30 minutes later: right, wrong, still too recent, or nothing to judge. */
+/** Who judged a look: the price 30 minutes later, or the auditor at 12, 24 or 36 hours (the longest one available wins). */
+export type CheckSource =
+  '30min' | 'auditor_12h' | 'auditor_24h' | 'auditor_36h'
+
+/**
+ * How one look turned out: right, wrong, still too recent, or nothing to judge.
+ * Until the auditor resolves it, the price 30 minutes later; then the auditor's
+ * verdict of the whole operation (`none` when its rule is fixed, not judged).
+ */
 export interface StepCheck {
   state: 'right' | 'wrong' | 'pending' | 'none'
   /** The instant of the look. */
   atMs: number
-  /** What the price did in the 30 minutes after the look, in basis points; null while unknown. */
+  /** What the price did in the 30 minutes after the look, in basis points; null while unknown or when the auditor judged. */
   moveBp: number | null
+  source: CheckSource
+  /** The auditor's short text of the verdict («si entraba: +23 pb»); null for the 30 minute judge. */
+  text: string | null
 }
 
 export interface LifecycleStep {
@@ -591,17 +602,74 @@ function claimOf(
       : null
 }
 
+const AUDITOR_HORIZONS = [
+  ['veredicto_36h', 'auditor_36h'],
+  ['veredicto_24h', 'auditor_24h'],
+  ['veredicto_12h', 'auditor_12h'],
+] as const
+
+/**
+ * The auditor's verdict of a look at the longest horizon it has one for
+ * (36 h over 24 h over 12 h); null while it has none. `acerto` null is a fixed
+ * rule: it is not judged and so reads as `none`.
+ */
+function auditorCheck(
+  look: Record<string, unknown> | undefined,
+  atMs: number,
+): StepCheck | null {
+  const audit = record(look?.auditoria)
+  for (const [key, source] of AUDITOR_HORIZONS) {
+    const verdict = audit[key]
+    if (typeof verdict !== 'object' || verdict === null) continue
+    const { acerto, texto } = record(verdict)
+    return {
+      state: acerto === true ? 'right' : acerto === false ? 'wrong' : 'none',
+      atMs,
+      moveBp: null,
+      source,
+      text: typeof texto === 'string' && texto.length > 0 ? texto : null,
+    }
+  }
+  return null
+}
+
+/**
+ * One dot of a step: a step with a claim about the market (see `claimOf`) is
+ * judged by the auditor when it has a verdict for that look, and by the price
+ * 30 minutes later until then.
+ */
+function judge(
+  claim: Claim | null,
+  look: Record<string, unknown> | undefined,
+  atMs: number,
+  nowMs: number,
+  prices: readonly PricePoint[],
+): StepCheck {
+  if (claim !== null) {
+    const audited = auditorCheck(look, atMs)
+    if (audited) return audited
+  }
+  return checkOf(claim, atMs, nowMs, prices)
+}
+
 function checkOf(
   claim: Claim | null,
   atMs: number,
   nowMs: number,
   prices: readonly PricePoint[],
 ): StepCheck {
-  if (claim === null) return { state: 'none', atMs, moveBp: null }
+  const none: StepCheck = {
+    state: 'none',
+    atMs,
+    moveBp: null,
+    source: '30min',
+    text: null,
+  }
+  if (claim === null) return none
   const from = priceAt(prices, atMs)
-  if (from === null || from <= 0) return { state: 'none', atMs, moveBp: null }
+  if (from === null || from <= 0) return none
   const to = atMs + CHECK_MS > nowMs ? null : priceAt(prices, atMs + CHECK_MS)
-  if (to === null) return { state: 'pending', atMs, moveBp: null }
+  if (to === null) return { ...none, state: 'pending' }
   const move = (to / from - 1) * 10_000
   const signed = claim.side * move
   const right =
@@ -614,14 +682,15 @@ function checkOf(
           : claim.kind === 'block'
             ? signed < COST_BP
             : Math.abs(move) < COST_BP
-  return { state: right ? 'right' : 'wrong', atMs, moveBp: move }
+  return { ...none, state: right ? 'right' : 'wrong', moveBp: move }
 }
 
 /**
  * The strip for the product: entry steps when no operation is open, exit steps
  * while one is. `null` when Qwen has not looked yet (nothing to evaluate).
  * `prices` (1 minute candles) lets each past look be judged against what the
- * price did in the next 30 minutes.
+ * price did in the next 30 minutes, until the look carries an auditor verdict
+ * (`auditoria`, 12 / 24 / 36 h), which then decides.
  */
 export function lifecycleView(input: {
   analyses: readonly unknown[]
@@ -656,8 +725,9 @@ export function lifecycleView(input: {
             const at = Number(look.decision_time_ms)
             // Looks from before the operation opened had nothing to hold or close.
             const past = build(look, at)[index]
-            return checkOf(
+            return judge(
               at < trade.entryMs || !past ? null : claimOf(past, side, null),
+              look,
               at,
               input.nowMs,
               prices,
@@ -687,8 +757,9 @@ export function lifecycleView(input: {
       ? recent.map((look) => {
           const at = Number(look.decision_time_ms)
           const past = entryStepsOf(look)[index]
-          return checkOf(
+          return judge(
             past ? claimOf(past, 0, entryContext(look)) : null,
+            look,
             at,
             input.nowMs,
             prices,

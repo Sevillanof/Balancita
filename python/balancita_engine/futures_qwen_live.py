@@ -46,6 +46,7 @@ import sys
 import time
 from decimal import Decimal
 
+from . import futures_auditor as auditor
 from . import futures_llm_decisions as llm
 from . import futures_qwen_analista as analista
 from . import futures_qwen_aprende as aprende
@@ -53,6 +54,7 @@ from . import futures_qwen_factors as fq
 from . import futures_qwen_noticias as noticias
 from . import futures_qwen_trader as qt
 from . import positioning_data
+from .futures_costs import round_trip_cost_bps
 from .futures_products import is_product_id
 from .futures_history import (DAY_MS, HOUR_MS, MINUTE_MS, CandleCache, HistoryError, fetch_candles, fetch_funding,
                               fill_gaps)
@@ -1379,6 +1381,8 @@ class LiveOperator:
             self._recovered("ejecucion", product)
         if events and self.cfg.get("decide_by") == "formula" and qt.candle_opinions_enabled(self.cfg):
             self._resolve_examples(product, trader, now)
+        if events and self.cfg.get("decide_by") == "formula":          # el auditor no necesita la opinión de Qwen
+            self._audit(product, trader, events, now)
 
     def _log_exit_plan(self, product, event):
         plan = event["plan"]
@@ -1427,6 +1431,23 @@ class LiveOperator:
             aprende.resolve_live(self.store.db, closes_of, dict(self.cfg, products=[product]), now)
         except Exception as error:                        # noqa: BLE001 - learning labels never block live operation
             self._failure("ejemplos", product, error)
+
+    def _audit(self, product, trader, events, now):
+        """Auditor de decisiones (``futures_auditor``): anota cada mirada con decisión y resuelve las que ya pueden juzgarse. Escribe
+        solo en ``auditor.sqlite`` (nunca en esta base) y no cambia ninguna decisión; si falla, queda anotado como aviso y la
+        operación sigue igual (no cuenta como ciclo fallido: no frena el sondeo)."""
+        failed = self.failed_cycle
+        try:
+            for event in events:
+                if event["type"] in ("decision", "guardrail"):
+                    auditor.snapshot(self.store.path, product, trader, event, now)
+            closes = {int(t) + BAR_MS: float(c) for t, c in zip(trader.t, trader.c)}
+            auditor.resolve(self.store.path, product, closes, dict(self.cfg, products=[product]), now,
+                            float(round_trip_cost_bps(product)))
+            self._recovered("auditor", product)
+        except Exception as error:                        # noqa: BLE001 - el auditor nunca bloquea la operación en vivo
+            self._failure("auditor", product, error)
+            self.failed_cycle = failed
 
     @staticmethod
     def _formula_decision_line(head, event):

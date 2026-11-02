@@ -76,6 +76,8 @@ export function qwenAnalyses(payload: unknown): Record<string, unknown>[] {
       p_action: row.p_action,
       opinion_agrees: row.opinion_agrees,
       opinion_error: row.opinion_error,
+      // The auditor's verdicts at 12 / 24 / 36 h for this look (null until it resolves it).
+      auditoria: row.auditoria ?? null,
     }))
   return [...decided, ...skipped].sort(
     (a, b) => Number(a.decision_time_ms) - Number(b.decision_time_ms),

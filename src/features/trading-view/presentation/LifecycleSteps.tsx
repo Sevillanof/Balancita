@@ -123,16 +123,32 @@ function Icon({ name }: { name: StepIcon }) {
   )
 }
 
+const AUDITOR_LABEL: Record<Exclude<StepCheck['source'], '30min'>, string> = {
+  auditor_12h: 'Auditor a 12 h (provisorio)',
+  auditor_24h: 'Auditor a 24 h (provisorio)',
+  auditor_36h: 'Auditor a 36 h (definitivo)',
+}
+
 function checkText(check: StepCheck): string {
   const when = madridTime(check.atMs)
+  if (check.source !== '30min') {
+    const said = check.text ?? 'sin detalle'
+    const outcome =
+      check.state === 'right'
+        ? 'acertó'
+        : check.state === 'wrong'
+          ? 'falló'
+          : 'regla fija, no se juzga'
+    return `${when} · ${AUDITOR_LABEL[check.source]}: ${said} · ${outcome}`
+  }
   if (check.state === 'none')
     return `${when} · este paso no opinó sobre el precio`
   if (check.state === 'pending') return `${when} · todavía no pasaron 30 min`
   const move =
     check.moveBp === null
       ? ''
-      : ` · el precio se movió ${check.moveBp >= 0 ? '+' : '−'}${Math.abs(check.moveBp).toFixed(0)} pb`
-  return `${when}${move} · ${check.state === 'right' ? 'acertó' : 'falló'}`
+      : `${check.moveBp >= 0 ? '+' : '−'}${Math.abs(check.moveBp).toFixed(0)} pb`
+  return `${when} · A 30 min: ${move} · ${check.state === 'right' ? 'acertó' : 'falló'} (hasta que el auditor resuelva a las 12 h)`
 }
 
 const CHECK_FILL: Record<StepCheck['state'], string> = {
@@ -238,8 +254,9 @@ function Detail({
             ))}
           </div>
           <span className="text-label text-ink-2">
-            Verde acertó, rojo falló, gris todavía no se sabe. Mide el precio 30
-            min después de cada mirada.
+            Verde acertó, rojo falló, gris todavía no se sabe. A los 30 min mide
+            el precio; a las 12, 24 y 36 h el auditor pone el veredicto real
+            (qué habría pasado con la operación completa).
           </span>
         </div>
       )}

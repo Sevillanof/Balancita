@@ -123,6 +123,48 @@ function entryLooks() {
   ]
 }
 
+const verdict = (acerto: boolean | null, texto: string) => ({
+  acerto,
+  costo_error_pb: 0,
+  regla: 'fixture',
+  texto,
+})
+
+/**
+ * The auditor's verdicts as the gateway serves them (`auditoria`), one per
+ * entry look, oldest first: resolved at 36 h, only at 12 h, a fixed rule, and
+ * two still unresolved (the 30 minute judge takes over, then pending).
+ */
+function withAuditor<T extends object>(looks: T[]) {
+  const audit = [
+    {
+      accion: 'ENTRAR',
+      veredicto_12h: verdict(true, 'si entraba: +9 pb'),
+      veredicto_24h: verdict(true, 'si entraba: +15 pb'),
+      veredicto_36h: verdict(true, 'si entraba: +23 pb'),
+      despues: null,
+    },
+    {
+      accion: 'NO_ENTRAR_maestro',
+      veredicto_12h: verdict(false, 'quedaba: −41 pb'),
+      veredicto_24h: null,
+      veredicto_36h: null,
+      despues: null,
+    },
+    {
+      accion: 'NO_ENTRAR_regla',
+      veredicto_12h: null,
+      veredicto_24h: verdict(null, 'regla fija'),
+      veredicto_36h: null,
+      despues: null,
+    },
+  ]
+  return looks.map((value, index) => ({
+    ...value,
+    auditoria: audit[index] ?? null,
+  }))
+}
+
 function exitLooks() {
   return [
     look(
@@ -332,7 +374,7 @@ async function openFixture(
 test('without an open operation the strip shows the entry steps', async ({
   page,
 }) => {
-  await openFixture(page, { decisions: entryLooks(), trades: [] })
+  await openFixture(page, { decisions: withAuditor(entryLooks()), trades: [] })
   const strip = page.getByRole('group', {
     name: 'Pasos para entrar a una operación',
   })
@@ -362,6 +404,35 @@ test('without an open operation the strip shows the entry steps', async ({
     /todavía no pasaron 30 min/,
   )
   await expect(dots.first()).toHaveAttribute('title', /acertó|falló/)
+  // The auditor decides once it has a verdict: the longest horizon wins, the dots keep their size and place.
+  await expect(dots.nth(0)).toHaveAttribute(
+    'title',
+    /Auditor a 36 h \(definitivo\): si entraba: \+23 pb · acertó/,
+  )
+  await expect(dots.nth(1)).toHaveAttribute(
+    'title',
+    /Auditor a 12 h \(provisorio\): quedaba: −41 pb · falló/,
+  )
+  await expect(dots.nth(2)).toHaveAttribute(
+    'title',
+    /Auditor a 24 h \(provisorio\): regla fija · regla fija, no se juzga/,
+  )
+  // Not resolved yet: the price 30 minutes later, and it says it is waiting for the auditor.
+  await expect(dots.nth(3)).toHaveAttribute(
+    'title',
+    /A 30 min: [+−]\d+ pb · (acertó|falló) \(hasta que el auditor resuelva a las 12 h\)/,
+  )
+  await expect(master).toContainText(
+    'A los 30 min mide el precio; a las 12, 24 y 36 h el auditor pone el veredicto real',
+  )
+  await expect(master.getByRole('button')).toHaveCount(5)
+  await expect(dots.nth(0).locator('i')).toHaveClass(/bg-long/)
+  await expect(dots.nth(1).locator('i')).toHaveClass(/bg-short/)
+  await expect(dots.nth(2).locator('i')).toHaveClass(/bg-line\b/)
+  if (SHOTS)
+    await master.screenshot({
+      path: `${SHOTS}/decision-optima-auditor-${test.info().project.name}.png`,
+    })
   if (SHOTS)
     await page.screenshot({
       path: `${SHOTS}/decision-optima-${test.info().project.name}.png`,

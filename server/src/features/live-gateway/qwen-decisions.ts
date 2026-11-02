@@ -2,6 +2,13 @@ import type { DatabaseSync } from 'node:sqlite'
 import { withDb, num, rowOf, type Row } from './observability-health.ts'
 import { addDecimal, decimalFromPython } from './decimal-string.ts'
 import { canonicalHash } from '../paper-futures/futures-canonical.ts'
+import { readAuditorVerdicts, type QwenAuditoria } from './auditor-verdicts.ts'
+
+export type {
+  QwenAfter,
+  QwenAuditoria,
+  QwenVerdict,
+} from './auditor-verdicts.ts'
 
 /**
  * Qwen operador en vivo, solo lectura: sus decisiones (una por producto cada
@@ -79,6 +86,8 @@ export interface QwenDecision {
   readonly opinion_agrees: number | null
   /** Why there is no opinion (modelo_caido, modelo_lento, sin_respuesta); null otherwise. */
   readonly opinion_error: string | null
+  /** The auditor's verdicts at 12, 24 and 36 h for this look (`auditor.sqlite`); null while it has none or cannot be read. */
+  readonly auditoria: QwenAuditoria | null
 }
 
 export interface QwenFactors {
@@ -637,7 +646,26 @@ export function createQwenDecisions(options: {
           formula: objectOf(row.formula_json),
           opinion_agrees: num(row.opinion_agrees),
           opinion_error: text(row.opinion_error),
+          auditoria: null,
         })
+      }
+      // One query for the whole list; any failure reads as no verdicts at all.
+      if (decisions.length > 0) {
+        const buckets = decisions.map((d) => d.bucket_start_ms)
+        const verdicts = readAuditorVerdicts(
+          options.liveDbPath,
+          product,
+          Math.min(...buckets),
+          Math.max(...buckets),
+        )
+        if (verdicts)
+          for (let i = 0; i < decisions.length; i++) {
+            const current = decisions[i]!
+            decisions[i] = {
+              ...current,
+              auditoria: verdicts.get(current.bucket_start_ms) ?? null,
+            }
+          }
       }
       const skipped: QwenSkipped[] = []
       for (const row of opened.value.skipped as Row[]) {

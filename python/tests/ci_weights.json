@@ -15,6 +15,7 @@
   "test_data_quality": 1,
   "test_funding_causal": 2,
   "test_funding_recovery": 4,
+  "test_futures_auditor": 4,
   "test_futures_candles_export": 1,
   "test_futures_canonical": 1,
   "test_futures_carry": 1,
