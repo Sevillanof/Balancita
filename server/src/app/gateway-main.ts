@@ -138,6 +138,10 @@ async function main(): Promise<void> {
         dirname(config.futuresMarketDbPath),
         'resilience.jsonl',
       ),
+      dbHealthStatePath: join(
+        dirname(config.futuresMarketDbPath),
+        'db-health-state.json',
+      ),
       staleAfterMs: config.marketStaleAfterMs,
     }),
     // Same read-only sources as the health report, counted over 3 h / 24 h.

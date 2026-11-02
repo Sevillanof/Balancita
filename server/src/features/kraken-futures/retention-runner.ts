@@ -19,8 +19,21 @@ export interface RetentionCycle {
   readonly batchSize: number
 }
 
+/**
+ * Gentle cleanup: one cycle every 30 s that works for at most 6 s, that is 20 %
+ * of the time (below the 25 % ceiling), in short transactions of a few hundred
+ * rows. The capture never spends more than a fifth of its time deleting.
+ */
+export const RETENTION_INTERVAL_MS = 30_000
+export const RETENTION_CYCLE_BUDGET_MS = 6_000
+
 export interface RetentionRunnerOptions {
   readonly store: Pick<FuturesMarketStore, 'trimRawEvents'>
+  /** Folds the WAL back during a cycle (PASSIVE, never blocks); called every `checkpointEverySteps` steps and when a cycle ends. */
+  readonly checkpoint?: () => void
+  readonly checkpointEverySteps?: number
+  /** False while something else needs the database quiet (a backup, a failed integrity check, a wake-up check). */
+  readonly canRun?: () => boolean
   readonly policy: RetentionPolicy
   readonly clock?: () => number
   /** Wall clock in ms with sub-millisecond precision, to time a step. */
@@ -53,13 +66,24 @@ export function createRetentionRunner(options: RetentionRunnerOptions) {
   const now = options.now ?? (() => performance.now())
   const yieldLoop = options.yieldLoop ?? defaultYield
   const target = options.targetStepMs ?? 40
-  const minBatch = options.minBatch ?? 50
-  const maxBatch = options.maxBatch ?? 5_000
-  const budget = options.cycleBudgetMs ?? 20_000
+  const minBatch = options.minBatch ?? 100
+  const maxBatch = options.maxBatch ?? 1_000
+  const budget = options.cycleBudgetMs ?? RETENTION_CYCLE_BUDGET_MS
+  const checkpointEvery = options.checkpointEverySteps ?? 20
   const mode = options.mode ?? 'incremental'
   let batch = Math.min(maxBatch, Math.max(minBatch, options.startBatch ?? 500))
   let running = false
   let stopped = false
+  let pausedUntil = Number.NEGATIVE_INFINITY
+  const paused = (): boolean => clock() < pausedUntil
+  const allowed = (): boolean => !paused() && (options.canRun?.() ?? true)
+  const checkpoint = (): void => {
+    try {
+      options.checkpoint?.()
+    } catch {
+      // A busy WAL is retried at the next step; the cleanup is not the place to fail on it.
+    }
+  }
 
   const legacyCycle = (): RetentionCycle => {
     const at = clock()
@@ -87,7 +111,7 @@ export function createRetentionRunner(options: RetentionRunnerOptions) {
     let slimmed = 0
     let maxStepMs = 0
     let done = false
-    while (!stopped) {
+    while (!stopped && allowed()) {
       const started = now()
       // A small pass over the freed pages per step (no-op unless auto_vacuum=INCREMENTAL).
       const result = options.store.trimRawEvents(
@@ -105,9 +129,11 @@ export function createRetentionRunner(options: RetentionRunnerOptions) {
       else if (elapsed < target / 4)
         batch = Math.min(maxBatch, Math.ceil(batch * 1.5))
       done = result.done
+      if (steps % checkpointEvery === 0) checkpoint()
       if (done || now() - cycleStart > budget) break
       await yieldLoop()
     }
+    if (deleted > 0 || slimmed > 0) checkpoint()
     return {
       at,
       mode: 'incremental',
@@ -124,7 +150,7 @@ export function createRetentionRunner(options: RetentionRunnerOptions) {
   return {
     /** One cycle; `undefined` when another is still running or the runner was stopped. */
     async run(): Promise<RetentionCycle | undefined> {
-      if (running || stopped) return undefined
+      if (running || stopped || !allowed()) return undefined
       running = true
       try {
         const cycle =
@@ -137,6 +163,16 @@ export function createRetentionRunner(options: RetentionRunnerOptions) {
     },
     stop(): void {
       stopped = true
+    },
+    /** No cleanup for `ms` (a wake-up from sleep): a running cycle ends at its next step. */
+    pauseFor(ms: number): void {
+      pausedUntil = Math.max(pausedUntil, clock() + ms)
+    },
+    get paused(): boolean {
+      return paused()
+    },
+    get running(): boolean {
+      return running
     },
     get batchSize(): number {
       return batch

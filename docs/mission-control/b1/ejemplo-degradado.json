@@ -24,6 +24,24 @@
       "summary": "Hay eventos recientes de otro feed (trade) pero el ticker no se actualiza.",
       "checks": [
         {
+          "required": false,
+          "id": "database_integrity",
+          "label": "Integridad de la base de captura",
+          "status": "unknown",
+          "value": null,
+          "rule": "quick_check cada 15 min (y tras despertar la Mac); error si la base está dañada o una escritura devolvió «malformed»",
+          "detail": "Sin estado de integridad: la captura no lo escribió (¿versión anterior?)."
+        },
+        {
+          "required": false,
+          "id": "database_backup",
+          "label": "Copia de seguridad diaria",
+          "status": "unknown",
+          "value": null,
+          "rule": "una copia por día de la base de captura y las del paper; se conservan las 3 últimas buenas",
+          "detail": "Todavía no se hizo ninguna copia en esta sesión."
+        },
+        {
           "required": true,
           "id": "ticker_freshness",
           "label": "Frescura del ticker",
@@ -84,6 +102,13 @@
           "origin": "futures-market.sqlite",
           "last_updated_ms": 1789999400000,
           "state": "read"
+        },
+        {
+          "source": "db-health-state.json (integridad y copias)",
+          "origin": null,
+          "last_updated_ms": null,
+          "state": "missing",
+          "detail": "file_not_found_or_empty"
         },
         {
           "source": "resilience.jsonl (cola de 64 KB)",

@@ -199,12 +199,13 @@ server/src/          app/ (capture, gateway, mock), features/ (kraken-futures, l
 python/balancita_engine/   C, D, E, Q, N, S, simulador, costes, indicadores, replay
 config/              Productos, estrategias C25-C30 y su fiabilidad medida, preguntas y prompts de Q, fuentes de noticias
 docs/                Contratos de APIs, ADR 0001, fiabilidad y validación
+docs/operacion-base-de-datos.md   Copias diarias, sueño/despertar, `pnpm db:snapshot` y `pnpm db:rebuild` (inspeccioná siempre una copia, nunca la base viva)
 docs/archive/        Historial cerrado (spot BTC-EUR, planes de futuros terminados); solo lectura
 odd/tasks/           Planes vivos (strategy-simulation.md, qwen-calibration.md, qwen-funding.md, kronos-as-qwen.md)
 odd/research/        Estudios cerrados de octubre 2026
 ```
 
-Documentación relacionada: [registro de estrategias](docs/strategy-registry-api.md) · [fiabilidad de las estrategias](docs/strategy-reliability.md) · [datos de mercado de Kraken Futures](docs/kraken-futures-market-data.md) · [aprendizaje de Qwen](docs/qwen-lessons.md) · [scores de Qwen](docs/qwen-scores-api.md) · [plan de simulación](odd/tasks/strategy-simulation.md) · [historial archivado](docs/archive/README.md) (spot BTC-EUR y planes cerrados).
+Documentación relacionada: [registro de estrategias](docs/strategy-registry-api.md) · [fiabilidad de las estrategias](docs/strategy-reliability.md) · [datos de mercado de Kraken Futures](docs/kraken-futures-market-data.md) · [operación de las bases SQLite: copias, sueño de la Mac y reparación](docs/operacion-base-de-datos.md) · [aprendizaje de Qwen](docs/qwen-lessons.md) · [scores de Qwen](docs/qwen-scores-api.md) · [plan de simulación](odd/tasks/strategy-simulation.md) · [historial archivado](docs/archive/README.md) (spot BTC-EUR y planes cerrados).
 
 ## Atribución del gráfico
 
