@@ -10,6 +10,10 @@ import {
   RETENTION_CYCLE_BUDGET_MS,
   RETENTION_INTERVAL_MS,
 } from '../features/kraken-futures/retention-runner.ts'
+import {
+  captureSavingsFromEnv,
+  retentionFromEnv,
+} from '../features/kraken-futures/capture-savings.ts'
 import { archiveModeFromEnv } from '../features/archive-prune/archive-env.ts'
 import { createWakeGuard } from '../features/kraken-futures/wake-guard.ts'
 import { retryWithBackoff } from '../features/kraken-futures/retry-backoff.ts'
@@ -64,8 +68,11 @@ async function main(): Promise<void> {
   // readers (gateway, Python) never take this lock.
   const lock = acquireWriterLock(config.futuresMarketDbPath)
   process.once('exit', () => lock.release())
+  // "Save less" switches, all OFF unless their variable is set (capture-savings.ts, docs/operacion-base-de-datos.md).
+  const savings = captureSavingsFromEnv(process.env)
   // docs/operacion-base-de-datos.md: NORMAL by default; FUTURES_DB_SYNCHRONOUS=full fsyncs every commit.
   const store = new FuturesMarketStore(config.futuresMarketDbPath, {
+    savings,
     synchronous:
       process.env.FUTURES_DB_SYNCHRONOUS?.toLowerCase() === 'full'
         ? 'FULL'
@@ -123,11 +130,8 @@ async function main(): Promise<void> {
     const value = Number(process.env[name])
     return Number.isFinite(value) && value > 0 ? value : fallback
   }
-  const retention = {
-    tickerRetentionMs: envNumber('FUTURES_TICKER_RETENTION_HOURS', 24) * HOUR,
-    eventRetentionMs: envNumber('FUTURES_EVENT_RETENTION_DAYS', 7) * 24 * HOUR,
-    rawKeepMs: envNumber('FUTURES_RAW_COPY_KEEP_HOURS', 24) * HOUR,
-  }
+  // Tickers and the raw copy: 48 h by default (capture-savings.ts), so one daily copy holds the whole day.
+  const retention = retentionFromEnv(process.env)
   const diagnosticsDir = dirname(config.futuresMarketDbPath)
   const appendJson = (file: string, value: unknown): void => {
     try {
@@ -148,8 +152,24 @@ async function main(): Promise<void> {
     canRun: () => dbHealth.writesAllowed() && !dbHealth.backupBusy(),
     cycleBudgetMs: RETENTION_CYCLE_BUDGET_MS,
     mode: legacyRetention ? 'legacy' : 'incremental',
+    // Switch FUTURES_CANDLE_REVISIONS_COMPACT (off by default): settled candles keep first, last and closed revisions.
+    ...(savings.candleCompaction && !legacyRetention
+      ? {
+          candles: {
+            step: () =>
+              store.compactCandleRevisions({
+                now: Date.now(),
+                settleMs: savings.candleCompaction!.settleMs,
+              }),
+          },
+        }
+      : {}),
     onCycle: (cycle) => {
       appendJson('retention.jsonl', cycle)
+      if ((cycle.candleRevisionsCompacted ?? 0) > 0)
+        log(
+          `retention: ${cycle.candleRevisionsCompacted} intermediate candle revisions removed`,
+        )
       if (cycle.deleted > 0 || cycle.slimmed > 0)
         log(
           `retention: ${cycle.deleted} old events removed, ${cycle.slimmed} compacted in ${cycle.steps} step(s), longest ${Math.round(cycle.maxStepMs)} ms${cycle.done ? '' : ' (more pending)'}`,

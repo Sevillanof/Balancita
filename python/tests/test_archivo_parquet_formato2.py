@@ -382,6 +382,42 @@ class Formato2Tests(unittest.TestCase):
         self.assertIn("retencion", r["omitidos_por_retencion"][0]["motivo"])
         self.assertEqual([e["dia"] for e in leer_manifiesto(self.destino)], ["2023-11-15"])  # el dia siguiente conserva su inicio
 
+    def _copia_con_retencion(self, horas: int):
+        """Copia tomada a las 06:00 UTC del dia 1, con la retencion de la captura ya aplicada (se borra lo de mas de ``horas``)."""
+        sintetico.crear_copia(self.copia, DIA0, 2, ("PF_XBTUSD",), 600_000, ("market_events",))
+        toma = DIA0 + DAY_MS + 6 * 3_600_000
+        con = sqlite3.connect(self.copia)
+        con.execute("DELETE FROM paper_futures_market_events WHERE received_at < ? OR received_at > ?", (toma - horas * 3_600_000, toma))
+        con.commit()
+        con.close()
+        return toma
+
+    def test_market_events_con_retencion_de_48_h_una_copia_diaria_trae_el_dia_anterior_entero(self):
+        toma = self._copia_con_retencion(48)
+        r = self.exp(["market_events"], ahora=toma + 3_600_000)
+        self.assertEqual(r["omitidos_por_retencion"], [])
+        self.assertEqual(r["no_confirmados"], [])
+        self.assertEqual([e["dia"] for e in leer_manifiesto(self.destino)], ["2023-11-14"])  # el dia 1 sigue abierto en esa copia
+
+    def test_market_events_con_la_retencion_vieja_de_24_h_el_dia_anterior_llega_recortado(self):
+        toma = self._copia_con_retencion(24)
+        r = self.exp(["market_events"], ahora=toma + 3_600_000)
+        self.assertEqual([(o["tabla"], o["dia"]) for o in r["omitidos_por_retencion"]], [("market_events", "2023-11-14")])
+        self.assertEqual(leer_manifiesto(self.destino), [])
+
+    def test_market_events_con_una_copia_anterior_al_fin_del_dia_espera_una_copia_mas_nueva(self):
+        sintetico.crear_copia(self.copia, DIA0, 1, ("PF_XBTUSD",), 600_000, ("market_events",))
+        con = sqlite3.connect(self.copia)
+        con.execute("DELETE FROM paper_futures_market_events WHERE received_at >= ?", (DIA0 + 20 * 3_600_000,))  # copia tomada a las 20:00
+        con.commit()
+        con.close()
+        r = self.exp(["market_events"], ahora=DIA0 + DAY_MS + 3_600_000)  # la exportacion corre despues de la medianoche
+        self.assertEqual(r["exportados"], [])
+        self.assertEqual(r["no_confirmados"], [])
+        self.assertEqual([(o["tabla"], o["dia"]) for o in r["pendientes_por_abrir"]], [("market_events", "2023-11-14")])
+        self.assertIn("copia mas nueva", r["pendientes_por_abrir"][0]["motivo"])
+        self.assertEqual(leer_manifiesto(self.destino), [])
+
     def test_premium_de_1_minuto_se_archiva_por_dia_al_dia_siguiente(self):
         con = sqlite3.connect(self.copia)
         con.execute(sintetico.DDL["premium"])

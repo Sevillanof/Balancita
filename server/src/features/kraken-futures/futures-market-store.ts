@@ -1,9 +1,13 @@
 import { DatabaseSync, type StatementSync } from 'node:sqlite'
 import { createHash } from 'node:crypto'
 import {
+  FUNDING_SLIM_MARK,
   fundingLiteralExtract,
+  fundingSlimBody,
+  isFundingSlimBody,
   type HistoricalFundingResponse,
 } from './historical-funding.ts'
+import type { CaptureSavings } from './capture-savings.ts'
 import {
   FUNDING_RECOVERY_LOOKBACK_MS,
   needsFundingSighting,
@@ -192,6 +196,7 @@ export class FuturesMarketStore {
   private readonly db: DatabaseSync
   private readonly statements = new Map<string, StatementSync>()
   readonly readOnly: boolean
+  private readonly savings: Partial<CaptureSavings>
 
   constructor(
     path: string,
@@ -199,8 +204,11 @@ export class FuturesMarketStore {
       readOnly?: boolean
       /** `FULL` fsyncs every commit (see docs/operacion-base-de-datos.md); default `NORMAL`. */
       synchronous?: 'NORMAL' | 'FULL'
+      /** "Save less" switches of the capture (capture-savings.ts); all off by default. */
+      savings?: Partial<CaptureSavings>
     } = {},
   ) {
+    this.savings = options.savings ?? {}
     this.readOnly = options.readOnly ?? false
     if (!path || path === ':memory:') {
       if (path !== ':memory:')
@@ -257,12 +265,7 @@ export class FuturesMarketStore {
         product_id TEXT NOT NULL, epoch INTEGER NOT NULL, seq INTEGER NOT NULL,
         event_time INTEGER NOT NULL, received_at INTEGER NOT NULL, bids_json TEXT NOT NULL, asks_json TEXT NOT NULL
       ) STRICT;
-      -- Legacy: no longer written (the ticker payload lives in market_events); kept so old DBs open.
-      CREATE TABLE IF NOT EXISTS paper_futures_ticker_snapshots (
-        event_id TEXT PRIMARY KEY REFERENCES paper_futures_market_events(event_id),
-        product_id TEXT NOT NULL, epoch INTEGER NOT NULL, seq INTEGER NOT NULL,
-        event_time INTEGER NOT NULL, received_at INTEGER NOT NULL, payload_json TEXT NOT NULL
-      ) STRICT;
+      -- paper_futures_ticker_snapshots (legacy, never read, no longer written) is not created any more; old databases keep it.
       CREATE TABLE IF NOT EXISTS paper_futures_data_gaps (
         gap_id TEXT PRIMARY KEY, feed TEXT NOT NULL, product_id TEXT NOT NULL,
         epoch INTEGER NOT NULL, expected_seq INTEGER, actual_seq INTEGER,
@@ -318,10 +321,6 @@ export class FuturesMarketStore {
         BEFORE UPDATE ON paper_futures_book_snapshots BEGIN SELECT RAISE(ABORT, 'market evidence is immutable'); END;
       CREATE TRIGGER IF NOT EXISTS paper_futures_book_snapshots_no_delete
         BEFORE DELETE ON paper_futures_book_snapshots BEGIN SELECT RAISE(ABORT, 'market evidence is immutable'); END;
-      CREATE TRIGGER IF NOT EXISTS paper_futures_ticker_snapshots_no_update
-        BEFORE UPDATE ON paper_futures_ticker_snapshots BEGIN SELECT RAISE(ABORT, 'market evidence is immutable'); END;
-      CREATE TRIGGER IF NOT EXISTS paper_futures_ticker_snapshots_no_delete
-        BEFORE DELETE ON paper_futures_ticker_snapshots BEGIN SELECT RAISE(ABORT, 'market evidence is immutable'); END;
       CREATE TRIGGER IF NOT EXISTS paper_futures_data_gaps_no_update
         BEFORE UPDATE ON paper_futures_data_gaps BEGIN SELECT RAISE(ABORT, 'market evidence is immutable'); END;
       CREATE TRIGGER IF NOT EXISTS paper_futures_data_gaps_no_delete
@@ -869,7 +868,19 @@ export class FuturesMarketStore {
       (record) => !known.has(`${record.startMs}:${record.fundingRate}`),
     )
     if (fresh.length === 0) return { stored: false, newPeriods: 0 }
-    this.writeFundingResponse(response, fresh, productId)
+    // Switch FUTURES_FUNDING_BODY_DAILY: the first new response of a UTC day keeps its full body,
+    // the others only the lines of their new periods (see fundingSlimBody).
+    const slim =
+      this.savings.fundingBodyDaily === true &&
+      this.fundingFullBodyOfDay(productId, response.receivedAtMs)
+    this.writeFundingResponse(
+      response,
+      fresh,
+      productId,
+      slim
+        ? fundingSlimBody(response, new Set(fresh.map((r) => r.startMs)))
+        : undefined,
+    )
     return { stored: true, newPeriods: fresh.length }
   }
 
@@ -1203,10 +1214,36 @@ export class FuturesMarketStore {
     }
   }
 
+  /** UTC day (number) per product whose full funding body is already stored; avoids a query per response. */
+  private readonly fundingFullDay = new Map<string, number>()
+
+  private fundingFullBodyOfDay(productId: string, receivedAt: number): boolean {
+    const day = Math.floor(receivedAt / 86_400_000)
+    if (this.fundingFullDay.get(productId) === day) return true
+    const row = this.db
+      .prepare(
+        `SELECT 1 AS found FROM paper_futures_funding_responses r
+         JOIN paper_futures_funding_periods p ON p.response_sha256=r.sha256
+         WHERE p.product_id=? AND r.received_at>=? AND r.received_at<?
+           AND substr(r.raw_response,1,?)<>? LIMIT 1`,
+      )
+      .get(
+        productId,
+        day * 86_400_000,
+        (day + 1) * 86_400_000,
+        FUNDING_SLIM_MARK.length,
+        FUNDING_SLIM_MARK,
+      )
+    if (row === undefined) return false
+    this.fundingFullDay.set(productId, day)
+    return true
+  }
+
   private writeFundingResponse(
     response: HistoricalFundingResponse,
     records: HistoricalFundingResponse['records'],
     productId: string,
+    storedBody?: string,
   ): void {
     if (this.readOnly)
       throw new Error('Cannot append to a read-only market store.')
@@ -1221,7 +1258,11 @@ export class FuturesMarketStore {
         'SELECT raw_response FROM paper_futures_funding_responses WHERE sha256=?',
       )
       .get(hash) as { raw_response: string } | undefined
-    if (prior && prior.raw_response !== raw)
+    if (
+      prior &&
+      prior.raw_response !== raw &&
+      !isFundingSlimBody(prior.raw_response)
+    )
       throw new Error('Funding response hash identity conflict.')
     this.db.exec('BEGIN IMMEDIATE')
     try {
@@ -1233,7 +1274,7 @@ export class FuturesMarketStore {
           hash,
           time(response.receivedAtMs, 'receivedAtMs'),
           response.serverTime,
-          raw,
+          storedBody ?? raw,
         )
       const insert = this.db.prepare(
         'INSERT OR IGNORE INTO paper_futures_funding_periods(response_sha256,start_ms,end_ms,funding_rate,known_at,unit,product_id) VALUES(?,?,?,?,?,?,?)',
@@ -1258,6 +1299,11 @@ export class FuturesMarketStore {
         )
       }
       this.db.exec('COMMIT')
+      if (storedBody === undefined && this.savings.fundingBodyDaily)
+        this.fundingFullDay.set(
+          productId,
+          Math.floor(response.receivedAtMs / 86_400_000),
+        )
     } catch (error) {
       this.db.exec('ROLLBACK')
       throw error
@@ -1371,7 +1417,15 @@ export class FuturesMarketStore {
         intervalMs,
         time(response.fromMs, 'analytics from'),
         receivedAt,
-        raw,
+        // Switch FUTURES_ANALYTICS_RAW_SLIM: nothing reads this body (the points hold the values); the
+        // row stays because the points' foreign key points at it, and keeps the body's hash and size.
+        this.savings.analyticsRawSlim
+          ? JSON.stringify({
+              balancitaSlim: true,
+              sha256: response.sha256,
+              bytes: Buffer.byteLength(raw, 'utf8'),
+            })
+          : raw,
       )
       const insert = this.prepared(
         'INSERT OR IGNORE INTO paper_futures_analytics_points VALUES(?,?,?,?,?,?,?,?)',
@@ -2023,6 +2077,96 @@ export class FuturesMarketStore {
         candle.tradeCount,
         candle.sourceHash,
       )
+  }
+
+  /** Next bucket to look at, per candle interval, for `compactCandleRevisions`. */
+  private readonly candleCompactCursor = new Map<number, number>()
+  private candleIntervals: { at: number; list: number[] } | undefined
+
+  /**
+   * Switch FUTURES_CANDLE_REVISIONS_COMPACT. A candle is rewritten on every trade (about 175
+   * revisions per 1-minute candle). Once a candle is settled (its bucket ended at least
+   * `settleMs` ago) this deletes its intermediate OPEN revisions and keeps the first one, the
+   * last one and every closed one. That is everything the readers use: the Terminal follower
+   * tails the newest rowids (never a settled candle), `candleHeadById` and the closed-candle
+   * queries read the highest or the closed revisions, and the first/last closed revision of a
+   * minute (capture_minimal_read) stays. One call looks at 5 buckets of one interval, in a short
+   * transaction that lifts the delete trigger and puts it back before commit.
+   */
+  compactCandleRevisions(policy: { now: number; settleMs: number }): {
+    deleted: number
+    done: boolean
+  } {
+    if (this.readOnly)
+      throw new Error('Cannot compact a read-only market store.')
+    // The list of intervals rarely changes: look it up every 10 minutes, not on every 30 s cycle.
+    if (
+      this.candleIntervals === undefined ||
+      policy.now - this.candleIntervals.at > 600_000
+    )
+      this.candleIntervals = {
+        at: policy.now,
+        list: (
+          this.db
+            .prepare(
+              'SELECT DISTINCT interval_ms AS i FROM paper_futures_candle_revisions',
+            )
+            .all() as Array<{ i: number }>
+        ).map((row) => Number(row.i)),
+      }
+    for (const interval of this.candleIntervals.list) {
+      const boundary =
+        Math.floor((policy.now - policy.settleMs) / interval) * interval
+      let cursor = this.candleCompactCursor.get(interval)
+      if (cursor === undefined) {
+        const first = this.db
+          .prepare(
+            'SELECT MIN(bucket_start) AS b FROM paper_futures_candle_revisions WHERE interval_ms=?',
+          )
+          .get(interval) as { b: number | null }
+        cursor = Number(first.b ?? boundary)
+      }
+      if (cursor >= boundary) {
+        this.candleCompactCursor.set(interval, cursor)
+        continue
+      }
+      const to = Math.min(cursor + 5 * interval, boundary)
+      const guard = this.db
+        .prepare(
+          `SELECT sql FROM sqlite_master WHERE type='trigger' AND name='paper_futures_candle_revisions_no_delete'`,
+        )
+        .get() as { sql: string } | undefined
+      let deleted: number
+      this.db.exec('BEGIN IMMEDIATE')
+      try {
+        if (guard)
+          this.db.exec('DROP TRIGGER paper_futures_candle_revisions_no_delete')
+        deleted = Number(
+          this.db
+            .prepare(
+              `DELETE FROM paper_futures_candle_revisions
+               WHERE interval_ms=? AND bucket_start>=? AND bucket_start<? AND is_closed=0
+                 AND revision>(SELECT MIN(m.revision) FROM paper_futures_candle_revisions AS m
+                               WHERE m.candle_id=paper_futures_candle_revisions.candle_id)
+                 AND revision<(SELECT MAX(m.revision) FROM paper_futures_candle_revisions AS m
+                               WHERE m.candle_id=paper_futures_candle_revisions.candle_id)`,
+            )
+            .run(interval, cursor, to).changes,
+        )
+        if (guard?.sql) this.db.exec(guard.sql)
+        this.db.exec('COMMIT')
+      } catch (error) {
+        try {
+          this.db.exec('ROLLBACK')
+        } catch {
+          // No open transaction.
+        }
+        throw error
+      }
+      this.candleCompactCursor.set(interval, to)
+      return { deleted, done: false }
+    }
+    return { deleted: 0, done: true }
   }
 
   eventsAsOf(receivedCutoff: number): unknown[] {

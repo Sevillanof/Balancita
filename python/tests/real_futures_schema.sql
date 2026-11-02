@@ -22,11 +22,6 @@ CREATE TABLE paper_futures_book_snapshots (
         product_id TEXT NOT NULL, epoch INTEGER NOT NULL, seq INTEGER NOT NULL,
         event_time INTEGER NOT NULL, received_at INTEGER NOT NULL, bids_json TEXT NOT NULL, asks_json TEXT NOT NULL
       ) STRICT;
-CREATE TABLE paper_futures_ticker_snapshots (
-        event_id TEXT PRIMARY KEY REFERENCES paper_futures_market_events(event_id),
-        product_id TEXT NOT NULL, epoch INTEGER NOT NULL, seq INTEGER NOT NULL,
-        event_time INTEGER NOT NULL, received_at INTEGER NOT NULL, payload_json TEXT NOT NULL
-      ) STRICT;
 CREATE TABLE paper_futures_data_gaps (
         gap_id TEXT PRIMARY KEY, feed TEXT NOT NULL, product_id TEXT NOT NULL,
         epoch INTEGER NOT NULL, expected_seq INTEGER, actual_seq INTEGER,
@@ -80,10 +75,6 @@ CREATE TRIGGER paper_futures_book_snapshots_no_update
         BEFORE UPDATE ON paper_futures_book_snapshots BEGIN SELECT RAISE(ABORT, 'market evidence is immutable'); END;
 CREATE TRIGGER paper_futures_book_snapshots_no_delete
         BEFORE DELETE ON paper_futures_book_snapshots BEGIN SELECT RAISE(ABORT, 'market evidence is immutable'); END;
-CREATE TRIGGER paper_futures_ticker_snapshots_no_update
-        BEFORE UPDATE ON paper_futures_ticker_snapshots BEGIN SELECT RAISE(ABORT, 'market evidence is immutable'); END;
-CREATE TRIGGER paper_futures_ticker_snapshots_no_delete
-        BEFORE DELETE ON paper_futures_ticker_snapshots BEGIN SELECT RAISE(ABORT, 'market evidence is immutable'); END;
 CREATE TRIGGER paper_futures_data_gaps_no_update
         BEFORE UPDATE ON paper_futures_data_gaps BEGIN SELECT RAISE(ABORT, 'market evidence is immutable'); END;
 CREATE TRIGGER paper_futures_data_gaps_no_delete

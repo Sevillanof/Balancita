@@ -75,7 +75,7 @@ def _ddl_de(con, nombre: str) -> str:
 
 
 class Omitido(Exception):
-    """El periodo NO se exporta y no es un fallo (se informa aparte): su inicio ya lo recorto la retencion, o el reemplazo perderia filas."""
+    """El periodo NO se exporta y no es un fallo (se informa aparte): su inicio ya lo recorto la retencion, la copia es anterior a su fin, o el reemplazo perderia filas."""
 
     def __init__(self, clave: str, motivo: str):
         super().__init__(motivo)
@@ -106,6 +106,10 @@ def _exportar_dia(con, cfg: TablaConfig, base: str, destino: str, dia: dt.date, 
             if primero is not None and primero > d0 + cfg.tolerancia_inicio_ms:
                 raise Omitido("retencion", "la copia ya no tiene el inicio del periodo (primera fila %d ms despues del inicio): la retencion de la "
                               "captura lo recorto; archivarlo lo certificaria como dia completo" % (primero - d0))
+            ultimo = con.execute('SELECT MAX("%s") FROM "%s"' % (cfg.tiempo, cfg.sqlite)).fetchone()[0]
+            if ultimo is None or ultimo < d1 - cfg.tolerancia_fin_ms:
+                raise Omitido("copia_anterior", "la copia no llega al fin del periodo (su fila mas nueva esta a %d ms del fin): se tomo antes de que "
+                              "terminara; se exporta con una copia mas nueva" % (d1 - (ultimo or 0)))
         ddl = _ddl_de(con, cfg.sqlite)
         origen = Resumen(cfg)
         meta = {"schema_version": cfg.schema_version, "formato_version": FORMATO_VERSION, "base": base, "tabla": cfg.nombre, "dia": dia.isoformat(),
@@ -265,8 +269,8 @@ def exportar(copia: str, base: str, destino: str, tablas: Optional[List[str]] = 
                     e = _exportar_dia(con, cfg, base, destino, dia, copia, reemplaza=previa)
                 except Omitido as om:
                     log("OMITIDO %s %s: %s" % (nombre, clave[2], om))
-                    reporte["omitidos_por_retencion" if om.clave == "retencion" else "reemplazos_omitidos"].append(
-                        {"tabla": nombre, "dia": clave[2], "motivo": str(om)})
+                    destino_om = {"retencion": "omitidos_por_retencion", "copia_anterior": "pendientes_por_abrir"}.get(om.clave, "reemplazos_omitidos")
+                    reporte[destino_om].append({"tabla": nombre, "dia": clave[2], "motivo": str(om)})
                     continue
                 except Exception as exc:  # noqa: BLE001 - cualquier fallo deja el dia sin confirmar
                     log("NO CONFIRMADO %s %s: %s" % (nombre, clave[2], exc))

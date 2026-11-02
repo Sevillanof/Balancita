@@ -4,7 +4,7 @@ import { DatabaseSync } from 'node:sqlite'
 import { acquireWriterLock } from '../../platform/writer-lock.ts'
 
 /**
- * Temporary bid/ask archive. The capture keeps tickers 24 h; this process
+ * Temporary bid/ask archive. The capture keeps tickers 48 h; this process
  * copies a thinned bid/ask series into its OWN database before they expire,
  * reading the market database read-only. It never writes to the capture's
  * database or changes its retention. Public data only.

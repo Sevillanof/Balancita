@@ -183,7 +183,7 @@ def nocturno(destino: str, respaldos: str, bases=BASES, dry_run: bool = False, a
         info["estado"] = "ok" if not rep["no_confirmados"] else "con_no_confirmados"
         info["exportados"] = len(rep["exportados"])
         info["reemplazados"] = len(rep["reemplazados"])  # formato viejo -> formato 2
-        info["omitidos_por_retencion"] = rep["omitidos_por_retencion"]  # informado, no es fallo (ver docs: pendiente de Fran)
+        info["omitidos_por_retencion"] = rep["omitidos_por_retencion"]  # informado, no es fallo (ver docs/archivo-parquet.md, retencion de 48 h)
         info["reemplazos_omitidos"] = rep["reemplazos_omitidos"]
         info["ya_confirmados"] = len(rep["ya_confirmados"])
         info["no_confirmados"] = rep["no_confirmados"]

@@ -7,7 +7,7 @@ Mantenimiento (con `pnpm dev` parado cuando se compacta):
 ```bash
 pnpm --dir server candles:backfill --days 90            # velas oficiales
 pnpm --dir server funding:backfill --db <base>          # ~1 año de funding de los 8 perpetuos
-pnpm --dir server market:prune --vacuum                 # retención: tickers 24 h, trades 7 d
+pnpm --dir server market:prune --vacuum                 # retención: tickers 48 h, trades 7 d
 ```
 
 `DEV_ONLY=vite,capture,live,forward,strategies pnpm dev` arranca esos procesos (captura y seguimiento forward, sin libros paper) y siempre Qwen (modelo, veredictos y decisiones).
@@ -50,4 +50,4 @@ This evidence validates public schemas and current product metadata only. Kraken
 
 ## Archivo temporal de bid/ask (2026-10-12)
 
-`pnpm --dir server quotes:archive --loop-seconds 60` copia a su propia base (`server/data/quotes/quotes.sqlite`) una serie reducida de **mejor bid / mejor ask y sus tamaños** (más mark y último) de los 8 perpetuos antes de que la captura los borre (24 h). Lee la base de mercado en solo lectura, toma su propio candado de escritor y no cambia la captura ni su retención. Límites por defecto: una cotización por producto cada 10 s, 30 días, 300 MB (se borran primero las más viejas) y se detiene con un registro si quedan menos de 5 GB libres; un silencio de más de 2 min por producto, o una caída del archivador más larga que la retención de la captura, se anota en `quote_archive_gap`. Son cotizaciones del tope del libro, **no** snapshots del libro completo ni de profundidad. Datos públicos, solo paper.
+`pnpm --dir server quotes:archive --loop-seconds 60` copia a su propia base (`server/data/quotes/quotes.sqlite`) una serie reducida de **mejor bid / mejor ask y sus tamaños** (más mark y último) de los 8 perpetuos antes de que la captura los borre (48 h). Lee la base de mercado en solo lectura, toma su propio candado de escritor y no cambia la captura ni su retención. Límites por defecto: una cotización por producto cada 10 s, 30 días, 300 MB (se borran primero las más viejas) y se detiene con un registro si quedan menos de 5 GB libres; un silencio de más de 2 min por producto, o una caída del archivador más larga que la retención de la captura, se anota en `quote_archive_gap`. Son cotizaciones del tope del libro, **no** snapshots del libro completo ni de profundidad. Datos públicos, solo paper.

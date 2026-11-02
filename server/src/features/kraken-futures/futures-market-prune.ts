@@ -1,6 +1,7 @@
 import { DatabaseSync } from 'node:sqlite'
 import { FuturesMarketStore } from './futures-market-store.ts'
 import { acquireWriterLock } from '../../platform/writer-lock.ts'
+import { retentionFromEnv } from './capture-savings.ts'
 
 export const DEFAULT_RETENTION_DAYS = 7
 
@@ -12,8 +13,8 @@ const GUARDED = [
 ] as const
 
 /**
- * Offline version of the capture's online retention (tickers 24 h, trades 7
- * days, duplicate raw copies dropped after 24 h), run to completion.
+ * Offline version of the capture's online retention (tickers 48 h, trades 7
+ * days, duplicate raw copies dropped after 48 h), run to completion.
  */
 export function trimMarketDb(dbPath: string, now = Date.now()) {
   const lock = acquireWriterLock(dbPath)
@@ -22,15 +23,7 @@ export function trimMarketDb(dbPath: string, now = Date.now()) {
     let deleted = 0
     let slimmed = 0
     for (;;) {
-      const result = store.trimRawEvents(
-        {
-          now,
-          tickerRetentionMs: 24 * 3_600_000,
-          eventRetentionMs: DEFAULT_RETENTION_DAYS * DAY_MS,
-          rawKeepMs: 24 * 3_600_000,
-        },
-        200,
-      )
+      const result = store.trimRawEvents({ now, ...retentionFromEnv({}) }, 200)
       deleted += result.deleted
       slimmed += result.slimmed
       if (result.done) return { deleted, slimmed }
@@ -120,13 +113,22 @@ export function pruneMarketEvents(
         )
         .run().changes,
     )
-    const tickerSnapshots = Number(
+    // Legacy table: databases created from now on do not have it.
+    const hasTickerSnapshots =
       db
         .prepare(
-          `DELETE FROM paper_futures_ticker_snapshots WHERE event_id IN (${old})`,
+          `SELECT 1 FROM sqlite_master WHERE type='table' AND name='paper_futures_ticker_snapshots'`,
         )
-        .run().changes,
-    )
+        .get() !== undefined
+    const tickerSnapshots = hasTickerSnapshots
+      ? Number(
+          db
+            .prepare(
+              `DELETE FROM paper_futures_ticker_snapshots WHERE event_id IN (${old})`,
+            )
+            .run().changes,
+        )
+      : 0
     const events = Number(
       db
         .prepare(

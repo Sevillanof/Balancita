@@ -72,6 +72,9 @@ def crear_copia(ruta: str, dia0_ms: int, dias: int, productos: Sequence[str] = (
                     con.executemany("INSERT INTO paper_futures_llm_decisions VALUES(%s)" % ",".join("?" * 21), q)
                     total += len(q)
                 if "market_events" in tablas:
+                    # El ticker de 1 s siempre cae a menos de un minuto del fin del dia: una copia que llega al fin lo tiene.
+                    fin = dia0_ms + (d + 1) * DAY_MS - 1
+                    m.append(("ev-%s-fin-%d" % (p, fin), "ticker", p, 1, fin, fin - 1, fin, fin + 1, None, "{}", _payload(rng, p, fin), "h-fin-%s-%d" % (p, fin)))
                     con.executemany("INSERT INTO paper_futures_market_events VALUES(%s)" % ",".join("?" * 12), m)
                     total += len(m)
         con.commit()
