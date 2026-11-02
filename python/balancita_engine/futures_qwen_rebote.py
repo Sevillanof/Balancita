@@ -1,12 +1,14 @@
-"""El ANALISTA DE REBOTE: ETH cae 5 % o más en 1 hora → largo, salida a las 24 h. Solo para las pruebas de /Estrategias.
+"""El ANALISTA DE REBOTE: ETH cae 5 % o más desde el máximo de la última hora → largo, salida a las 4 h. Para las pruebas de /Estrategias.
 
-No usa el maestro, el portero ni Qwen, y no toca paper. Es la regla medida en ``analisis/caidas-fuertes/informe.md`` (sección 4.2):
+No usa el maestro, el portero ni Qwen. Es la MISMA definición que el Experto rebotes del paper (``Trader._check_rebote``, parámetros en
+``futures_qwen_posiciones.DEFAULT_REBOTES``) y la del ``analizador.py`` de ``analisis/mejorar-maestro/rebotes-tabla``:
 
-* **Disparo**: al cierre de una vela de 5 min, el cierre es 5 % (o más) más bajo que el de 60 min antes.
+* **Disparo**: al cierre de una vela de 5 min, el cierre está 5 % (o más) por debajo del MÁXIMO de los cierres de la ventana (60 min, 12 velas
+  con la actual) y la vela anterior todavía no lo estaba (borde de subida: un episodio). 4 h de descanso entre episodios.
 * **Entrada**: largo a mercado al cierre del minuto siguiente (la vela de 1 min que empieza en el cierre de 5 min). Sin stop ni objetivo.
-* **Salida**: 24 h exactas después de la entrada. Una posición por vez; tras salir, 60 min sin disparar.
+* **Salida**: 4 h exactas después de la entrada. Una posición por vez en esta prueba suelta (en paper comparte los 3 cupos con el maestro).
 * **Variante con filtro** (entrada ``rebote_btc``): además, ETH cayó al menos 2 puntos más que BTC en la misma hora (o sea, fue algo de ETH y no del
-  mercado); sale a las 4 h.
+  mercado).
 * **Costos**: taker 5,19 pb por pata (comisión 0,05 % más impacto), 10,38 pb ida y vuelta. Sin funding, como en la medición.
 
 El tamaño de la cuenta (100 USD fijos o toda la cuenta, 1.000 USD más lo ganado) lo pone la pantalla sobre estas mismas operaciones.
@@ -29,7 +31,7 @@ START = "2022-04-01"                     # primer día con velas del análisis (
 MIN_MS, BAR_MS, HOUR_MS = 60_000, 300_000, 3_600_000
 LOOK_BARS = 12                           # 60 min = 12 velas de 5 min
 DROP_PCT = 5.0
-COOLDOWN_MIN = 60
+COOLDOWN_MIN = 240                       # descanso entre episodios
 TAKER_BP = 5.19                          # por pata
 NOTIONAL_USD = 100.0                     # el nominal de paper
 ENV = "QWEN_ENTRADA"
@@ -38,12 +40,12 @@ DEFAULT = "formula"
 BEFORE_MS, AFTER_MS = 4 * HOUR_MS, 3 * HOUR_MS     # precios de 5 min que se guardan alrededor de cada operación (para el zoom)
 REASON = "tiempo"
 RULES = {
-    "rebote": {"id": "principal", "label": "caída de 5 % en 1 h → largo 24 h", "hold_min": 1440, "gap_pct": None},
-    "rebote_btc": {"id": "filtro_btc", "label": "caída de 5 % en 1 h y ETH 2 puntos peor que BTC → largo 4 h", "hold_min": 240,
+    "rebote": {"id": "principal", "label": "caída de 5 % desde el máximo de 1 h → largo 4 h", "hold_min": 240, "gap_pct": None},
+    "rebote_btc": {"id": "filtro_btc", "label": "caída de 5 % desde el máximo de 1 h y ETH 2 puntos peor que BTC → largo 4 h", "hold_min": 240,
                    "gap_pct": 2.0},
 }
-NOTE = ("Rebote de ETH, sin Qwen: cae 5 % o más en 1 h → largo, salida a las 24 h (con filtro: ETH 2 puntos peor que BTC, salida a las "
-        "4 h). Costos taker de 10,38 pb ida y vuelta, sin funding. La regla se eligió mirando este mismo período, así que el medidor "
+NOTE = ("Rebote de ETH, sin Qwen: cae 5 % o más desde el máximo de la última hora → largo, salida a las 4 h (con filtro: ETH 2 puntos "
+        "peor que BTC). Costos taker de 10,38 pb ida y vuelta, sin funding. La regla se eligió mirando este mismo período, así que el medidor "
         "sale rojo: es para VER cada caída y cada rebote, no una prueba de que funciona.")
 
 
@@ -127,19 +129,20 @@ class Minutes:
 # --------------------------------------------------------------------------- the rule
 
 
-def _drop_candidate(bar, ref, start_ms, end_ms):
-    if int(bar["bucket_start"]) - int(ref["bucket_start"]) != LOOK_BARS * BAR_MS:
+def drop_from_max(bars, k, window=LOOK_BARS):
+    """How far (in %) the close of ``bars[k]`` is below the highest close of the ``window`` candles that end there (it included), and the
+    start of that high; ``None`` without a contiguous window. The one definition of the rebound expert (also ``Trader._drop_from_max``)."""
+    if k < window - 1:
         return None
-    t_ms = int(bar["bucket_start"]) + BAR_MS
-    if t_ms < start_ms or t_ms > end_ms:
+    part = bars[k - window + 1:k + 1]
+    if int(part[-1]["bucket_start"]) - int(part[0]["bucket_start"]) != (window - 1) * BAR_MS:
         return None
-    close, before = float(bar["close"]), float(ref["close"])
-    if close <= 0 or before <= 0 or math.isnan(close) or math.isnan(before):
+    closes = [float(b["close"]) for b in part]
+    top = max(closes)
+    if top <= 0 or math.isnan(top) or math.isnan(closes[-1]) or closes[-1] <= 0:
         return None
-    ret = close / before - 1
-    if ret > -DROP_PCT / 100:
-        return None
-    return t_ms, close, before, ret
+    peak = part[closes.index(top)]
+    return (1 - closes[-1] / top) * 100.0, top, int(peak["bucket_start"]) + BAR_MS
 
 
 def _btc_gap(variant, btc_close, bar, ref, ret):
@@ -154,27 +157,36 @@ def _btc_gap(variant, btc_close, bar, ref, ret):
     return True, btc_ret
 
 
-def find_drops(eth, btc, variant, start_ms, end_ms):
-    """Las caídas que disparan la regla, una posición por vez.
+def find_drops(eth, btc, variant, start_ms, end_ms, *, drop_pct=DROP_PCT, window=LOOK_BARS, rest_min=COOLDOWN_MIN):
+    """Los episodios que disparan la regla, una posición por vez.
 
     ``eth`` / ``btc``: velas de 5 min sin huecos (``bucket_start``, ``close``). ``end_ms``: el último cierre de decisión que sirve.
-    Devuelve ``[{"t_ms": cierre de la vela que dispara, "desde_px", "hasta_px", "pct", "btc_pct"}]`` por tiempo.
+    Un episodio es el borde de subida de «cierre ``drop_pct`` % o más bajo que el máximo de los cierres de la ventana»; ``rest_min``
+    de descanso entre episodios (cuenta desde el episodio, haya o no lugar). Devuelve
+    ``[{"t_ms": cierre de la vela que dispara, "desde_ms", "desde_px": el máximo, "hasta_px", "pct", "btc_pct"}]`` por tiempo.
     """
     btc_close = {int(b["bucket_start"]): float(b["close"]) for b in btc or ()}
-    out, free_ms = [], None
-    for k in range(LOOK_BARS, len(eth)):
-        bar, ref = eth[k], eth[k - LOOK_BARS]
-        candidate = _drop_candidate(bar, ref, start_ms, end_ms)
-        if candidate is None:
+    out, free_ms, last_episode = [], None, None
+    for k in range(window, len(eth)):
+        now, before = drop_from_max(eth, k, window), drop_from_max(eth, k - 1, window)
+        if now is None or now[0] < drop_pct or (before is not None and before[0] >= drop_pct):
             continue
-        t_ms, close, before, ret = candidate
+        bar = eth[k]
+        t_ms = int(bar["bucket_start"]) + BAR_MS
+        if t_ms < start_ms or t_ms > end_ms:
+            continue
+        if last_episode is not None and t_ms - last_episode < rest_min * MIN_MS:
+            continue
+        last_episode = t_ms
+        ret = -now[0] / 100.0
+        ref = eth[k - window + 1]
         allowed, btc_ret = _btc_gap(variant, btc_close, bar, ref, ret)
         if not allowed:
             continue
         if free_ms is not None and t_ms - MIN_MS < free_ms:
-            continue                                     # ya hay una operación abierta (o en los 60 min de espera)
-        free_ms = t_ms + (variant["hold_min"] + COOLDOWN_MIN) * MIN_MS
-        out.append({"t_ms": t_ms, "desde_ms": t_ms - HOUR_MS, "desde_px": before, "hasta_px": close,
+            continue                                     # ya hay una operación abierta
+        free_ms = t_ms + variant["hold_min"] * MIN_MS
+        out.append({"t_ms": t_ms, "desde_ms": now[2], "desde_px": now[1], "hasta_px": float(bar["close"]),
                     "pct": round(ret * 100, 2), "btc_pct": None if btc_ret is None else round(btc_ret * 100, 2)})
     return out
 

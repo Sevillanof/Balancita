@@ -91,6 +91,10 @@ export interface QwenTrade {
   closedBy: string | null
   /** Why the exit rule closed it (`noticia_12h`, `maestro_vuelta`…), when the gateway sends it. */
   exitReason?: string | null
+  /** Why it opened: `rebote` is the rebound expert, anything else the maestro. */
+  entryReason?: string | null
+  /** The longest it may stay open in ms (the rebound expert exits at 4 h), when it has its own. */
+  maxHoldMs?: number | null
   holdMin: number | null
   markPrice: number | null
   notionalUsd: number | null
@@ -327,6 +331,9 @@ export function qwenTrades(payload: unknown): QwenTrade[] {
         closedBy: typeof row.closed_by === 'string' ? row.closed_by : null,
         exitReason:
           typeof row.exit_reason === 'string' ? row.exit_reason : null,
+        entryReason:
+          typeof row.entry_reason === 'string' ? row.entry_reason : null,
+        maxHoldMs: number(row.max_hold_ms),
         holdMin: number(row.hold_min),
         markPrice: number(row.mark_price),
         notionalUsd: number(row.notional_usd),

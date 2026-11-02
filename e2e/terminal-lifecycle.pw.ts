@@ -731,3 +731,84 @@ test('without judged operations the Auditor step says so and shows no cards', as
     0,
   )
 })
+
+/** The rebound expert's reading and the shared places, as the live engine writes them in `formula`. */
+function reboundLooks() {
+  const formula = (drop: number, level: number, open: number) => ({
+    maestro: -2,
+    puntaje: -1.3,
+    portero_si: false,
+    portero_p: 0.38,
+    noticias_si: false,
+    portero_autonomo: independent(1),
+    noticias: { priority: { status: 'none' } },
+    motivo: 'maestro y portero autónomo no coinciden',
+    rebote: {
+      activo: true,
+      caida_pct: drop,
+      umbral_pct: 5,
+      nivel: level,
+      ventana_min: 60,
+      salida_min: 240,
+      enfriamiento_min: 240,
+      descanso_hasta_ms: null,
+      abiertas: 1,
+    },
+    posiciones: {
+      abiertas: open,
+      max: 3,
+      usado_usd: String(open * 333.3),
+      saldo_usd: '1000',
+      fraccion: 0.33,
+    },
+  })
+  return [
+    look(3, formula(1.2, 0, 1), 'ESPERAR'),
+    look(2, formula(3.1, 0, 1), 'ESPERAR'),
+    look(1, formula(5.4, 1, 2), 'ESPERAR'),
+  ]
+}
+
+test('with several places the strip has the rebound step and the card says which place it holds', async ({
+  page,
+}) => {
+  const first = { ...openTrade(240, false), trade_no: 5 }
+  const second = {
+    ...openTrade(75, false),
+    trade_no: 6,
+    side: 'LONG',
+    entry_reason: 'rebote',
+    max_hold_ms: 4 * 60 * 60_000,
+    mark_price: 2230,
+  }
+  await openFixture(page, {
+    decisions: withAuditor(reboundLooks()),
+    trades: [second, first],
+  })
+  const strip = page.getByRole('group', {
+    name: 'Pasos para salir de la operación',
+  })
+  await expect(strip).toBeVisible()
+  const step = strip.getByRole('button', { name: /^Experto rebotes/ })
+  await expect(step).toBeVisible()
+  await step.click()
+  const detail = page.getByRole('dialog', {
+    name: /Experto rebotes: última evaluación/,
+  })
+  await expect(detail).toContainText('Caída desde el máximo')
+  await expect(detail).toContainText('5,4 %')
+  await expect(detail).toContainText('2/3')
+  await expect(detail).toContainText('Sale a las')
+  if (SHOTS)
+    await page.screenshot({
+      path: `${SHOTS}/terminal-experto-rebotes-${test.info().project.name}.png`,
+    })
+  await page.keyboard.press('Escape')
+  await expect(page.getByTestId('operation-places').first()).toContainText(
+    'Abiertas 2 de 3',
+  )
+  if (SHOTS)
+    await page.screenshot({
+      path: `${SHOTS}/terminal-posiciones-${test.info().project.name}.png`,
+    })
+})

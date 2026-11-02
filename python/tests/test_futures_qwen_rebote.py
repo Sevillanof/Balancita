@@ -63,15 +63,16 @@ class FindDropsTest(unittest.TestCase):
         self.assertEqual(len(fires), 1)
         self.assertEqual(fires[0]["t_ms"], T0 + (12 * 30 + 1) * BAR - BAR + BAR)    # decide al cierre de la vela que cae
         self.assertEqual(fires[0]["pct"], -5.0)
-        self.assertEqual(fires[0]["desde_ms"], fires[0]["t_ms"] - HOUR)
+        self.assertTrue(fires[0]["t_ms"] - HOUR <= fires[0]["desde_ms"] < fires[0]["t_ms"])     # el máximo está dentro de la ventana
+        self.assertEqual(fires[0]["desde_px"], 2000.0)
         self.assertEqual(rb.find_drops(series(flat_with_drop(n, 12 * 30, -4.9)), None, self.principal, T0, T0 + n * BAR), [])
 
     def test_a_drop_that_stays_down_fires_once_and_the_next_look_does_not_repeat_it(self):
         n = 12 * 24 * 3
         got = rb.find_drops(series(flat_with_drop(n, 12 * 30, -6.0)), None, self.principal, T0, T0 + n * BAR)
-        self.assertEqual(len(got), 1)                        # las 11 velas siguientes siguen 5 % abajo, pero ya hay posición
+        self.assertEqual(len(got), 1)                        # las velas siguientes siguen abajo, pero el episodio ya empezó (borde de subida)
 
-    def test_one_position_at_a_time_with_an_hour_of_rest(self):
+    def test_rest_of_four_hours_between_episodes_and_one_position_at_a_time(self):
         n = 12 * 24 * 6
         closes = flat_with_drop(n, 12 * 30, -6.0)
         eth = series(closes)
@@ -79,8 +80,8 @@ class FindDropsTest(unittest.TestCase):
         first = rb.find_drops(eth, None, self.principal, T0, T0 + n * BAR)[0]
         drops = rb.find_drops(eth, None, self.principal, T0, T0 + n * BAR)
         self.assertEqual(drops[0], first)
-        # nada dentro de las 24 h + 60 min de la primera
-        free = first["t_ms"] + (1440 + 60) * MIN
+        # nada dentro de las 4 h de la salida de la primera
+        free = first["t_ms"] + 240 * MIN
         self.assertTrue(all(d["t_ms"] - MIN >= free for d in drops[1:]))
 
     def test_filter_needs_eth_to_fall_two_points_more_than_btc(self):
@@ -101,18 +102,18 @@ class FindDropsTest(unittest.TestCase):
 
 
 class TradeTest(unittest.TestCase):
-    def test_enters_at_the_next_minute_and_exits_24_hours_later_with_costs(self):
+    def test_enters_at_the_next_minute_and_exits_4_hours_later_with_costs(self):
         n = 12 * 24 * 4
         closes = flat_with_drop(n, 12 * 30, -6.0)
-        for k in range(12 * 30 + 12 * 24 + 1, n):
+        for k in range(12 * 30 + 12 * 4 + 1, n):
             closes[k] = closes[12 * 30] * 1.04
         eth = series(closes)
         drop = rb.find_drops(eth, None, rb.RULES["rebote"], T0, T0 + n * BAR)[0]
         minutes = FakeMinutes(eth)
         trade = rb.trade_of(drop, rb.RULES["rebote"], minutes, {int(b["bucket_start"]): b for b in eth})
         self.assertEqual(trade["entrada_ms"], drop["t_ms"] + MIN)
-        self.assertEqual(trade["salida_ms"], drop["t_ms"] + 1440 * MIN + MIN)
-        self.assertEqual(minutes.asked, [drop["t_ms"], drop["t_ms"] + 1440 * MIN])
+        self.assertEqual(trade["salida_ms"], drop["t_ms"] + 240 * MIN + MIN)
+        self.assertEqual(minutes.asked, [drop["t_ms"], drop["t_ms"] + 240 * MIN])
         self.assertEqual(trade["lado"], 1)
         expected = (trade["salida_px"] / trade["entrada_px"] - 1) * 1e4 - 2 * rb.TAKER_BP
         self.assertAlmostEqual(trade["neto_bp"], expected, places=2)
@@ -137,7 +138,7 @@ class BuildTest(unittest.TestCase):
         closes = [2000.0] * n
         for k, start in enumerate(range(day * 3, day * 36, day * 6)):     # una caída de 6 % cada 6 días, con rebote a las 24 h
             for i in range(start, min(n, start + day * 3)):
-                closes[i] = 2000.0 * (0.94 if i < start + day else 1.02 + 0.01 * k)
+                closes[i] = 2000.0 * (0.94 if i < start + 12 * 2 else 1.02 + 0.01 * k)
         return series(closes), series([60000.0] * n)
 
     def test_build_has_the_shape_of_the_formula_result_with_drops_and_a_red_meter(self):
@@ -150,7 +151,7 @@ class BuildTest(unittest.TestCase):
         trades = out["curvas"]["formula"]
         self.assertGreaterEqual(len(trades), 3)
         self.assertEqual(out["formula"]["n"], len(trades))
-        self.assertEqual(out["max_horas"], 24.0)
+        self.assertEqual(out["max_horas"], 4.0)
         self.assertEqual(out["productos"], ["PF_ETHUSD"])
         self.assertTrue(all(t["caida"]["pct"] <= -5 and t["velas"] for t in trades))
         self.assertEqual(out["honestidad"]["fuera_del_ajuste_pct"], 0.0)       # la regla se eligió con este mismo período

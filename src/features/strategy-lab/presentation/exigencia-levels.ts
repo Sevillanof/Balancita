@@ -4,6 +4,8 @@ import type {
   Entrada,
   ExigenciaLevels,
   Medicion,
+  Posiciones,
+  Rebotes,
   Salida,
 } from '../infrastructure/quick-api.ts'
 
@@ -122,5 +124,43 @@ export const CUENTAS: Array<{ modo: Cuenta; label: string; detail: string }> = [
     label: 'Toda la cuenta',
     detail:
       'La primera operación usa 1.000 USD; cada siguiente, 1.000 más lo ganado o perdido hasta ahí. Sin apalancamiento.',
+  },
+]
+
+/** How many positions a test may hold at once (mirrors `futures_qwen_posiciones.py`): the same function runs in paper. */
+export const POSICIONES: Array<{
+  modo: Posiciones
+  label: string
+  detail: string
+}> = [
+  {
+    modo: 1,
+    label: 'Una',
+    detail: 'Una sola posición a la vez, con todo el saldo (como hasta ahora).',
+  },
+  {
+    modo: 3,
+    label: 'Hasta 3',
+    detail:
+      'Hasta 3 a la vez, cada una con el 33 % del saldo del momento sin pasar del saldo libre. El maestro abre otra solo cuando aparece una señal nueva (no mientras sigue la misma) y no abre del lado contrario mientras haya abiertas.',
+  },
+]
+
+/** The rebound expert, an extra source of entries that shares the places (mirrors `futures_qwen_rebote.py`). */
+export const REBOTES: Array<{
+  modo: Rebotes
+  label: string
+  detail: string
+}> = [
+  {
+    modo: 'apagado',
+    label: 'Apagado',
+    detail: 'Solo entra el maestro.',
+  },
+  {
+    modo: 'encendido',
+    label: 'Encendido',
+    detail:
+      'Si al cerrar una vela de 5 min ETH está 5 % o más debajo del máximo de la última hora, compra largo a mercado (sin consultar al maestro ni al portero) si hay un lugar libre. Sale a las 4 h, sin stop ni take profit, y descansa 4 h entre disparos.',
   },
 ]

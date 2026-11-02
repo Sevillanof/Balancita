@@ -111,7 +111,15 @@ export type ExigenciaLevels = {
   cuenta?: Cuenta
   /** How the exits are executed: at market, a resting maker order that stays put, or one that follows the best price (paper). */
   salida?: Salida
+  /** How many positions may be open at once, each with a third of the account (1 = one at a time, as before). */
+  posiciones?: Posiciones
+  /** The rebound expert: buys ETH long after a fall of 5 % from the 1 h high and leaves at 4 h, sharing the places. */
+  rebotes?: Rebotes
 }
+
+export type Posiciones = 1 | 3
+
+export type Rebotes = 'apagado' | 'encendido'
 
 export type Salida = 'mercado' | 'fija' | 'sigue'
 
@@ -221,6 +229,15 @@ export type QuickTrade = {
 export type QuickFormula = {
   execution?: 'terminal.v2'
   cuenta?: Cuenta
+  /** Several places: what the shared places did in this test (absent with one place and no rebound expert). */
+  posiciones?: {
+    max: number
+    fraccion: number
+    rebotes: Record<string, number> | null
+    maximo_abiertas: number
+    operaciones_por_mes: number
+    por_origen: { maestro: number; rebotes: number }
+  } | null
   capital_inicial_usd?: string
   saldo_final_usd?: string
   news_evaluated?: boolean

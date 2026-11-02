@@ -1329,7 +1329,10 @@ def _register_evaluation(db, spec, cfg, kind, start_ms, end_ms, product_list, sc
         params["exigencia"] = futures_qwen_exigencia.from_env()
         params["analista"] = futures_qwen_analista.from_env()
         params["medicion"] = futures_walkforward.medicion_from_env()
-        live_cfg = futures_qwen_live.apply_overrides(futures_qwen_trader.load_config(futures_qwen_trader.CONFIG_PATH_LIVE))
+        from . import futures_qwen_posiciones
+        live_cfg = futures_qwen_posiciones.apply_env(
+            futures_qwen_live.apply_overrides(futures_qwen_trader.load_config(futures_qwen_trader.CONFIG_PATH_LIVE)))
+        params["posiciones"] = futures_qwen_posiciones.describe(live_cfg)
         futures_walkforward.register(futures_walkforward.test_spec(live_cfg), medicion=params["medicion"])
     with db:
         cur = db.execute(

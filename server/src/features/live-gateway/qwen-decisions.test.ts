@@ -679,6 +679,25 @@ describe('createQwenDecisions: trades', () => {
     expect(result.trades[2]!.mark_price).toBeNull()
   })
 
+  it('tells which operations the rebound expert opened and how long they may stay', () => {
+    const path = seed(
+      [],
+      [{ ...base, trade_no: 7, status: 'open', entry_ms: 1_000 }],
+    )
+    const db = new DatabaseSync(path)
+    db.exec(
+      "ALTER TABLE trades ADD COLUMN entry_reason TEXT; ALTER TABLE trades ADD COLUMN max_hold_ms INTEGER; UPDATE trades SET entry_reason='rebote', max_hold_ms=14400000",
+    )
+    db.close()
+    const result = createQwenDecisions({ liveDbPath: path }).trades('PF_XBTUSD')
+    expect(result.status).toBe('ok')
+    if (result.status !== 'ok') return
+    expect(result.trades[0]).toMatchObject({
+      entry_reason: 'rebote',
+      max_hold_ms: 14_400_000,
+    })
+  })
+
   it('says off when the base has no trades table yet', () => {
     const path = seed([])
     const db = new DatabaseSync(path)

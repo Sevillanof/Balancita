@@ -28,6 +28,7 @@ from . import futures_qwen_factors as fq
 from . import futures_qwen_ficha as fficha
 from . import futures_qwen_maestro as maestro
 from . import futures_qwen_noticias as noticias
+from . import futures_qwen_posiciones as posiciones
 from . import futures_qwen_trader as qt
 from . import positioning_data
 from .futures_costs import round_trip_cost_bps
@@ -794,14 +795,38 @@ def _trade_list(items):
     return out
 
 
-def _one_at_a_time(items):
-    """As the live operator: one position per product. A photo while one is open is not an entry."""
-    free, out = {}, []
-    for r, s in sorted(items, key=lambda it: it[0]["t_ms"]):
-        if r["t_ms"] < free.get(r["product"], 0):
+def _one_at_a_time(items, max_positions=1, fraction=None):
+    """As the live operator: one position per product. A photo while one is open is not an entry.
+
+    With ``max_positions`` > 1 (``futures_qwen_posiciones``, the maestro's side of ``Trader.entry_block``): up to that many open at once
+    per product, the same side only, and a new one only on a signal EPISODE (the previous look, 15 min before, had no signal of that
+    side) when one is already open; each takes ``fraction`` of the account (``neto_bp`` weighs that much). With 1: the old function."""
+    ordered = sorted(items, key=lambda it: it[0]["t_ms"])
+    if max_positions <= 1:
+        free, out = {}, []
+        for r, s in ordered:
+            if r["t_ms"] < free.get(r["product"], 0):
+                continue
+            free[r["product"]] = _op_side(r, s)["salida_ms"]
+            out.append((r, s))
+        return out
+    weight = fraction or posiciones.DEFAULT_FRACTION
+    signals = {(r["product"], r["t_ms"], s) for r, s in ordered}
+    open_now, out = {}, []
+    for r, s in ordered:
+        product, t_ms = r["product"], r["t_ms"]
+        live = [(out_ms, side) for out_ms, side in open_now.get(product, []) if out_ms > t_ms]
+        open_now[product] = live
+        if len(live) >= max_positions or any(side != s for _, side in live):
             continue
-        free[r["product"]] = _op_side(r, s)["salida_ms"]
-        out.append((r, s))
+        if live and (product, t_ms - 15 * MINUTE_MS, s) in signals:
+            continue
+        live.append((_op_side(r, s)["salida_ms"], s))
+        op = r["operacion"]
+        sized = dict(op, tamano=op.get("tamano", 1.0) * weight)
+        for name in ("largo", "corto"):
+            sized[name] = dict(op[name], neto_bp=op[name]["neto_bp"] * weight)
+        out.append((dict(r, operacion=sized), s))
     return out
 
 
@@ -832,12 +857,14 @@ def analyse_formula(photos, cfg):
                        "siempre_corto": _trade_list([(r, -1) for r, _ in formula])}}
 
 
-def formula_entries(photos):
-    """The entries of the live scheme among these photos: strong maestro and the portero in favour, one position per product.
-    ``(photo, side)`` by time. The honest measurement engine (``futures_walkforward``) picks its entries with this same function."""
+def formula_entries(photos, max_positions=1, fraction=None):
+    """The entries of the live scheme among these photos: strong maestro and the portero in favour, one position per product (or
+    ``max_positions`` at once, one per signal episode, each with ``fraction`` of the account). ``(photo, side)`` by time. The honest
+    measurement engine (``futures_walkforward``) picks its entries with this same function. (The rebound expert has no photos: it
+    is measured by the real engine, ``replay_formula``, and by ``futures_qwen_rebote``.)"""
     side = lambda r: 1 if r["operacion"]["maestro"] > 0 else -1
     return _one_at_a_time([(r, side(r)) for r in photos if r.get("operacion") and abs(r["operacion"]["maestro"]) == 2
-                           and _formula_says_yes(r["operacion"])])
+                           and _formula_says_yes(r["operacion"])], max_positions, fraction)
 
 
 def _funding_coverage_status(covered, held):
@@ -860,7 +887,8 @@ def scheme_trades(history, cfg, product, start_ms, end_ms, holdout_ms, funding=N
     reach = min(holdout_ms, end_ms + extra_ms + DAY_MS)
     photos = [p for p in make_photos(history, cfg, product, reach, texts=False, start_ms=start_ms, moves=False)
               if p["t_ms"] < end_ms]
-    chosen = formula_entries(photos)
+    places = posiciones.settings(cfg)
+    chosen = formula_entries(photos, places["max"], places["fraccion"])
     line = qt.FundingLine([(r[0], r[1]) for r in funding]) if funding else None
     out = []
     for r, s in chosen:
@@ -884,7 +912,11 @@ def _honesty(cfg, op):
     from . import futures_walkforward as walkforward
     medicion = "honesta" if (cfg.get("corta") or {}).get("pares") else "vigente"
     walkforward.register(walkforward.test_spec(cfg), medicion=medicion)
-    trades = [{"t_in": t["entrada_ms"], "t_out": t["salida_ms"], "net": t["neto_bp"]} for t in op["curvas"]["formula"]]
+    sliced = posiciones.settings(cfg)["max"] > 1
+    # with several places each trade is a slice of the account: the meter judges the result in bp of the WHOLE account
+    account = float(op.get("capital_inicial_usd") or 1000)
+    trades = [{"t_in": t["entrada_ms"], "t_out": t["salida_ms"],
+               "net": float(t["pnl_usd"]) / account * 1e4 if sliced else t["neto_bp"]} for t in op["curvas"]["formula"]]
     return walkforward.meter(trades, medicion=medicion, trial_count=walkforward.trials())
 
 
@@ -970,7 +1002,25 @@ def _replay_curve(trade, product):
         "notional_usd": trade["notional_usd"], "entrada_px": trade["entry_fill"], "salida_px": str(trade["exit_px"]),
         "funding_usd": trade["funding_usd"], "funding_status": trade["funding_status"], "funding_model": trade["funding_model"],
         "salida": (trade.get("exit_plan") or {}).get("outcome", "mercado"),
+        "origen": "rebotes" if trade.get("entry_reason") == posiciones.REBOTE_REASON else "maestro",
     }
+
+
+def parallel_summary(cfg, curves):
+    """What the shared places did in a test: the most open at once, operations per month and how many came from each origin.
+    ``None`` with one place and no rebound expert."""
+    described = posiciones.describe(cfg)
+    if described is None:
+        return None
+    events = sorted([(c["entrada_ms"], 1) for c in curves] + [(c["salida_ms"], -1) for c in curves], key=lambda e: (e[0], e[1]))
+    open_now = peak = 0
+    for _, delta in events:
+        open_now += delta
+        peak = max(peak, open_now)
+    span = max(1, max(c["salida_ms"] for c in curves) - min(c["entrada_ms"] for c in curves)) if curves else 1
+    return dict(described, maximo_abiertas=peak,
+                operaciones_por_mes=round(len(curves) / (span / (30.4375 * qt.DAY_MS)), 1) if curves else 0.0,
+                por_origen={name: sum(1 for c in curves if c["origen"] == name) for name in ("maestro", "rebotes")})
 
 
 def replay_formula(history, cfg, holdout_ms):
@@ -1002,6 +1052,7 @@ def replay_formula(history, cfg, holdout_ms):
         "entrada": cfg.get("entrada", "formula"), "fotos": snapshots, "desde_ms": start, "hasta_ms": holdout_ms,
         "max_horas": cfg["guardrails"]["max_hold_min"] / 60, "nocional_usd": float(cfg["notional_usd"]),
         "productos": products, "analista": analista.describe(cfg), "formula": stats,
+        "posiciones": parallel_summary(cfg, curves),
         "curvas": {"formula": curves}, "mercado": market, "salida": maker_exit.describe(cfg, exits),
     }
 
@@ -1029,7 +1080,7 @@ def run_formula(history, cfg, holdout_ms, state_path, variant, *, log=print):
         mode = os.environ.get("QWEN_CUENTA", "entera" if cfg.get("cuenta") == "entera" else "fija")
         if mode not in ("fija", "entera"):
             raise qt.TraderError("La cuenta de la prueba debe ser fija o entera.")
-        cfg = dict(cfg, cuenta=mode, notional_usd="1000" if mode == "entera" else "100")
+        cfg = posiciones.apply_env(dict(cfg, cuenta=mode, notional_usd="1000" if mode == "entera" else "100"))
         op = replay_formula(history, cfg, holdout_ms)
         state.update(answered=len(products), updated_ms=int(time.time() * 1000))
         if op is not None:

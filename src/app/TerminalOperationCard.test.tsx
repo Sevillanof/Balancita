@@ -194,4 +194,24 @@ describe('Terminal operation card', () => {
     expect(screen.getByText(/Funding incompleto/)).toBeTruthy()
     expect(screen.getByTestId('operation-net')).toHaveClass('text-warn')
   })
+
+  it('says which of the shared places the operation holds and the balance in use', () => {
+    const next = vi.fn()
+    render(
+      <TerminalOperationCard
+        compact
+        trade={{ ...trade, side: 'LONG', entryReason: 'rebote' }}
+        place={{ index: 2, open: 2, max: 3, usedUsd: 666.6, onNext: next }}
+        source={{ state: 'ok' }}
+        nowMs={301_000}
+        onFocus={() => undefined}
+      />,
+    )
+    expect(screen.getByText(/2\/3 · rebote/)).toBeTruthy()
+    expect(screen.getByTestId('operation-places').textContent).toContain(
+      'Abiertas 2 de 3',
+    )
+    fireEvent.click(screen.getByRole('button', { name: /Ver otra/ }))
+    expect(next).toHaveBeenCalled()
+  })
 })

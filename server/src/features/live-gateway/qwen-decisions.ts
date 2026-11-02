@@ -176,6 +176,10 @@ export interface QwenTrade {
   readonly net_usd: string | null
   readonly closed_by: string | null
   readonly exit_reason: string | null
+  /** Why it opened (`rebote` for the rebound expert); null for the maestro or an older database. */
+  readonly entry_reason?: string | null
+  /** The longest it may stay open, in ms (the rebound expert's own exit); null when the general cap applies. */
+  readonly max_hold_ms?: number | null
   readonly hold_min: number | null
   readonly mark_price: number | null
   readonly mark_ms: number | null
@@ -752,6 +756,8 @@ export function createQwenDecisions(options: {
           net_usd: text(open ? row.net_now_usd : row.net_usd),
           closed_by: text(row.closed_by),
           exit_reason: text(row.exit_reason),
+          entry_reason: text(row.entry_reason),
+          max_hold_ms: num(row.max_hold_ms),
           hold_min: num(row.hold_min),
           mark_price: open ? num(row.mark_px) : null,
           mark_ms: open ? num(row.mark_ms) : null,

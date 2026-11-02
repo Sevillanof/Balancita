@@ -57,6 +57,7 @@ from typing import Callable, Optional, TYPE_CHECKING
 
 from . import futures_llm_decisions as llm
 from . import futures_qwen_funding as exact_funding
+from . import futures_qwen_posiciones as posiciones
 from . import futures_book_execution as book_execution
 from . import futures_maker_exit as maker_exit
 from .futures_costs import COST_MODEL_VERSION, entry_fill, exit_fill, fee_rate, round_trip_cost_bps, side_impact_bps
@@ -609,7 +610,9 @@ class LlmDecider:
 
 
 class Trader:
-    """One product, one position at a time. Feed closed 5m candles in order with ``feed``.
+    """One product, one position at a time (or up to ``posiciones.max`` sharing the account, see ``futures_qwen_posiciones``). Feed
+    closed 5m candles in order with ``feed``. ``position`` is the oldest open position (what every single-position consumer reads),
+    ``extra_positions`` the newer ones in order of entry, ``positions`` all of them.
 
     ``key``: identifier of the run (the block id in the practice; the product in live). ``decider.ask`` is the only thing
     that talks to the model. ``entry_threshold``: minimum p(action) to enter (``cfg['entry_threshold']`` when None).
@@ -638,6 +641,21 @@ class Trader:
         self.last_mark_execution = None
         self.movement: Optional["Movement"] = None
         self.position: Optional[Position] = None
+        self.extra_positions: list = []
+        try:
+            places = posiciones.settings(cfg)
+            self.rebotes = posiciones.rebotes_of(cfg)
+        except ValueError as error:
+            raise TraderError(str(error)) from error
+        self.max_positions, self.fraction = places["max"], places["fraccion"]
+        if self.max_positions > 1 and cfg.get("decide_by") != "formula":
+            raise TraderError("Varias posiciones solo existen cuando decide la fórmula (decide_by: formula).")
+        if self.rebotes is not None and self.max_positions == 1:
+            raise TraderError("El experto rebotes comparte cupos con el maestro: necesita posiciones.max mayor que 1.")
+        self.rebote_last_ms = None        # last episode of the rebound expert (its 4 h rest counts from here)
+        self.prev_entry_side = 0          # side of the maestro's entry signal at the previous look (+1 / -1 / 0): episode edge
+        self.opened_this_look = False
+        self.closed_this_look = False
         self.cooldown_until = 0
         self.last_call_ms = None
         self.trade_seq = 0
@@ -655,6 +673,50 @@ class Trader:
             self.maker_exit = maker_exit.settings(cfg)
         except maker_exit.MakerExitError as error:
             raise TraderError(str(error)) from error
+
+    @property
+    def positions(self):
+        """Every open position, oldest first (``[]`` when flat)."""
+        return [] if self.position is None else [self.position, *self.extra_positions]
+
+    def maestro_positions(self):
+        """The open positions that belong to the maestro / news (not to the rebound expert)."""
+        return [p for p in self.positions if p.entry_reason != posiciones.REBOTE_REASON]
+
+    def _add_position(self, position):
+        if self.position is None:
+            self.position = position
+        else:
+            self.extra_positions.append(position)
+
+    def _remove_position(self, position):
+        if position is self.position:
+            self.position = self.extra_positions.pop(0) if self.extra_positions else None
+        else:
+            self.extra_positions = [other for other in self.extra_positions if other is not position]
+
+    def committed_usd(self):
+        return sum((p.notional_usd or D(0) for p in self.positions), D(0))
+
+    def entry_block(self, t_ms, side, *, origin="maestro", reversal=False):
+        """Why a NEW position cannot open now: ``(text, kind)``, or ``None`` when it can. One place: the old rule (flat). Several:
+        free places (shared by the maestro and the rebound expert), free balance, one entry per look and, for the maestro, never the
+        side opposite to an open maestro position (the rebound expert's long positions do not count: only the same origin blocks)."""
+        open_now = self.positions
+        if self.max_positions == 1:
+            return None if not open_now else ("ya hay una posición abierta", "posicion_abierta")
+        if len(open_now) >= self.max_positions:
+            return "ya están ocupados los {} lugares".format(self.max_positions), "lugares_ocupados"
+        if self.cfg.get("cuenta") == "entera" and self.notional - self.committed_usd() <= 0:
+            return "no queda saldo libre", "saldo_insuficiente"
+        if self.opened_this_look:
+            return "ya se abrió otra posición en esta misma mirada", "una_entrada_por_mirada"
+        if origin == "maestro":
+            if any(p.side != side for p in self.maestro_positions()):
+                return "hay una posición del maestro abierta del lado contrario", "lado_contrario"
+            if self.closed_this_look and not reversal:
+                return "se cerró otra posición en esta misma mirada", "cierre_en_la_mirada"
+        return None
 
     # ---- data
 
@@ -701,15 +763,17 @@ class Trader:
 
     def _big_move(self):
         """v2: the price is far (either way) from the entry, in daily volatilities. Only a reason to ask again."""
-        position, k = self.position, self.cfg["wake"].get("position_big_move_sigma_24h")
-        if position is None or not k:
+        k = self.cfg["wake"].get("position_big_move_sigma_24h")
+        if self.position is None or not k:
             return False
         sigma24 = self._sigma5() * math.sqrt(H24)
-        return sigma24 > 0 and abs(self.c[-1] / position.entry_ref - 1) >= k * sigma24
+        return sigma24 > 0 and any(abs(self.c[-1] / position.entry_ref - 1) >= k * sigma24 for position in self.positions)
 
     def _near_stop(self):
-        position = self.position
-        if position is None or not position.stop_pct:
+        return any(self._position_near_stop(position) for position in self.positions)
+
+    def _position_near_stop(self, position):
+        if not position.stop_pct:
             return False
         adverse = (position.entry_ref - self.c[-1]) / position.entry_ref if position.side == "LONG" else \
             (self.c[-1] - position.entry_ref) / position.entry_ref
@@ -994,25 +1058,29 @@ class Trader:
         if not trade or len(self.c) < MIN_BARS or candle.get("observed") is False:
             return []
         events = []
+        self.opened_this_look = self.closed_this_look = False
         if self.position is not None:
             try:
                 events += self._guardrails(t_ms)
-                if (self.position is not None and self.position.exit_plan is not None
-                        and self.book_execution is None):             # velas: la espera avanza con cada vela
-                    events += self._advance_exit_candle(t_ms)
+                if self.book_execution is None:                       # velas: cada espera avanza con cada vela
+                    for position in list(self.positions):
+                        if position.exit_plan is not None:
+                            events += self._advance_exit_candle(t_ms, position)
             except WakeSkipped as skip:
-                return [{"type": "skipped", "t_ms": t_ms, "wake": ["proteccion"],
-                         "kind": skip.kind, "detail": skip.detail}]
+                return events + [{"type": "skipped", "t_ms": t_ms, "wake": ["proteccion"],
+                                  "kind": skip.kind, "detail": skip.detail}]
         if self.data_gap_ms is not None:
             return events + [{"type": "skipped", "t_ms": t_ms, "wake": ["datos"],
                               "kind": "datos_incompletos",
                               "detail": "Hay velas sin observar: no se usan para entradas ni decisiones de los expertos."}]
+        if self.rebotes is not None and self.product == posiciones.REBOTE_PRODUCT:
+            events += self._check_rebote(t_ms)
         priority_events = self._feed_news_priority(t_ms, events)
         if priority_events is not None:
             return priority_events
         if events and self.position is None:
             return events
-        if self.position is not None and self.position.exit_plan is not None:
+        if self.max_positions == 1 and self.position is not None and self.position.exit_plan is not None:
             return events                       # ya está saliendo: no se decide otra cosa hasta que se cierre
         if self.position is None and t_ms < self.cooldown_until:
             return events
@@ -1040,7 +1108,21 @@ class Trader:
         return None
 
     def _guardrails(self, t_ms):
-        position = self._require_position()
+        """Stop and time limit of EVERY open position. If one cannot be priced after others already closed, those closes are kept
+        (a ``skipped`` event ends the list): nothing that closed is lost."""
+        events = []
+        for position in list(self.positions):
+            try:
+                events += self._guard_one(position, t_ms)
+            except WakeSkipped as skip:
+                if not events:
+                    raise
+                events.append({"type": "skipped", "t_ms": t_ms, "wake": ["proteccion"], "kind": skip.kind,
+                               "detail": skip.detail})
+                break
+        return events
+
+    def _guard_one(self, position, t_ms):
         long = position.side == "LONG"
         high, low, open_ = self.h[-1], self.l[-1], self.o[-1]
         ref = position.entry_ref
@@ -1051,31 +1133,32 @@ class Trader:
         touched = position.stop_px is not None and (low <= position.stop_px if long else high >= position.stop_px)
         if touched:
             level = min(position.stop_px, open_) if long else max(position.stop_px, open_)
-            return self._close(t_ms, level, "stop", "stop", None)
+            return self._close(t_ms, level, "stop", "stop", None, position=position)
         if position.max_hold_ms is not None and t_ms - position.entry_ms >= position.max_hold_ms:
-            return self._close(t_ms, self.c[-1], "strategy_exit", "tiempo", None)
+            return self._close(t_ms, self.c[-1], "strategy_exit", "tiempo", None, position=position)
         return []
 
     def force_close(self, reason="fin_de_bloque"):
-        """Closes the open position at the last close (end of a practice block). Not a Qwen decision."""
-        if self.position is None:
-            return []
-        return self._close(self.t[-1] + BAR_MS, self.c[-1], "strategy_exit", reason, None)
+        """Closes every open position at the last close (end of a practice block). Not a Qwen decision."""
+        events = []
+        for position in list(self.positions):
+            events += self._close(self.t[-1] + BAR_MS, self.c[-1], "strategy_exit", reason, None, position=position)
+        return events
 
-    def _close(self, t_ms, ref_price, cost_reason, closed_by, exit_reason):
-        position = self._require_position()
+    def _close(self, t_ms, ref_price, cost_reason, closed_by, exit_reason, position=None):
+        position = self._require_position() if position is None else position
         if position.exit_plan is not None:
             if closed_by in maker_exit.ELIGIBLE:
                 return []                           # ya hay una orden esperando: no se duplica
             return self._finish_close(t_ms, ref_price, cost_reason, closed_by, exit_reason,
-                                      outcome="mercado:emergencia_" + str(closed_by))
+                                      outcome="mercado:emergencia_" + str(closed_by), position=position)
         if self.maker_exit is not None and closed_by in maker_exit.ELIGIBLE:
-            return self._begin_exit(t_ms, ref_price, closed_by, exit_reason)
-        return self._finish_close(t_ms, ref_price, cost_reason, closed_by, exit_reason)
+            return self._begin_exit(t_ms, ref_price, closed_by, exit_reason, position)
+        return self._finish_close(t_ms, ref_price, cost_reason, closed_by, exit_reason, position=position)
 
-    def _begin_exit(self, t_ms, ref_price, closed_by, exit_reason):
+    def _begin_exit(self, t_ms, ref_price, closed_by, exit_reason, position=None):
         """Decided to close: leave a post-only order waiting at the best price of our side instead of crossing the spread."""
-        position = self._require_position()
+        position = self._require_position() if position is None else position
         if position.entry_execution is not None:
             if self.book_execution is None:
                 raise WakeSkipped("libro_no_disponible", "Falta el libro público para esta posición.")
@@ -1096,19 +1179,23 @@ class Trader:
         return [{"type": "exit_plan", "t_ms": started, "action": "colocada", "trade_no": position.trade_no,
                  "plan": dict(plan), "price": plan["limit"]}]
 
-    def _advance_exit_candle(self, t_ms):
+    def _advance_exit_candle(self, t_ms, position=None):
         """Candles (Estrategias): the order fills only if the candle goes PAST its price; it follows the close."""
-        position = self._require_position()
+        position = self._require_position() if position is None else position
         close = D(repr(self.c[-1]))
         through = D(repr(self.h[-1] if position.side == "LONG" else self.l[-1]))
         plan, action = maker_exit.step(position.exit_plan, t_ms, close, close, through, strict=True, gap_ms=None)
-        return self._apply_exit_action(plan, action, t_ms, self.c[-1], None)
+        return self._apply_exit_action(plan, action, t_ms, self.c[-1], None, position)
 
     def service_exit(self, now_ms):
-        """Terminal: one pass over the waiting order with a fresh public book (called every few seconds)."""
-        position = self.position
-        if position is None or position.exit_plan is None:
-            return []
+        """Terminal: one pass over every waiting order with a fresh public book (called every few seconds)."""
+        events = []
+        for position in list(self.positions):
+            if position.exit_plan is not None:
+                events += self._service_one_exit(position, now_ms)
+        return events
+
+    def _service_one_exit(self, position, now_ms):
         if self.book_execution is None:
             raise WakeSkipped("libro_no_disponible", "Falta el libro público para esta posición.")
         try:
@@ -1118,10 +1205,10 @@ class Trader:
         bid, ask = quote.bids[0][0], quote.asks[0][0]
         through = bid if position.side == "LONG" else ask
         plan, action = maker_exit.step(position.exit_plan, now, bid, ask, through, strict=False)
-        return self._apply_exit_action(plan, action, now, float(quote.mid), quote)
+        return self._apply_exit_action(plan, action, now, float(quote.mid), quote, position)
 
-    def _apply_exit_action(self, plan, action, now, ref_price, quote):
-        position = self._require_position()
+    def _apply_exit_action(self, plan, action, now, ref_price, quote, position=None):
+        position = self._require_position() if position is None else position
         position.exit_plan = plan
         kind = action["kind"]
         if kind == "hold":
@@ -1140,16 +1227,16 @@ class Trader:
                 except book_execution.BookError as error:
                     raise WakeSkipped(error.kind, error.detail) from error
             return self._finish_close(now, float(action["price"]), "target", plan["closed_by"], plan["exit_reason"],
-                                      execution=execution, maker=True, outcome="maker")
+                                      execution=execution, maker=True, outcome="maker", position=position)
         return self._finish_close(now, ref_price, "strategy_exit", plan["closed_by"], plan["exit_reason"],
-                                  outcome="mercado:" + action["reason"])
+                                  outcome="mercado:" + action["reason"], position=position)
 
     def _finish_close(self, t_ms, ref_price, cost_reason, closed_by, exit_reason, *, execution=None, maker=False,
-                      outcome=None):
-        position = self._require_position()
+                      outcome=None, position=None):
+        position = self._require_position() if position is None else position
         plan = position.exit_plan
         if execution is None and position.entry_execution is not None:
-            execution = self._book_exit(t_ms)
+            execution = self._book_exit(t_ms, position=position)
         done = settle(self.product, position, ref_price, cost_reason, t_ms, self.funding,
                       position.notional_usd or self.notional, execution=execution, maker_exit=maker)
         summary = None
@@ -1177,7 +1264,8 @@ class Trader:
                 "exit_execution": done["execution"], "exit_plan": summary}
         if self.cfg.get("cuenta") == "entera":
             self.notional += done["net_usd"]
-        self.position = None
+        self._remove_position(position)
+        self.closed_this_look = True
         self.cooldown_until = t_ms + self.cfg["guardrails"]["cooldown_min"] * MINUTE_MS
         events = []
         if closed_by not in ("qwen", "formula"):
@@ -1191,8 +1279,8 @@ class Trader:
             raise TraderError("No hay una posición abierta para gestionar o cerrar.")
         return self.position
 
-    def _book_exit(self, t_ms, *, purpose="exit"):
-        position = self._require_position()
+    def _book_exit(self, t_ms, *, purpose="exit", position=None):
+        position = self._require_position() if position is None else position
         if self.book_execution is None:
             raise WakeSkipped("libro_no_disponible", "Falta el libro público para esta posición.")
         try:
@@ -1200,9 +1288,9 @@ class Trader:
         except book_execution.BookError as error:
             raise WakeSkipped(error.kind, error.detail) from error
 
-    def mark(self, t_ms):
-        position = self._require_position()
-        execution = self._book_exit(t_ms, purpose="mark") if position.entry_execution is not None else None
+    def mark(self, t_ms, position=None):
+        position = self._require_position() if position is None else position
+        execution = self._book_exit(t_ms, purpose="mark", position=position) if position.entry_execution is not None else None
         self.last_mark_execution = None if execution is None else execution.evidence()
         return settle(self.product, position, self.c[-1], "strategy_exit", t_ms, self.funding,
                       position.notional_usd or self.notional, execution=execution)
@@ -1215,10 +1303,15 @@ class Trader:
             if now >= expires_at_ms:
                 raise WakeSkipped("noticia_vencida", "La noticia venció antes de poder ejecutar la decisión.")
 
-    def _open(self, t_ms, side, probability, reason, *, expires_at_ms=None) -> Position:
+    def _open(self, t_ms, side, probability, reason, *, expires_at_ms=None, reversal=False) -> Position:
         if self.entry_check is not None:
             self.entry_check()
         self._check_execution_deadline(t_ms, expires_at_ms)
+        if self.max_positions > 1:
+            origin = "rebotes" if reason == posiciones.REBOTE_REASON else "maestro"
+            block = self.entry_block(t_ms, side, origin=origin, reversal=reversal)
+            if block is not None:
+                raise WakeSkipped(block[1], block[0])
         from . import futures_qwen_analista as analista
         guard = self.cfg["guardrails"]
         funding_model = self.cfg.get("funding_model", exact_funding.LEGACY_MODEL)
@@ -1233,13 +1326,18 @@ class Trader:
             stop_px = last * (1 - stop_pct) if side == "LONG" else last * (1 + stop_pct)
         entry = entry_fill(D(repr(last)), side, self.product)
         mult = D(str(analista.multiplier(self.cfg, self.movement, t_ms)))
-        notional = self.notional if mult == 1 else self.notional * mult      # size 1 keeps the exact stored text ("1000", not "1000.0")
+        # Several places: each one takes ``fraccion`` (33 %) of the account balance at this moment; with one place, all of it as always.
+        share = self.notional if self.max_positions == 1 else self.notional * D(str(self.fraction))
+        notional = share if mult == 1 else share * mult      # size 1 keeps the exact stored text ("1000", not "1000.0")
         if self.cfg.get("cuenta") == "entera":
             if not self.notional.is_finite() or self.notional <= 0:
                 raise WakeSkipped("saldo_insuficiente", "No hay saldo disponible para abrir la operación.")
+            free = self.notional - self.committed_usd()          # never more than what is not already committed
+            if free <= 0:
+                raise WakeSkipped("saldo_insuficiente", "No queda saldo libre para otra posición.")
             with localcontext() as ctx:
                 ctx.rounding = ROUND_DOWN
-                notional = min(notional, self.notional / (1 + fee_rate("taker")))
+                notional = min(notional, free / (1 + fee_rate("taker")))
                 qty = notional / entry
         else:
             qty = notional / entry
@@ -1258,13 +1356,15 @@ class Trader:
                              signal_reference_kind="official_candle_close", funding_model=funding_model)
         self.last_open_ms = t_ms
         self.trade_seq += 1
-        self.position = Position(
+        self.opened_this_look = True
+        position = Position(
             side=side, entry_ms=t_ms, entry_ref=last, entry_px=entry, qty=qty,
             stop_px=stop_px,
             stop_pct=stop_pct, max_hold_ms=None if guard["max_hold_min"] is None else guard["max_hold_min"] * MINUTE_MS, entry_p=probability, entry_reason=reason,
             trade_no=self.trade_seq, mfe_bp=0.0, mae_bp=0.0, notional_usd=notional, funding_model=funding_model,
             entry_execution=execution)
-        return self.position
+        self._add_position(position)
+        return position
 
     def _passes_mirror(self, t_ms, reasons, action, event):
         """v3 mirror test: the same question about the mirrored STATE must give the opposite side. Anything else (the same
@@ -1377,6 +1477,8 @@ class Trader:
 
     def _decide_formula(self, t_ms, event, state, question):
         """Version 9: the FORMULAS decide and Qwen gives an opinion next to them."""
+        if self.max_positions > 1:
+            return self._decide_formula_multi(t_ms, event, state, question)
         from . import futures_qwen_corta as corta
         pos_side, held_min = None, 0
         if self.position is not None:
@@ -1408,10 +1510,140 @@ class Trader:
             return [event] + self._close(t_ms, self.c[-1], "strategy_exit", "formula", reason)
         return [event]
 
-    def _arm_news_watch(self, readings):
+    def _decide_formula_multi(self, t_ms, event, state, question):
+        """Several places. Every open position of the maestro leaves by its own rule (the maestro turned, 24 h without the maestro
+        in favour, the 36 h limit; news positions: the 12 h watch and their own 24 h). A new one opens only on a signal EPISODE (the
+        previous look had no entry signal of that side) when some maestro position is already open, and as always when none is;
+        ``entry_block`` adds places, balance, one entry per look and no opposite side. Never an entry and a close in the same look.
+        The rebound expert's positions are not touched here (they leave at their own time)."""
+        from . import futures_qwen_corta as corta
+        from . import futures_qwen_noticias as noticias
+        exhaust_min = (self.cfg.get("guardrails") or {}).get("exhaust_hold_min")
+        readings = corta.readings(self, t_ms)
+        closes, hold = [], None
+        for position in self.maestro_positions():
+            side = 1 if position.side == "LONG" else -1
+            held_min = (t_ms - position.entry_ms) // MINUTE_MS
+            if position.entry_reason == "noticias":                  # their own exit: the 12 h watch, else 24 h in guardrails
+                armed = self._arm_news_watch(readings, position)
+                if armed and held_min * MINUTE_MS <= corta.NEWS_EXIT_MIN * MINUTE_MS and side * readings["veredicto"] < 2:
+                    closes.append((position, corta.NEWS_EXIT_WHY + " (primeras 12 h)"))
+                elif hold is None:
+                    hold = "operación de noticias: salida propia a las 24 h"
+                continue
+            verdict, why = corta.formula_action(readings, side, held_min=held_min, exhaust_min=exhaust_min,
+                                                news_armed=self._arm_news_watch(readings, position))
+            if verdict == "CERRAR":
+                closes.append((position, why))
+            elif hold is None:
+                hold = why
+        entry, entry_why = (self._independent_formula_action(readings) if noticias.priority_enabled(self.cfg)
+                            else corta.formula_action(readings, None))
+        entry_side = 1 if entry == "LARGO" else -1 if entry == "CORTO" else 0
+        waiting = "MANTENER" if self.positions else "ESPERAR"
+        if closes:
+            action, why = "CERRAR", closes[0][1]
+        elif entry_side:
+            blocked = self.entry_block(t_ms, "LONG" if entry_side > 0 else "SHORT")
+            if blocked is None and self.maestro_positions() and entry_side == self.prev_entry_side:
+                blocked = ("la señal sigue en el mismo episodio", "mismo_episodio")
+            if blocked is None:
+                action, why = entry, entry_why
+            else:
+                action, why = waiting, "{} (hay señal de entrada, pero {})".format(hold or entry_why, blocked[0])
+                event["override"] = blocked[1]
+        else:
+            action, why = waiting, (hold if self.positions and hold else entry_why)
+        self.prev_entry_side = entry_side
+        event.update(formula_action=action, formula=corta.formula_json(readings, why), action=action)
+        event["formula"]["opinion_enabled"] = candle_opinions_enabled(self.cfg)
+        event["formula"]["posiciones"] = self.positions_summary()
+        if self.rebotes is not None:
+            event["formula"]["rebote"] = self.rebote_reading(t_ms)
+        if candle_opinions_enabled(self.cfg):
+            self._ask_formula_opinion(t_ms, action, event, state, question)
+        if action == "CERRAR" and self.execution_check is not None:
+            self.execution_check()
+        if action in ("LARGO", "CORTO"):
+            position = self._open(t_ms, "LONG" if action == "LARGO" else "SHORT", readings["portero_p"], "formula")
+            if not readings.get("portero_si") and readings.get("portero_direccion") is None and readings.get("noticias_si"):
+                position.news_armed = True          # entró por noticia con el maestro fuerte: rige el cierre de 12 h
+            event["trade_no"] = position.trade_no
+            event["formula"]["posiciones"] = self.positions_summary()
+            return [event]
+        if action == "CERRAR":
+            events = [event]
+            for position, close_why in closes:
+                reason = ("noticia_12h" if close_why.startswith(corta.NEWS_EXIT_WHY) else
+                          "maestro_agotado" if "perdió fuerza" in close_why else "maestro_vuelta")
+                events += self._close(t_ms, self.c[-1], "strategy_exit", "formula", reason, position=position)
+            return events
+        return [event]
+
+    def positions_summary(self):
+        """What the places look like now: open, maximum, committed money and the balance they share."""
+        return {"abiertas": len(self.positions), "max": self.max_positions, "usado_usd": str(self.committed_usd()),
+                "saldo_usd": str(self.notional), "fraccion": self.fraction}
+
+    # ---- the rebound expert
+
+    def _drop_from_max(self, bars, back=0):
+        """How far (in %) the close of ``back`` candles ago is below the highest close of the ``bars`` candles that end there."""
+        end = len(self.c) - back
+        window = self.c[end - bars:end]
+        if len(window) < bars or end < 1:
+            return 0.0
+        top = max(window)
+        return 0.0 if top <= 0 else max(0.0, (1 - window[-1] / top) * 100.0)
+
+    def rebote_reading(self, t_ms):
+        """The rebound expert as the Terminal shows it: the drop from the window's high, the threshold, the level (0 / 1)."""
+        rule = self.rebotes
+        drop = self._drop_from_max(rule["ventana_min"] // 5)
+        rest_until = None
+        if self.rebote_last_ms is not None and t_ms < self.rebote_last_ms + rule["enfriamiento_min"] * MINUTE_MS:
+            rest_until = self.rebote_last_ms + rule["enfriamiento_min"] * MINUTE_MS
+        return {"activo": True, "caida_pct": round(drop, 2), "umbral_pct": rule["caida_pct"], "nivel": 1 if drop >= rule["caida_pct"] else 0,
+                "ventana_min": rule["ventana_min"], "salida_min": rule["salida_min"], "descanso_hasta_ms": rest_until,
+                "abiertas": len([p for p in self.positions if p.entry_reason == posiciones.REBOTE_REASON])}
+
+    def _check_rebote(self, t_ms):
+        """At the close of a candle: the close is ``caida_pct`` or more below the window's high and the previous candle was not (the
+        edge of the episode), and the rest since the last episode is over → LONG at market if a place and balance are free. The
+        episode counts for the rest even when no place was free (as in the measurement). No stop, no take-profit: out at ``salida_min``."""
+        rule = self.rebotes
+        bars = rule["ventana_min"] // 5
+        if len(self.c) < bars + 1:
+            return []
+        now, before = self._drop_from_max(bars), self._drop_from_max(bars, 1)
+        if now < rule["caida_pct"] or before >= rule["caida_pct"]:
+            return []
+        if self.rebote_last_ms is not None and t_ms - self.rebote_last_ms < rule["enfriamiento_min"] * MINUTE_MS:
+            return []
+        self.rebote_last_ms = t_ms
+        event = {"type": "rebote", "t_ms": t_ms, "caida_pct": round(now, 2), "umbral_pct": rule["caida_pct"]}
+        try:
+            block = self.entry_block(t_ms, "LONG", origin="rebotes")
+            if block is not None:
+                return [dict(event, action="sin_cupo", motivo=block[1], detalle=block[0])]
+            position = self._open(t_ms, "LONG", None, posiciones.REBOTE_REASON)
+        except WakeSkipped as skip:
+            return [dict(event, action="sin_cupo", motivo=skip.kind, detalle=skip.detail)]
+        position.max_hold_ms = rule["salida_min"] * MINUTE_MS
+        return [dict(event, action="abierta", trade_no=position.trade_no)]
+
+    def memo(self):
+        """What a restart needs besides the open positions: the episode edge of the maestro and the rebound expert's rest."""
+        return {"prev_entry_side": self.prev_entry_side, "rebote_last_ms": self.rebote_last_ms}
+
+    def load_memo(self, memo):
+        self.prev_entry_side = int(memo.get("prev_entry_side") or 0)
+        self.rebote_last_ms = memo.get("rebote_last_ms")
+
+    def _arm_news_watch(self, readings, position=None):
         """Estado del cierre de 12 h de una operación por noticia: ``None`` si no es de noticia; ``True`` cuando el maestro
         ya se vio fuerte a favor (desde ahí, si deja de verlo en las primeras 12 h, se cierra); ``False`` si todavía no."""
-        position = self.position
+        position = self.position if position is None else position
         if position is None or position.news_armed is None:
             return None
         side = 1 if position.side == "LONG" else -1
@@ -1485,6 +1717,8 @@ class Trader:
         from . import futures_qwen_noticias as noticias
         side = "LONG" if signal["side"] == 1 else "SHORT"
         self._check_execution_deadline(t_ms, signal["expires_at"])
+        if self.max_positions > 1:
+            return self._apply_news_position_multi(t_ms, signal, side, event, formula, events)
         if previous is not None and previous.side == side:
             return "noticia fuerte a favor: se mantiene sin aumentar el tamaño"
         if previous is not None:
@@ -1503,6 +1737,32 @@ class Trader:
         formula["reversal"] = previous is not None
         return "noticia fuerte verificada: " + ("cierre y giro" if previous is not None else "entrada")
 
+    def _apply_news_position_multi(self, t_ms, signal, side, event, formula, events):
+        """A verified news signal with several places: the maestro-origin positions of the other side close first (and the new one may
+        open in the same look); on the same side it opens one more only if ``entry_block`` lets it (places, balance), else it keeps."""
+        from . import futures_qwen_noticias as noticias
+        opposite = [position for position in self.maestro_positions() if position.side != side]
+        for position in opposite:
+            events.extend(self._close(t_ms, self.c[-1], "strategy_exit", "noticias", "noticia_contraria", position=position))
+        if opposite:
+            event["action"] = "CERRAR"
+        block = self.entry_block(t_ms, side, reversal=bool(opposite))
+        if block is not None:
+            return ("noticia fuerte contraria: se cerró y no se abre otra ({})" if opposite
+                    else "noticia fuerte a favor: se mantiene sin abrir otra ({})").format(block[0])
+        position = self._open(t_ms, side, None, "noticias", expires_at_ms=signal["expires_at"], reversal=bool(opposite))
+        position.max_hold_ms = noticias.NEWS_HOLD_MIN * MINUTE_MS
+        position.news_armed = False
+        try:
+            from . import futures_qwen_corta as corta
+            self._arm_news_watch(corta.readings(self, t_ms), position)
+        except WakeSkipped:
+            pass
+        event["trade_no"] = position.trade_no
+        event["action"] = "LARGO" if signal["side"] == 1 else "CORTO"
+        formula["reversal"] = bool(opposite)
+        return "noticia fuerte verificada: " + ("cierre y giro" if opposite else "entrada")
+
     def _ask_entry_or_exit_reason(self, t_ms, action, state, event):
         try:
             asked = self.decider.ask(self.key, t_ms, "reason", dict(
@@ -1518,6 +1778,8 @@ class Trader:
         kind = "position" if in_position else "flat"
         position = self._require_position() if in_position else None
         snapshot = position.snapshot() if position is not None else None
+        if snapshot is not None and self.extra_positions:
+            snapshot["positions"] = [other.snapshot() for other in self.positions]
         net_now = self.mark(t_ms)["net_bp"] if position is not None else None
         return {"type": "decision", "kind": kind, "t_ms": t_ms, "wake": list(reasons), "state_text": state,
                 "state_hash": llm.text_hash(state)[:16], "position": snapshot, "net_bp_now": net_now,
@@ -1551,7 +1813,8 @@ class Trader:
         position = self.position
         in_position = position is not None
         from . import futures_qwen_noticias as noticias
-        if position is not None and position.entry_reason == "noticias" and noticias.priority_enabled(self.cfg):
+        if (self.max_positions == 1 and position is not None and position.entry_reason == "noticias"
+                and noticias.priority_enabled(self.cfg)):
             early = self._news_early_exit(t_ms, reasons)
             if early is not None:
                 return early

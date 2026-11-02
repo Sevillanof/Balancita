@@ -28,7 +28,9 @@ import {
   qwenNotice,
   useQwenDecisions,
 } from './useQwenDecisions.ts'
-import TerminalOperationCard from './TerminalOperationCard.tsx'
+import TerminalOperationCard, {
+  type PositionPlace,
+} from './TerminalOperationCard.tsx'
 import { useQwenTrades } from './useQwenTrades.ts'
 import { tradeIdentity } from '../features/trading-view/domain/terminal-trade-model.ts'
 import TerminalNewsPanel from './TerminalNewsPanel.tsx'
@@ -44,7 +46,11 @@ import {
   utcTime,
 } from './terminal-labels.ts'
 import { record } from '../shared/wire/decode.ts'
-import { lifecycleView, minutePrices } from './terminal-lifecycle.ts'
+import {
+  lifecycleView,
+  minutePrices,
+  positionsReading,
+} from './terminal-lifecycle.ts'
 import { useHealth } from '../features/observability/presentation/useHealth.ts'
 import { latestDecision } from '../features/observability/presentation/latest-decision.ts'
 import ObserverPanel from '../features/observability/presentation/ObserverPanel.tsx'
@@ -164,6 +170,31 @@ export default function FuturesTerminal({
       setSelectedAnalysisId(id)
   }
   const selectedDecisionTime = selectedAnalysis?.decision_time_ms
+  // Several places: the open operations by entry time, and the next one to show from the card.
+  const openOwn = ownTrades
+    .filter((trade) => trade.open)
+    .sort((a, b) => a.entryMs - b.entryMs)
+  const reading = positionsReading(analyses)
+  const place: PositionPlace | null =
+    reading !== null && reading.max > 1
+      ? {
+          index: selectedTrade?.open
+            ? openOwn.findIndex(
+                (trade) => tradeIdentity(trade) === selectedTradeId,
+              ) + 1
+            : 0,
+          open: openOwn.length,
+          max: reading.max,
+          usedUsd: reading.usedUsd,
+          onNext: () => {
+            const at = openOwn.findIndex(
+              (trade) => tradeIdentity(trade) === selectedTradeId,
+            )
+            const next = openOwn[(at + 1) % Math.max(1, openOwn.length)]
+            if (next) focusTrade(tradeIdentity(next))
+          },
+        }
+      : null
   const [displayClock, setDisplayClock] = useState(() => Date.now())
   // The live gateway serves public candles/price while the decision engine is
   // not running: show that state explicitly and render no engine-owned data.
@@ -552,6 +583,7 @@ export default function FuturesTerminal({
                       <TerminalOperationCard
                         compact
                         trade={selectedTrade}
+                        place={place}
                         source={tradeRead.source}
                         nowMs={displayClock}
                         onFocus={() => focusTrade(selectedTradeId)}
