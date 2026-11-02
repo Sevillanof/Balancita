@@ -1,6 +1,6 @@
 """Unico modulo que importa pyarrow (opcional, fijado con hashes, entorno aparte). Sin pyarrow, usarlo lanza ``ParquetNoDisponible``.
 
-Escribe un archivo por dia y tabla: zstd nivel 3, grupos de ~128k filas, ordenado por clave, estadisticas de grupo activas (el filtro salta
+Escribe un archivo por dia y tabla: zstd nivel 3, grupos de ~128k filas (o los de ``cfg.filas_por_grupo``: ~2000 si las filas son pesadas), ordenado por clave, estadisticas de grupo activas (el filtro salta
 bloques), checksum de paginas, tiempos int64 ms y texto sin reinterpretar. Lee con verificacion de checksum de paginas.
 """
 from __future__ import annotations
@@ -45,26 +45,32 @@ def _esquema(cfg: TablaConfig):
     return pa.schema([pa.field(c.nombre, tipos[c.tipo], nullable=c.nullable) for c in cfg.columnas])
 
 
+def filas_por_grupo(cfg: TablaConfig) -> int:
+    """Filas por grupo de esa tabla: la de su configuracion (chica si las filas son pesadas) o la general."""
+    return cfg.filas_por_grupo or FILAS_POR_GRUPO
+
+
 def escribir(ruta: str, cfg: TablaConfig, lotes: Iterator[List[tuple]], metadatos: dict) -> int:
     """Escribe ``ruta`` con las filas (ya ordenadas por clave) que entregan los lotes. Devuelve la cantidad de filas."""
     _necesita()
     esquema = _esquema(cfg).with_metadata({k: str(v) for k, v in metadatos.items()})
     total = 0
+    grupo = filas_por_grupo(cfg)
     pendiente: List[tuple] = []
 
     def vaciar(writer, filas):
         columnas = list(zip(*filas))
         tabla = pa.table({c.nombre: pa.array(columnas[i], esquema.field(i).type) for i, c in enumerate(cfg.columnas)}, schema=esquema)
-        writer.write_table(tabla, row_group_size=FILAS_POR_GRUPO)
+        writer.write_table(tabla, row_group_size=grupo)
 
     with pq.ParquetWriter(ruta, esquema, compression=COMPRESION, compression_level=NIVEL, write_statistics=True,
                           write_page_checksum=True) as writer:
         for lote in lotes:
             pendiente.extend(lote)
             total += len(lote)
-            while len(pendiente) >= FILAS_POR_GRUPO:
-                vaciar(writer, pendiente[:FILAS_POR_GRUPO])
-                del pendiente[:FILAS_POR_GRUPO]
+            while len(pendiente) >= grupo:
+                vaciar(writer, pendiente[:grupo])
+                del pendiente[:grupo]
         if pendiente:
             vaciar(writer, pendiente)
     return total

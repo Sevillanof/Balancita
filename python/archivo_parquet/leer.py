@@ -63,7 +63,13 @@ def consulta_duckdb(destino: str, base: str, tabla: str, desde_ms: int, hasta_ms
     d_ini, d_fin = dia_de(desde_ms), dia_de(max(desde_ms, hasta_ms - 1))
     ruta = "%s/%s/%s/anio=*/mes=*/dia=*/part-*.parquet" % (destino.rstrip("/"), base, tabla)
     cols = ", ".join(columnas) if columnas else "*"
-    cond = [_desde_particion("", d_ini, ">="), _desde_particion("", d_fin, "<="),
+    if cfg.granularidad == "mes":  # sin carpeta dia=: se filtra por (anio, mes)
+        ruta = "%s/%s/%s/anio=*/mes=*/part-*.parquet" % (destino.rstrip("/"), base, tabla)
+        cond = ["(anio > %d OR (anio = %d AND mes >= %d))" % (d_ini.year, d_ini.year, d_ini.month),
+                "(anio < %d OR (anio = %d AND mes <= %d))" % (d_fin.year, d_fin.year, d_fin.month)]
+    else:
+        cond = [_desde_particion("", d_ini, ">="), _desde_particion("", d_fin, "<=")]
+    cond += [
             "%s >= %d" % (cfg.tiempo, desde_ms), "%s < %d" % (cfg.tiempo, hasta_ms)]
     if producto is not None and cfg.producto:
         cond.append("%s = %s" % (cfg.producto, _sql(producto)))

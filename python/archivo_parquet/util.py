@@ -32,7 +32,28 @@ def dia_cerrado(dia: dt.date, ahora_ms: int) -> bool:
     return inicio_dia_ms(dia) + 2 * DAY_MS <= ahora_ms
 
 
-def ruta_relativa(base: str, tabla: str, dia: dt.date, nombre: str) -> str:
+def periodo_de(dia: dt.date, granularidad: str) -> dt.date:
+    """Primer dia del periodo que contiene ``dia``: el mismo dia (granularidad "dia") o el 1 del mes ("mes")."""
+    return dia.replace(day=1) if granularidad == "mes" else dia
+
+
+def rango_periodo(inicio: dt.date, granularidad: str) -> tuple:
+    """(desde_ms, hasta_ms) del periodo que empieza en ``inicio``; hasta excluido."""
+    d0 = inicio_dia_ms(inicio)
+    if granularidad == "mes":
+        sig = dt.date(inicio.year + (inicio.month == 12), inicio.month % 12 + 1, 1)
+        return d0, inicio_dia_ms(sig)
+    return d0, d0 + DAY_MS
+
+
+def periodo_cerrado(inicio: dt.date, granularidad: str, ahora_ms: int) -> bool:
+    """Periodo terminado hace al menos 24 h (cerrado + 1 dia de margen). Para "dia" coincide con ``dia_cerrado``."""
+    return rango_periodo(inicio, granularidad)[1] + DAY_MS <= ahora_ms
+
+
+def ruta_relativa(base: str, tabla: str, dia: dt.date, nombre: str, granularidad: str = "dia") -> str:
+    if granularidad == "mes":
+        return "%s/%s/anio=%04d/mes=%02d/%s" % (base, tabla, dia.year, dia.month, nombre)
     return "%s/%s/anio=%04d/mes=%02d/dia=%02d/%s" % (base, tabla, dia.year, dia.month, dia.day, nombre)
 
 

@@ -9,8 +9,8 @@ from typing import Callable, Dict, List, Optional
 
 from . import formato
 from .config import DAY_MS, TABLAS, TablaConfig
-from .util import (ErrorArchivo, Resumen, abrir_copia, agregar_al_manifiesto, dia_cerrado, dia_de, diferencias, inicio_dia_ms,
-                   leer_manifiesto, ruta_relativa, sha256_archivo)
+from .util import (ErrorArchivo, Resumen, abrir_copia, agregar_al_manifiesto, dia_de, diferencias, leer_manifiesto, periodo_cerrado,
+                   periodo_de, rango_periodo, ruta_relativa, sha256_archivo)
 
 LOTE_ORIGEN = 50_000
 
@@ -39,9 +39,13 @@ def _extremo_clave(con, cfg, d0, d1, desc: bool):
     return list(f) if f else None
 
 
-def dias_de_la_tabla(con: sqlite3.Connection, cfg: TablaConfig) -> List[dt.date]:
+def periodos_de_la_tabla(con: sqlite3.Connection, cfg: TablaConfig) -> List[dt.date]:
+    """Primer dia de cada periodo (dia o mes, segun la granularidad de la tabla) que tiene filas, en orden."""
     filas = con.execute('SELECT DISTINCT "%s" / %d FROM "%s" ORDER BY 1' % (cfg.tiempo, DAY_MS, cfg.sqlite)).fetchall()
-    return [dia_de(int(n) * DAY_MS) for (n,) in filas]
+    return sorted({periodo_de(dia_de(int(n) * DAY_MS), cfg.granularidad) for (n,) in filas})
+
+
+dias_de_la_tabla = periodos_de_la_tabla  # nombre de la fase 1
 
 
 def _columnas_de(con, nombre: str) -> Optional[List[str]]:
@@ -50,16 +54,15 @@ def _columnas_de(con, nombre: str) -> Optional[List[str]]:
 
 
 def _exportar_dia(con, cfg: TablaConfig, base: str, destino: str, dia: dt.date) -> dict:
-    d0 = inicio_dia_ms(dia)
-    d1 = d0 + DAY_MS
-    carpeta = os.path.dirname(os.path.join(destino, ruta_relativa(base, cfg.nombre, dia, "x")))
+    d0, d1 = rango_periodo(dia, cfg.granularidad)
+    carpeta = os.path.dirname(os.path.join(destino, ruta_relativa(base, cfg.nombre, dia, "x", cfg.granularidad)))
     os.makedirs(carpeta, exist_ok=True)
     tmp = os.path.join(carpeta, "part-%d.parquet.tmp" % os.getpid())
     try:
         esperado_filas = con.execute('SELECT COUNT(*) FROM "%s" WHERE "%s" >= ? AND "%s" < ?' % (cfg.sqlite, cfg.tiempo, cfg.tiempo),
                                      (d0, d1)).fetchone()[0]
         origen = Resumen(cfg)
-        meta = {"schema_version": cfg.schema_version, "base": base, "tabla": cfg.nombre, "dia": dia.isoformat()}
+        meta = {"schema_version": cfg.schema_version, "base": base, "tabla": cfg.nombre, "dia": dia.isoformat(), "granularidad": cfg.granularidad}
         formato.escribir(tmp, cfg, _lotes_origen(con, cfg, d0, d1, origen), meta)
         esperado = origen.como_dict()
         problemas = []
@@ -84,17 +87,17 @@ def _exportar_dia(con, cfg: TablaConfig, base: str, destino: str, dia: dt.date) 
         sha = sha256_archivo(tmp)
         nombre = "part-%s.parquet" % sha[:8]
         final = os.path.join(carpeta, nombre)
-        rel = ruta_relativa(base, cfg.nombre, dia, nombre)
+        rel = ruta_relativa(base, cfg.nombre, dia, nombre, cfg.granularidad)
         # restos sin confirmar de intentos anteriores (no estan en el manifiesto): se descartan
         confirmadas = {e["ruta"] for e in leer_manifiesto(destino)}
         for f in os.listdir(carpeta):
-            r = ruta_relativa(base, cfg.nombre, dia, f)
+            r = ruta_relativa(base, cfg.nombre, dia, f, cfg.granularidad)
             if f.endswith(".tmp") and os.path.join(carpeta, f) != tmp or (f.startswith("part-") and f.endswith(".parquet") and r not in confirmadas):
                 os.remove(os.path.join(carpeta, f))
         os.replace(tmp, final)
         _fsync_dir(carpeta)
         entrada = {
-            "base": base, "tabla": cfg.nombre, "dia": dia.isoformat(), "ruta": rel, "filas": origen.filas, "grupos_filas": info["grupos"],
+            "base": base, "tabla": cfg.nombre, "dia": dia.isoformat(), "granularidad": cfg.granularidad, "ruta": rel, "filas": origen.filas, "grupos_filas": info["grupos"],
             "bytes": os.path.getsize(final), "sha256": sha, "schema_version": cfg.schema_version,
             "checksum_tipo": cfg.hash if cfg.hash else "hash_canonico_de_filas",
             "exportado_en": dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -147,18 +150,18 @@ def exportar(copia: str, base: str, destino: str, tablas: Optional[List[str]] = 
             faltan = [c for c in cfg.nombres if c not in columnas]
             if faltan:
                 raise ErrorArchivo("a %s le faltan columnas %s (el esquema cambio: suba schema_version)" % (cfg.sqlite, faltan))
-            for dia in dias_de_la_tabla(con, cfg):
+            for dia in periodos_de_la_tabla(con, cfg):
                 clave = (base, nombre, dia.isoformat())
                 if clave in hechos:
                     reporte["ya_confirmados"].append({"tabla": nombre, "dia": clave[2]})
                     continue
-                if not dia_cerrado(dia, ahora_ms):
+                if not periodo_cerrado(dia, cfg.granularidad, ahora_ms):
                     reporte["pendientes_por_abrir"].append({"tabla": nombre, "dia": clave[2]})
                     continue
                 if dry_run:
-                    d0 = inicio_dia_ms(dia)
+                    d0, d1 = rango_periodo(dia, cfg.granularidad)
                     n = con.execute('SELECT COUNT(*) FROM "%s" WHERE "%s" >= ? AND "%s" < ?' % (cfg.sqlite, cfg.tiempo, cfg.tiempo),
-                                    (d0, d0 + DAY_MS)).fetchone()[0]
+                                    (d0, d1)).fetchone()[0]
                     reporte["dry_run"].append({"tabla": nombre, "dia": clave[2], "filas": n})
                     continue
                 try:
