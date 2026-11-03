@@ -812,3 +812,49 @@ test('with several places the strip has the rebound step and the card says which
       path: `${SHOTS}/terminal-posiciones-${test.info().project.name}.png`,
     })
 })
+
+test('three open operations with close entries keep one separate label each on the chart', async ({
+  page,
+}) => {
+  const open = (no: number, agoMin: number, price: number, net: number) => {
+    const base = openTrade(agoMin, false)
+    return {
+      ...base,
+      trade_no: no,
+      side: 'LONG',
+      entry_price: price,
+      mark_price: 2210,
+      net_usd: net,
+      net_complete_usd: net,
+      execution: {
+        ...base.execution,
+        entry: { ...base.execution.entry, price },
+      },
+    }
+  }
+  await openFixture(page, {
+    decisions: withAuditor(reboundLooks()),
+    trades: [
+      open(5, 80, 2210.3, 0),
+      open(4, 130, 2211, -0.28),
+      open(3, 340, 2216, -1.73),
+    ],
+  })
+  const labels = page.getByRole('button', { name: /^Entrada LONG operación/ })
+  await expect(labels).toHaveCount(3)
+  const boxes = await labels.evaluateAll((nodes) =>
+    nodes.map((node) => node.getBoundingClientRect().toJSON()),
+  )
+  for (const [index, a] of boxes.entries())
+    for (const b of boxes.slice(index + 1))
+      expect(
+        a.bottom <= b.top + 0.5 ||
+          b.bottom <= a.top + 0.5 ||
+          a.right <= b.left + 0.5 ||
+          b.right <= a.left + 0.5,
+      ).toBe(true)
+  if (SHOTS)
+    await page.screenshot({
+      path: `${SHOTS}/terminal-etiquetas-abiertas-${test.info().project.name}.png`,
+    })
+})

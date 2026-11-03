@@ -147,103 +147,72 @@ export interface TradeLabelLayout {
   result: TradeLabelRect | null
 }
 
-function labelsOverlap(a: TradeLabelRect, b: TradeLabelRect): boolean {
-  return (
-    a.left < b.left + b.width + 4 &&
-    a.left + a.width + 4 > b.left &&
-    a.top < b.top + b.height + 4 &&
-    a.top + a.height + 4 > b.top
-  )
+/** Pill sizes of the single per-operation label (the selected one shows two more lines of detail). */
+export const TRADE_PILL_HEIGHT = 26
+export const TRADE_PILL_SELECTED_HEIGHT = 62
+const TRADE_PILL_GAP = 6
+const TRADE_PILL_EDGE = 4
+
+export function tradePillWidth(width: number): number {
+  return width < 500 ? 108 : 136
 }
 
-function placeTradeLabel(
-  preferred: TradeLabelRect,
-  width: number,
-  height: number,
-  occupied: TradeLabelRect[],
-): TradeLabelRect | null {
-  if (preferred.width + 8 > width || preferred.height + 8 > height) return null
-  const clampX = (x: number) =>
-    Math.max(4, Math.min(width - preferred.width - 4, x))
-  const clampY = (y: number) =>
-    Math.max(4, Math.min(height - preferred.height - 4, y))
-  const step = preferred.height + 6
-  const columns = [
-    preferred.left,
-    preferred.left - preferred.width - 6,
-    preferred.left + preferred.width + 6,
-    4,
-    width - preferred.width - 4,
-  ].map(clampX)
-  for (let row = 0; row <= Math.ceil(height / step); row++) {
-    const tops =
-      row === 0
-        ? [clampY(preferred.top)]
-        : [
-            clampY(preferred.top - row * step),
-            clampY(preferred.top + row * step),
-          ]
-    for (const top of tops)
-      for (const left of columns) {
-        const box = { ...preferred, left, top }
-        if (!occupied.some((other) => labelsOverlap(box, other))) {
-          occupied.push(box)
-          return box
-        }
-      }
-  }
-  return null
+/** «2 h 10 m», «45 m», «3 d 4 h»: how long an operation has been open (or was). */
+export function formatTradeDuration(ms: number): string {
+  const minutes = Math.max(0, Math.floor(ms / 60_000))
+  if (minutes < 60) return `${minutes} m`
+  const hours = Math.floor(minutes / 60)
+  if (hours < 24) return `${hours} h ${minutes % 60} m`
+  return `${Math.floor(hours / 24)} d ${hours % 24} h`
 }
 
+/**
+ * One label per operation, stacked in a column at the right edge of the chart, each
+ * as close as possible to the height of its own entry line, with a fixed gap so
+ * labels never overlap however many operations are open. The selected operation
+ * expands in place; whatever does not fit in the column gets `entry: null`.
+ */
 export function layoutTradeLabels(
   items: readonly TradeCoordinates[],
   width: number,
   height: number,
   selectedId: string,
 ): TradeLabelLayout[] {
-  const occupied: TradeLabelRect[] = []
-  const ordered = [...items].sort(
-    (a, b) => Number(b.id === selectedId) - Number(a.id === selectedId),
+  const pillWidth = tradePillWidth(width)
+  const left = Math.max(TRADE_PILL_EDGE, width - pillWidth - TRADE_PILL_EDGE)
+  const slots = items
+    .map((item) => ({
+      item,
+      height:
+        item.id === selectedId ? TRADE_PILL_SELECTED_HEIGHT : TRADE_PILL_HEIGHT,
+      top: 0,
+    }))
+    .sort((a, b) => a.item.entryY - b.item.entryY)
+  let floor = TRADE_PILL_EDGE
+  for (const slot of slots) {
+    slot.top = Math.max(slot.item.entryY - slot.height / 2, floor)
+    floor = slot.top + slot.height + TRADE_PILL_GAP
+  }
+  let ceiling = height - TRADE_PILL_EDGE
+  for (let index = slots.length - 1; index >= 0; index--) {
+    const slot = slots[index]!
+    slot.top = Math.min(slot.top, ceiling - slot.height)
+    ceiling = slot.top - TRADE_PILL_GAP
+  }
+  const fits = width >= pillWidth + 2 * TRADE_PILL_EDGE
+  const boxes = new Map<string, TradeLabelRect | null>(
+    slots.map((slot) => [
+      slot.item.id,
+      fits && slot.top >= TRADE_PILL_EDGE
+        ? { left, top: slot.top, width: pillWidth, height: slot.height }
+        : null,
+    ]),
   )
-  return ordered.map((item) => {
-    const long = item.trade.side === 'LONG'
-    const reversal = items.some(
-      (other) =>
-        other.id !== item.id && other.trade.exitMs === item.trade.entryMs,
-    )
-    const entry = placeTradeLabel(
-      {
-        left: item.entryVisible ? item.entryX - 52 : 4,
-        top:
-          item.entryY + (long ? 21 : -53) + (reversal ? (long ? 36 : -36) : 0),
-        width: item.entryVisible ? 104 : 140,
-        height: 32,
-      },
-      width,
-      height,
-      occupied,
-    )
-    const result =
-      item.resultVisible && item.resultX !== null && item.resultY !== null
-        ? placeTradeLabel(
-            {
-              left: item.resultX - 72,
-              top:
-                width < 500
-                  ? item.trade.open
-                    ? 7
-                    : item.resultY + 13
-                  : item.resultY - 43,
-              width: 144,
-              height: 30,
-            },
-            width,
-            height,
-            occupied,
-          )
-        : null
-    return { item, entry, result }
-  })
+  return items.map((item) => ({
+    item,
+    entry: boxes.get(item.id) ?? null,
+    result: null,
+  }))
 }
 
 export function projectTrade(
