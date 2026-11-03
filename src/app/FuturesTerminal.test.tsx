@@ -65,6 +65,8 @@ vi.mock('lightweight-charts', () => {
     panes: () => [],
     removePane() {},
     timeScale: () => timeScale,
+    subscribeCrosshairMove() {},
+    unsubscribeCrosshairMove() {},
     subscribeClick(handler: (parameter: ChartClickParameter) => void) {
       chartHarness.clickHandlers.push(handler)
     },
@@ -721,18 +723,19 @@ describe('FuturesTerminal on the live gateway with paper execution', () => {
     await waitFor(() =>
       expect(
         chartHarness.markerSets.at(-1)?.map((marker) => marker.id),
-      ).toEqual(['verdict-hash-1', 'verdict-hash-2', 'verdict-hash-3']),
+      ).toEqual(['verdict-hash-2', 'verdict-hash-3']),
     )
     const markers = chartHarness.markerSets.at(-1)!
     expect(markers.map((marker) => marker.shape)).toEqual([
-      'circle',
       'arrowUp',
       'arrowDown',
     ])
     // A proposal is not an operation: the label says so.
     expect(
       markers.map((marker) => String(marker.text).replace(' ◀', '')),
-    ).toEqual(['W', 'C25 LONG', 'C25 SHORT propuesta'])
+    ).toEqual(['C25 LONG', 'C25 SHORT propuesta'])
+    // A WAIT look leaves no «W» on the candles.
+    expect(markers.map((marker) => marker.id)).not.toContain('verdict-hash-1')
   })
 
   it('shows no paper.* controls and sends nothing', async () => {

@@ -17,6 +17,24 @@ import {
 } from '../domain/terminal-trade-model.ts'
 import type { ApprovedTerminalCandle } from './ApprovedTerminalChart.tsx'
 
+/**
+ * lightweight-charts only places whole bar indexes (a fractional index answers 0,
+ * the left edge), so an instant between two candle opens is interpolated between
+ * the coordinates of the bars around it.
+ */
+export function coordinateOfLogical(
+  scale: { logicalToCoordinate(logical: Logical): number | null },
+  logical: number,
+): number | null {
+  const lower = Math.floor(logical)
+  const from = scale.logicalToCoordinate(lower as Logical)
+  if (lower === logical) return from
+  const to = scale.logicalToCoordinate((lower + 1) as Logical)
+  return from === null || to === null
+    ? null
+    : from + (logical - lower) * (to - from)
+}
+
 export interface TerminalTradeFrame {
   width: number
   height: number
@@ -161,9 +179,7 @@ export class TerminalTradePrimitive implements ISeriesPrimitive<Time> {
           timeMs,
           this.intervalSeconds,
         )
-        return logical === null
-          ? null
-          : scale.logicalToCoordinate(logical as Logical)
+        return logical === null ? null : coordinateOfLogical(scale, logical)
       },
       price: (price: number) => series.priceToCoordinate(price),
     }
