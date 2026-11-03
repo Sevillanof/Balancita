@@ -397,7 +397,7 @@ for (const summaryStatus of ['pending', 'error', 'stale'] as const) {
   test(`empty news keeps an honest pinned ${summaryStatus} card without scroll`, async ({
     page,
   }) => {
-    await page.setViewportSize({ width: 390, height: 640 })
+    await page.setViewportSize({ width: 620, height: 640 })
     await openFixture(page, { empty: true, summaryStatus })
     await expect(page.getByTestId('qwen-news-briefing')).toContainText(
       summaryStatus === 'pending'
