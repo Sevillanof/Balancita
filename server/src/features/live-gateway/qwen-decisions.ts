@@ -407,12 +407,12 @@ function executionOf(db: DatabaseSync, trade: Row): QwenExecution | null {
       out.decision_at_ms > out.executed_at_ms ||
       out.requested_at_ms > out.received_at_ms ||
       out.received_at_ms > out.executed_at_ms ||
-      out.quantity !== text(trade.qty) ||
+      !sameDecimal(out.quantity, trade.qty) ||
       (purpose === 'entry' &&
-        (out.price !== text(trade.entry_px) ||
+        (!sameDecimal(out.price, trade.entry_px) ||
           out.executed_at_ms !== num(trade.entry_ms))) ||
       (purpose === 'exit' &&
-        (out.price !== text(trade.exit_px) ||
+        (!sameDecimal(out.price, trade.exit_px) ||
           out.executed_at_ms !== num(trade.exit_ms)))
     )
       throw new Error('execution_projection_invalid')
@@ -564,6 +564,15 @@ function heartbeatOf(meta: Record<string, unknown>): QwenHeartbeat {
       ? { pending_config: rowOf(meta.pending_config) }
       : {}),
   }
+}
+
+/**
+ * Equal as exact decimals: the receipt side is already normalized by `decimalFromPython` (no trailing zeros), while the
+ * trade row keeps the 28-digit text the engine wrote (`…32375` vs `…323750`). Compare both normalized.
+ */
+function sameDecimal(normalized: string, stored: unknown): boolean {
+  const value = text(stored)
+  return value !== null && decimalFromPython(value) === normalized
 }
 
 function text(value: unknown): string | null {
