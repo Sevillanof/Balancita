@@ -53,6 +53,8 @@ import {
 } from './terminal-lifecycle.ts'
 import { useHealth } from '../features/observability/presentation/useHealth.ts'
 import { latestDecision } from '../features/observability/presentation/latest-decision.ts'
+import MobileTerminal from './MobileTerminal.tsx'
+import { useIsPhone } from './useIsPhone.ts'
 import ObserverPanel from '../features/observability/presentation/ObserverPanel.tsx'
 
 /** Closed 1 m candles the engine needs before it can decide. */
@@ -87,6 +89,7 @@ export default function FuturesTerminal({
     unknown
   > | null>(null)
   const liveGateway = bootstrap.mode === 'paper_live'
+  const phone = useIsPhone()
   const health = useHealth(liveGateway)
   const {
     items: newsItems,
@@ -471,6 +474,94 @@ export default function FuturesTerminal({
     />
   )
 
+  const lifecycleData = liveGateway
+    ? lifecycleView({
+        analyses,
+        openTrade: ownTrades.find((trade) => trade.open) ?? null,
+        nowMs: displayClock,
+        prices: minutePrices(market.candles),
+        trades: ownTrades,
+      })
+    : null
+
+  const chartNode = (
+    <section
+      className={
+        phone
+          ? 'flex h-full min-h-0 flex-col'
+          : `${TERMINAL_FRAME} ${liveGateway ? 'h-full min-h-0 pt-2' : 'observer-height'} flex flex-col`
+      }
+      aria-label={`Gráfico ${productPair(product)}`}
+    >
+      <TerminalMarketChart
+        market={market}
+        mode={bootstrap.mode}
+        analyses={bootstrap.mode === 'paper_live' ? analyses : []}
+        selectedId={bootstrap.mode === 'paper_live' ? selectedId : ''}
+        onSelect={selectAnalysis}
+        trades={liveGateway ? ownTrades : undefined}
+        viewport={liveGateway}
+        lifecycle={phone ? null : lifecycleData}
+        tradesConfirmed={tradeRead.source.state === 'ok'}
+        selectedTradeId={selectedTradeId}
+        tradeFocus={tradeFocus}
+        onSelectTrade={selectTrade}
+        apiBase={apiBase}
+        product={product}
+        ticker={
+          (marketState.ticker_stats ??
+            record(bootstrap.market).ticker_stats ??
+            null) as TerminalTickerStats | null
+        }
+        {...approvedChartData({
+          orders,
+          fills,
+          positions: positions ?? [],
+          position,
+        })}
+        positions={
+          positions
+            ? approvedChartData({
+                orders: [],
+                fills: [],
+                positions,
+                position,
+              }).positions
+            : undefined
+        }
+        quantityUnit={
+          typeof state?.quantity_unit === 'string'
+            ? state.quantity_unit
+            : undefined
+        }
+        historicalLabel={gatewayEngine ? 'Histórico · Gateway D' : undefined}
+      />
+    </section>
+  )
+
+  if (phone && liveGateway && state)
+    return (
+      <MobileTerminal
+        product={product ?? bootstrap.products?.[0]}
+        price={displayedPrice}
+        change24h={change24h}
+        chart={chartNode}
+        trades={ownTrades}
+        onSelectTrade={selectTrade}
+        onFocusTrade={focusTrade}
+        tradeSource={tradeRead.source}
+        usedUsd={reading?.usedUsd ?? null}
+        nowMs={displayClock}
+        lifecycle={lifecycleData}
+        newsBriefing={newsBriefing}
+        newsItems={newsItems}
+        newsLoaded={newsLoaded}
+        decisionRows={decisionRows}
+        statusItems={statusItems}
+        diagnosis={diagnosis}
+      />
+    )
+
   return (
     <AppShell
       brandHref="/"
@@ -505,69 +596,7 @@ export default function FuturesTerminal({
         <>
           <ApprovedTerminalLayout
             tradeLayout={liveGateway}
-            chart={
-              <section
-                className={`${TERMINAL_FRAME} ${liveGateway ? 'h-full min-h-0 pt-2' : 'observer-height'} flex flex-col`}
-                aria-label={`Gráfico ${productPair(product)}`}
-              >
-                <TerminalMarketChart
-                  market={market}
-                  mode={bootstrap.mode}
-                  analyses={bootstrap.mode === 'paper_live' ? analyses : []}
-                  selectedId={bootstrap.mode === 'paper_live' ? selectedId : ''}
-                  onSelect={selectAnalysis}
-                  trades={liveGateway ? ownTrades : undefined}
-                  viewport={liveGateway}
-                  lifecycle={
-                    liveGateway
-                      ? lifecycleView({
-                          analyses,
-                          openTrade:
-                            ownTrades.find((trade) => trade.open) ?? null,
-                          nowMs: displayClock,
-                          prices: minutePrices(market.candles),
-                          trades: ownTrades,
-                        })
-                      : null
-                  }
-                  tradesConfirmed={tradeRead.source.state === 'ok'}
-                  selectedTradeId={selectedTradeId}
-                  tradeFocus={tradeFocus}
-                  onSelectTrade={selectTrade}
-                  apiBase={apiBase}
-                  product={product}
-                  ticker={
-                    (marketState.ticker_stats ??
-                      record(bootstrap.market).ticker_stats ??
-                      null) as TerminalTickerStats | null
-                  }
-                  {...approvedChartData({
-                    orders,
-                    fills,
-                    positions: positions ?? [],
-                    position,
-                  })}
-                  positions={
-                    positions
-                      ? approvedChartData({
-                          orders: [],
-                          fills: [],
-                          positions,
-                          position,
-                        }).positions
-                      : undefined
-                  }
-                  quantityUnit={
-                    typeof state?.quantity_unit === 'string'
-                      ? state.quantity_unit
-                      : undefined
-                  }
-                  historicalLabel={
-                    gatewayEngine ? 'Histórico · Gateway D' : undefined
-                  }
-                />
-              </section>
-            }
+            chart={chartNode}
             decisions={
               bootstrap.mode === 'paper_live' ? (
                 <ObserverPanel

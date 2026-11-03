@@ -1,5 +1,13 @@
 import { expect, test, type Page } from '@playwright/test'
 
+// The phone view (<= 600 px) is a separate layout with its own test: terminal-mobile.pw.ts.
+test.beforeEach((_fixtures, info) => {
+  test.skip(
+    info.project.name.startsWith('mobile'),
+    'phone view has its own spec',
+  )
+})
+
 const NOW = Date.now()
 const RUN = 'terminal-lifecycle-fixture'
 const PRODUCT = 'PF_ETHUSD'

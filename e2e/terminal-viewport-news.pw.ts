@@ -1,5 +1,13 @@
 import { expect, test, type Page } from '@playwright/test'
 
+// The phone view (<= 600 px) is a separate layout with its own test: terminal-mobile.pw.ts.
+test.beforeEach((_fixtures, info) => {
+  test.skip(
+    info.project.name.startsWith('mobile'),
+    'phone view has its own spec',
+  )
+})
+
 const NOW = Date.now()
 const RUN = 'terminal-viewport-fixture'
 const PRODUCT = 'PF_ETHUSD'
@@ -300,6 +308,7 @@ for (const [width, height] of [
   test(`Terminal C fits actual synthetic components at ${width}x${height}`, async ({
     page,
   }) => {
+    test.skip(width! <= 600, 'phone view has its own spec')
     await page.setViewportSize({ width: width!, height: height! })
     await openFixture(page)
     await assertViewport(page)
