@@ -1,6 +1,7 @@
 import { signedUsd } from '../../../app/qwen-trades-text.ts'
 import { usd, utcDateTime } from '../../../shared/finance/format.ts'
 import {
+  formatTradeDuration,
   layoutTradeLabels,
   tradeTone,
   type TradeCoordinates,
@@ -34,14 +35,12 @@ function LabelLeader({
   y: number
   color: string
 }) {
-  const anchorX = Math.max(box.left + 8, Math.min(box.left + box.width - 8, x))
-  const anchorY = y < box.top ? box.top : box.top + box.height
   return (
     <line
       x1={x}
       y1={y}
-      x2={anchorX}
-      y2={anchorY}
+      x2={box.left}
+      y2={box.top + 13}
       stroke={color}
       strokeWidth={1}
       opacity={0.65}
@@ -58,7 +57,7 @@ function TradeSpanGlyph({
   selected: boolean
   confirmed: boolean
 }) {
-  const { item, entry, result } = layout
+  const { item, entry } = layout
   const tone = tradeTone(item.trade, confirmed)
   const point = resultPoint(item)
   const area = `M ${item.startX} ${item.entryY} ${item.area.map((point) => `L ${point.x} ${point.y}`).join(' ')} L ${item.endX} ${item.entryY} Z`
@@ -76,31 +75,29 @@ function TradeSpanGlyph({
         y1={item.entryY}
         y2={item.entryY}
         stroke="var(--color-chart-info)"
-        strokeWidth={selected ? 2.3 : 1.4}
+        strokeWidth={selected ? 2.3 : 1.2}
         strokeDasharray={item.trade.open ? '7 5' : undefined}
-        opacity={confirmed ? 0.95 : 0.45}
+        opacity={confirmed ? (selected ? 0.95 : 0.55) : 0.4}
       />
+      {entry && (
+        <LabelLeader
+          box={entry}
+          x={item.endX}
+          y={item.entryY}
+          color={
+            item.trade.side === 'LONG'
+              ? 'var(--color-long)'
+              : 'var(--color-short)'
+          }
+        />
+      )}
       {item.entryVisible && (
-        <>
-          {entry && (
-            <LabelLeader
-              box={entry}
-              x={item.entryX}
-              y={item.entryY}
-              color={
-                item.trade.side === 'LONG'
-                  ? 'var(--color-long)'
-                  : 'var(--color-short)'
-              }
-            />
-          )}
-          <circle
-            cx={item.entryX}
-            cy={item.entryY}
-            r={5}
-            fill="var(--color-chart-info)"
-          />
-        </>
+        <circle
+          cx={item.entryX}
+          cy={item.entryY}
+          r={selected ? 6 : 4.5}
+          fill="var(--color-chart-info)"
+        />
       )}
       {point && (
         <>
@@ -114,14 +111,6 @@ function TradeSpanGlyph({
               strokeDasharray="3 4"
             />
           )}
-          {result && (
-            <LabelLeader
-              box={result}
-              x={point.x}
-              y={point.y}
-              color={COLORS[tone]}
-            />
-          )}
         </>
       )}
     </g>
@@ -130,21 +119,18 @@ function TradeSpanGlyph({
 
 function TradeBadges({
   layout,
+  selected,
   confirmed,
   onSelect,
 }: {
   layout: TradeLabelLayout
+  selected: boolean
   confirmed: boolean
   onSelect: (id: string) => void
 }) {
-  const { item, entry, result } = layout
+  const { item, entry } = layout
   const tone = tradeTone(item.trade, confirmed)
   const long = item.trade.side === 'LONG'
-  const directionClass = item.entryVisible
-    ? long
-      ? 'font-bold text-long'
-      : 'font-bold text-short'
-    : 'font-medium text-chart-text'
   const entryIcon = item.entryVisible ? (long ? '▲' : '▼') : '←'
   const point = resultPoint(item)
   const net = !confirmed
@@ -156,19 +142,46 @@ function TradeBadges({
     item.trade.open && item.trade.markMs != null
       ? `Neto a la marca ${utcDateTime(item.trade.markMs)}`
       : 'Neto registrado al cierre'
+  const provisional = tone === 'provisional' ? ' *' : ''
   return (
     <div>
       {entry && (
         <button
           type="button"
-          className={`pointer-events-auto absolute h-8 cursor-pointer rounded-lg border border-solid border-current/45 bg-surface-1 px-2.5 py-1 whitespace-nowrap ${item.entryVisible ? 'w-26 text-body' : 'w-35 text-label'} ${directionClass} focus-visible:outline-2 focus-visible:outline-info`}
-          style={{ left: entry.left, top: entry.top }}
-          aria-label={`${item.entryVisible ? 'Entrada' : 'Entrada anterior'} ${item.trade.side} operación ${item.trade.tradeNo}`}
-          title={`${item.trade.side} · entrada ${usd(item.trade.entryPrice)} · ${utcDateTime(item.startMs)}`}
+          className={`pointer-events-auto absolute flex cursor-pointer flex-col justify-center gap-0.5 rounded-lg border border-solid bg-surface-1 px-2 text-left text-label whitespace-nowrap focus-visible:outline-2 focus-visible:outline-info ${selected ? 'border-chart-info' : 'border-current/45'} ${long ? 'text-long' : 'text-short'}`}
+          style={{
+            left: entry.left,
+            top: entry.top,
+            width: entry.width,
+            height: entry.height,
+          }}
+          data-result-tone={tone}
+          aria-pressed={selected}
+          aria-label={`${item.entryVisible ? 'Entrada' : 'Entrada anterior'} ${item.trade.side} operación ${item.trade.tradeNo}: ${net}${tone === 'provisional' ? ', provisional' : ''}`}
+          title={`${item.trade.side} · entrada ${usd(item.trade.entryPrice)} · ${utcDateTime(item.startMs)} · ${netTitle}`}
           onClick={() => onSelect(item.id)}
         >
-          {entryIcon} {item.trade.side}
-          {!item.entryVisible && <small> anterior</small>}
+          <span className="flex items-baseline gap-1.5 font-bold">
+            <span>
+              {entryIcon} #{item.trade.tradeNo}
+            </span>
+            <span style={{ color: COLORS[tone] }}>
+              {net}
+              {provisional}
+            </span>
+          </span>
+          {selected && (
+            <>
+              <small className="font-normal text-ink">
+                {entry.width >= 130 ? 'entrada ' : ''}
+                {usd(item.trade.entryPrice)}
+              </small>
+              <small className="font-normal text-ink-2">
+                {item.trade.open ? 'abierta' : 'duró'}{' '}
+                {formatTradeDuration(item.endMs - item.startMs)}
+              </small>
+            </>
+          )}
         </button>
       )}
       {point && (
@@ -180,20 +193,6 @@ function TradeBadges({
           onClick={() => onSelect(item.id)}
         >
           {item.trade.open ? '●' : '×'}
-        </button>
-      )}
-      {result && (
-        <button
-          type="button"
-          className="pointer-events-auto absolute h-7.5 w-36 cursor-pointer rounded-lg border border-solid border-current/40 bg-surface-1 px-1.5 py-1.25 text-label font-bold whitespace-nowrap focus-visible:outline-2 focus-visible:outline-info"
-          style={{ left: result.left, top: result.top, color: COLORS[tone] }}
-          data-result-tone={tone}
-          title={netTitle}
-          aria-label={`Resultado ${item.trade.side} operación ${item.trade.tradeNo}: ${net}${tone === 'provisional' ? ', provisional' : ''}`}
-          onClick={() => onSelect(item.id)}
-        >
-          {item.trade.open ? '●' : '×'} {net}
-          {tone === 'provisional' && ' *'}
         </button>
       )}
     </div>
@@ -218,10 +217,7 @@ export default function TerminalTradeOverlay({
   if (!(width > 0) || !(height > 0)) return null
   const layouts = layoutTradeLabels(items, width, height, selectedId)
   const grouped = layouts.reduce(
-    (count, layout) =>
-      count +
-      Number(layout.entry === null) +
-      Number(resultPoint(layout.item) !== null && layout.result === null),
+    (count, layout) => count + Number(layout.entry === null),
     0,
   )
   return (
@@ -249,6 +245,7 @@ export default function TerminalTradeOverlay({
         <TradeBadges
           key={layout.item.id}
           layout={layout}
+          selected={selectedId === layout.item.id}
           confirmed={confirmed}
           onSelect={onSelect}
         />

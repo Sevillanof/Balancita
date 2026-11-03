@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  formatTradeDuration,
   layoutTradeLabels,
   readTradeSpan,
   timeLogicalIndex,
@@ -112,7 +113,7 @@ describe('registered Terminal trade visuals', () => {
   })
 
   it.each([234, 980])(
-    'keeps entry and result badges readable across a same-time reversal in a %ipx pane',
+    'keeps one label per operation readable across a same-time reversal in a %ipx pane',
     (width) => {
       const point = (operation: TerminalChartTrade): TradeCoordinates => ({
         id: tradeIdentity(operation),
@@ -146,7 +147,7 @@ describe('registered Terminal trade visuals', () => {
       const boxes = layout
         .flatMap((item) => [item.entry, item.result])
         .filter((box) => box !== null)
-      expect(boxes).toHaveLength(4)
+      expect(boxes).toHaveLength(2)
       for (const box of boxes) {
         expect(box.left).toBeGreaterThanOrEqual(0)
         expect(box.top).toBeGreaterThanOrEqual(0)
@@ -163,4 +164,55 @@ describe('registered Terminal trade visuals', () => {
           ).toBe(true)
     },
   )
+})
+
+describe('stacked operation labels', () => {
+  const coords = (
+    tradeNo: number,
+    entryY: number,
+    open = true,
+  ): TradeCoordinates => ({
+    id: tradeIdentity(trade({ tradeNo, open })),
+    trade: trade({ tradeNo, open }),
+    startMs: entryMs,
+    endMs: entryMs + 600_000,
+    startX: 0,
+    endX: 400,
+    entryY,
+    entryX: 100,
+    entryVisible: true,
+    resultX: 400,
+    resultY: entryY,
+    resultVisible: true,
+    area: [],
+  })
+
+  it('stacks entries that are a few pixels apart without overlapping, in the right column', () => {
+    const items = [coords(3, 90), coords(4, 185), coords(5, 191)]
+    const layout = layoutTradeLabels(items, 900, 300, items[1]!.id)
+    const boxes = layout.map((entry) => entry.entry!)
+    expect(boxes.every((box) => box !== null)).toBe(true)
+    expect(layout.every((entry) => entry.result === null)).toBe(true)
+    expect(new Set(boxes.map((box) => box.left)).size).toBe(1)
+    const sorted = [...boxes].sort((a, b) => a.top - b.top)
+    for (const [index, box] of sorted.slice(1).entries())
+      expect(box.top).toBeGreaterThanOrEqual(
+        sorted[index]!.top + sorted[index]!.height + 4,
+      )
+    expect(boxes[1]!.height).toBeGreaterThan(boxes[0]!.height)
+  })
+
+  it('drops the labels that do not fit instead of overlapping them', () => {
+    const items = Array.from({ length: 12 }, (_, i) => coords(i + 1, 140))
+    const layout = layoutTradeLabels(items, 900, 200, '')
+    const placed = layout.filter((entry) => entry.entry !== null)
+    expect(placed.length).toBeGreaterThan(0)
+    expect(placed.length).toBeLessThan(12)
+  })
+
+  it('formats how long an operation has been open', () => {
+    expect(formatTradeDuration(45 * 60_000)).toBe('45 m')
+    expect(formatTradeDuration(130 * 60_000)).toBe('2 h 10 m')
+    expect(formatTradeDuration(28 * 3_600_000)).toBe('1 d 4 h')
+  })
 })
