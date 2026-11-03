@@ -1034,6 +1034,7 @@ export default function TerminalChartPanel({
           currency="USD"
           instrument={instrument}
           initialViewport="approved-terminal"
+          showVolume={!phone}
           overlays={overlays}
           profile={profile}
           panes={panes}

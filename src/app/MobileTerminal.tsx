@@ -1,7 +1,6 @@
-import { useState, type ReactNode } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
 import { productBase } from '../features/trading-view/domain/product-label.ts'
 import { PhoneChartContext } from '../features/trading-view/presentation/phone-chart-context.ts'
-import { Icon } from '../features/trading-view/presentation/LifecycleSteps.tsx'
 import {
   TONE_RING,
   TONE_TEXT,
@@ -20,6 +19,8 @@ import type {
 } from './useTerminalNews.ts'
 import type { QwenTrade, QwenTradesSource } from './useQwenTrades.ts'
 import { useQwenAccount } from './useQwenAccount.ts'
+import type { QwenSource } from './useQwenDecisions.ts'
+import { summarizeUsage } from './system-usage.ts'
 
 type Tab = 'ops' | 'news' | 'decisions' | 'status'
 
@@ -192,10 +193,31 @@ function NewsTab({
   const relevant = items
     .filter((item) => item.relevance === 'high' || item.relevance === 'medium')
     .slice(0, 6)
+  const score = relevant.reduce(
+    (sum, item) =>
+      sum +
+      (item.direction === 'bullish'
+        ? 1
+        : item.direction === 'bearish'
+          ? -1
+          : 0),
+    0,
+  )
+  const tone =
+    score > 0
+      ? { word: 'positivo', cls: 'text-long' }
+      : score < 0
+        ? { word: 'negativo', cls: 'text-short' }
+        : { word: 'neutro', cls: 'text-ink-2' }
   return (
     <div data-testid="mobile-news">
       <div className="mb-1.5 rounded-xl bg-surface-2 px-3 py-2 text-label leading-snug">
-        <b>🤖 Resumen Qwen</b>
+        <b>
+          🤖 Resumen Qwen · tono{' '}
+          <span className={tone.cls} data-testid="mobile-news-tone">
+            {tone.word}
+          </span>
+        </b>
         <span className="mt-0.5 block text-ink-2">
           {briefing?.text ??
             (briefing?.status === 'no_news'
@@ -235,8 +257,24 @@ function NewsTab({
           </li>
         )}
       </ul>
+      <p className="m-0 pt-1.5 text-label text-ink-2">
+        ▸ Solo las relevantes · toca una para leerla
+      </p>
     </div>
   )
+}
+
+const STEP_EMOJI: Record<string, string> = {
+  look: '👁',
+  master: '👑',
+  gate: '🛡',
+  news: '📰',
+  enter: '🎯',
+  entered: '🎯',
+  flip: '👑',
+  news12: '🛡',
+  exhaust24: '⏱',
+  cap: '🏁',
 }
 
 const BOX_TONE = {
@@ -318,7 +356,9 @@ function DecisionsTab({
                   onClick={() => setPicked(item.id)}
                   className={`grid size-9.5 shrink-0 cursor-pointer place-items-center rounded-full border-2 border-solid bg-surface-2 p-0 ${TONE_RING[item.tone]} ${step?.id === item.id ? 'ring-2 ring-line-focus' : ''}`}
                 >
-                  <Icon name={item.icon} />
+                  <span aria-hidden="true" className="text-body">
+                    {STEP_EMOJI[item.id] ?? '•'}
+                  </span>
                 </button>
                 {index < steps.length - 1 && (
                   <span className="h-0.5 flex-1 bg-line" aria-hidden="true" />
@@ -380,31 +420,83 @@ function DecisionsTab({
   )
 }
 
+export interface StatusRow {
+  key: string
+  icon: string
+  label: string
+  value: string
+  tone: 'ok' | 'warn' | 'bad'
+}
+
+const VALUE_TONE = {
+  ok: 'text-long',
+  warn: 'text-warn',
+  bad: 'text-short',
+} as const
+
 function StatusTab({
-  items,
+  rows,
+  extra,
   diagnosis,
 }: {
-  items: ReadonlyArray<{ key: string; tone?: string; text: string }>
+  rows: readonly StatusRow[]
+  extra: ReadonlyArray<{ key: string; tone?: string; text: string }>
   diagnosis: ReactNode
 }) {
   return (
     <div data-testid="mobile-status">
       <ul className="m-0 list-none p-0">
-        {items.map((item) => (
+        {rows.map((row) => (
+          <li
+            key={row.key}
+            className="flex items-center justify-between border-0 border-b border-solid border-line py-2 text-label last:border-0"
+          >
+            <span>
+              <span aria-hidden="true">{row.icon}</span> {row.label}
+            </span>
+            <b className={VALUE_TONE[row.tone]}>{row.value}</b>
+          </li>
+        ))}
+        {extra.map((item) => (
           <li
             key={item.key}
             className="flex items-center justify-between border-0 border-b border-solid border-line py-2 text-label last:border-0"
           >
             <span>{item.text}</span>
-            <b className={NOTICE_DOT[item.tone ?? ''] ?? 'text-ink-2'}>
-              {item.tone === 'ok' ? '●' : item.tone === 'bad' ? '✕' : '▲'}
-            </b>
+            <b className={NOTICE_DOT[item.tone ?? ''] ?? 'text-ink-2'}>▲</b>
           </li>
         ))}
       </ul>
       <div className="pt-1.5 text-label text-ink-2">{diagnosis}</div>
     </div>
   )
+}
+
+/** CPU and memory of the machine the gateway runs on, polled; null until it answers. */
+function useServerLine(apiBase: string): string | null {
+  const [line, setLine] = useState<string | null>(null)
+  useEffect(() => {
+    const controller = new AbortController()
+    const load = async () => {
+      try {
+        const response = await fetch(`${apiBase}/system`, {
+          signal: controller.signal,
+        })
+        if (!response.ok) throw new Error('HTTP')
+        const usage = summarizeUsage(await response.json())
+        setLine(`CPU ${usage.cpu} · Qwen ${usage.qwen}`)
+      } catch {
+        if (!controller.signal.aborted) setLine(null)
+      }
+    }
+    void load()
+    const timer = setInterval(() => void load(), 10_000)
+    return () => {
+      controller.abort()
+      clearInterval(timer)
+    }
+  }, [apiBase])
+  return line
 }
 
 export default function MobileTerminal({
@@ -425,6 +517,9 @@ export default function MobileTerminal({
   decisionRows,
   statusItems,
   diagnosis,
+  apiBase,
+  qwenSource,
+  quoteAgeMs,
   banner,
 }: {
   product: string | undefined
@@ -444,13 +539,69 @@ export default function MobileTerminal({
   decisionRows: readonly DecisionRow[]
   statusItems: ReadonlyArray<{ key: string; tone?: string; text: string }>
   diagnosis: ReactNode
+  apiBase: string
+  qwenSource: QwenSource
+  quoteAgeMs: number | null
   banner?: ReactNode
 }) {
+  const serverLine = useServerLine(apiBase)
   const [tab, setTab] = useState<Tab>('ops')
   const account = useQwenAccount()
   const alerts = statusItems.filter(
     (item) => item.tone === 'warn' || item.tone === 'bad',
   )
+  const feed = statusItems.find((item) => item.key === 'feed')
+  const funding = statusItems.find((item) => item.key === 'funding')
+  const statusRows: StatusRow[] = [
+    {
+      key: 'kraken',
+      icon: '🌐',
+      label: 'Kraken en vivo',
+      value: feed?.tone === 'ok' ? 'OK' : feed ? 'con problemas' : '—',
+      tone: feed?.tone === 'ok' ? 'ok' : feed?.tone === 'bad' ? 'bad' : 'warn',
+    },
+    {
+      key: 'qwen',
+      icon: '🤖',
+      label: 'Qwen',
+      value:
+        qwenSource.state === 'ok'
+          ? 'OK'
+          : qwenSource.state === 'loading'
+            ? 'cargando'
+            : qwenSource.state === 'off'
+              ? 'apagado'
+              : 'sin conexión',
+      tone:
+        qwenSource.state === 'ok'
+          ? 'ok'
+          : qwenSource.state === 'loading'
+            ? 'warn'
+            : 'bad',
+    },
+    {
+      key: 'candles',
+      icon: '🕯️',
+      label: 'Velas',
+      value:
+        quoteAgeMs === null ? '—' : `hace ${Math.floor(quoteAgeMs / 1000)} s`,
+      tone: quoteAgeMs === null ? 'warn' : quoteAgeMs > 120_000 ? 'bad' : 'ok',
+    },
+    {
+      key: 'funding',
+      icon: '💸',
+      label: 'Funding',
+      value: funding?.tone === 'ok' ? 'completo' : 'incompleto',
+      tone: funding?.tone === 'ok' ? 'ok' : 'warn',
+    },
+    {
+      key: 'server',
+      icon: '🖥️',
+      label: 'Servidor',
+      value: serverLine ?? '—',
+      tone: serverLine ? 'ok' : 'warn',
+    },
+  ]
   const open = trades.filter((trade) => trade.open)
   const shown = open.length > 0 ? open : trades.slice(0, 1)
   return (
@@ -553,7 +704,17 @@ export default function MobileTerminal({
           />
         )}
         {tab === 'status' && (
-          <StatusTab items={statusItems} diagnosis={diagnosis} />
+          <StatusTab
+            rows={statusRows}
+            extra={statusItems.filter(
+              (item) =>
+                item.key !== 'feed' &&
+                item.key !== 'funding' &&
+                item.key !== 'engine' &&
+                (item.tone === 'warn' || item.tone === 'bad'),
+            )}
+            diagnosis={diagnosis}
+          />
         )}
       </section>
     </main>

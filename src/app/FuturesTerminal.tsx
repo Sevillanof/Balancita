@@ -559,6 +559,13 @@ export default function FuturesTerminal({
         decisionRows={decisionRows}
         statusItems={statusItems}
         diagnosis={diagnosis}
+        apiBase={apiBase}
+        qwenSource={qwenSource}
+        quoteAgeMs={
+          quote.receivedAt === null
+            ? null
+            : Math.max(0, displayClock - quote.receivedAt)
+        }
       />
     )
 
