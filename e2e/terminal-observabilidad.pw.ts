@@ -2,6 +2,15 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { expect, test, type Page } from '@playwright/test'
 
+// The phone view (<= 600 px) is a separate layout with its own test: terminal-mobile.pw.ts.
+// eslint-disable-next-line no-empty-pattern -- Playwright requires a destructuring pattern here
+test.beforeEach(({}, info) => {
+  test.skip(
+    info.project.name.startsWith('mobile'),
+    'phone view has its own spec',
+  )
+})
+
 /** The documented examples the backend tests generate from its own code. */
 const example = (path: string) =>
   JSON.parse(readFileSync(join('docs/mission-control', path), 'utf8'))
