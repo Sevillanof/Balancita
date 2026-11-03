@@ -1,3 +1,4 @@
+import { usePhoneChart } from './phone-chart-context.ts'
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import ModalFrame from '../../strategy-lab/presentation/ModalFrame.tsx'
 import { productBase, productPair } from '../domain/product-label.ts'
@@ -525,7 +526,13 @@ export default function TerminalChartPanel({
   lifecycle?: LifecycleView | null
   decisions?: readonly LookDecisions[]
 }) {
-  const [settings, setSettings] = useState<Settings>(loadSettings)
+  const [storedSettings, setSettings] = useState<Settings>(loadSettings)
+  const phone = usePhoneChart()
+  // The phone view shows no sub-panes; what the person chose on desktop stays stored.
+  const settings = useMemo<Settings>(
+    () => (phone ? { ...storedSettings, panes: [] } : storedSettings),
+    [phone, storedSettings],
+  )
   const [now, setNow] = useState(() => Date.now())
   const [timeFocus, setTimeFocus] = useState<{
     ms: number
@@ -546,11 +553,11 @@ export default function TerminalChartPanel({
   }
   useEffect(() => {
     try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(settings))
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(storedSettings))
     } catch {
       // Private mode or blocked storage: settings last for this view only.
     }
-  }, [settings])
+  }, [storedSettings])
   useEffect(() => {
     // The funding countdown ticks only over real market data.
     if (!live) return
@@ -645,15 +652,17 @@ export default function TerminalChartPanel({
   }, [profileSource])
   const panes = useMemo(
     () =>
-      flowPanes(
-        settings.panes.filter(
-          (id) => live || !PANES.find((pane) => pane.id === id)!.live,
-        ),
-        remote?.flow ?? [],
-        shown,
-        colors,
-      ),
-    [settings.panes, remote, shown, colors, live],
+      phone
+        ? []
+        : flowPanes(
+            settings.panes.filter(
+              (id) => live || !PANES.find((pane) => pane.id === id)!.live,
+            ),
+            remote?.flow ?? [],
+            shown,
+            colors,
+          ),
+    [settings.panes, remote, shown, colors, live, phone],
   )
   const askKey = (id: Pane) => `${id}|${product ?? ''}|${settings.intervalMs}`
   const wantedLive = settings.panes.filter(
@@ -789,9 +798,11 @@ export default function TerminalChartPanel({
     >
       <div
         className={
-          viewport
-            ? 'flex flex-none flex-wrap items-center gap-x-2 gap-y-1 px-2'
-            : 'flex flex-wrap items-center gap-x-4 gap-y-2 px-3 py-0 chart-phone:flex-nowrap chart-phone:gap-x-3 chart-phone:overflow-x-auto chart-phone:pb-1 chart-desktop:gap-x-3 chart-desktop:gap-y-1 chart-desktop:px-2'
+          phone
+            ? 'hidden'
+            : viewport
+              ? 'flex flex-none flex-wrap items-center gap-x-2 gap-y-1 px-2'
+              : 'flex flex-wrap items-center gap-x-4 gap-y-2 px-3 py-0 chart-phone:flex-nowrap chart-phone:gap-x-3 chart-phone:overflow-x-auto chart-phone:pb-1 chart-desktop:gap-x-3 chart-desktop:gap-y-1 chart-desktop:px-2'
         }
       >
         {viewport ? (
@@ -1023,6 +1034,7 @@ export default function TerminalChartPanel({
           currency="USD"
           instrument={instrument}
           initialViewport="approved-terminal"
+          showVolume={!phone}
           overlays={overlays}
           profile={profile}
           panes={panes}
@@ -1096,7 +1108,7 @@ export default function TerminalChartPanel({
             </p>
           ) : null
         })}
-      {trades !== undefined && trades.length > 0 && (
+      {!phone && trades !== undefined && trades.length > 0 && (
         <div
           className={
             viewport
@@ -1146,7 +1158,7 @@ export default function TerminalChartPanel({
           })}
         </div>
       )}
-      {viewport && pendingPanes.length > 0 ? (
+      {viewport && !phone && pendingPanes.length > 0 ? (
         <p
           className="m-0 line-clamp-1 px-2 text-label text-ink-2"
           title={pendingPanes.map((pane) => pane.text).join(' · ')}
@@ -1193,93 +1205,95 @@ export default function TerminalChartPanel({
           </p>
         </section>
       )}
-      <ChartMenu
-        viewport={viewport}
-        inline
-        label="Leyenda del gráfico"
-        compactLabel="▲ LONG / ▼ SHORT · ━ Entrada · ● Neto · × Cierre · ⓘ"
-      >
-        <p
-          className="m-0 flex flex-wrap gap-x-4 gap-y-1 px-3 py-0 text-hint text-ink-2"
-          aria-label="Leyenda del gráfico"
+      {!phone && (
+        <ChartMenu
+          viewport={viewport}
+          inline
+          label="Leyenda del gráfico"
+          compactLabel="▲ LONG / ▼ SHORT · ━ Entrada · ● Neto · × Cierre · ⓘ"
         >
-          {trades !== undefined && trades.length > 0 ? (
-            <>
+          <p
+            className="m-0 flex flex-wrap gap-x-4 gap-y-1 px-3 py-0 text-hint text-ink-2"
+            aria-label="Leyenda del gráfico"
+          >
+            {trades !== undefined && trades.length > 0 ? (
+              <>
+                <span>
+                  <b className="text-long">▲ LONG</b> /{' '}
+                  <b className="text-short">▼ SHORT</b> · operación registrada
+                </span>
+                <span>
+                  <b className="text-chart-info">━</b> entrada fija hasta el
+                  cierre
+                </span>
+                <span>
+                  <b className="text-chart-info">×</b> cierre · ● neto a la
+                  marca registrada
+                </span>
+                <span>
+                  <b className="text-warn">*</b> funding incompleto · neto
+                  provisional
+                </span>
+                <span title="Las marcas pequeñas son señales del motor, no operaciones. El sombreado es el recorrido observado del precio, no un cálculo de PnL por vela.">
+                  Marcas pequeñas: señales · sombreado: precio
+                </span>
+              </>
+            ) : proposalLegend ? (
+              <>
+                <span data-testid="legend-proposal">
+                  <b className="text-long">▲</b>
+                  <b className="text-short">▼</b> propuesta LONG/SHORT (no es
+                  una operación)
+                </span>
+                <span data-testid="legend-wait">
+                  <b style={{ color: colors.muted }}>◌</b> W = WAIT (W×n:
+                  agrupados)
+                </span>
+                <span data-testid="legend-fill">
+                  <b className="text-long">■</b> EJEC. ejecución paper (EJ L/S,
+                  un marcador por fill; el detalle sale al seleccionarlo)
+                </span>
+                <span data-testid="legend-exit">
+                  <b style={{ color: colors.info }}>●</b> salida (stop,
+                  objetivo, tiempo)
+                </span>
+                <span data-testid="legend-qwen">
+                  <b style={{ color: colors.amber }}>■</b> Portero ✕ = el
+                  portero frenó la entrada · Qwen ≠ = Qwen opina distinto
+                </span>
+              </>
+            ) : (
+              <>
+                <span>
+                  <b className="text-long">▲</b> entrada larga
+                </span>
+                <span>
+                  <b className="text-short">▼</b> entrada corta
+                </span>
+                <span>
+                  <b style={{ color: colors.info }}>●</b> salida (stop,
+                  objetivo, tiempo)
+                </span>
+              </>
+            )}
+            {panes.some((pane) => pane.id === 'flow') && (
               <span>
-                <b className="text-long">▲ LONG</b> /{' '}
-                <b className="text-short">▼ SHORT</b> · operación registrada
+                Compra/venta: volumen agresor comprador arriba, vendedor abajo
               </span>
+            )}
+            {panes.some((pane) => pane.id === 'positioning') && (
               <span>
-                <b className="text-chart-info">━</b> entrada fija hasta el
-                cierre
+                Long/short: % de cuentas en largo (verde) y top 20 % (ámbar)
               </span>
+            )}
+            {panes.some((pane) => pane.id === 'premium') && (
               <span>
-                <b className="text-chart-info">×</b> cierre · ● neto a la marca
-                registrada
+                Prima: precio del perpetuo sobre el contado, en puntos básicos
               </span>
-              <span>
-                <b className="text-warn">*</b> funding incompleto · neto
-                provisional
-              </span>
-              <span title="Las marcas pequeñas son señales del motor, no operaciones. El sombreado es el recorrido observado del precio, no un cálculo de PnL por vela.">
-                Marcas pequeñas: señales · sombreado: precio
-              </span>
-            </>
-          ) : proposalLegend ? (
-            <>
-              <span data-testid="legend-proposal">
-                <b className="text-long">▲</b>
-                <b className="text-short">▼</b> propuesta LONG/SHORT (no es una
-                operación)
-              </span>
-              <span data-testid="legend-wait">
-                <b style={{ color: colors.muted }}>◌</b> W = WAIT (W×n:
-                agrupados)
-              </span>
-              <span data-testid="legend-fill">
-                <b className="text-long">■</b> EJEC. ejecución paper (EJ L/S, un
-                marcador por fill; el detalle sale al seleccionarlo)
-              </span>
-              <span data-testid="legend-exit">
-                <b style={{ color: colors.info }}>●</b> salida (stop, objetivo,
-                tiempo)
-              </span>
-              <span data-testid="legend-qwen">
-                <b style={{ color: colors.amber }}>■</b> Portero ✕ = el portero
-                frenó la entrada · Qwen ≠ = Qwen opina distinto
-              </span>
-            </>
-          ) : (
-            <>
-              <span>
-                <b className="text-long">▲</b> entrada larga
-              </span>
-              <span>
-                <b className="text-short">▼</b> entrada corta
-              </span>
-              <span>
-                <b style={{ color: colors.info }}>●</b> salida (stop, objetivo,
-                tiempo)
-              </span>
-            </>
-          )}
-          {panes.some((pane) => pane.id === 'flow') && (
-            <span>
-              Compra/venta: volumen agresor comprador arriba, vendedor abajo
-            </span>
-          )}
-          {panes.some((pane) => pane.id === 'positioning') && (
-            <span>
-              Long/short: % de cuentas en largo (verde) y top 20 % (ámbar)
-            </span>
-          )}
-          {panes.some((pane) => pane.id === 'premium') && (
-            <span>
-              Prima: precio del perpetuo sobre el contado, en puntos básicos
-            </span>
-          )}
-        </p>
-      </ChartMenu>
+            )}
+          </p>
+        </ChartMenu>
+      )}
     </div>
   )
 }

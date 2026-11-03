@@ -464,8 +464,11 @@ describe('db compact', () => {
     const src = join(dir, 'copy.sqlite')
     const db = new DatabaseSync(src)
     db.exec('CREATE TABLE a(id INTEGER PRIMARY KEY, v TEXT)')
-    for (let i = 0; i < 2000; i += 1)
-      db.prepare('INSERT INTO a(v) VALUES(?)').run('x'.repeat(200))
+    // One transaction: 2000 autocommit inserts cost one fsync each (~3 ms on a VPS disk), which timed the test out at 5 s.
+    const insert = db.prepare('INSERT INTO a(v) VALUES(?)')
+    db.exec('BEGIN')
+    for (let i = 0; i < 2000; i += 1) insert.run('x'.repeat(200))
+    db.exec('COMMIT')
     db.exec('DELETE FROM a WHERE id > 200')
     expect(freeSpace(db).freeRatio).toBeGreaterThan(0.3)
     db.close()

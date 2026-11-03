@@ -1,5 +1,6 @@
 import { signedUsd } from '../../../app/qwen-trades-text.ts'
 import { usd, utcDateTime } from '../../../shared/finance/format.ts'
+import { usePhoneChart } from './phone-chart-context.ts'
 import TradeFicha from './TradeFicha.tsx'
 import { FICHA_HEIGHT, FICHA_WIDTH } from './trade-ficha-model.ts'
 import type { LookDecision } from '../../../app/terminal-lifecycle.ts'
@@ -225,6 +226,7 @@ export default function TerminalTradeOverlay({
   /** What was decided when an operation entered (icons of its ficha). */
   decisionsFor?: (entryMs: number) => readonly LookDecision[] | null
 }) {
+  const phone = usePhoneChart()
   if (!(width > 0) || !(height > 0)) return null
   const layouts = layoutTradeLabels(items, width, height)
   const grouped = layouts.reduce(
@@ -243,7 +245,7 @@ export default function TerminalTradeOverlay({
         ),
       )
     : 0
-  const showFicha = selected !== null && width >= FICHA_WIDTH + 8
+  const showFicha = !phone && selected !== null && width >= FICHA_WIDTH + 8
   return (
     <div
       className="pointer-events-none absolute top-0 left-0 z-3 overflow-hidden"

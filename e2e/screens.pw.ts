@@ -116,7 +116,11 @@ async function noHorizontalScroll(page: Page) {
 
 test('terminal decisions list keeps its height whatever the number of verdicts', async ({
   page,
-}) => {
+}, info) => {
+  test.skip(
+    info.project.name.startsWith('mobile'),
+    'phone view has its own spec',
+  )
   await openTerminal(page, 5)
   const frame = page.getByTestId('activity-panel')
   const small = await frame.boundingBox()
@@ -272,7 +276,11 @@ test('estrategias shows the same chips as the terminal when the gateway is up', 
  */
 test('terminal chart with two sub-panes takes the available height', async ({
   page,
-}) => {
+}, info) => {
+  test.skip(
+    info.project.name.startsWith('mobile'),
+    'phone view has its own spec',
+  )
   const interval = 60_000
   const end = 1_800_000_000_000
   const candles = Array.from({ length: 120 }, (_, index) => {

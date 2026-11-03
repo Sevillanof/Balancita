@@ -1,5 +1,14 @@
 import { expect, test, type Page } from '@playwright/test'
 
+// The phone view (<= 600 px) is a separate layout with its own test: terminal-mobile.pw.ts.
+// eslint-disable-next-line no-empty-pattern -- Playwright requires a destructuring pattern here
+test.beforeEach(({}, info) => {
+  test.skip(
+    info.project.name.startsWith('mobile'),
+    'phone view has its own spec',
+  )
+})
+
 const NOW = Date.now()
 const RUN = 'terminal-viewport-fixture'
 const PRODUCT = 'PF_ETHUSD'
@@ -300,6 +309,7 @@ for (const [width, height] of [
   test(`Terminal C fits actual synthetic components at ${width}x${height}`, async ({
     page,
   }) => {
+    test.skip(width! <= 600, 'phone view has its own spec')
     await page.setViewportSize({ width: width!, height: height! })
     await openFixture(page)
     await assertViewport(page)
@@ -387,7 +397,7 @@ for (const summaryStatus of ['pending', 'error', 'stale'] as const) {
   test(`empty news keeps an honest pinned ${summaryStatus} card without scroll`, async ({
     page,
   }) => {
-    await page.setViewportSize({ width: 390, height: 640 })
+    await page.setViewportSize({ width: 620, height: 640 })
     await openFixture(page, { empty: true, summaryStatus })
     await expect(page.getByTestId('qwen-news-briefing')).toContainText(
       summaryStatus === 'pending'
