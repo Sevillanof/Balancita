@@ -2,6 +2,8 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!-- Plantilla: la rellena ops/launchd/instalar-archivo-parquet.sh (no editar a mano: __REPO__, __PYTHON__, __DESTINO__, __RESPALDOS__).
      Exportacion nocturna a Parquet, 04:30 hora LOCAL de la Mac (Madrid). Si la Mac duerme a esa hora, launchd la corre al despertar.
+     Al despertar el comando ESPERA (hasta 15 min) a que pasen 10 min desde el despertar; si aun asi sale con codigo 3, StartInterval
+     lo reintenta cada hora. Es seguro: idempotente, con candado, y una corrida sin novedad no repite quick_check.
      No borra nada de SQLite: el borrado es otro interruptor, apagado por defecto (docs/archivo-parquet.md). -->
 <plist version="1.0">
 <dict>
@@ -26,6 +28,7 @@
     <key>Hour</key><integer>4</integer>
     <key>Minute</key><integer>30</integer>
   </dict>
+  <key>StartInterval</key><integer>3600</integer>
   <key>RunAtLoad</key><false/>
   <key>Nice</key><integer>10</integer>
   <key>LowPriorityIO</key><true/>

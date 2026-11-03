@@ -61,15 +61,16 @@ Un solo comando, en la Mac, sin `sudo` (crea el entorno aparte con pyarrow y has
 bash ops/launchd/instalar-archivo-parquet.sh
 ```
 
-Lo que queda instalado: `~/.venvs/archivo-parquet` (fuera del repo), `~/Library/LaunchAgents/com.balancita.archivo-parquet.plist` (plantilla en `ops/launchd/`) y una corrida **todas las noches a las 04:30 hora local de la Mac** (si la Mac duerme a esa hora, launchd la corre al despertar). Prioridad baja (`Nice`, `LowPriorityIO`). El resultado va a `~/balancita-data.noindex/archivo-parquet`.
+Lo que queda instalado: `~/.venvs/archivo-parquet` (fuera del repo), `~/Library/LaunchAgents/com.balancita.archivo-parquet.plist` (plantilla en `ops/launchd/`) y una corrida **todas las noches a las 04:30 hora local de la Mac** (si la Mac duerme a esa hora, launchd la corre al despertar; además `StartInterval` de 3600 s la reintenta cada hora, y las corridas sin novedad son baratas). Para actualizar el agente basta repetir el instalador: recarga el existente con `launchctl bootout` + `bootstrap`. Prioridad baja (`Nice`, `LowPriorityIO`). El resultado va a `~/balancita-data.noindex/archivo-parquet`.
 
 `python -m archivo_parquet nocturno [--destino D] [--respaldos R] [--bases a,b] [--dry-run]` (destino: `--destino`, o `BALANCITA_ARCHIVO_DESTINO`, o `~/balancita-data.noindex/archivo-parquet`; copias: `--respaldos`, o `BALANCITA_RESPALDOS_DIR`, o `server/data/backups`):
 
 - Por cada base elige la copia diaria **más reciente que pase `quick_check`** (nunca la base viva), exporta todas las tablas que tenga, corre `verificar` sobre todo el archivo y agrega una línea de resumen a `nocturno.jsonl` en el destino.
 - No usa una copia con menos de 5 min de vida ni si hay un `.tmp` de copia en curso (de menos de 2 h): lo deja para otra noche. Una base sin ninguna copia (no se usa) se omite sin error; una copia ilegible o con `quick_check` malo cuenta como sin confirmar.
 - Un solo proceso a la vez (`flock` sobre `.nocturno.lock`); es idempotente (lo ya confirmado se salta).
-- No corre en los 10 min posteriores a un despertar: en macOS lo sabe por `sysctl kern.waketime`; en otros sistemas no hay forma simple y no se aplica.
-- Códigos: `0` todo confirmado; `1` algo quedó **sin confirmar** (día, copia mala o `verificar` con problemas); `2` uso incorrecto o sin pyarrow; `3` no corrió a propósito (otra corrida en curso o despertar reciente; no es un fallo, la noche siguiente lo recupera).
+- No exporta en los 10 min posteriores a un despertar: en macOS lo sabe por `sysctl kern.waketime`; en otros sistemas no hay forma simple y no se aplica. Si la guarda se activa, el propio comando **espera** (ya con `nice` y el candado tomado, en tramos de 30 s, releyendo el despertar en cada tramo) hasta que pasen esos 10 min, con un tope de 15 min de espera total; un nuevo despertar durante la espera recalcula. En `--dry-run` no espera. Si el tope no alcanza sale con `3` y el `StartInterval` de launchd lo reintenta.
+- Una corrida sin novedad es barata: si hoy (UTC) ya hubo una corrida con código `0` sobre la misma copia de una base (según `nocturno.jsonl`), esa base queda `sin_novedad` sin repetir su `quick_check`; `verificar` sí corre siempre.
+- Códigos: `0` todo confirmado; `1` algo quedó **sin confirmar** (día, copia mala o `verificar` con problemas); `2` uso incorrecto o sin pyarrow; `3` no corrió a propósito (otra corrida en curso o despertar reciente que no terminó en el tope de espera; no es un fallo, el reintento horario o la noche siguiente lo recupera).
 - Con `--dry-run` no escribe nada (ni el log) y no toma el candado.
 
 ## Borrado seguro de lo ya archivado (fase 3, parte B)
