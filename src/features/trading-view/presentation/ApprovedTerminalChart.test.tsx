@@ -39,6 +39,8 @@ const chartMocks = vi.hoisted(() => {
       return series === 'candles' ? candles : volume
     }),
     timeScale: vi.fn(() => timeScale),
+    subscribeCrosshairMove: vi.fn(),
+    unsubscribeCrosshairMove: vi.fn(),
     subscribeClick: vi.fn(),
     unsubscribeClick: vi.fn(),
     remove: vi.fn(),

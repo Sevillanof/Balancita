@@ -20,6 +20,7 @@ import {
   tradeIdentity,
   type TerminalChartTrade,
 } from '../domain/terminal-trade-model.ts'
+import CandleHoverCard, { type HoverEntry } from './CandleHoverCard.tsx'
 import TerminalTradeOverlay from './TerminalTradeOverlay.tsx'
 import {
   EMPTY_TRADE_FRAME,
@@ -296,10 +297,15 @@ export default function ApprovedTerminalChart({
     covered: boolean
   } | null>(null)
   const tradeMode = trades !== undefined
+  const tradesRef = useRef(trades)
+  const [hover, setHover] = useState<{ time: number; left: boolean } | null>(
+    null,
+  )
 
   useEffect(() => {
+    tradesRef.current = trades
     propsRef.current = { candles, markers, intervalSeconds, onSelect }
-  }, [candles, markers, intervalSeconds, onSelect])
+  }, [candles, markers, intervalSeconds, onSelect, trades])
 
   useEffect(() => {
     const node = container.current
@@ -394,6 +400,20 @@ export default function ApprovedTerminalChart({
       .priceScale()
       .applyOptions({ scaleMargins: { top: 0.83, bottom: 0.02 } })
     const markerApi = createSeriesMarkers(series, [])
+    chart.subscribeCrosshairMove((param) => {
+      const x = param.point?.x
+      const time = typeof param.time === 'number' ? param.time : null
+      const left = x !== undefined && x > node.clientWidth * 0.4
+      setHover((previous) =>
+        time === null || x === undefined
+          ? previous === null
+            ? previous
+            : null
+          : previous?.time === time && previous.left === left
+            ? previous
+            : { time, left },
+      )
+    })
     if (tradeMode && typeof series.attachPrimitive === 'function') {
       tradePrimitive.current = new TerminalTradePrimitive(setTradeFrame)
       series.attachPrimitive(tradePrimitive.current)
@@ -788,6 +808,8 @@ export default function ApprovedTerminalChart({
           Math.floor(marker.time / intervalSeconds) * intervalSeconds
         if (!candleTimes.has(bucket)) return []
         if (marker.band === true && !stands(marker, selectedId)) return []
+        // A WAIT is not an event: it gets no «W» on the candles unless it is the selected one.
+        if (marker.type === 'wait' && !stands(marker, selectedId)) return []
         const appearance = markerPresentation(marker, markerColors)
         const strategyColor = strategyMarkerColor(marker.strategyId)
         return [
@@ -1010,6 +1032,36 @@ export default function ApprovedTerminalChart({
     )
   }, [fixedLines, initialViewport, currency])
 
+  const hoverIndex =
+    hover === null ? -1 : candles.findIndex((item) => item.time === hover.time)
+  const hovered = hoverIndex >= 0 ? candles[hoverIndex]! : null
+  const hoverEntries: HoverEntry[] =
+    hovered === null
+      ? []
+      : (trades ?? []).flatMap((trade) =>
+          trade.entryPrice !== null &&
+          trade.entryMs >= hovered.time * 1000 &&
+          trade.entryMs < (hovered.time + intervalSeconds) * 1000
+            ? [
+                {
+                  tradeNo: trade.tradeNo,
+                  side: trade.side,
+                  price: trade.entryPrice,
+                },
+              ]
+            : [],
+        )
+  const hoverCard =
+    hovered !== null && hover !== null ? (
+      <CandleHoverCard
+        candle={hovered}
+        previousClose={candles[hoverIndex - 1]?.close ?? hovered.open}
+        volumeMax={candles.reduce((max, item) => Math.max(max, item.volume), 0)}
+        entries={hoverEntries}
+        align={hover.left ? 'start' : 'middle'}
+      />
+    ) : null
+
   const renderer = (
     <div
       ref={container}
@@ -1041,6 +1093,7 @@ export default function ApprovedTerminalChart({
           data-testid="terminal-chart-surface"
         >
           {renderer}
+          {hoverCard}
           <TerminalTradeOverlay
             items={tradeFrame.items}
             width={tradeFrame.width}

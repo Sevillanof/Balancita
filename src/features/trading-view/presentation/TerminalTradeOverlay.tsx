@@ -52,10 +52,12 @@ function TradeSpanGlyph({
   layout,
   selected,
   confirmed,
+  height,
 }: {
   layout: TradeLabelLayout
   selected: boolean
   confirmed: boolean
+  height: number
 }) {
   const { item, entry } = layout
   const tone = tradeTone(item.trade, confirmed)
@@ -92,12 +94,40 @@ function TradeSpanGlyph({
         />
       )}
       {item.entryVisible && (
-        <circle
-          cx={item.entryX}
-          cy={item.entryY}
-          r={selected ? 6 : 4.5}
-          fill="var(--color-chart-info)"
-        />
+        <>
+          {selected && (
+            <line
+              x1={item.entryX}
+              x2={item.entryX}
+              y1={item.entryY}
+              y2={height}
+              stroke="var(--color-chart-info)"
+              strokeDasharray="2 4"
+              opacity={0.5}
+            />
+          )}
+          <circle
+            data-testid="trade-entry-dot"
+            cx={item.entryX}
+            cy={item.entryY}
+            r={selected ? 7 : 5.5}
+            fill="var(--color-chart-info)"
+            stroke="var(--color-ink)"
+            strokeWidth={2}
+          />
+          <text
+            x={item.entryX + 10}
+            y={item.entryY - 9}
+            fill="var(--color-ink)"
+            stroke="var(--color-chart-surface)"
+            strokeWidth={3}
+            paintOrder="stroke"
+            fontSize={11}
+            fontWeight={700}
+          >
+            {item.trade.side === 'LONG' ? '▲' : '▼'} #{item.trade.tradeNo}
+          </text>
+        </>
       )}
       {point && (
         <>
@@ -238,6 +268,7 @@ export default function TerminalTradeOverlay({
             layout={layout}
             selected={selectedId === layout.item.id}
             confirmed={confirmed}
+            height={height}
           />
         ))}
       </svg>

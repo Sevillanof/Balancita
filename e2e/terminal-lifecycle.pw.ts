@@ -823,7 +823,7 @@ test('three open operations with close entries keep one separate label each on t
       trade_no: no,
       side: 'LONG',
       entry_price: price,
-      mark_price: 2210,
+      mark_price: 2192,
       net_usd: net,
       net_complete_usd: net,
       execution: {
@@ -835,9 +835,9 @@ test('three open operations with close entries keep one separate label each on t
   await openFixture(page, {
     decisions: withAuditor(reboundLooks()),
     trades: [
-      open(5, 80, 2210.3, 0),
-      open(4, 130, 2211, -0.28),
-      open(3, 340, 2216, -1.73),
+      open(5, 20, 2192.3, 0),
+      open(4, 30, 2192, -0.28),
+      open(3, 45, 2196, -1.73),
     ],
   })
   const labels = page.getByRole('button', { name: /^Entrada LONG operación/ })
@@ -856,5 +856,54 @@ test('three open operations with close entries keep one separate label each on t
   if (SHOTS)
     await page.screenshot({
       path: `${SHOTS}/terminal-etiquetas-abiertas-${test.info().project.name}.png`,
+    })
+})
+
+test('hovering a candle shows a visual card, and the entry candle names its operation', async ({
+  page,
+}) => {
+  const open = (no: number, agoMin: number, price: number, net: number) => {
+    const base = openTrade(agoMin, false)
+    return {
+      ...base,
+      trade_no: no,
+      side: 'LONG',
+      entry_price: price,
+      mark_price: 2192,
+      net_usd: net,
+      net_complete_usd: net,
+      execution: {
+        ...base.execution,
+        entry: { ...base.execution.entry, price },
+      },
+    }
+  }
+  await openFixture(page, {
+    decisions: withAuditor(reboundLooks()),
+    trades: [
+      open(5, 30, 2192, 0),
+      open(4, 45, 2190, -0.28),
+      open(3, 60, 2188, -1.73),
+    ],
+  })
+  const surface = page.getByTestId('terminal-chart-surface')
+  const dot = page.getByTestId('trade-entry-dot').first()
+  await expect(dot).toBeAttached()
+  const box = (await surface.boundingBox())!
+  await page.mouse.move(box.x + box.width * 0.3, box.y + box.height * 0.5)
+  const card = page.getByTestId('candle-hover-card')
+  await expect(card).toBeVisible()
+  await expect(card).toContainText('Abre')
+  await expect(card).toContainText('Volumen')
+  if (SHOTS)
+    await page.screenshot({
+      path: `${SHOTS}/terminal-hover-vela-${test.info().project.name}.png`,
+    })
+  const entryX = Number(await dot.getAttribute('cx'))
+  await page.mouse.move(box.x + entryX, box.y + box.height * 0.85)
+  await expect(card).toContainText(/Entrada #\d/)
+  if (SHOTS)
+    await page.screenshot({
+      path: `${SHOTS}/terminal-hover-entrada-${test.info().project.name}.png`,
     })
 })
