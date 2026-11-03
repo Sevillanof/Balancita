@@ -7,13 +7,12 @@ import {
   TONE_TEXT,
 } from '../features/trading-view/presentation/step-tones.ts'
 import { tradeIdentity } from '../features/trading-view/domain/terminal-trade-model.ts'
-import { amount, usd } from '../shared/finance/format.ts'
+import { usd } from '../shared/finance/format.ts'
 import { formatBalance } from './account-balance.ts'
-import { DecisionChips } from './DecisionGlyphs.tsx'
-import { qwenTradesNotice, signedUsd } from './qwen-trades-text.ts'
+import { qwenTradesNotice } from './qwen-trades-text.ts'
 import { money } from './terminal-labels.ts'
 import type { DecisionRow } from './terminal-decisions.ts'
-import type { LifecycleView } from './terminal-lifecycle.ts'
+import type { LifecycleStep, LifecycleView } from './terminal-lifecycle.ts'
 import type {
   NewsDirection,
   TerminalNewsBriefing,
@@ -42,6 +41,11 @@ const MARK: Record<NewsDirection, { glyph: string; tone: string }> = {
   bearish: { glyph: '−', tone: 'text-short' },
   neutral: { glyph: '=', tone: 'text-ink-2' },
 }
+
+const signedDollars = (value: number | null): string =>
+  value === null
+    ? '—'
+    : `${value < 0 ? '−' : '+'}${Math.abs(value).toFixed(2).replace('.', ',')} $`
 
 const tradeTone = (net: number | null): string =>
   net === null || net === 0
@@ -119,7 +123,7 @@ function OperationsTab({
                   className={`text-body tabular-nums ${tradeTone(trade.netUsd)}`}
                   data-testid="mobile-op-net"
                 >
-                  {signedUsd(trade.netUsd)}
+                  {signedDollars(trade.netUsd)}
                 </b>
                 <span className="text-ink-2" aria-hidden="true">
                   {open ? '▾' : '▸'}
@@ -163,10 +167,13 @@ function OperationsTab({
       </ul>
       <p className="m-0 pt-1.5 text-label tabular-nums">
         <b className={tradeTone(total)} data-testid="mobile-total">
-          Total {signedUsd(total)}
+          Total {signedDollars(total)}
         </b>
         {usedUsd !== null && (
-          <span className="text-ink-2"> · usado {amount(usedUsd)} $</span>
+          <span className="text-ink-2">
+            {' '}
+            · usado {Math.round(usedUsd).toLocaleString('es-ES')} $
+          </span>
         )}
       </p>
     </div>
@@ -232,15 +239,63 @@ function NewsTab({
   )
 }
 
+const BOX_TONE = {
+  ok: { glyph: '✓', cls: 'bg-long/20 text-long' },
+  no: { glyph: '✕', cls: 'bg-short/20 text-short' },
+  na: { glyph: '…', cls: 'bg-warn/20 text-warn' },
+} as const
+
+const boxOf = (value: boolean | null | undefined) =>
+  BOX_TONE[value === true ? 'ok' : value === false ? 'no' : 'na']
+
+const ACTION_WORD: Record<string, string> = {
+  'enter-long': 'Comprar',
+  'enter-short': 'Vender',
+  exit: 'Cerrar',
+  hold: 'Mantener',
+  wait: 'Esperar',
+  blocked: 'Esperar',
+  skipped: 'Sin decisión',
+}
+
+/** The five steps of the phone strip: with an open operation its entry plus the exit rules that matter. */
+function phoneSteps(
+  view: LifecycleView | null,
+  trade: QwenTrade | null,
+): readonly LifecycleStep[] {
+  if (view === null) return []
+  if (view.phase === 'entry') return view.steps.slice(0, 5)
+  const by = (id: string) => view.steps.find((step) => step.id === id)
+  const entered: LifecycleStep | null = trade
+    ? {
+        id: 'entered',
+        icon: 'enter',
+        label: 'Entrada',
+        tone: 'ok',
+        headline: `Entró ${usd(trade.entryPrice)}`,
+        rows: [],
+        meter: null,
+        history: [],
+        rule: '',
+        checks: null,
+      }
+    : null
+  return [entered, by('flip'), by('news12'), by('exhaust24'), by('cap')].filter(
+    (step): step is LifecycleStep => step !== null && step !== undefined,
+  )
+}
+
 function DecisionsTab({
   lifecycle,
   rows,
+  trade,
 }: {
   lifecycle: LifecycleView | null
   rows: readonly DecisionRow[]
+  trade: QwenTrade | null
 }) {
   const [picked, setPicked] = useState<string | null>(null)
-  const steps = lifecycle?.steps ?? []
+  const steps = phoneSteps(lifecycle, trade)
   const step = steps.find((item) => item.id === picked) ?? steps[0] ?? null
   return (
     <div data-testid="mobile-decisions">
@@ -280,20 +335,46 @@ function DecisionsTab({
         </>
       )}
       <ul className="m-0 list-none p-0">
-        {rows.slice(0, 4).map((row) => (
-          <li
-            key={row.id}
-            className="flex items-center justify-between gap-2 border-0 border-b border-solid border-line py-2 text-label last:border-0"
-          >
-            <span className="text-ink-2 tabular-nums">{row.time}</span>
-            {row.view ? (
-              <DecisionChips view={row.view} />
-            ) : (
-              <span className="text-ink-2">{row.reason}</span>
-            )}
-            <b>{row.action}</b>
-          </li>
-        ))}
+        {rows.slice(0, 4).map((row) => {
+          const view = row.view
+          const boxes = view
+            ? [
+                boxOf(view.master === null ? null : view.master !== 0),
+                boxOf(view.gate),
+                boxOf(view.news),
+              ]
+            : []
+          return (
+            <li
+              key={row.id}
+              className="flex items-center justify-between gap-2 border-0 border-b border-solid border-line py-2 text-label last:border-0"
+            >
+              <span className="text-ink-2 tabular-nums">{row.time}</span>
+              <span className="flex gap-1.5">
+                {boxes.map((box, index) => (
+                  <span
+                    key={index}
+                    aria-hidden="true"
+                    className={`grid size-6 place-items-center rounded-md text-label ${box.cls}`}
+                  >
+                    {box.glyph}
+                  </span>
+                ))}
+              </span>
+              <b
+                className={
+                  view?.kind === 'enter-long'
+                    ? 'text-long'
+                    : view?.kind === 'enter-short'
+                      ? 'text-short'
+                      : 'text-ink-2'
+                }
+              >
+                {view ? ACTION_WORD[view.kind] : row.action}
+              </b>
+            </li>
+          )
+        })}
       </ul>
     </div>
   )
@@ -366,7 +447,6 @@ export default function MobileTerminal({
   banner?: ReactNode
 }) {
   const [tab, setTab] = useState<Tab>('ops')
-  const [newsOpen, setNewsOpen] = useState(false)
   const account = useQwenAccount()
   const alerts = statusItems.filter(
     (item) => item.tone === 'warn' || item.tone === 'bad',
@@ -422,25 +502,6 @@ export default function MobileTerminal({
         </span>
       </header>
       {banner}
-      {newsBriefing?.text && (
-        <button
-          type="button"
-          aria-expanded={newsOpen}
-          onClick={() => setNewsOpen((value) => !value)}
-          data-testid="mobile-news-line"
-          className="mx-3 mb-2 flex cursor-pointer items-start gap-2 rounded-xl border-0 bg-surface-2 px-3 py-2 text-left text-label text-ink"
-        >
-          <span aria-hidden="true">📰</span>
-          <span
-            className={`flex-1 leading-snug ${newsOpen ? '' : 'line-clamp-2'}`}
-          >
-            {newsBriefing.text}
-          </span>
-          <span className="text-ink-2" aria-hidden="true">
-            {newsOpen ? '⌃' : '⌄'}
-          </span>
-        </button>
-      )}
       <div
         className="min-h-0 flex-1 overflow-hidden bg-chart-surface"
         data-testid="mobile-chart"
@@ -485,7 +546,11 @@ export default function MobileTerminal({
           />
         )}
         {tab === 'decisions' && (
-          <DecisionsTab lifecycle={lifecycle} rows={decisionRows} />
+          <DecisionsTab
+            lifecycle={lifecycle}
+            rows={decisionRows}
+            trade={shown[0] ?? null}
+          />
         )}
         {tab === 'status' && (
           <StatusTab items={statusItems} diagnosis={diagnosis} />

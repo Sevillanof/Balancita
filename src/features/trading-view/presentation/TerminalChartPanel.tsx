@@ -526,7 +526,13 @@ export default function TerminalChartPanel({
   lifecycle?: LifecycleView | null
   decisions?: readonly LookDecisions[]
 }) {
-  const [settings, setSettings] = useState<Settings>(loadSettings)
+  const [storedSettings, setSettings] = useState<Settings>(loadSettings)
+  const phone = usePhoneChart()
+  // The phone view shows no sub-panes; what the person chose on desktop stays stored.
+  const settings = useMemo<Settings>(
+    () => (phone ? { ...storedSettings, panes: [] } : storedSettings),
+    [phone, storedSettings],
+  )
   const [now, setNow] = useState(() => Date.now())
   const [timeFocus, setTimeFocus] = useState<{
     ms: number
@@ -547,11 +553,11 @@ export default function TerminalChartPanel({
   }
   useEffect(() => {
     try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(settings))
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(storedSettings))
     } catch {
       // Private mode or blocked storage: settings last for this view only.
     }
-  }, [settings])
+  }, [storedSettings])
   useEffect(() => {
     // The funding countdown ticks only over real market data.
     if (!live) return
@@ -646,15 +652,17 @@ export default function TerminalChartPanel({
   }, [profileSource])
   const panes = useMemo(
     () =>
-      flowPanes(
-        settings.panes.filter(
-          (id) => live || !PANES.find((pane) => pane.id === id)!.live,
-        ),
-        remote?.flow ?? [],
-        shown,
-        colors,
-      ),
-    [settings.panes, remote, shown, colors, live],
+      phone
+        ? []
+        : flowPanes(
+            settings.panes.filter(
+              (id) => live || !PANES.find((pane) => pane.id === id)!.live,
+            ),
+            remote?.flow ?? [],
+            shown,
+            colors,
+          ),
+    [settings.panes, remote, shown, colors, live, phone],
   )
   const askKey = (id: Pane) => `${id}|${product ?? ''}|${settings.intervalMs}`
   const wantedLive = settings.panes.filter(
@@ -779,7 +787,6 @@ export default function TerminalChartPanel({
   const toggle = <T extends string>(list: readonly T[], id: T): T[] =>
     list.includes(id) ? list.filter((item) => item !== id) : [...list, id]
   const change = stats?.change_24h_pct ?? null
-  const phone = usePhoneChart()
 
   return (
     <div
@@ -791,9 +798,11 @@ export default function TerminalChartPanel({
     >
       <div
         className={
-          viewport
-            ? 'flex flex-none flex-wrap items-center gap-x-2 gap-y-1 px-2'
-            : 'flex flex-wrap items-center gap-x-4 gap-y-2 px-3 py-0 chart-phone:flex-nowrap chart-phone:gap-x-3 chart-phone:overflow-x-auto chart-phone:pb-1 chart-desktop:gap-x-3 chart-desktop:gap-y-1 chart-desktop:px-2'
+          phone
+            ? 'hidden'
+            : viewport
+              ? 'flex flex-none flex-wrap items-center gap-x-2 gap-y-1 px-2'
+              : 'flex flex-wrap items-center gap-x-4 gap-y-2 px-3 py-0 chart-phone:flex-nowrap chart-phone:gap-x-3 chart-phone:overflow-x-auto chart-phone:pb-1 chart-desktop:gap-x-3 chart-desktop:gap-y-1 chart-desktop:px-2'
         }
       >
         {viewport ? (
@@ -1148,7 +1157,7 @@ export default function TerminalChartPanel({
           })}
         </div>
       )}
-      {viewport && pendingPanes.length > 0 ? (
+      {viewport && !phone && pendingPanes.length > 0 ? (
         <p
           className="m-0 line-clamp-1 px-2 text-label text-ink-2"
           title={pendingPanes.map((pane) => pane.text).join(' · ')}
