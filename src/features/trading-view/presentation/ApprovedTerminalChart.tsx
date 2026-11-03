@@ -20,7 +20,14 @@ import {
   tradeIdentity,
   type TerminalChartTrade,
 } from '../domain/terminal-trade-model.ts'
-import CandleHoverCard, { type HoverEntry } from './CandleHoverCard.tsx'
+import CandleHoverCard, {
+  type HoverEntry,
+  type HoverSpot,
+} from './CandleHoverCard.tsx'
+import {
+  lookDecisionsAt,
+  type LookDecisions,
+} from '../../../app/terminal-lifecycle.ts'
 import TerminalTradeOverlay from './TerminalTradeOverlay.tsx'
 import {
   EMPTY_TRADE_FRAME,
@@ -135,6 +142,8 @@ type Props = {
   /** Moves the view to this instant (a new `revision` moves it again). */
   timeFocus?: { ms: number; revision: number } | null
   onSelectTrade?: (id: string) => void
+  /** What each look decided, oldest first: the icons of the hovered candle and of an operation's entry. */
+  decisions?: readonly LookDecisions[]
   viewport?: boolean
 }
 
@@ -235,6 +244,7 @@ function markerPresentation(
 const BASE_SCALE_MARGINS = { top: 0.12, bottom: 0.22 }
 // Distance between two stacked glyphs of one candle: glyph + margin + label.
 const MARKER_STACK_STEP_PX = 30
+const NO_DECISIONS: readonly LookDecisions[] = []
 
 export default function ApprovedTerminalChart({
   candles,
@@ -259,6 +269,7 @@ export default function ApprovedTerminalChart({
   tradeFocus = null,
   timeFocus = null,
   onSelectTrade,
+  decisions = NO_DECISIONS,
   viewport = false,
 }: Props) {
   const container = useRef<HTMLDivElement>(null)
@@ -297,15 +308,14 @@ export default function ApprovedTerminalChart({
     covered: boolean
   } | null>(null)
   const tradeMode = trades !== undefined
-  const tradesRef = useRef(trades)
-  const [hover, setHover] = useState<{ time: number; left: boolean } | null>(
-    null,
-  )
+  const [hover, setHover] = useState<HoverSpot | null>(null)
+  const hoverHeld = useRef(false)
+  const hoverClear = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const [plotWidth, setPlotWidth] = useState(0)
 
   useEffect(() => {
-    tradesRef.current = trades
     propsRef.current = { candles, markers, intervalSeconds, onSelect }
-  }, [candles, markers, intervalSeconds, onSelect, trades])
+  }, [candles, markers, intervalSeconds, onSelect])
 
   useEffect(() => {
     const node = container.current
@@ -401,17 +411,28 @@ export default function ApprovedTerminalChart({
       .applyOptions({ scaleMargins: { top: 0.83, bottom: 0.02 } })
     const markerApi = createSeriesMarkers(series, [])
     chart.subscribeCrosshairMove((param) => {
-      const x = param.point?.x
       const time = typeof param.time === 'number' ? param.time : null
-      const left = x !== undefined && x > node.clientWidth * 0.4
+      if (hoverClear.current !== null) clearTimeout(hoverClear.current)
+      hoverClear.current = null
+      if (time === null) {
+        // Leaving the candles for the card keeps the card; anything else drops it.
+        hoverClear.current = setTimeout(() => {
+          if (!hoverHeld.current) setHover(null)
+        }, 160)
+        return
+      }
+      const candle = propsRef.current.candles.find((item) => item.time === time)
+      const x = chart.timeScale().timeToCoordinate(time)
+      const highY = candle ? series.priceToCoordinate(candle.high) : null
+      const lowY = candle ? series.priceToCoordinate(candle.low) : null
+      if (x === null || highY === null || lowY === null) return
+      setPlotWidth(node.clientWidth - chart.priceScale('right').width())
       setHover((previous) =>
-        time === null || x === undefined
-          ? previous === null
-            ? previous
-            : null
-          : previous?.time === time && previous.left === left
-            ? previous
-            : { time, left },
+        previous?.time === time &&
+        Math.round(previous.x) === Math.round(x) &&
+        Math.round(previous.highY) === Math.round(highY)
+          ? previous
+          : { time, x, highY, lowY },
       )
     })
     if (tradeMode && typeof series.attachPrimitive === 'function') {
@@ -1039,26 +1060,35 @@ export default function ApprovedTerminalChart({
     hovered === null
       ? []
       : (trades ?? []).flatMap((trade) =>
-          trade.entryPrice !== null &&
           trade.entryMs >= hovered.time * 1000 &&
           trade.entryMs < (hovered.time + intervalSeconds) * 1000
-            ? [
-                {
-                  tradeNo: trade.tradeNo,
-                  side: trade.side,
-                  price: trade.entryPrice,
-                },
-              ]
+            ? [{ tradeNo: trade.tradeNo, side: trade.side }]
             : [],
         )
   const hoverCard =
     hovered !== null && hover !== null ? (
       <CandleHoverCard
         candle={hovered}
+        spot={hover}
         previousClose={candles[hoverIndex - 1]?.close ?? hovered.open}
         volumeMax={candles.reduce((max, item) => Math.max(max, item.volume), 0)}
+        steps={
+          lookDecisionsAt(
+            decisions,
+            (hovered.time + intervalSeconds) * 1000 - 1,
+            Math.max(intervalSeconds * 1000, 15 * 60_000),
+          )?.steps ?? null
+        }
         entries={hoverEntries}
-        align={hover.left ? 'start' : 'middle'}
+        plotWidth={plotWidth}
+        onHold={(held) => {
+          hoverHeld.current = held
+          if (held && hoverClear.current !== null) {
+            clearTimeout(hoverClear.current)
+            hoverClear.current = null
+          }
+          if (!held) setHover(null)
+        }}
       />
     ) : null
 
@@ -1101,6 +1131,9 @@ export default function ApprovedTerminalChart({
             selectedId={selectedTradeId}
             confirmed={tradesConfirmed}
             onSelect={(id) => onSelectTrade?.(id)}
+            decisionsFor={(entryMs) =>
+              lookDecisionsAt(decisions, entryMs, 30 * 60_000)?.steps ?? null
+            }
           />
           {viewport && (
             <button

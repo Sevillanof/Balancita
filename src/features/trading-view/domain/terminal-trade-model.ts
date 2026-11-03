@@ -147,9 +147,8 @@ export interface TradeLabelLayout {
   result: TradeLabelRect | null
 }
 
-/** Pill sizes of the single per-operation label (the selected one shows two more lines of detail). */
+/** Size of the single per-operation label (the selected operation's data lives in its ficha at the top edge). */
 export const TRADE_PILL_HEIGHT = 26
-export const TRADE_PILL_SELECTED_HEIGHT = 62
 const TRADE_PILL_GAP = 6
 const TRADE_PILL_EDGE = 4
 
@@ -157,34 +156,23 @@ export function tradePillWidth(width: number): number {
   return width < 500 ? 108 : 136
 }
 
-/** «2 h 10 m», «45 m», «3 d 4 h»: how long an operation has been open (or was). */
-export function formatTradeDuration(ms: number): string {
-  const minutes = Math.max(0, Math.floor(ms / 60_000))
-  if (minutes < 60) return `${minutes} m`
-  const hours = Math.floor(minutes / 60)
-  if (hours < 24) return `${hours} h ${minutes % 60} m`
-  return `${Math.floor(hours / 24)} d ${hours % 24} h`
-}
-
 /**
  * One label per operation, stacked in a column at the right edge of the chart, each
  * as close as possible to the height of its own entry line, with a fixed gap so
  * labels never overlap however many operations are open. The selected operation
- * expands in place; whatever does not fit in the column gets `entry: null`.
+ * keeps the same size; whatever does not fit in the column gets `entry: null`.
  */
 export function layoutTradeLabels(
   items: readonly TradeCoordinates[],
   width: number,
   height: number,
-  selectedId: string,
 ): TradeLabelLayout[] {
   const pillWidth = tradePillWidth(width)
   const left = Math.max(TRADE_PILL_EDGE, width - pillWidth - TRADE_PILL_EDGE)
   const slots = items
     .map((item) => ({
       item,
-      height:
-        item.id === selectedId ? TRADE_PILL_SELECTED_HEIGHT : TRADE_PILL_HEIGHT,
+      height: TRADE_PILL_HEIGHT,
       top: 0,
     }))
     .sort((a, b) => a.item.entryY - b.item.entryY)

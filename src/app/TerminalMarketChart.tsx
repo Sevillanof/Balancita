@@ -12,7 +12,7 @@ import { candleForDecision, markerGap } from './terminal-markers.ts'
 import { decisionView } from './terminal-decision-view.ts'
 import { analysisAction } from './terminal-labels.ts'
 import { QWEN_STRATEGY_ID } from './useQwenDecisions.ts'
-import type { LifecycleView } from './terminal-lifecycle.ts'
+import { lookDecisionSeries, type LifecycleView } from './terminal-lifecycle.ts'
 import type { TerminalChartTrade } from '../features/trading-view/domain/terminal-trade-model.ts'
 
 export default function TerminalMarketChart({
@@ -224,6 +224,8 @@ export default function TerminalMarketChart({
     [analyses, bucketsKey],
   )
 
+  const decisions = useMemo(() => lookDecisionSeries(analyses), [analyses])
+
   if (
     market.schema_version !== 'futures-terminal-market.v1' ||
     candles.length === 0
@@ -261,6 +263,7 @@ export default function TerminalMarketChart({
         tradeFocus={tradeFocus}
         onSelectTrade={onSelectTrade}
         lifecycle={lifecycle}
+        decisions={decisions}
       />
     </>
   )

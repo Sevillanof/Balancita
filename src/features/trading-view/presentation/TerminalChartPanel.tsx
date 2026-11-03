@@ -43,7 +43,10 @@ import {
   type TerminalChartTrade,
 } from '../domain/terminal-trade-model.ts'
 import { signedUsd } from '../../../app/qwen-trades-text.ts'
-import type { LifecycleView } from '../../../app/terminal-lifecycle.ts'
+import type {
+  LifecycleView,
+  LookDecisions,
+} from '../../../app/terminal-lifecycle.ts'
 import LifecycleSteps from './LifecycleSteps.tsx'
 
 const SUMMARY_CLASSES =
@@ -487,6 +490,7 @@ export default function TerminalChartPanel({
   onSelectTrade,
   viewport = false,
   lifecycle = null,
+  decisions,
 }: {
   /** Live 1m candles from the terminal stream (seconds). */
   candles: readonly ApprovedTerminalCandle[]
@@ -519,6 +523,7 @@ export default function TerminalChartPanel({
   viewport?: boolean
   /** Steps of the entry (no open operation) or exit cycle, shown at the right of the bar. */
   lifecycle?: LifecycleView | null
+  decisions?: readonly LookDecisions[]
 }) {
   const [settings, setSettings] = useState<Settings>(loadSettings)
   const [now, setNow] = useState(() => Date.now())
@@ -1029,6 +1034,7 @@ export default function TerminalChartPanel({
           tradeFocus={tradeFocus}
           timeFocus={timeFocus}
           onSelectTrade={onSelectTrade}
+          decisions={decisions}
           onSelect={(time, markerId) => {
             if (markerId) {
               // An executed operation (EJEC.) opens its own facts; it never
