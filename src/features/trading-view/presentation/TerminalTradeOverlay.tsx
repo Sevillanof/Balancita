@@ -1,8 +1,11 @@
 import { signedUsd } from '../../../app/qwen-trades-text.ts'
 import { usd, utcDateTime } from '../../../shared/finance/format.ts'
+import TradeFicha from './TradeFicha.tsx'
+import { FICHA_HEIGHT, FICHA_WIDTH } from './trade-ficha-model.ts'
+import type { LookDecision } from '../../../app/terminal-lifecycle.ts'
 import {
-  formatTradeDuration,
   layoutTradeLabels,
+  tradePillWidth,
   tradeTone,
   type TradeCoordinates,
   type TradeLabelLayout,
@@ -52,12 +55,10 @@ function TradeSpanGlyph({
   layout,
   selected,
   confirmed,
-  height,
 }: {
   layout: TradeLabelLayout
   selected: boolean
   confirmed: boolean
-  height: number
 }) {
   const { item, entry } = layout
   const tone = tradeTone(item.trade, confirmed)
@@ -95,17 +96,6 @@ function TradeSpanGlyph({
       )}
       {item.entryVisible && (
         <>
-          {selected && (
-            <line
-              x1={item.entryX}
-              x2={item.entryX}
-              y1={item.entryY}
-              y2={height}
-              stroke="var(--color-chart-info)"
-              strokeDasharray="2 4"
-              opacity={0.5}
-            />
-          )}
           <circle
             data-testid="trade-entry-dot"
             cx={item.entryX}
@@ -200,18 +190,6 @@ function TradeBadges({
               {provisional}
             </span>
           </span>
-          {selected && (
-            <>
-              <small className="font-normal text-ink">
-                {entry.width >= 130 ? 'entrada ' : ''}
-                {usd(item.trade.entryPrice)}
-              </small>
-              <small className="font-normal text-ink-2">
-                {item.trade.open ? 'abierta' : 'duró'}{' '}
-                {formatTradeDuration(item.endMs - item.startMs)}
-              </small>
-            </>
-          )}
         </button>
       )}
       {point && (
@@ -236,6 +214,7 @@ export default function TerminalTradeOverlay({
   selectedId,
   confirmed,
   onSelect,
+  decisionsFor,
 }: {
   items: readonly TradeCoordinates[]
   width: number
@@ -243,13 +222,28 @@ export default function TerminalTradeOverlay({
   selectedId: string
   confirmed: boolean
   onSelect: (id: string) => void
+  /** What was decided when an operation entered (icons of its ficha). */
+  decisionsFor?: (entryMs: number) => readonly LookDecision[] | null
 }) {
   if (!(width > 0) || !(height > 0)) return null
-  const layouts = layoutTradeLabels(items, width, height, selectedId)
+  const layouts = layoutTradeLabels(items, width, height)
   const grouped = layouts.reduce(
     (count, layout) => count + Number(layout.entry === null),
     0,
   )
+  const selected = items.find((item) => item.id === selectedId) ?? null
+  // The ficha sits at the top edge above the entry, clear of the label column.
+  const fichaLeft = selected
+    ? Math.max(
+        4,
+        Math.min(
+          width - tradePillWidth(width) - FICHA_WIDTH - 12,
+          (selected.entryVisible ? selected.entryX : 4 + FICHA_WIDTH / 2) -
+            FICHA_WIDTH / 2,
+        ),
+      )
+    : 0
+  const showFicha = selected !== null && width >= FICHA_WIDTH + 8
   return (
     <div
       className="pointer-events-none absolute top-0 left-0 z-3 overflow-hidden"
@@ -268,10 +262,32 @@ export default function TerminalTradeOverlay({
             layout={layout}
             selected={selectedId === layout.item.id}
             confirmed={confirmed}
-            height={height}
           />
         ))}
+        {showFicha && selected.entryVisible && (
+          <line
+            data-testid="trade-ficha-leader"
+            x1={Math.max(
+              fichaLeft + 14,
+              Math.min(fichaLeft + FICHA_WIDTH - 14, selected.entryX),
+            )}
+            y1={6 + FICHA_HEIGHT}
+            x2={selected.entryX}
+            y2={selected.entryY - 8}
+            stroke="var(--color-chart-info)"
+            strokeWidth={1.2}
+            opacity={0.8}
+          />
+        )}
       </svg>
+      {showFicha && (
+        <TradeFicha
+          item={selected}
+          confirmed={confirmed}
+          left={fichaLeft}
+          steps={decisionsFor?.(selected.startMs) ?? null}
+        />
+      )}
       {layouts.map((layout) => (
         <TradeBadges
           key={layout.item.id}

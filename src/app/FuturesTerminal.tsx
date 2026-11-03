@@ -132,6 +132,12 @@ export default function FuturesTerminal({
     ownTrades[0] ??
     null
   const selectedTradeId = selectedTrade ? tradeIdentity(selectedTrade) : ''
+  // Touching an operation shows its data; it never moves the chart.
+  const selectTrade = (id: string) => {
+    if (!ownTrades.some((trade) => tradeIdentity(trade) === id)) return
+    setPickedTrade({ product: qwenProduct, id })
+  }
+  // Only the explicit «Centrar operación» moves the chart to an operation.
   const focusTrade = (id: string) => {
     if (!ownTrades.some((trade) => tradeIdentity(trade) === id)) return
     setPickedTrade({ product: qwenProduct, id })
@@ -191,7 +197,7 @@ export default function FuturesTerminal({
               (trade) => tradeIdentity(trade) === selectedTradeId,
             )
             const next = openOwn[(at + 1) % Math.max(1, openOwn.length)]
-            if (next) focusTrade(tradeIdentity(next))
+            if (next) selectTrade(tradeIdentity(next))
           },
         }
       : null
@@ -527,7 +533,7 @@ export default function FuturesTerminal({
                   tradesConfirmed={tradeRead.source.state === 'ok'}
                   selectedTradeId={selectedTradeId}
                   tradeFocus={tradeFocus}
-                  onSelectTrade={focusTrade}
+                  onSelectTrade={selectTrade}
                   apiBase={apiBase}
                   product={product}
                   ticker={

@@ -1,21 +1,33 @@
-import { currency, utcDateTime } from '../../../shared/finance/format.ts'
+import type { LookDecision } from '../../../app/terminal-lifecycle.ts'
 import type { ApprovedTerminalCandle } from './ApprovedTerminalChart.tsx'
+import DecisionIcons from './DecisionIcons.tsx'
 
 export interface HoverEntry {
   tradeNo: number
   side: 'LONG' | 'SHORT'
-  price: number
 }
 
-const GLYPH_H = 64
-const GLYPH_W = 26
+export interface HoverSpot {
+  time: number
+  /** Pixels of the candle's centre, of its high and of its low, inside the chart pane. */
+  x: number
+  highY: number
+  lowY: number
+}
+
+const GLYPH_H = 52
+const GLYPH_W = 22
+const CARD_W = 132
+const CARD_H = 82
+const STRIP_H = 32
+const GAP = 10
 
 function CandleGlyph({ candle }: { candle: ApprovedTerminalCandle }) {
   const span = candle.high - candle.low
   const at = (price: number) =>
-    span > 0 ? 4 + ((candle.high - price) / span) * (GLYPH_H - 8) : GLYPH_H / 2
-  const up = candle.close >= candle.open
-  const color = up ? 'var(--color-long)' : 'var(--color-short)'
+    span > 0 ? 3 + ((candle.high - price) / span) * (GLYPH_H - 6) : GLYPH_H / 2
+  const color =
+    candle.close >= candle.open ? 'var(--color-long)' : 'var(--color-short)'
   const top = at(Math.max(candle.open, candle.close))
   const bottom = at(Math.min(candle.open, candle.close))
   return (
@@ -46,22 +58,29 @@ function CandleGlyph({ candle }: { candle: ApprovedTerminalCandle }) {
 }
 
 /**
- * What the pointer is over, drawn rather than listed: the candle itself, how far
- * it moved, how much was traded compared with the busiest candle in view, and
- * the operations that entered in it.
+ * What the pointer is over, drawn and pinned to that candle: a strip with the
+ * icons of that look's decisions right above it, and over the strip a small card
+ * with the candle drawn, how far it moved and how much was traded next to the
+ * busiest candle in view. It flips below the candle when there is no room above.
  */
 export default function CandleHoverCard({
   candle,
+  spot,
   previousClose,
   volumeMax,
+  steps,
   entries,
-  align,
+  plotWidth,
+  onHold,
 }: {
   candle: ApprovedTerminalCandle
+  spot: HoverSpot
   previousClose: number
   volumeMax: number
+  steps: readonly LookDecision[] | null
   entries: readonly HoverEntry[]
-  align: 'start' | 'middle'
+  plotWidth: number
+  onHold: (held: boolean) => void
 }) {
   const change =
     previousClose > 0
@@ -69,63 +88,86 @@ export default function CandleHoverCard({
       : 0
   const up = change >= 0
   const volumeShare =
-    volumeMax > 0 ? Math.max(0.02, Math.min(1, candle.volume / volumeMax)) : 0
-  const rows: Array<[string, number]> = [
-    ['Abre', candle.open],
-    ['Máx', candle.high],
-    ['Mín', candle.low],
-    ['Cierra', candle.close],
-  ]
+    volumeMax > 0 ? Math.max(0.03, Math.min(1, candle.volume / volumeMax)) : 0
+  const hasStrip = steps !== null && steps.length > 0
+  const stripW = hasStrip ? steps.length * 28 + 4 : 0
+  const blockH = CARD_H + (hasStrip ? STRIP_H + 6 : 0)
+  const above = spot.highY - GAP - blockH >= 4
+  const top = above ? spot.highY - GAP - blockH : spot.lowY + GAP
+  const clamp = (width: number) =>
+    Math.max(4, Math.min(plotWidth - width - 4, spot.x - width / 2))
+  const cardLeft = clamp(CARD_W)
+  const stripLeft = clamp(stripW)
+  const cardTop = above ? top : top + (hasStrip ? STRIP_H + 6 : 0)
+  const stripTop = above ? top + CARD_H + 6 : top
   return (
     <div
+      className="pointer-events-none absolute inset-0 z-4"
       data-testid="candle-hover-card"
-      role="status"
-      style={align === 'middle' ? { left: '42%' } : undefined}
-      className={`pointer-events-none absolute top-2 z-4 w-48 rounded-lg border border-solid border-line bg-surface-1 p-2 text-label shadow-lg ${align === 'start' ? 'left-2' : ''}`}
+      data-placement={above ? 'above' : 'below'}
     >
-      <div className="mb-1.5 text-ink-2">{utcDateTime(candle.time * 1000)}</div>
-      <div className="flex gap-2.5">
-        <CandleGlyph candle={candle} />
-        <dl className="m-0 flex flex-1 flex-col gap-0.5 tabular-nums">
-          {rows.map(([name, price]) => (
-            <div key={name} className="flex justify-between gap-2">
-              <dt className="text-ink-2">{name}</dt>
-              <dd className="m-0 text-right">{currency(price, 'USD')}</dd>
-            </div>
-          ))}
-        </dl>
-      </div>
       <div
-        className={`mt-1.5 font-bold tabular-nums ${up ? 'text-long' : 'text-short'}`}
+        role="status"
+        className="absolute rounded-lg border border-solid border-line bg-surface-1 p-2 text-label shadow-lg"
+        style={{
+          left: cardLeft,
+          top: cardTop,
+          width: CARD_W,
+          height: CARD_H,
+        }}
       >
-        {up ? '▲' : '▼'} {up ? '+' : ''}
-        {change.toFixed(2).replace('.', ',')} %
-      </div>
-      <div className="mt-1.5 flex items-center gap-2">
-        <span className="text-ink-2">Volumen</span>
-        <span
-          className="h-1.5 flex-1 overflow-hidden rounded-full bg-surface-2"
-          aria-hidden="true"
-        >
-          <span
-            className="block h-full rounded-full bg-chart-info"
-            style={{ width: `${Math.round(volumeShare * 100)}%` }}
-          />
-        </span>
-      </div>
-      {entries.length > 0 && (
-        <ul className="m-0 mt-1.5 flex list-none flex-col gap-0.5 p-0">
-          {entries.map((entry) => (
-            <li
-              key={entry.tradeNo}
-              className={`font-bold ${entry.side === 'LONG' ? 'text-long' : 'text-short'}`}
+        <div className="flex gap-2.5">
+          <CandleGlyph candle={candle} />
+          <div className="flex min-w-0 flex-1 flex-col justify-between">
+            <strong
+              className={`tabular-nums ${up ? 'text-long' : 'text-short'}`}
             >
-              {entry.side === 'LONG' ? '▲' : '▼'} Entrada #{entry.tradeNo} ·{' '}
-              {currency(entry.price, 'USD')}
-            </li>
-          ))}
-        </ul>
+              {up ? '▲ +' : '▼ '}
+              {change.toFixed(2).replace('.', ',')} %
+            </strong>
+            <span
+              className="block h-1.5 overflow-hidden rounded-full bg-surface-2"
+              aria-label="Volumen frente a la vela más activa a la vista"
+            >
+              <span
+                className="block h-full rounded-full bg-chart-info"
+                style={{ width: `${Math.round(volumeShare * 100)}%` }}
+              />
+            </span>
+            <small className="text-ink-2">
+              {new Date(candle.time * 1000).toISOString().slice(11, 16)} UTC
+            </small>
+          </div>
+        </div>
+        {entries.length > 0 && (
+          <div className="mt-1 flex gap-1.5 font-bold">
+            {entries.map((entry) => (
+              <span
+                key={entry.tradeNo}
+                className={entry.side === 'LONG' ? 'text-long' : 'text-short'}
+              >
+                {entry.side === 'LONG' ? '▲' : '▼'} #{entry.tradeNo}
+              </span>
+            ))}
+          </div>
+        )}
+      </div>
+      {hasStrip && (
+        <div
+          className="absolute rounded-full border border-solid border-line bg-surface-1 px-0.5 py-0.5 shadow-lg"
+          style={{ left: stripLeft, top: stripTop, width: stripW }}
+        >
+          <DecisionIcons steps={steps} onHold={onHold} />
+        </div>
       )}
+      <span
+        aria-hidden="true"
+        className="absolute size-2 rotate-45 border border-solid border-line bg-surface-1"
+        style={{
+          left: spot.x - 4,
+          top: above ? top + blockH - 2 : top - 4,
+        }}
+      />
     </div>
   )
 }

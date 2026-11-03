@@ -1137,3 +1137,61 @@ export function lifecycleView(input: {
     evaluatedMs,
   }
 }
+
+/** One decision of one look, as the chart shows it: the step's icon, its tone and what it said. */
+export interface LookDecision {
+  id: string
+  icon: StepIcon
+  label: string
+  tone: StepTone
+  headline: string
+}
+
+export interface LookDecisions {
+  ms: number
+  steps: readonly LookDecision[]
+}
+
+/**
+ * What each look decided, step by step (mercado, maestro, portero, noticias,
+ * rebotes, entrada), oldest first: the same icons and tones as the step strip,
+ * one set per look, for the candle under the pointer and for an operation's entry.
+ */
+export function lookDecisionSeries(
+  analyses: readonly unknown[],
+): LookDecisions[] {
+  return qwenLooks(analyses)
+    .map((look) => {
+      const entry = entryStepsOf(look)
+      const rebound = reboundStepOf(look, [])
+      const ordered =
+        rebound === null
+          ? entry
+          : [...entry.slice(0, -1), rebound, ...entry.slice(-1)]
+      return {
+        ms: Number(look.decision_time_ms),
+        steps: ordered.map(({ id, icon, label, tone, headline }) => ({
+          id,
+          icon,
+          label,
+          tone,
+          headline,
+        })),
+      }
+    })
+    .sort((a, b) => a.ms - b.ms)
+}
+
+/** The look in force at an instant (the last one at or before it), within `maxAgeMs`. */
+export function lookDecisionsAt(
+  series: readonly LookDecisions[],
+  ms: number,
+  maxAgeMs: number,
+): LookDecisions | null {
+  let found: LookDecisions | null = null
+  for (const item of series) {
+    if (item.ms > ms) break
+    found = item
+  }
+  return found !== null && ms - found.ms <= maxAgeMs ? found : null
+}

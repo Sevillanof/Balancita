@@ -859,7 +859,7 @@ test('three open operations with close entries keep one separate label each on t
     })
 })
 
-test('hovering a candle shows a visual card, and the entry candle names its operation', async ({
+test('an operation shows its ficha without moving the chart, and a candle shows its decisions on hover', async ({
   page,
 }) => {
   const open = (no: number, agoMin: number, price: number, net: number) => {
@@ -887,23 +887,38 @@ test('hovering a candle shows a visual card, and the entry candle names its oper
     ],
   })
   const surface = page.getByTestId('terminal-chart-surface')
-  const dot = page.getByTestId('trade-entry-dot').first()
-  await expect(dot).toBeAttached()
+  const dots = page.getByTestId('trade-entry-dot')
+  await expect(dots).toHaveCount(3)
+  const positions = () =>
+    dots.evaluateAll((nodes) =>
+      nodes.map((node) => [node.getAttribute('cx'), node.getAttribute('cy')]),
+    )
+  const before = await positions()
+  const ficha = page.getByTestId('trade-ficha')
+  await expect(ficha).toHaveAttribute('data-trade-id', /:5$/)
+  await expect(ficha.locator('[data-decision]')).not.toHaveCount(0)
+  await expect(page.getByTestId('trade-ficha-bar')).toBeVisible()
+  // Touching another operation changes the ficha and leaves the chart where it is.
+  await page.getByRole('button', { name: /^Entrada LONG operación 4/ }).click()
+  await expect(ficha).toHaveAttribute('data-trade-id', /:4$/)
+  await page.waitForTimeout(400)
+  expect(await positions()).toEqual(before)
+  if (SHOTS)
+    await page.screenshot({
+      path: `${SHOTS}/terminal-ficha-operacion-${test.info().project.name}.png`,
+    })
+  // Hover: the card is pinned to the hovered candle, with that look's decisions.
   const box = (await surface.boundingBox())!
-  await page.mouse.move(box.x + box.width * 0.3, box.y + box.height * 0.5)
+  await page.mouse.move(box.x + box.width * 0.35, box.y + box.height * 0.7)
   const card = page.getByTestId('candle-hover-card')
   await expect(card).toBeVisible()
-  await expect(card).toContainText('Abre')
-  await expect(card).toContainText('Volumen')
+  const icons = card.locator('[data-decision]')
+  await expect(icons.first()).toBeVisible()
+  await icons.nth(2).hover()
+  await expect(page.getByTestId('decision-tip')).toBeVisible()
   if (SHOTS)
     await page.screenshot({
       path: `${SHOTS}/terminal-hover-vela-${test.info().project.name}.png`,
     })
-  const entryX = Number(await dot.getAttribute('cx'))
-  await page.mouse.move(box.x + entryX, box.y + box.height * 0.85)
-  await expect(card).toContainText(/Entrada #\d/)
-  if (SHOTS)
-    await page.screenshot({
-      path: `${SHOTS}/terminal-hover-entrada-${test.info().project.name}.png`,
-    })
+  expect(await positions()).toEqual(before)
 })

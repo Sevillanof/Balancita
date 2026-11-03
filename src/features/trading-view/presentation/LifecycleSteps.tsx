@@ -9,14 +9,7 @@ import {
   type TradeJudgment,
   type TradeMark,
 } from '../../../app/terminal-lifecycle.ts'
-
-const TONE_RING: Record<StepTone, string> = {
-  ok: 'border-long text-long',
-  no: 'border-short text-short',
-  warn: 'border-warn text-warn',
-  info: 'border-info text-info',
-  na: 'border-line-strong text-ink-2',
-}
+import { TONE_RING, TONE_TEXT } from './step-tones.ts'
 
 const TONE_FILL: Record<StepTone, string> = {
   ok: 'bg-long',
@@ -24,14 +17,6 @@ const TONE_FILL: Record<StepTone, string> = {
   warn: 'bg-warn',
   info: 'bg-info',
   na: 'bg-line-strong',
-}
-
-const TONE_TEXT: Record<StepTone, string> = {
-  ok: 'text-long',
-  no: 'text-short',
-  warn: 'text-warn',
-  info: 'text-info',
-  na: 'text-ink-2',
 }
 
 const TONE_WORD: Record<StepTone, string> = {
@@ -120,7 +105,7 @@ const PATHS: Record<StepIcon, ReactNode> = {
   ),
 }
 
-function Icon({ name }: { name: StepIcon }) {
+export function Icon({ name }: { name: StepIcon }) {
   return (
     <svg
       viewBox="0 0 24 24"
