@@ -61,25 +61,35 @@ function seed(
 }
 
 describe('immutable execution evidence', () => {
-  it('serves recorded fees and timing only after verifying the receipt hash', () => {
-    const path = seed(
-      [],
-      [
-        {
-          product: 'PF_ETHUSD',
-          trade_no: 1,
-          status: 'open',
-          side: 'LONG',
-          entry_ms: 1300,
-          entry_px: '101',
-          qty: '1',
-          notional_usd: '101',
-          funding_status: 'unknown',
-        },
-      ],
-    )
-    const db = new DatabaseSync(path)
-    db.exec(`ALTER TABLE trades ADD COLUMN execution_model TEXT;
+  it.each([
+    { name: 'plain decimals', qty: '1', px: '101', receiptQty: '1' },
+    {
+      name: 'trailing zeros in the stored trade',
+      qty: '0.2181388559496190556100323750',
+      px: '2291.60',
+      receiptQty: '0.218138855949619055610032375',
+    },
+  ])(
+    'serves recorded fees and timing only after verifying the receipt hash ($name)',
+    ({ qty, px, receiptQty }) => {
+      const path = seed(
+        [],
+        [
+          {
+            product: 'PF_ETHUSD',
+            trade_no: 1,
+            status: 'open',
+            side: 'LONG',
+            entry_ms: 1300,
+            entry_px: px,
+            qty,
+            notional_usd: '101',
+            funding_status: 'unknown',
+          },
+        ],
+      )
+      const db = new DatabaseSync(path)
+      db.exec(`ALTER TABLE trades ADD COLUMN execution_model TEXT;
       ALTER TABLE trades ADD COLUMN entry_receipt_id TEXT;
       ALTER TABLE trades ADD COLUMN exit_receipt_id TEXT;
       ALTER TABLE trades ADD COLUMN mark_receipt_id TEXT;
@@ -87,81 +97,82 @@ describe('immutable execution evidence', () => {
       ALTER TABLE trades ADD COLUMN execution_error TEXT;
       CREATE TABLE execution_receipts(receipt_id TEXT,product TEXT,trade_no INTEGER,purpose TEXT,
       signal_ms INTEGER,recorded_at_ms INTEGER,evidence_hash TEXT,evidence_json TEXT)`)
-    const profile = {
-      model: 'kraken-futures-book.v1',
-      product: 'PF_ETHUSD',
-      taker_rate: '0.0005',
-      decimal_precision: 28,
-      static_impact_applied: false,
-      walk_rounding: 'ROUND_DOWN',
-      fee_rounding: 'ROUND_HALF_EVEN',
-    }
-    const evidence = {
-      ...profile,
-      cost_model_hash: canonicalHash(profile),
-      fee_kind: 'taker',
-      price: '101',
-      quantity: '1',
-      notional_usd: '101',
-      fee_usd: '0.0505',
-      purpose: 'entry',
-      signal_at_ms: 1000,
-      decision_at_ms: 1100,
-      executed_at_ms: 1300,
-      classification: 'paper_simulated_from_displayed_depth',
-      quote: {
+      const profile = {
+        model: 'kraken-futures-book.v1',
         product: 'PF_ETHUSD',
-        source:
-          'https://futures.kraken.com/derivatives/api/v3/orderbook?symbol=PF_ETHUSD',
-        requested_at_ms: 1100,
-        received_at_ms: 1200,
-        server_at_ms: 1190,
-        server_time_kind: 'response_generation_not_book_event',
-      },
-    }
-    const id = canonicalHash({
-      product: 'PF_ETHUSD',
-      trade_no: 1,
-      purpose: 'entry',
-      signal_ms: 1000,
-    })
-    db.prepare('INSERT INTO execution_receipts VALUES(?,?,?,?,?,?,?,?)').run(
-      id,
-      'PF_ETHUSD',
-      1,
-      'entry',
-      1000,
-      1300,
-      canonicalHash(evidence),
-      JSON.stringify(evidence),
-    )
-    db.prepare(
-      "UPDATE trades SET execution_model=?,entry_receipt_id=?,execution_error='libro_no_disponible'",
-    ).run(profile.model, id)
-    db.close()
-    const reader = createQwenDecisions({ liveDbPath: path })
-    const result = reader.trades('PF_ETHUSD')
-    expect(result.status).toBe('ok')
-    if (result.status !== 'ok') throw new Error(result.reason)
-    expect(result.trades[0]).toMatchObject({
-      execution: {
-        model: profile.model,
-        error: 'libro_no_disponible',
-        entry: {
-          receipt_id: id,
-          fee_rate: '0.0005',
+        taker_rate: '0.0005',
+        decimal_precision: 28,
+        static_impact_applied: false,
+        walk_rounding: 'ROUND_DOWN',
+        fee_rounding: 'ROUND_HALF_EVEN',
+      }
+      const evidence = {
+        ...profile,
+        cost_model_hash: canonicalHash(profile),
+        fee_kind: 'taker',
+        price: px === '2291.60' ? '2291.6' : px,
+        quantity: receiptQty,
+        notional_usd: '101',
+        fee_usd: '0.0505',
+        purpose: 'entry',
+        signal_at_ms: 1000,
+        decision_at_ms: 1100,
+        executed_at_ms: 1300,
+        classification: 'paper_simulated_from_displayed_depth',
+        quote: {
+          product: 'PF_ETHUSD',
+          source:
+            'https://futures.kraken.com/derivatives/api/v3/orderbook?symbol=PF_ETHUSD',
+          requested_at_ms: 1100,
           received_at_ms: 1200,
-          executed_at_ms: 1300,
+          server_at_ms: 1190,
+          server_time_kind: 'response_generation_not_book_event',
         },
-      },
-    })
-    const corrupt = new DatabaseSync(path)
-    corrupt.prepare("UPDATE execution_receipts SET evidence_json='{}'").run()
-    corrupt.close()
-    const broken = reader.trades('PF_ETHUSD')
-    expect(broken.status).not.toBe('ok')
-    if (broken.status !== 'ok') expect(broken.reason).toContain('execution')
-  })
+      }
+      const id = canonicalHash({
+        product: 'PF_ETHUSD',
+        trade_no: 1,
+        purpose: 'entry',
+        signal_ms: 1000,
+      })
+      db.prepare('INSERT INTO execution_receipts VALUES(?,?,?,?,?,?,?,?)').run(
+        id,
+        'PF_ETHUSD',
+        1,
+        'entry',
+        1000,
+        1300,
+        canonicalHash(evidence),
+        JSON.stringify(evidence),
+      )
+      db.prepare(
+        "UPDATE trades SET execution_model=?,entry_receipt_id=?,execution_error='libro_no_disponible'",
+      ).run(profile.model, id)
+      db.close()
+      const reader = createQwenDecisions({ liveDbPath: path })
+      const result = reader.trades('PF_ETHUSD')
+      expect(result.status).toBe('ok')
+      if (result.status !== 'ok') throw new Error(result.reason)
+      expect(result.trades[0]).toMatchObject({
+        execution: {
+          model: profile.model,
+          error: 'libro_no_disponible',
+          entry: {
+            receipt_id: id,
+            fee_rate: '0.0005',
+            received_at_ms: 1200,
+            executed_at_ms: 1300,
+          },
+        },
+      })
+      const corrupt = new DatabaseSync(path)
+      corrupt.prepare("UPDATE execution_receipts SET evidence_json='{}'").run()
+      corrupt.close()
+      const broken = reader.trades('PF_ETHUSD')
+      expect(broken.status).not.toBe('ok')
+      if (broken.status !== 'ok') expect(broken.reason).toContain('execution')
+    },
+  )
 })
 
 describe('resting maker exit', () => {
