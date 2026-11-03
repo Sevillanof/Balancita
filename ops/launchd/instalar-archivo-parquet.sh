@@ -2,6 +2,7 @@
 # Instala (o actualiza) la exportacion nocturna a Parquet en esta Mac. Idempotente, sin sudo. Un solo comando:
 #   bash ops/launchd/instalar-archivo-parquet.sh
 # Hace: venv fuera del repo con pyarrow (hashes), plist con rutas absolutas, launchctl, y una corrida de prueba --dry-run.
+# Recarga el agente existente (bootout + bootstrap) para que tome la plantilla nueva.
 # NO enciende el borrado de SQLite (FUTURES_ARCHIVE_DELETE): eso es aparte y esta apagado.
 set -euo pipefail
 
@@ -45,6 +46,6 @@ CODIGO=$?
 set -e
 echo
 case "$CODIGO" in
-  0|3) echo "Listo. Se exporta cada noche a las 04:30 (hora de la Mac) en $DESTINO. Resumen de cada corrida: $DESTINO/nocturno.jsonl" ;;
+  0|3) echo "Listo. Se exporta cada noche a las 04:30 (hora de la Mac; si estaba dormida, espera 10 min tras despertar, y se reintenta cada hora) en $DESTINO. Resumen de cada corrida: $DESTINO/nocturno.jsonl" ;;
   *) echo "La prueba salio con codigo $CODIGO: revisa el mensaje de arriba. El agente quedo instalado." >&2; exit "$CODIGO" ;;
 esac

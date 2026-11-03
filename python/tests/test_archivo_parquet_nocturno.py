@@ -6,6 +6,7 @@ import json
 import os
 import tempfile
 import unittest
+from unittest import mock
 
 from archivo_parquet import cli, formato, nocturno, sintetico
 from archivo_parquet.config import DAY_MS
@@ -83,10 +84,51 @@ class EleccionDeCopia(Base):
 class Corrida(Base):
     def test_despertar_reciente_pospone_con_codigo_3(self):
         self.copia()
-        res = self.correr(despertar=lambda: AHORA_S - 60)
+        res = self.correr(despertar=lambda: AHORA_S - 60, dry_run=True)  # en dry-run no espera
         self.assertEqual((res["estado"], res["codigo"]), ("pospuesta_por_despertar", 3))
         res = self.correr(despertar=lambda: AHORA_S - 3600, dry_run=True)
         self.assertNotEqual(res["codigo"], 3)
+
+    def reloj_falso(self, despertares=()):
+        """(reloj, dormir, dormidos, despertar): el tiempo solo avanza al 'dormir'; ``despertares`` = [(instante, nuevo_despertar)]."""
+        est = {"t": AHORA_S, "w": AHORA_S - 60}
+        dormidos = []
+
+        def dormir(s):
+            dormidos.append(s)
+            est["t"] += s
+            for t, w in despertares:
+                if est["t"] >= t:
+                    est["w"] = w
+        return (lambda: est["t"]), dormir, dormidos, (lambda: est["w"])
+
+    @unittest.skipUnless(formato.disponible(), "pyarrow no esta instalado")
+    def test_despertar_reciente_espera_y_luego_exporta(self):
+        self.copia()
+        reloj, dormir, dormidos, despertar = self.reloj_falso()
+        res = self.correr(despertar=despertar, dormir=dormir, reloj=reloj)
+        self.assertEqual(res["codigo"], 0, res)
+        self.assertTrue(dormidos and all(d <= nocturno.TRAMO_ESPERA_S for d in dormidos))
+        self.assertGreaterEqual(sum(dormidos), nocturno.PAUSA_DESPERTAR_S - 60)
+        self.assertLessEqual(sum(dormidos), nocturno.PAUSA_DESPERTAR_S - 60 + nocturno.TRAMO_ESPERA_S)
+        self.assertEqual(res["esperado_s"], int(sum(dormidos)))
+
+    @unittest.skipUnless(formato.disponible(), "pyarrow no esta instalado")
+    def test_nuevo_despertar_durante_la_espera_recalcula(self):
+        self.copia()
+        reloj, dormir, dormidos, despertar = self.reloj_falso([(AHORA_S + 120, AHORA_S + 120)])
+        res = self.correr(despertar=despertar, dormir=dormir, reloj=reloj)
+        self.assertEqual(res["codigo"], 0, res)
+        self.assertGreaterEqual(sum(dormidos), 120 + nocturno.PAUSA_DESPERTAR_S)
+
+    def test_tope_de_espera_sale_con_codigo_3(self):
+        self.copia()
+        reloj, dormir, dormidos, despertar = self.reloj_falso([(AHORA_S + 30 * k, AHORA_S + 30 * k) for k in range(1, 200)])
+        res = self.correr(despertar=despertar, dormir=dormir, reloj=reloj)
+        self.assertEqual((res["estado"], res["codigo"]), ("pospuesta_por_despertar", 3))
+        self.assertGreaterEqual(sum(dormidos), nocturno.TOPE_ESPERA_S)
+        self.assertLess(sum(dormidos), nocturno.TOPE_ESPERA_S + nocturno.TRAMO_ESPERA_S + 1)
+        self.assertFalse(os.path.exists(os.path.join(self.destino, "manifiesto.jsonl")))
 
     def test_dry_run_no_escribe_nada(self):
         self.copia()
@@ -139,10 +181,13 @@ class CorridaCompleta(Base):
         self.assertEqual(res["verificacion"]["problemas"], [])
         res2 = self.correr()
         self.assertEqual(res2["codigo"], 0)
-        self.assertEqual(res2["bases"]["futures-verdicts"]["exportados"], 0)
+        self.assertEqual(res2["bases"]["futures-verdicts"]["estado"], "sin_novedad")  # misma copia ya exportada hoy: sin quick_check
+        self.assertEqual(res2["verificacion"]["problemas"], [])  # verificar sigue corriendo (detecta archivos danados)
+        with mock.patch.object(nocturno, "abrir_copia", side_effect=AssertionError("no debe abrir la copia")):
+            self.assertEqual(self.correr()["codigo"], 0)
         with open(os.path.join(self.destino, nocturno.NOMBRE_LOG)) as fh:
             lineas = [json.loads(l) for l in fh if l.strip()]
-        self.assertEqual(len(lineas), 2)
+        self.assertEqual(len(lineas), 3)
         self.assertEqual(lineas[0]["estado"], "ok")
 
     def test_algo_sin_confirmar_sale_con_codigo_1(self):
