@@ -458,3 +458,16 @@ test('interacciones desktop no recargan', async ({ page }, info) => {
   }
   await sigueViva(page)
 })
+
+test('mobile: tras recargar vuelve a la pestaña en que estaba', async ({
+  page,
+}, info) => {
+  test.skip(info.project.name !== 'mobile-390x844')
+  await openFixture(page)
+  await page.getByRole('tab', { name: 'Noticias' }).click()
+  await page.reload()
+  await expect(page.getByRole('tab', { name: 'Noticias' })).toHaveAttribute(
+    'aria-selected',
+    'true',
+  )
+})

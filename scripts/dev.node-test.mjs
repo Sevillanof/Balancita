@@ -61,6 +61,17 @@ describe('devChildSpecs', () => {
     )
   })
 
+  it('final mode serves the compiled app with vite preview instead of the dev server', () => {
+    const viteArgs = (env) =>
+      devChildSpecs({ root, env, allowedFlags: noFlags, llm: null }).find(
+        (s) => s.name === 'vite',
+      ).args
+    assert.equal(viteArgs({}).length, 1)
+    const final = viteArgs({ BALANCITA_FINAL: '1' })
+    assert.equal(final[1], 'preview')
+    assert.ok(final.includes('--strictPort'))
+  })
+
   it('news-only mode starts the deterministic operator without a model server', () => {
     const specs = devChildSpecs({
       root,

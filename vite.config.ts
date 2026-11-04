@@ -42,4 +42,9 @@ export default defineConfig({
   server: {
     proxy: devProxyConfig(),
   },
+  // Final mode (`vite preview`): same /api proxy; reachable by its Tailscale name.
+  preview: {
+    proxy: devProxyConfig(),
+    allowedHosts: ['.ts.net'],
+  },
 })
