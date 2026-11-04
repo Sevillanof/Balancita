@@ -705,7 +705,21 @@ export function devChildSpecs({
     {
       name: 'vite',
       cwd: root,
-      args: [`${root}/node_modules/vite/bin/vite.js`],
+      // Final mode (BALANCITA_FINAL=1, the VPS): serve the compiled app from
+      // dist/ (run `pnpm build` first). No dev server, no HMR socket, one
+      // bundle instead of hundreds of modules; same port and same /api proxy.
+      args:
+        (env.BALANCITA_FINAL ?? '').trim() === '1'
+          ? [
+              `${root}/node_modules/vite/bin/vite.js`,
+              'preview',
+              '--host',
+              'localhost',
+              '--port',
+              String(DEV_PORTS.vite),
+              '--strictPort',
+            ]
+          : [`${root}/node_modules/vite/bin/vite.js`],
       env,
     },
   ]

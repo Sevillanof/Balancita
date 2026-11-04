@@ -24,6 +24,26 @@ import { summarizeUsage } from './system-usage.ts'
 
 type Tab = 'ops' | 'news' | 'decisions' | 'status'
 
+// A phone may discard a backgrounded tab and reload it on return; the tab the
+// person was on survives that in sessionStorage.
+const TAB_KEY = 'balancita.mobile-tab.v1'
+const TAB_IDS: readonly Tab[] = ['ops', 'news', 'decisions', 'status']
+function readTab(): Tab {
+  try {
+    const saved = window.sessionStorage.getItem(TAB_KEY)
+    return TAB_IDS.find((t) => t === saved) ?? 'ops'
+  } catch {
+    return 'ops'
+  }
+}
+function saveTab(tab: Tab) {
+  try {
+    window.sessionStorage.setItem(TAB_KEY, tab)
+  } catch {
+    // storage blocked: the tab simply resets after a reload
+  }
+}
+
 const TABS: ReadonlyArray<{ id: Tab; icon: string; label: string }> = [
   { id: 'ops', icon: '📈', label: 'Operaciones' },
   { id: 'news', icon: '📰', label: 'Noticias' },
@@ -545,7 +565,11 @@ export default function MobileTerminal({
   banner?: ReactNode
 }) {
   const serverLine = useServerLine(apiBase)
-  const [tab, setTab] = useState<Tab>('ops')
+  const [tab, setTabState] = useState<Tab>(readTab)
+  const setTab = (next: Tab) => {
+    saveTab(next)
+    setTabState(next)
+  }
   const account = useQwenAccount()
   const alerts = statusItems.filter(
     (item) => item.tone === 'warn' || item.tone === 'bad',
