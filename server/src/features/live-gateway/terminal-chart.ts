@@ -196,6 +196,8 @@ function officialChartCandles(
     }))
 }
 
+const HISTORY_SOURCE_MS = 300_000
+
 /**
  * One page of older candles for the chart: official closed candles that start
  * before `beforeMs`, ascending, plus the flow of the same span.
@@ -208,13 +210,14 @@ export function chartCandlesBefore(
   productId: string = FUTURES_PRODUCT,
   positioning?: PositioningStore,
 ): { candles: ChartCandle[]; flow: ChartFlow[]; hasMore: boolean } {
-  const rows = store.officialCandlesBefore(
-    productId,
-    intervalMs,
-    beforeMs,
-    limit,
-  )
-  const candles = rows.map((candle) => ({
+  const toChart = (candle: {
+    bucketStart: number
+    open: string
+    high: string
+    low: string
+    close: string
+    volumeBtc: string
+  }): ChartCandle => ({
     time_ms: candle.bucketStart,
     open: candle.open,
     high: candle.high,
@@ -222,7 +225,35 @@ export function chartCandlesBefore(
     close: candle.close,
     volume_btc: candle.volumeBtc,
     closed: true,
-  }))
+  })
+  let candles = store
+    .officialCandlesBefore(productId, intervalMs, beforeMs, limit)
+    .map(toChart)
+  // Kraken's backfill stores 1m and 5m only: older 15m/1h/4h/1d buckets are
+  // folded from the 5m candles, whole buckets only.
+  if (
+    candles.length < limit &&
+    intervalMs > HISTORY_SOURCE_MS &&
+    intervalMs % HISTORY_SOURCE_MS === 0
+  ) {
+    const cut = candles[0]?.time_ms ?? beforeMs
+    const ratio = intervalMs / HISTORY_SOURCE_MS
+    const wanted = Math.min(5_000, (limit - candles.length) * ratio)
+    const fine = store
+      .officialCandlesBefore(
+        productId,
+        HISTORY_SOURCE_MS,
+        Math.floor(cut / intervalMs) * intervalMs,
+        wanted,
+      )
+      .map(toChart)
+    let folded = aggregateCandles(fine, intervalMs)
+      .filter((candle) => candle.time_ms < cut)
+      .map((candle) => ({ ...candle, closed: true }))
+    // A full page may start mid-bucket: that oldest bucket is incomplete.
+    if (fine.length >= wanted) folded = folded.slice(1)
+    candles = [...folded, ...candles].slice(-limit)
+  }
   if (candles.length === 0) return { candles, flow: [], hasMore: false }
   const flow = chartFlow(
     store,
