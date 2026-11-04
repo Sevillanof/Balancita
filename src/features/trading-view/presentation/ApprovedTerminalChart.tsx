@@ -145,6 +145,8 @@ type Props = {
   /** What each look decided, oldest first: the icons of the hovered candle and of an operation's entry. */
   decisions?: readonly LookDecisions[]
   viewport?: boolean
+  /** Called when the view reaches the oldest candle drawn, so older ones can be loaded. */
+  onReachStart?: () => void
 }
 
 export type ApprovedVolumeProfile = {
@@ -251,6 +253,7 @@ export default function ApprovedTerminalChart({
   markers,
   selectedId,
   intervalSeconds,
+  onReachStart,
   currency = 'EUR',
   instrument = 'BTC/EUR',
   levels = [],
@@ -297,6 +300,7 @@ export default function ApprovedTerminalChart({
   const renderedCandles = useRef<readonly ApprovedTerminalCandle[] | null>(null)
   const renderedInterval = useRef<number | null>(null)
   const propsRef = useRef({ candles, markers, intervalSeconds, onSelect })
+  const reachStartRef = useRef(onReachStart)
   const publishRef = useRef<(() => void) | null>(null)
   const paintedRef = useRef<readonly SeriesMarker<Time>[]>([])
   const tradePrimitive = useRef<TerminalTradePrimitive | null>(null)
@@ -316,6 +320,10 @@ export default function ApprovedTerminalChart({
   useEffect(() => {
     propsRef.current = { candles, markers, intervalSeconds, onSelect }
   }, [candles, markers, intervalSeconds, onSelect])
+
+  useEffect(() => {
+    reachStartRef.current = onReachStart
+  }, [onReachStart])
 
   useEffect(() => {
     const node = container.current
@@ -670,6 +678,17 @@ export default function ApprovedTerminalChart({
       initialTradeView.current = false
       focusedTradeHistory.current = null
     }
+  }, [currency, initialViewport, tradeMode])
+
+  useEffect(() => {
+    // Scrolling or zooming out to the oldest candles asks for older ones.
+    const timeScale = chartRef.current?.timeScale()
+    if (!timeScale) return
+    const check = (range: { from: number } | null) => {
+      if (range && range.from < 20) reachStartRef.current?.()
+    }
+    timeScale.subscribeVisibleLogicalRangeChange(check)
+    return () => timeScale.unsubscribeVisibleLogicalRangeChange(check)
   }, [currency, initialViewport, tradeMode])
 
   useEffect(() => {
