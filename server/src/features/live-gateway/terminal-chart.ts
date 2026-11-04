@@ -197,6 +197,44 @@ function officialChartCandles(
 }
 
 /**
+ * One page of older candles for the chart: official closed candles that start
+ * before `beforeMs`, ascending, plus the flow of the same span.
+ */
+export function chartCandlesBefore(
+  store: FuturesMarketStore,
+  intervalMs: number,
+  beforeMs: number,
+  limit: number,
+  productId: string = FUTURES_PRODUCT,
+  positioning?: PositioningStore,
+): { candles: ChartCandle[]; flow: ChartFlow[]; hasMore: boolean } {
+  const rows = store.officialCandlesBefore(
+    productId,
+    intervalMs,
+    beforeMs,
+    limit,
+  )
+  const candles = rows.map((candle) => ({
+    time_ms: candle.bucketStart,
+    open: candle.open,
+    high: candle.high,
+    low: candle.low,
+    close: candle.close,
+    volume_btc: candle.volumeBtc,
+    closed: true,
+  }))
+  if (candles.length === 0) return { candles, flow: [], hasMore: false }
+  const flow = chartFlow(
+    store,
+    intervalMs,
+    candles[0]!.time_ms,
+    productId,
+    positioning,
+  ).filter((point) => point.time_ms < beforeMs)
+  return { candles, flow, hasMore: candles.length >= limit }
+}
+
+/**
  * Candles of one timeframe: Kraken's official closed candles, then the
  * buckets Kraken has not published yet, built from the next finer official
  * timeframes and finally the live 1m candles (closed and forming).

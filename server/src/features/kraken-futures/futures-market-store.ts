@@ -1574,6 +1574,40 @@ export class FuturesMarketStore {
     return rows.map(officialRow)
   }
 
+  /**
+   * Latest `limit` official candles of a product whose bucket starts before
+   * `beforeBucket` (first-known revision), ascending. Pages the chart back in time.
+   */
+  officialCandlesBefore(
+    productId: string,
+    intervalMs: number,
+    beforeBucket: number,
+    limit: number,
+  ): OfficialStoredCandle[] {
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 5_000)
+      throw new RangeError('Official candle limit must be between 1 and 5000.')
+    if (!this.hasOfficialCandles()) return []
+    const rows = this.prepared(
+      `WITH known AS (
+         SELECT *, ROW_NUMBER() OVER (
+           PARTITION BY bucket_start ORDER BY known_at, rowid
+         ) AS revision_rank
+         FROM paper_futures_official_candles
+         WHERE product_id=? AND interval_ms=? AND bucket_start<?
+       )
+       SELECT * FROM (
+         SELECT * FROM known WHERE revision_rank=1
+         ORDER BY bucket_start DESC LIMIT ?
+       ) ORDER BY bucket_start`,
+    ).all(
+      product(productId),
+      time(intervalMs, 'official interval'),
+      time(beforeBucket, 'official before'),
+      limit,
+    ) as RecordValue[]
+    return rows.map(officialRow)
+  }
+
   /** Highest official-candle rowid over all products (0 when none or on an old store). */
   maxOfficialRowid(): number {
     if (!this.hasOfficialCandles()) return 0

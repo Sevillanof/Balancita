@@ -1,5 +1,12 @@
 import { usePhoneChart } from './phone-chart-context.ts'
-import { useEffect, useMemo, useState, type ReactNode } from 'react'
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from 'react'
 import ModalFrame from '../../strategy-lab/presentation/ModalFrame.tsx'
 import { productBase, productPair } from '../domain/product-label.ts'
 import { amount, compactUsd, usd } from '../../../shared/finance/format.ts'
@@ -21,9 +28,13 @@ import {
 } from '../domain/chart-indicators.ts'
 import {
   CHART_TIMEFRAMES,
+  fetchTerminalChartHistory,
+  prependFlow,
+  prependHistory,
   useTerminalChart,
   type ChartDepth,
   type ChartFlowPoint,
+  type TerminalChartHistory,
   type TerminalTickerStats,
 } from '../infrastructure/terminal-chart-client.ts'
 import {
@@ -564,7 +575,7 @@ export default function TerminalChartPanel({
     const timer = setInterval(() => setNow(Date.now()), 1_000)
     return () => clearInterval(timer)
   }, [live])
-  const remote = useTerminalChart(
+  const remoteLive = useTerminalChart(
     apiBase,
     settings.intervalMs,
     live,
@@ -585,6 +596,54 @@ export default function TerminalChartPanel({
         ),
   )
   const intervalSeconds = settings.intervalMs / 1000
+  // Older candles loaded while scrolling back; they belong to one timeframe and product.
+  const [older, setOlder] = useState<{
+    key: string
+    data: TerminalChartHistory
+    done: boolean
+  } | null>(null)
+  const olderKey = `${product ?? ''}:${settings.intervalMs}`
+  const olderLoading = useRef(false)
+  const remote = useMemo(() => {
+    if (!remoteLive) return remoteLive
+    if (!older || older.key !== olderKey) return remoteLive
+    return {
+      ...remoteLive,
+      candles: prependHistory(older.data.candles, remoteLive.candles),
+      flow: prependFlow(older.data.flow, remoteLive.flow),
+    }
+  }, [remoteLive, older, olderKey])
+  const loadOlder = useCallback(() => {
+    if (!live || !remote || olderLoading.current) return
+    if (older?.key === olderKey && older.done) return
+    const first = remote.candles[0]
+    if (!first) return
+    olderLoading.current = true
+    void fetchTerminalChartHistory(
+      apiBase,
+      settings.intervalMs,
+      first.time,
+      product,
+    )
+      .then((page) => {
+        if (!page) return
+        setOlder((current) => {
+          const same = current?.key === olderKey ? current.data : null
+          return {
+            key: olderKey,
+            done: !page.hasMore || page.candles.length === 0,
+            data: {
+              candles: prependHistory(page.candles, same?.candles ?? []),
+              flow: prependFlow(page.flow, same?.flow ?? []),
+              hasMore: page.hasMore,
+            },
+          }
+        })
+      })
+      .finally(() => {
+        olderLoading.current = false
+      })
+  }, [live, remote, older, olderKey, apiBase, settings.intervalMs, product])
   // Real data: wait for the server series instead of opening on the few
   // candles the 1m stream can fold (the view would stay on them).
   const waiting = live && intervalSeconds !== 60 && remote === null
@@ -1028,6 +1087,7 @@ export default function TerminalChartPanel({
           key={settings.intervalMs}
           focusOnMount={false}
           candles={shown}
+          onReachStart={loadOlder}
           markers={allMarkers}
           selectedId={fillId ?? selectedId}
           intervalSeconds={intervalSeconds}
