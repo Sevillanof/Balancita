@@ -326,17 +326,6 @@ export default function ApprovedTerminalChart({
   }, [onReachStart])
 
   useEffect(() => {
-    // Scrolling or zooming out to the oldest candles asks for older ones.
-    const timeScale = chartRef.current?.timeScale()
-    if (!timeScale) return
-    const check = (range: { from: number } | null) => {
-      if (range && range.from < 20) reachStartRef.current?.()
-    }
-    timeScale.subscribeVisibleLogicalRangeChange(check)
-    return () => timeScale.unsubscribeVisibleLogicalRangeChange(check)
-  }, [])
-
-  useEffect(() => {
     const node = container.current
     if (!node) return
     const colors = {
@@ -689,6 +678,17 @@ export default function ApprovedTerminalChart({
       initialTradeView.current = false
       focusedTradeHistory.current = null
     }
+  }, [currency, initialViewport, tradeMode])
+
+  useEffect(() => {
+    // Scrolling or zooming out to the oldest candles asks for older ones.
+    const timeScale = chartRef.current?.timeScale()
+    if (!timeScale) return
+    const check = (range: { from: number } | null) => {
+      if (range && range.from < 20) reachStartRef.current?.()
+    }
+    timeScale.subscribeVisibleLogicalRangeChange(check)
+    return () => timeScale.unsubscribeVisibleLogicalRangeChange(check)
   }, [currency, initialViewport, tradeMode])
 
   useEffect(() => {
