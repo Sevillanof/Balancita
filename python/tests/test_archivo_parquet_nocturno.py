@@ -189,12 +189,12 @@ class Corrida(Base):
 
     def test_copia_de_una_base_que_no_se_archiva_es_fallo_salvo_caches(self):
         self.copia()
-        for nombre in ("qwen-live__live-20261102-040000.sqlite", "qwen-live_cache__candles-PF_ETHUSD-20261102-040000.sqlite"):
+        for nombre in ("otra-base__x-20261102-040000.sqlite", "qwen-live_cache__candles-PF_ETHUSD-20261102-040000.sqlite"):
             with open(os.path.join(self.resp, nombre), "wb") as fh:
                 fh.write(b"x")
         res = self.correr(dry_run=True)
         self.assertEqual(res["codigo"], 1)
-        self.assertEqual(res["bases_sin_cubrir"], ["qwen-live__live"])
+        self.assertEqual(res["bases_sin_cubrir"], ["otra-base__x"])
 
     def reporte(self, **cambios):
         rep = {"exportados": [], "reemplazados": [], "ya_confirmados": [], "no_confirmados": [], "tablas_ausentes": [],
@@ -269,6 +269,140 @@ class Corrida(Base):
             code = cli.main(["nocturno", "--dry-run", "--bases", "futures-verdicts"])
         self.assertEqual(code, 0)
         self.assertEqual(json.loads(out.getvalue())["destino"], self.destino)
+
+
+# Tablas de las copias del VPS que NO se archivan a proposito (nombres reales de la copia ``ultima-copia`` del 2026-11-05).
+EXCLUIDAS_VPS = {
+    "futures-market": ("paper_futures_analytics_responses", "paper_futures_book_snapshots", "paper_futures_data_gaps",
+                       "paper_futures_funding_backlog", "paper_futures_funding_polls", "paper_futures_funding_sightings",
+                       "paper_futures_funding_ws_marks", "paper_futures_funding_ws_observations", "paper_futures_instrument_versions",
+                       "paper_futures_market_migrations", "paper_futures_market_quality_policies", "paper_futures_official_candle_responses",
+                       "paper_futures_ticker_snapshots"),
+    "futures-verdicts": ("paper_futures_verdict_meta", "paper_futures_verdict_products"),
+    "futures-llm-decisions": ("paper_futures_llm_errors", "paper_futures_llm_meta"),
+    "futures-forecast-scores": ("paper_futures_forecast_meta",),
+    "positioning": ("collector_run",),
+    "futures-news": ("paper_futures_news_briefings", "paper_futures_news_errors", "paper_futures_news_meta", "paper_futures_news_polls",
+                     "paper_futures_news_source_sets"),
+    "qwen-live__live": ("meta", "account", "examples", "skipped", "rebotes", "errors", "trader_state"),
+    "qwen-live__auditor": ("meta",),
+}
+BASES_EXCLUIDAS_VPS = ("forward__forward", "futures-strategies", "maker-costs__eth-costs-20261031", "qwen-live_cache__candles-PF_ETHUSD",
+                       "qwen-live_cache__candles-PF_SOLUSD")
+
+
+class ListaDeExclusion(Base):
+    """S1 y S3: qwen-live entra al archivo; todo lo demas queda en una lista explicita de exclusion con su motivo."""
+
+    def sello(self, base, edad_s=3600):
+        ruta = os.path.join(self.resp, "%s-20261102-040000.sqlite" % base)
+        return ruta, lambda: os.utime(ruta, (AHORA_S - edad_s, AHORA_S - edad_s))
+
+    def crear_vps(self, excluidas=True):
+        """Una copia por base del VPS: la tabla archivada de cada una (sintetica) mas las que no se archivan (vacias, solo el nombre)."""
+        import sqlite3
+        creadores = {
+            "futures-market": lambda r: sintetico.crear_copia(r, DIA0, 2, ("PF_XBTUSD",), 600_000, ("market_events",)),
+            "futures-verdicts": lambda r: sintetico.crear_copia(r, DIA0, 2, ("PF_XBTUSD",), 600_000, ("verdicts",)),
+            "futures-llm-decisions": lambda r: sintetico.crear_copia(r, DIA0, 2, ("PF_XBTUSD",), 600_000, ("llm_decisions",)),
+            "futures-forecast-scores": lambda r: sintetico.crear_copia_fase2(r, DIA0, 2, tablas=("forecasts",)),
+            "positioning": lambda r: sintetico.crear_copia_fase2(r, DIA0, 2, tablas=("positioning",)),
+            "futures-news": lambda r: sintetico.crear_copia_fase2(r, DIA0, 2, tablas=("news_items",)),
+            "qwen-live__live": lambda r: sintetico.crear_copia_qwen_live(r, DIA0, con_excluidas=False),
+            "qwen-live__auditor": lambda r: sintetico.crear_copia_auditor(r, DIA0, con_excluidas=False),
+        }
+        for base, crear in creadores.items():
+            ruta, madura = self.sello(base)
+            crear(ruta)
+            if excluidas:
+                con = sqlite3.connect(ruta)
+                for t in EXCLUIDAS_VPS[base]:
+                    con.execute('CREATE TABLE "%s"(x INTEGER)' % t)
+                con.commit()
+                con.close()
+            madura()
+        if excluidas:
+            for base in BASES_EXCLUIDAS_VPS:
+                ruta, madura = self.sello(base)
+                with open(ruta, "wb") as fh:
+                    fh.write(b"x")
+                madura()
+
+    def test_qwen_live_y_su_auditor_son_bases_del_archivo(self):  # S1
+        self.assertIn("qwen-live__live", nocturno.BASES)
+        self.assertIn("qwen-live__auditor", nocturno.BASES)
+
+    def test_con_solo_lo_excluido_a_proposito_sale_con_codigo_0(self):  # S3
+        self.crear_vps()
+        res = self.correr(dry_run=True, bases=nocturno.BASES)
+        self.assertEqual(res["codigo"], 0, res)
+        self.assertNotIn("bases_sin_cubrir", res)
+        for base in nocturno.BASES:
+            self.assertEqual(res["bases"][base]["estado"], "ok", (base, res["bases"][base]))
+            self.assertNotIn("tablas_sin_cubrir", res["bases"][base])
+        self.assertEqual(res["sin_confirmar"], 0)
+
+    def test_cada_exclusion_tiene_motivo_y_ninguna_tabla_archivada_esta_excluida(self):  # S3
+        from archivo_parquet.config import TABLAS
+        archivadas = {c.sqlite for c in TABLAS.values()}
+        self.assertEqual(set(nocturno.TABLAS_EXCLUIDAS), set(EXCLUIDAS_VPS))
+        for base, tablas in nocturno.TABLAS_EXCLUIDAS.items():
+            self.assertEqual(set(tablas), set(EXCLUIDAS_VPS[base]), base)
+            for tabla, motivo in tablas.items():
+                self.assertTrue(isinstance(motivo, str) and len(motivo.strip()) > 10, (base, tabla))
+                self.assertNotIn(tabla, archivadas, (base, tabla))
+        for base, motivo in nocturno.BASES_EXCLUIDAS.items():
+            self.assertTrue(isinstance(motivo, str) and len(motivo.strip()) > 10, base)
+        for base in BASES_EXCLUIDAS_VPS:
+            self.assertIsNotNone(nocturno.motivo_base_excluida(base), base)
+        self.assertEqual(nocturno.TABLAS_EXCLUIDAS["qwen-live__live"]["trader_state"], "estado vivo, queda en SQLite y en las copias diarias")
+        self.assertIsNone(nocturno.motivo_base_excluida("otra-base__x"))
+        self.assertIsNone(nocturno.motivo_base_excluida("futures-strategies-extra"))  # nombre exacto, no prefijo
+
+    def test_tabla_nueva_en_qwen_live_o_excluida_de_otra_base_sigue_siendo_hueco(self):  # S3: lo no exportado y no excluido es fallo
+        import sqlite3
+        self.crear_vps()
+        for base, tabla in (("qwen-live__live", "tabla_nueva_sin_decidir"), ("futures-verdicts", "meta"), ("qwen-live__auditor", "trader_state")):
+            ruta = os.path.join(self.resp, "%s-20261102-040000.sqlite" % base)
+            con = sqlite3.connect(ruta)
+            con.execute('CREATE TABLE "%s"(x INTEGER)' % tabla)
+            con.commit()
+            con.close()
+            os.utime(ruta, (AHORA_S - 3600, AHORA_S - 3600))
+        res = self.correr(dry_run=True, bases=nocturno.BASES)
+        self.assertEqual(res["codigo"], 1)
+        self.assertEqual(res["bases"]["qwen-live__live"]["tablas_sin_cubrir"], ["tabla_nueva_sin_decidir"])
+        self.assertEqual(res["bases"]["futures-verdicts"]["tablas_sin_cubrir"], ["meta"])
+        self.assertEqual(res["bases"]["qwen-live__auditor"]["tablas_sin_cubrir"], ["trader_state"])
+        self.assertNotIn("tablas_sin_cubrir", res["bases"]["futures-news"])
+
+    def test_base_desconocida_o_parecida_a_una_excluida_sigue_siendo_hueco(self):  # S3
+        self.crear_vps()
+        for nombre in ("otra-base__x", "futures-strategies-extra", "forward_forward"):
+            with open(os.path.join(self.resp, "%s-20261102-040000.sqlite" % nombre), "wb") as fh:
+                fh.write(b"x")
+        res = self.correr(dry_run=True, bases=nocturno.BASES)
+        self.assertEqual(res["codigo"], 1)
+        self.assertEqual(res["bases_sin_cubrir"], ["forward_forward", "futures-strategies-extra", "otra-base__x"])
+
+
+@unittest.skipUnless(formato.disponible(), "pyarrow no esta instalado (entorno aparte, ver docs/archivo-parquet.md)")
+class QwenLiveCorridaCompleta(Base):
+    def test_exporta_lo_inmutable_deja_pendiente_lo_mutable_y_sale_con_codigo_0(self):  # S1 + S3
+        for base, crear in (("qwen-live__live", sintetico.crear_copia_qwen_live), ("qwen-live__auditor", sintetico.crear_copia_auditor)):
+            ruta = os.path.join(self.resp, "%s-20261102-040000.sqlite" % base)
+            crear(ruta, DIA0)
+            os.utime(ruta, (AHORA_S - 3600, AHORA_S - 3600))
+        ahora = (DIA0 + 40 * DAY_MS) / 1000  # con el mes de config_versions ya cerrado
+        res = self.correr(bases=("qwen-live__live", "qwen-live__auditor"), ahora_s=ahora)
+        self.assertEqual(res["codigo"], 0, res)
+        vivo, auditor = res["bases"]["qwen-live__live"], res["bases"]["qwen-live__auditor"]
+        self.assertEqual((vivo["estado"], auditor["estado"]), ("ok", "ok"))
+        # decisions 3 dias + trades 1 dia (el dia 1 tiene una cerrada con funding pendiente) + recibos 3 + news_actions 3 + config 1 mes
+        self.assertEqual((vivo["exportados"], vivo["pendientes_por_abrir"]), (3 + 1 + 3 + 3 + 1, 1))
+        self.assertEqual((auditor["exportados"], auditor["pendientes_por_abrir"]), (1, 2))  # miradas: solo el dia 0, todo resuelto
+        self.assertEqual(res["verificacion"]["problemas"], [])
+        self.assertEqual(self.correr(bases=("qwen-live__live", "qwen-live__auditor"), ahora_s=ahora)["codigo"], 0)  # idempotente
 
 
 @unittest.skipUnless(formato.disponible(), "pyarrow no esta instalado (entorno aparte, ver docs/archivo-parquet.md)")

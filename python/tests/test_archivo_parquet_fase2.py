@@ -120,6 +120,140 @@ class TablasNuevasTests(unittest.TestCase):
         self.assertEqual([e["tabla"] for e in leer_manifiesto(self.destino)], ["news_items"])
 
 
+QWEN = ("qwen_decisions", "qwen_trades", "qwen_execution_receipts", "qwen_news_actions", "qwen_config_versions")
+MERCADO_UTIL = ("official_candles", "funding_periods", "analytics_points")
+
+
+class DatosUtilesConfigTests(unittest.TestCase):
+    def test_tablas_de_qwen_live_auditor_y_mercado_con_el_tiempo_que_no_cambia(self):  # S1, S2
+        esperado = {
+            "qwen_decisions": ("decisions", "t_ms", "dia"), "qwen_trades": ("trades", "exit_ms", "dia"),
+            "qwen_execution_receipts": ("execution_receipts", "recorded_at_ms", "dia"), "qwen_news_actions": ("news_actions", "consumed_ms", "dia"),
+            "qwen_config_versions": ("config_versions", "activated_ms", "mes"), "auditor_miradas": ("miradas", "t_ms", "dia"),
+            "official_candles": ("paper_futures_official_candles", "known_at", "dia"),
+            "funding_periods": ("paper_futures_funding_periods", "known_at", "mes"),
+            "analytics_points": ("paper_futures_analytics_points", "known_at", "dia"),
+        }
+        for nombre, (sqlite_, tiempo, gran) in esperado.items():
+            self.assertIn(nombre, TABLAS)
+            self.assertEqual((TABLAS[nombre].sqlite, TABLAS[nombre].tiempo, TABLAS[nombre].granularidad), (sqlite_, tiempo, gran), nombre)
+        # solo lo mutable declara cuando una fila ya no cambia
+        self.assertEqual({n for n, c in TABLAS.items() if c.inmutable_sql}, {"qwen_trades", "auditor_miradas"})
+        self.assertEqual(TABLAS["qwen_trades"].filtro_sql, "\"status\" = 'closed' AND \"exit_ms\" IS NOT NULL")
+
+
+@unittest.skipUnless(formato.disponible(), "pyarrow no esta instalado (entorno aparte, ver docs/archivo-parquet.md)")
+class DatosUtilesTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        os.makedirs(os.path.join(self.tmp.name, "snapshots"))
+        self.copia = os.path.join(self.tmp.name, "snapshots", "c.sqlite")
+        self.destino = os.path.join(self.tmp.name, "archivo")
+
+    def exp(self, base, tablas, ahora=DIA0 + 40 * DAY_MS, **kw):  # 40 dias: tambien estan cerrados los meses
+        return exportar(self.copia, base, self.destino, tablas=list(tablas), ahora_ms=ahora, **kw)
+
+    def filas_por_dia(self, tabla):
+        return {e["dia"]: e["filas"] for e in leer_manifiesto(self.destino) if e["tabla"] == tabla}
+
+    def dia(self, n):
+        return dia_de(DIA0 + n * DAY_MS).isoformat()
+
+    def sqlite(self, sql, params=()):
+        con = sqlite3.connect(self.copia)
+        try:
+            filas = con.execute(sql, params).fetchall()
+            con.commit()
+            return filas
+        finally:
+            con.close()
+
+    def archivo(self, base, tabla, desde=DIA0, hasta=DIA0 + 10 * DAY_MS):
+        t, _ = buscar_archivo(self.destino, base, tabla, desde, hasta)
+        return [tuple(f.values()) for f in t.to_pylist()]
+
+    # ---------- S1: base viva del trader ----------
+    def test_qwen_live_exporta_lo_que_ya_no_cambia_y_espera_lo_que_si(self):  # S1
+        n = sintetico.crear_copia_qwen_live(self.copia, DIA0)
+        r = self.exp("qwen-live__live", QWEN)
+        self.assertEqual(r["no_confirmados"], [])
+        d0, d1, d2 = self.dia(0), self.dia(1), self.dia(2)
+        self.assertEqual(self.filas_por_dia("qwen_decisions"), {d0: 4, d1: 4, d2: 4})  # nunca se modifican: por su hora de decision
+        self.assertEqual(self.filas_por_dia("qwen_news_actions"), {d0: 1, d1: 1, d2: 1})
+        self.assertEqual(self.filas_por_dia("qwen_config_versions"), {"2023-11-01": 2})  # mensual
+        # trades: solo cerradas Y con funding completo, por la hora de cierre. El dia 1 tiene una cerrada con funding pendiente: el motor la
+        # sigue actualizando, asi que ese dia NO se exporta; la abierta del dia 2 no es de ningun periodo.
+        self.assertEqual(self.filas_por_dia("qwen_trades"), {d0: 2})
+        pend = [p for p in r["pendientes_por_abrir"] if p["tabla"] == "qwen_trades"]
+        self.assertEqual([p["dia"] for p in pend], [d1])
+        self.assertIn("funding", pend[0]["motivo"])
+        self.assertEqual(sum(self.filas_por_dia("qwen_trades").values()), 2)
+        self.assertEqual(n["qwen_trades"], 5)
+        self.assertEqual(verificar(self.destino)["problemas"], [])
+        # ida y vuelta: lo archivado es igual, celda a celda, a lo que hay en SQLite
+        for tabla, sqlite_ in (("qwen_decisions", "decisions"), ("qwen_news_actions", "news_actions")):
+            cfg = TABLAS[tabla]
+            orig = self.sqlite("SELECT %s FROM %s ORDER BY %s" % (", ".join(cfg.nombres), sqlite_, ", ".join(cfg.clave)))
+            self.assertEqual(sorted(self.archivo("qwen-live__live", tabla), key=repr), sorted(orig, key=repr), tabla)
+        cfg = TABLAS["qwen_trades"]
+        orig = self.sqlite("SELECT %s FROM trades WHERE trade_no IN (1, 2)" % ", ".join(cfg.nombres))
+        self.assertEqual(sorted(self.archivo("qwen-live__live", "qwen_trades"), key=repr), sorted(orig, key=repr))
+
+    def test_la_operacion_cerrada_se_exporta_cuando_su_funding_queda_completo(self):  # S1
+        sintetico.crear_copia_qwen_live(self.copia, DIA0)
+        self.exp("qwen-live__live", ["qwen_trades"])
+        self.assertEqual(self.filas_por_dia("qwen_trades"), {self.dia(0): 2})
+        self.sqlite("UPDATE trades SET funding_status='complete', net_complete_usd='0.32' WHERE trade_no=12")  # el motor concilia el funding
+        r = self.exp("qwen-live__live", ["qwen_trades"])
+        self.assertEqual((r["no_confirmados"], r["pendientes_por_abrir"], len(r["ya_confirmados"])), ([], [], 1))
+        self.assertEqual(self.filas_por_dia("qwen_trades"), {self.dia(0): 2, self.dia(1): 2})
+        en_el_archivo = {f[1]: f[15] for f in self.archivo("qwen-live__live", "qwen_trades")}  # (trade_no -> funding_status): el valor FINAL, no el pendiente
+        self.assertEqual(en_el_archivo, {1: "complete", 2: "complete", 11: "complete", 12: "complete"})
+        self.assertEqual(verificar(self.destino)["problemas"], [])
+
+    def test_el_recibo_va_al_dia_en_que_se_grabo_no_al_de_su_senal(self):  # S1: un recibo de funding conciliado tarde no entra en un dia ya archivado
+        sintetico.crear_copia_qwen_live(self.copia, DIA0)
+        self.exp("qwen-live__live", ["qwen_execution_receipts"])
+        self.assertEqual(self.filas_por_dia("qwen_execution_receipts"), {self.dia(0): 3, self.dia(1): 3, self.dia(2): 4})
+        ids = {f[0] for f in self.archivo("qwen-live__live", "qwen_execution_receipts", DIA0 + 2 * DAY_MS, DIA0 + 3 * DAY_MS)}
+        self.assertIn("r-funding-tarde", ids)
+
+    def test_auditor_exporta_un_dia_solo_cuando_todas_sus_miradas_estan_resueltas(self):  # S1
+        sintetico.crear_copia_auditor(self.copia, DIA0)
+        r = self.exp("qwen-live__auditor", ["auditor_miradas"])
+        self.assertEqual(r["no_confirmados"], [])
+        self.assertEqual(self.filas_por_dia("auditor_miradas"), {self.dia(0): 4})
+        self.assertEqual([p["dia"] for p in r["pendientes_por_abrir"]], [self.dia(1), self.dia(2)])  # el dia 1 tiene UNA sin resolver
+        self.assertEqual(self.exp("qwen-live__auditor", ["auditor_miradas"], dry_run=True)["dry_run"], [])  # el dry-run tampoco las ofrece
+        self.sqlite("UPDATE miradas SET resuelto_ms = t_ms + 1, veredicto_36h_json = '{\"acerto\": false}', despues_json = '{\"mov\": 2}' WHERE resuelto_ms IS NULL")
+        r = self.exp("qwen-live__auditor", ["auditor_miradas"])
+        self.assertEqual((r["no_confirmados"], r["pendientes_por_abrir"]), ([], []))
+        self.assertEqual(self.filas_por_dia("auditor_miradas"), {self.dia(0): 4, self.dia(1): 4, self.dia(2): 4})
+        cfg = TABLAS["auditor_miradas"]
+        orig = self.sqlite("SELECT %s FROM miradas" % ", ".join(cfg.nombres))
+        self.assertEqual(sorted(self.archivo("qwen-live__auditor", "auditor_miradas"), key=repr), sorted(orig, key=repr))  # con el valor ya definitivo
+        self.assertEqual(verificar(self.destino)["problemas"], [])
+
+    # ---------- S2: velas oficiales, funding_periods y analytics_points ----------
+    def test_mercado_velas_oficiales_funding_y_analytics_ida_y_vuelta(self):  # S2
+        n = sintetico.crear_copia_mercado_util(self.copia, DIA0)
+        r = self.exp("futures-market", MERCADO_UTIL)
+        self.assertEqual((r["no_confirmados"], r["pendientes_por_abrir"]), ([], []))
+        # velas: por el momento en que se aprendieron; la revision tardia de una vela del dia 0 cae en el dia 2, donde se agrego
+        self.assertEqual(self.filas_por_dia("official_candles"), {self.dia(0): 6, self.dia(1): 6, self.dia(2): 7})
+        self.assertEqual(self.filas_por_dia("analytics_points"), {self.dia(0): 6, self.dia(1): 6, self.dia(2): 6})
+        self.assertEqual(self.filas_por_dia("funding_periods"), {"2023-11-01": 6})
+        self.assertEqual(sum(self.filas_por_dia("official_candles").values()), n["official_candles"])
+        for tabla in MERCADO_UTIL:
+            cfg = TABLAS[tabla]
+            orig = self.sqlite("SELECT %s FROM %s" % (", ".join(cfg.nombres), cfg.sqlite))
+            self.assertEqual(sorted(self.archivo("futures-market", tabla, DIA0, DIA0 + 40 * DAY_MS), key=repr), sorted(orig, key=repr), tabla)
+        velas = self.archivo("futures-market", "official_candles")
+        self.assertEqual({v[0] for v in velas}, {"PF_ETHUSD", "PF_XBTUSD"})
+        self.assertEqual(verificar(self.destino)["problemas"], [])
+
+
 @unittest.skipUnless(formato.disponible(), "pyarrow no esta instalado (entorno aparte, ver docs/archivo-parquet.md)")
 class GruposChicosTests(unittest.TestCase):
     """Con grupos de ~2000 filas pesadas, buscar un producto en 1 hora lee una fraccion de los bytes (las estadisticas saltan bloques)."""
