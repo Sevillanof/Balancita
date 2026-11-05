@@ -1,0 +1,42 @@
+docs/archivo-parquet.md
+  h_92dd6654ceb221 73,175
+odd/tasks/datos-utiles.md
+  h_92dd6654ceb221 1-33
+odd/tasks/parquet-respaldo-completo.md
+  h_92dd6654ceb221 1-30
+ops/vps/README.md
+  h_92dd6654ceb221 1-31
+ops/vps/balancita-healthcheck.service
+  h_92dd6654ceb221 1-8
+ops/vps/balancita-healthcheck.sh
+  h_92dd6654ceb221 1-44
+ops/vps/balancita-healthcheck.timer
+  h_92dd6654ceb221 1-10
+ops/vps/balancita-respaldo.service
+  h_92dd6654ceb221 1-11
+ops/vps/balancita-respaldo.sh
+  h_92dd6654ceb221 1-61
+ops/vps/balancita-respaldo.timer
+  h_92dd6654ceb221 1-9
+python/archivo_parquet/cli.py
+  h_92dd6654ceb221 27-30,90-97
+python/archivo_parquet/estado.py
+  h_92dd6654ceb221 1-59
+python/archivo_parquet/nocturno.py
+  h_92dd6654ceb221 5-6,13-14,34-39,41,189-213,253-258,263-270,276-278,283,288,296-305,310,313-315,319,342-346
+python/tests/test_archivo_parquet_estado.py
+  h_92dd6654ceb221 1-77
+python/tests/test_archivo_parquet_nocturno.py
+  h_92dd6654ceb221 140,142,144-147,154-249
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "6771ed224e15bd11434a4543c9dd5ccfc56e3e06",
+  "prompts": {},
+  "humans": {
+    "h_92dd6654ceb221": {
+      "author": "Franco Sevillano <79455847+Sevillanof@users.noreply.github.com>"
+    }
+  }
+}
