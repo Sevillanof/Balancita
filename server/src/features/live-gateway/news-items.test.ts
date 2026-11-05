@@ -235,7 +235,62 @@ describe('createNewsItems', () => {
   }
 
   describe('stored Qwen news briefing', () => {
-    it.each([1, 2])(
+    it.each(['pending', 'error'] as const)(
+      'keeps the last fresh summary visible while a newer attempt is %s',
+      (status) => {
+        const path = seedNewsDb()
+        seedBriefing(path)
+        seedBriefing(path, {
+          status,
+          started_at_ms: BRIEFING_NOW + 60000,
+          known_at_ms: BRIEFING_NOW + 60000,
+          expires_at_ms: BRIEFING_NOW + 60000 + 900000,
+          text: null,
+          response_json: null,
+          reason:
+            status === 'pending' ? 'generation_in_progress' : 'invalid_summary',
+        })
+        expect(
+          createNewsItems({
+            newsDbPath: path,
+            clock: () => BRIEFING_NOW + 120000,
+          }).list(),
+        ).toMatchObject({
+          status: 'ok',
+          briefing: {
+            status: 'ok',
+            text: BRIEFING_TEXT,
+            known_at_ms: BRIEFING_NOW,
+            expires_at_ms: BRIEFING_NOW + 900000,
+          },
+        })
+      },
+    )
+
+    it('shows the newer failure once the last summary has expired', () => {
+      const path = seedNewsDb()
+      seedBriefing(path)
+      seedBriefing(path, {
+        status: 'error',
+        started_at_ms: BRIEFING_NOW + 60000,
+        known_at_ms: BRIEFING_NOW + 60000,
+        expires_at_ms: BRIEFING_NOW + 60000 + 900000,
+        text: null,
+        response_json: null,
+        reason: 'invalid_summary',
+      })
+      expect(
+        createNewsItems({
+          newsDbPath: path,
+          clock: () => BRIEFING_NOW + 900000,
+        }).list(),
+      ).toMatchObject({
+        status: 'ok',
+        briefing: { status: 'error', text: null, reason: 'invalid_summary' },
+      })
+    })
+
+    it.each([1, 2, 3])(
       'reads known prompt version %s without relaxing summary validation',
       (prompt_version) => {
         const path = seedNewsDb()
@@ -405,7 +460,7 @@ describe('createNewsItems', () => {
       { text: 'Compra Ethereum ahora.' },
       { response_json: '{}' },
       { model_ref: 'another-model.gguf' },
-      { prompt_version: 3 },
+      { prompt_version: 4 },
     ])(
       'isolates malformed briefing rows from the existing news list: %j',
       (changes) => {

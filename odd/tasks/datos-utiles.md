@@ -1,0 +1,33 @@
+# datos-utiles
+
+Guardar y archivar lo que sirve para mejorar al maestro y al portero, y dejar de capturar lo que no sirve, sin perder nada en el camino.
+Continúa `odd/tasks/parquet-respaldo-completo.md` (T4 de esa feature queda absorbida acá).
+
+## Specs
+
+- **S1** — El Parquet nocturno archiva la base del trader `qwen-live`: `live` (decisiones con el veredicto de cada experto, operaciones, recibos de ejecución, acciones por noticias, versiones de configuración) y `auditor` (`miradas`), con la misma verificación de ida y vuelta que el resto.
+- **S2** — El Parquet archiva también, de `futures-market`: velas oficiales de ETH y BTC, `funding_periods` y `analytics_points`; posicionamiento, prima y noticias siguen archivados.
+- **S3** — Todas las demás tablas y bases quedan en una lista explícita de exclusión con su motivo, de modo que `nocturno` sale con código 0 solo cuando lo útil está completo.
+- **S4** — Se empieza a guardar un resumen por minuto de ETH derivado de los eventos de mercado (volumen comprador/vendedor, cantidad de trades, spread y profundidad), antes de recortar ningún dato crudo.
+- **S5** — Dejar de capturar eventos de mercado de los productos que no se operan (todo menos ETH), después de archivarlos una vez en Parquet. _Riesgo alto (datos): requiere OK explícito del usuario al ejecutarlo._
+- **S6** — Dejar de guardar el cuerpo crudo de cada respuesta de funding (queda el dato interpretado y su hash), después de archivarlo. _Riesgo alto: OK explícito._
+- **S7** — Apagar la captura del motor viejo D (`verdicts`, decisiones LLM viejas, puntaje de pronósticos) después de archivarla una vez. _Riesgo alto: OK explícito._
+
+## Tasks
+
+| ID  | Specs  | Ruta                                                                         | Estado                     | Commit                     |
+| --- | ------ | ---------------------------------------------------------------------------- | -------------------------- | -------------------------- |
+| T1  | S1, S3 | `python/archivo_parquet/config.py` (+ `nocturno.BASES`, exclusiones) + tests | pendiente                  | — (lo commitea el usuario) |
+| T2  | S2, S3 | `python/archivo_parquet/config.py` + tests                                   | pendiente                  | —                          |
+| T3  | S4     | captura de mercado (TS) + tabla nueva + tests                                | pendiente                  | —                          |
+| T4  | S5     | captura de mercado                                                           | pendiente (OK del usuario) | —                          |
+| T5  | S6     | funding                                                                      | pendiente (OK del usuario) | —                          |
+| T6  | S7     | `scripts/dev-provider-env.mjs` hijos de D                                    | pendiente (OK del usuario) | —                          |
+
+## Log
+
+- **L1** (usuario, 2026-11-05): «Que decis? Si qwen live no lo usamos mas. Ahora qwen solo se usa para catalogar las noticias y dar un resumen. Ahora usamos la formula de maestro, portero y el ciclo de vida de la entrada y salida de operaciones. Eso es lo importante, las velas, veredictos de cada experto, decisiones, operaciones con todos sus datos que nos sirvan para mejorar al maestro y al portero.»
+- **L2** (usuario): «Algo de esos datos que tenemos, puede ayudar al maestro y al portero a mejorar en un futuro? O son datos inservibles?» → respuesta: microestructura de ETH resumida por minuto y analíticas sirven; cuerpos crudos de funding, revisiones de velas, `verdicts` de D y eventos de los otros 7 productos no. No tirar nada sin archivarlo antes.
+- **L3** (usuario): «Me parece bien».
+- **L4** (evidencia): el maestro lee velas de ETH y BTC por API a su cache (`qwen-live_cache`), prima y sesgo long/short de `positioning.sqlite` y funding por API; el entrenamiento del portero lee `funding_periods` de `futures-market`. El trader no lee `market_events` (5,0 GB en VPS) ni `verdicts` (2,2 GB). `funding_responses` 1,2 GB. Por confirmar: si el tramo vivo del gráfico sale de los eventos de ETH.
+- **L5** (pendiente aparte): activar en el VPS `ops/vps/` (instalar scripts, `HC_PING_URL_RESPALDO`, reiniciar `balancita.service`). El usuario ya hizo `git pull` en el VPS.
