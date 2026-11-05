@@ -68,6 +68,11 @@ class TablaConfig:
     # debe estar a menos de esto del fin. Una copia tomada antes de que el dia terminara no lo tiene entero; ese dia queda pendiente.
     tolerancia_fin_ms: int = 60_000
     filtro_sql: Optional[str] = None  # condicion SQL fija de la configuracion (premium_1m); nunca viene del usuario
+    # Tablas con filas que SQLite todavia puede MODIFICAR (operaciones del trader, miradas del auditor): condicion SQL (fija, nunca del usuario)
+    # de las filas que YA NO cambian. Un periodo se exporta solo cuando TODAS sus filas (las que pasan ``filtro_sql``) la cumplen; si queda
+    # una que aun puede cambiar, el periodo queda en ``pendientes_por_abrir`` (no es un hueco) hasta una copia mas nueva. Nunca se exporta
+    # "lo que ya se puede" de un periodo: el manifiesto lo daria por hecho y el resto no se archivaria jamas.
+    inmutable_sql: Optional[str] = None
 
     def __post_init__(self):
         if self.granularidad not in ("dia", "mes"):
@@ -251,3 +256,95 @@ TABLAS = {
                        sin_stats=("model_info_json", "top_logprobs_json", "probabilities_json", "timings_json")),
         producto=None, filtro_tipico="status", filas_por_grupo=GRUPO_PESADO),
 }
+
+# ---- datos-utiles (odd/tasks/datos-utiles.md). Regla de TIEMPO: cada periodo se cierra con una columna que ya no puede recibir filas nuevas
+# (la hora en que el dato se grabo o se decidio), nunca con la hora de un hecho viejo que se aprende tarde: una fila agregada despues a un dia
+# ya exportado no se archivaria jamas. Por eso velas, funding y analytics usan ``known_at`` (cuando llegaron) y no ``bucket_start`` / ``start_ms``
+# (en la copia del VPS hay revisiones de velas aprendidas hasta 10 dias despues de su minuto, y funding aprendido hasta un ano despues).
+#
+# ---- base viva del trader (qwen-live__live). SQLite la modifica; solo se archiva lo que ya no cambia ----
+# decisions: INSERT OR IGNORE por (product, bucket_ms), nunca se actualiza. Tiempo = t_ms (la hora de la decision; el bucket es t_ms - 15 min).
+# Las columnas de SQLite (no STRICT) siguen la afinidad declarada: REAL guarda reales, INTEGER enteros, TEXT texto; un valor de otro tipo falla
+# el dia con fila y columna (ver ``validar_tipos``).
+_DECISIONES = ("product:text bucket_ms:int t_ms:int decided_at_ms:int kind:text action:text model_action:text? p_action:real? confidence:real? "
+               "probs_json:text? orders_json:text? override:text? reason:text? reason_json:text? mirror_action:text? mirror_p:real? wake_json:text? "
+               "state_text:text? state_hash:text? latency_ms:int? threshold:real? prompt_version:text? prompt_hash:text? model:text? "
+               "config_hash:text? position_json:text? net_bp_now:real? trade_no:int? lean:real? lean_m:real? lean_num:real? score:real? "
+               "best_score:real? look_n:int? mirror_ok:int? factors_json:text? formula_action:text? formula_json:text? opinion_agrees:int? "
+               "opinion_error:text?")
+TABLAS.update({
+    "qwen_decisions": TablaConfig(
+        nombre="qwen_decisions", sqlite="decisions", tiempo="t_ms", clave=("product", "t_ms", "bucket_ms"), producto="product",
+        columnas=_cols(_DECISIONES,
+                       dicc=("product", "kind", "action", "model_action", "override", "mirror_action", "prompt_version", "model", "config_hash",
+                             "formula_action"),
+                       sin_stats=("probs_json", "orders_json", "reason", "reason_json", "wake_json", "state_text", "position_json", "factors_json",
+                                  "formula_json", "opinion_error")),
+        filtro_tipico="action", filas_por_grupo=GRUPO_PESADO, grupo_por=("product",), nivel_zstd=9),
+    # trades: la fila se ACTUALIZA mientras la operacion esta abierta y, ya cerrada, mientras el motor concilia su funding (funding_status deja de
+    # ser 'complete' hasta que llega todo). Solo se archiva lo cerrado (status='closed'), por su hora de salida (exit_ms), y un dia solo cuando
+    # TODAS sus operaciones cerradas tienen el funding completo. Las abiertas no pertenecen a ningun periodo.
+    "qwen_trades": TablaConfig(
+        nombre="qwen_trades", sqlite="trades", tiempo="exit_ms", clave=("product", "exit_ms", "trade_no"), producto="product",
+        columnas=_cols("product:text trade_no:int status:text side:text entry_ms:int exit_ms:int? entry_px:text? exit_px:text? qty:text? "
+                       "notional_usd:text? gross_usd:text? fees_usd:text? funding_usd:text? net_usd:text? net_bp:real? funding_status:text? "
+                       "closed_by:text? exit_reason:text? entry_reason:text? entry_p:real? hold_min:int? mfe_bp:real? mae_bp:real? stop_px:real? "
+                       "max_hold_ms:int? mark_px:real? mark_ms:int? net_now_usd:text? opened_at_ms:int? closed_at_ms:int? leverage:text? "
+                       "margin_usd:text? funding_model:text? net_complete_usd:text? config_hash:text? execution_model:text? entry_receipt_id:text? "
+                       "exit_receipt_id:text? mark_receipt_id:text? funding_receipt_id:text? execution_error:text? exit_plan_json:text?",
+                       dicc=("product", "status", "side", "funding_status", "closed_by", "exit_reason", "leverage", "funding_model", "config_hash",
+                             "execution_model"),
+                       sin_stats=("entry_reason", "execution_error", "exit_plan_json")),
+        filtro_tipico="closed_by", grupo_por=("product",), filtro_sql='"status" = \'closed\' AND "exit_ms" IS NOT NULL',
+        inmutable_sql='"funding_status" = \'complete\''),
+    # execution_receipts: STRICT, con triggers de solo-agregar. Tiempo = recorded_at_ms (cuando se grabo), NO signal_ms: el recibo de funding con que
+    # el motor concilia una operacion vieja lleva el signal_ms de la salida pero se graba dias despues; con signal_ms caeria en un dia ya archivado.
+    "qwen_execution_receipts": TablaConfig(
+        nombre="qwen_execution_receipts", sqlite="execution_receipts", tiempo="recorded_at_ms", clave=("product", "recorded_at_ms", "receipt_id"),
+        producto="product",
+        columnas=_cols("receipt_id:text product:text trade_no:int purpose:text signal_ms:int recorded_at_ms:int evidence_hash:text evidence_json:text",
+                       dicc=("product", "purpose"), sin_stats=("evidence_json",)),
+        hash="evidence_hash", filtro_tipico="purpose", grupo_por=("product",), filas_por_grupo=GRUPO_PESADO, nivel_zstd=9),
+    # news_actions: INSERT OR IGNORE por (product, event_id); nunca se actualiza. Tiempo = consumed_ms.
+    "qwen_news_actions": TablaConfig(
+        nombre="qwen_news_actions", sqlite="news_actions", tiempo="consumed_ms", clave=("product", "consumed_ms", "event_id"), producto="product",
+        columnas=_cols("product:text event_id:text consumed_ms:int action:text evidence_json:text", dicc=("product", "action"),
+                       sin_stats=("evidence_json",)),
+        filtro_tipico="action", grupo_por=("product",)),
+    # config_versions: solo-agregar (triggers). Pocas filas: un archivo por mes. Sin producto.
+    "qwen_config_versions": TablaConfig(
+        nombre="qwen_config_versions", sqlite="config_versions", tiempo="activated_ms", clave=("activated_ms", "id"), producto=None, granularidad="mes",
+        columnas=_cols("id:int previous_hash:text? config_hash:text activated_ms:int config_json:text cash_usd:text", sin_stats=("config_json",)),
+        hash="config_hash"),
+    # ---- auditor (qwen-live__auditor): miradas. El auditor las ACTUALIZA hasta darles el veredicto de 36 h (``resuelto_ms`` queda puesto y ya no
+    # las toca). Un dia se exporta solo cuando TODAS sus miradas estan resueltas. Tiempo = t_ms (la hora de la mirada). ----
+    "auditor_miradas": TablaConfig(
+        nombre="auditor_miradas", sqlite="miradas", tiempo="t_ms", clave=("product", "t_ms", "bucket_ms"), producto="product",
+        columnas=_cols("product:text bucket_ms:int t_ms:int estado:text accion:text maestro:int? puntaje:real? umbral_flojo:real? umbral_fuerte:real? "
+                       "portero_si:int? portero_p:real? portero_umbral:real? noticias_si:int? noticias_lado:int? qwen:text? qwen_coincide:int? "
+                       "lado_posicion:int horas_en_posicion:real? neto_ahora_pb:real? trade_no:int? condiciones_json:text despues_json:text? "
+                       "veredicto_12h_json:text? veredicto_24h_json:text? veredicto_36h_json:text? resuelto_ms:int? version:text",
+                       dicc=("product", "estado", "accion", "qwen", "version"),
+                       sin_stats=("condiciones_json", "despues_json", "veredicto_12h_json", "veredicto_24h_json", "veredicto_36h_json")),
+        filtro_tipico="accion", grupo_por=("product",), nivel_zstd=9, inmutable_sql='"resuelto_ms" IS NOT NULL'),
+    # ---- futures-market: velas oficiales, funding por periodo y puntos de analytics. Las tres son solo-agregar (triggers) y se cierran por ``known_at``. ----
+    # Todos los productos (ETH y BTC incluidos): la tabla es chica y filtrar no ahorra nada.
+    "official_candles": TablaConfig(
+        nombre="official_candles", sqlite="paper_futures_official_candles", tiempo="known_at",
+        clave=("product_id", "interval_ms", "known_at", "bucket_start", "revision_hash"),
+        columnas=_cols("product_id:text interval_ms:int bucket_start:int revision_hash:text known_at:int open_price:text high_price:text "
+                       "low_price:text close_price:text volume_btc:text response_sha256:text", dicc=("product_id",)),
+        hash="revision_hash", grupo_por=("product_id",)),
+    "funding_periods": TablaConfig(
+        nombre="funding_periods", sqlite="paper_futures_funding_periods", tiempo="known_at",
+        clave=("product_id", "known_at", "start_ms", "response_sha256"), granularidad="mes",
+        columnas=_cols("response_sha256:text start_ms:int end_ms:int funding_rate:text known_at:int unit:text product_id:text",
+                       dicc=("product_id", "unit")),
+        grupo_por=("product_id",)),
+    "analytics_points": TablaConfig(
+        nombre="analytics_points", sqlite="paper_futures_analytics_points", tiempo="known_at",
+        clave=("product_id", "metric", "interval_ms", "known_at", "bucket_start", "revision_hash"),
+        columnas=_cols("product_id:text metric:text interval_ms:int bucket_start:int revision_hash:text known_at:int values_json:text "
+                       "response_sha256:text", dicc=("product_id", "metric"), sin_stats=("values_json",)),
+        hash="revision_hash", filtro_tipico="metric", grupo_por=("product_id",)),
+})
