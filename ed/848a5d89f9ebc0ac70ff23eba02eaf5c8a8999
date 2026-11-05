@@ -1,0 +1,20 @@
+python/balancita_engine/futures_news_briefing.py
+  h_92dd6654ceb221 13,21-31,124-126,130,140-143,145,156-162,188-191,195-222,260,271,342-345,347,351
+python/tests/test_futures_news_briefing.py
+  h_92dd6654ceb221 148,150,155-157,180,199,286-320,392-405
+server/src/features/live-gateway/news-items.test.ts
+  h_92dd6654ceb221 238-293,463
+server/src/features/live-gateway/news-items.ts
+  h_92dd6654ceb221 325-355,366,378
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "ed848a5d89f9ebc0ac70ff23eba02eaf5c8a8999",
+  "prompts": {},
+  "humans": {
+    "h_92dd6654ceb221": {
+      "author": "Franco Sevillano <79455847+Sevillanof@users.noreply.github.com>"
+    }
+  }
+}
