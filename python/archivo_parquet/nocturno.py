@@ -2,14 +2,16 @@
 
 Reglas:
 - Lee SOLO copias de ``server/data/backups`` (las que deja la captura); nunca la base viva. Por base elige la copia MAS RECIENTE que pase
-  ``quick_check``; una copia con menos de ``EDAD_MINIMA_COPIA_S`` de vida, o con un ``.tmp`` en curso, se deja para otra noche.
+  ``quick_check``; si la copia tiene menos de ``EDAD_MINIMA_COPIA_S`` de vida o un ``.tmp`` en curso, espera a que madure (tope
+  ``TOPE_ESPERA_COPIA_S``) en vez de saltearla.
 - Idempotente (``exportar`` salta lo ya confirmado) y un solo proceso a la vez (``flock`` sobre ``.nocturno.lock``).
 - Baja prioridad (``os.nice``). No corre en los 10 min posteriores a un despertar (macOS: ``sysctl kern.waketime``; en otros sistemas no hay
   forma simple de saberlo y no se aplica): en vez de salir, ESPERA (tramos de ``TRAMO_ESPERA_S``, ya con el candado y el nice) hasta que
   pasen esos 10 min, con tope ``TOPE_ESPERA_S`` de espera total; un nuevo despertar durante la espera recalcula. Solo si el tope no alcanza
   sale con codigo 3, y launchd lo reintenta (``StartInterval``). En ``--dry-run`` no espera.
 - Una corrida sin novedad es barata: si hoy (UTC) ya hubo una corrida ``ok`` sobre la misma copia de una base, no se repite su ``quick_check``.
-- Codigos: 0 todo confirmado; 1 algo quedo SIN confirmar (dia, base sin copia buena, o ``verificar`` con problemas); 2 uso o pyarrow ausente;
+- Codigos: 0 todo confirmado; 1 el archivo quedo incompleto o sin confirmar (dia, base sin copia buena, base o tabla sin cubrir, columnas
+  nuevas, retencion, reemplazo omitido, huerfanos, ``verificar`` con problemas o error inesperado); 2 uso o pyarrow ausente;
   3 no corrio a proposito (otra corrida en curso, o despertar reciente): no es un fallo, la proxima noche lo recupera.
 """
 from __future__ import annotations
@@ -29,7 +31,14 @@ from .util import ErrorArchivo, abrir_copia
 from .verificar import verificar
 
 BASES = ("futures-market", "futures-verdicts", "futures-llm-decisions", "futures-forecast-scores", "positioning", "futures-news")
+# Copias que no se archivan a proposito (se reconstruyen solas). Cualquier otra base con copia y fuera de BASES es un hueco.
+BASES_EXCLUIDAS_PREFIJOS = ("qwen-live_cache__",)
+# Tablas de una base archivada que no se exportan a proposito. Vacio: toda tabla fuera de config.TABLAS es un hueco hasta decidirla.
+TABLAS_EXCLUIDAS: frozenset = frozenset()
+# Huecos del reporte de exportar que dejan el archivo incompleto (los periodos aun abiertos no lo son).
+HUECOS_DEL_REPORTE = ("omitidos_por_retencion", "reemplazos_omitidos", "avisos", "tablas_ausentes")
 EDAD_MINIMA_COPIA_S = 300
+TOPE_ESPERA_COPIA_S = 3600
 TMP_RECIENTE_S = 2 * 3600
 PAUSA_DESPERTAR_S = 600
 TOPE_ESPERA_S = 900
@@ -177,6 +186,31 @@ def _tablas_presentes(con) -> List[str]:
     return [n for n, c in TABLAS.items() if con.execute("PRAGMA table_info(\"%s\")" % c.sqlite).fetchall()]
 
 
+def _tablas_sin_cubrir(con) -> List[str]:
+    """Tablas de la copia que ni se exportan (config.TABLAS) ni estan excluidas a proposito."""
+    from .config import TABLAS
+    cubiertas = {c.sqlite for c in TABLAS.values()} | set(TABLAS_EXCLUIDAS)
+    nombres = [r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name")]
+    return [n for n in nombres if n not in cubiertas]
+
+
+def _bases_sin_cubrir(respaldos: str) -> List[str]:
+    """Bases con copia en la carpeta que no estan en BASES ni excluidas a proposito."""
+    if not os.path.isdir(respaldos):
+        return []
+    vistas = {m.group("base") for m in map(_SELLO.match, os.listdir(respaldos)) if m}
+    return sorted(b for b in vistas if b not in BASES and not b.startswith(BASES_EXCLUIDAS_PREFIJOS))
+
+
+def _solo_por_madurar(motivo: Optional[str]) -> bool:
+    """La unica razon para no usar una copia es que todavia se esta escribiendo: vale la pena esperar."""
+    if motivo == "copia_en_curso":
+        return True
+    if not motivo or not motivo.startswith("ninguna_copia_valida: "):
+        return False
+    return all(p.endswith("muy nueva") for p in motivo[len("ninguna_copia_valida: "):].split("; "))
+
+
 def nocturno(destino: str, respaldos: str, bases=BASES, dry_run: bool = False, ahora_s: Optional[float] = None,
              log: Callable[[str], None] = lambda m: None, despertar: Callable[[], Optional[float]] = ultimo_despertar_s,
              aplicar_nice: bool = True, dormir: Callable[[float], None] = time.sleep, reloj: Callable[[], float] = time.time) -> dict:
@@ -216,28 +250,42 @@ def nocturno(destino: str, respaldos: str, bases=BASES, dry_run: bool = False, a
             pass
     sin_confirmar = 0
     ya_hechas = _copias_ya_exportadas(destino, ahora_s) if not dry_run else frozenset()
+    sin_cubrir = _bases_sin_cubrir(respaldos)
+    if sin_cubrir:
+        resumen["bases_sin_cubrir"] = sin_cubrir
+        sin_confirmar += len(sin_cubrir)
+        log("bases con copia que no se archivan: %s" % ", ".join(sin_cubrir))
+    espera_copias = 0.0
     for base in bases:
         info: dict = {}
         resumen["bases"][base] = info
         con, ruta, motivo = elegir_copia(respaldos, base, ahora_s, ya_hechas)
+        # Una copia que todavia se esta escribiendo no se saltea: se espera a que madure, con tope.
+        while con is None and _solo_por_madurar(motivo) and espera_copias < TOPE_ESPERA_COPIA_S:
+            t0 = reloj()
+            dormir(TRAMO_ESPERA_S)
+            pasado = max(reloj() - t0, TRAMO_ESPERA_S)
+            espera_copias += pasado
+            ahora_s += pasado
+            con, ruta, motivo = elegir_copia(respaldos, base, ahora_s, ya_hechas)
         if motivo == "sin_novedad":
             info.update(estado="sin_novedad", copia=os.path.basename(ruta))
             log("%s: sin novedad (%s ya exportada hoy)" % (base, info["copia"]))
             continue
         if con is None:
-            info["estado"] = "omitida"
-            info["motivo"] = motivo
-            # Sin ninguna copia (base que no se usa) no es un fallo; una copia ilegible o con quick_check malo si lo es.
-            if motivo.startswith("ninguna_copia_valida"):
-                sin_confirmar += 1
+            # Una base esperada sin copia buena deja el archivo incompleto: siempre es un fallo.
+            info.update(estado="omitida", motivo=motivo)
+            sin_confirmar += 1
             log("%s: omitida (%s)" % (base, motivo))
             continue
         info["copia"] = os.path.basename(ruta)
         try:
+            faltan = _tablas_sin_cubrir(con)
             tablas = _tablas_presentes(con)
             if not tablas:
                 info["estado"] = "sin_tablas_del_archivo"
                 con.close()
+                sin_confirmar += 1
                 continue
             rep = exportar(ruta, base, destino, tablas, dry_run, True, int(ahora_s * 1000), log, con=con)
         except ErrorArchivo as exc:
@@ -245,20 +293,30 @@ def nocturno(destino: str, respaldos: str, bases=BASES, dry_run: bool = False, a
             sin_confirmar += 1
             log("%s: error: %s" % (base, exc))
             continue
-        info["estado"] = "ok" if not rep["no_confirmados"] else "con_no_confirmados"
+        except Exception as exc:  # noqa: BLE001 - un error inesperado de una base no frena a las demas ni a la linea del log
+            info.update(estado="error", motivo="%s: %s" % (type(exc).__name__, exc))
+            sin_confirmar += 1
+            log("%s: error inesperado: %s" % (base, info["motivo"]))
+            continue
+        huecos = {k: rep[k] for k in HUECOS_DEL_REPORTE if rep.get(k)}
+        if faltan:
+            huecos["tablas_sin_cubrir"] = faltan
+        info.update(huecos)
+        info["estado"] = "con_huecos" if huecos else ("ok" if not rep["no_confirmados"] else "con_no_confirmados")
         info["exportados"] = len(rep["exportados"])
         info["reemplazados"] = len(rep["reemplazados"])  # formato viejo -> formato 2
-        info["omitidos_por_retencion"] = rep["omitidos_por_retencion"]  # informado, no es fallo (ver docs/archivo-parquet.md, retencion de 48 h)
-        info["reemplazos_omitidos"] = rep["reemplazos_omitidos"]
         info["ya_confirmados"] = len(rep["ya_confirmados"])
         info["no_confirmados"] = rep["no_confirmados"]
+        info["pendientes_por_abrir"] = len(rep.get("pendientes_por_abrir") or [])
         if dry_run:
             info["dry_run"] = rep["dry_run"]
-        sin_confirmar += len(rep["no_confirmados"])
+        sin_confirmar += len(rep["no_confirmados"]) + sum(len(v) for v in huecos.values())
+    if espera_copias:
+        resumen["espera_copias_s"] = int(espera_copias)
     if not dry_run and os.path.isdir(destino):
         ver = verificar(destino)
         resumen["verificacion"] = {"archivos": ver["archivos"], "problemas": ver["problemas"], "huerfanos_sin_confirmar": ver["huerfanos_sin_confirmar"]}
-        sin_confirmar += len(ver["problemas"])
+        sin_confirmar += len(ver["problemas"]) + len(ver["huerfanos_sin_confirmar"])
     resumen["sin_confirmar"] = sin_confirmar
     resumen["estado"] = "ok" if not sin_confirmar else "con_pendientes"
     resumen["codigo"] = 1 if sin_confirmar else 0
@@ -281,6 +339,11 @@ def correr(destino: str, respaldos: str, dry_run: bool = False, bases=BASES, log
             res = nocturno(destino, respaldos, bases, False, ahora_s, log, despertar, aplicar_nice, dormir, reloj)
     except OtraCorridaEnCurso:
         res = {"inicio": _iso(time.time() if ahora_s is None else ahora_s), "estado": "otra_corrida_en_curso", "codigo": 3, "destino": destino}
+    except formato.ParquetNoDisponible:
+        raise
+    except Exception as exc:  # noqa: BLE001 - la linea del log se escribe siempre: un fallo sin rastro no se ve
+        res = {"inicio": _iso(time.time() if ahora_s is None else ahora_s), "estado": "error", "codigo": 1, "destino": destino,
+               "respaldos": respaldos, "motivo": "%s: %s" % (type(exc).__name__, exc)}
     res["fin"] = _iso(time.time() if ahora_s is None else ahora_s)
     try:
         with open(os.path.join(destino, NOMBRE_LOG), "a", encoding="utf-8") as fh:

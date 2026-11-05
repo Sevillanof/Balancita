@@ -1,0 +1,8 @@
+[Unit]
+Description=Balancita health check
+
+[Service]
+Type=oneshot
+User=balancita
+EnvironmentFile=-/etc/balancita/alert.env
+ExecStart=/usr/local/bin/balancita-healthcheck.sh

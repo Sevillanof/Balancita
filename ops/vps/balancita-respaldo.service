@@ -1,0 +1,11 @@
+[Unit]
+Description=Balancita daily SQLite backup and Parquet export
+
+[Service]
+Type=oneshot
+User=balancita
+EnvironmentFile=-/etc/balancita/alert.env
+Nice=19
+IOSchedulingClass=idle
+TimeoutStartSec=6h
+ExecStart=/usr/local/bin/balancita-respaldo.sh

@@ -1,0 +1,9 @@
+[Unit]
+Description=Balancita daily backup at 04:30 Madrid
+
+[Timer]
+OnCalendar=*-*-* 04:30:00 Europe/Madrid
+Persistent=true
+
+[Install]
+WantedBy=timers.target

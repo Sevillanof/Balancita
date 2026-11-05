@@ -24,6 +24,10 @@ def _parser() -> argparse.ArgumentParser:
     n.add_argument("--respaldos", help="carpeta de copias diarias (por defecto $BALANCITA_RESPALDOS_DIR o server/data/backups del repo)")
     n.add_argument("--bases", help="lista separada por comas; por defecto todas las del archivo")
     n.add_argument("--dry-run", action="store_true", help="solo lista que se exportaria; no escribe nada")
+    s = sub.add_parser("estado", help="para la alerta: imprime el problema y sale con 1 si la ultima corrida nocturna es vieja o incompleta")
+    s.add_argument("--destino", help="carpeta del archivo (por defecto $BALANCITA_ARCHIVO_DESTINO o ~/balancita-data.noindex/archivo-parquet)")
+    s.add_argument("--max-horas", type=int, default=26)
+    s.add_argument("--ahora", type=float, help="segundos UNIX (pruebas)")
     e = sub.add_parser("exportar", help="exporta a Parquet los dias UTC cerrados de una COPIA de SQLite")
     e.add_argument("--copia", required=True)
     e.add_argument("--base", required=True)
@@ -83,6 +87,14 @@ def main(argv: Optional[List[str]] = None) -> int:
                          tuple(_tablas(args.bases) or BASES), log=lambda m: print(m, file=sys.stderr))
             _imprimir(rep)
             return rep["codigo"]
+        if args.cmd == "estado":
+            import time
+            from .estado import problema
+            from .nocturno import destino_por_defecto
+            texto = problema(args.destino or destino_por_defecto(), time.time() if args.ahora is None else args.ahora, args.max_horas)
+            if texto:
+                print(texto)
+            return 1 if texto else 0
         if args.cmd == "exportar":
             from .exportar import exportar
             rep = exportar(args.copia, args.base, args.destino, _tablas(args.tablas), args.dry_run, args.copia_confirmada,

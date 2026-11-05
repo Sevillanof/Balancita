@@ -137,15 +137,115 @@ class Corrida(Base):
         self.assertTrue(res["bases"]["futures-verdicts"]["dry_run"])
         self.assertFalse(os.path.exists(self.destino))
 
-    def test_base_sin_copias_no_es_fallo_pero_copia_invalida_si(self):
+    def test_base_esperada_sin_copias_es_fallo_y_copia_invalida_tambien(self):
         res = self.correr(dry_run=True)
-        self.assertEqual(res["codigo"], 0)
+        self.assertEqual(res["codigo"], 1)
         self.assertEqual(res["bases"]["futures-verdicts"]["estado"], "omitida")
+        self.assertEqual(res["bases"]["futures-verdicts"]["motivo"], "sin_copias")
+        os.rmdir(self.resp)
+        self.assertEqual(self.correr(dry_run=True)["codigo"], 1)
+        os.makedirs(self.resp)
         mala = os.path.join(self.resp, "futures-verdicts-20261102-040000.sqlite")
         with open(mala, "wb") as fh:
             fh.write(b"basura")
         os.utime(mala, (AHORA_S - 3600, AHORA_S - 3600))
         self.assertEqual(self.correr(dry_run=True)["codigo"], 1)
+
+    def test_copia_muy_nueva_espera_a_que_madure_y_sigue(self):
+        self.copia(edad_s=30)
+        reloj, dormir, dormidos, _ = self.reloj_falso()
+        res = self.correr(dry_run=True, dormir=dormir, reloj=reloj)
+        self.assertEqual(res["codigo"], 0, res)
+        self.assertEqual(res["bases"]["futures-verdicts"]["copia"], "futures-verdicts-20261102-040000.sqlite")
+        self.assertGreaterEqual(sum(dormidos), nocturno.EDAD_MINIMA_COPIA_S - 30)
+        self.assertTrue(all(d <= nocturno.TRAMO_ESPERA_S for d in dormidos))
+
+    def test_copia_que_nunca_madura_falla_al_vencer_la_espera(self):
+        ruta = self.copia(edad_s=30)
+        est = {"t": AHORA_S}
+
+        def dormir(s):
+            est["t"] += s
+            os.utime(ruta, (est["t"] - 30, est["t"] - 30))  # la copia se sigue escribiendo
+        res = self.correr(dry_run=True, dormir=dormir, reloj=lambda: est["t"])
+        self.assertEqual(res["codigo"], 1)
+        info = res["bases"]["futures-verdicts"]
+        self.assertEqual(info["estado"], "omitida")
+        self.assertIn("muy nueva", info["motivo"])
+        self.assertGreaterEqual(est["t"] - AHORA_S, nocturno.TOPE_ESPERA_COPIA_S)
+        self.assertLess(est["t"] - AHORA_S, nocturno.TOPE_ESPERA_COPIA_S + nocturno.TRAMO_ESPERA_S + 1)
+
+    def test_tabla_de_la_copia_sin_exportar_ni_excluir_es_fallo(self):
+        import sqlite3
+        ruta = self.copia()
+        con = sqlite3.connect(ruta)
+        con.execute("CREATE TABLE tabla_nueva_sin_archivo(x INTEGER)")
+        con.commit()
+        con.close()
+        os.utime(ruta, (AHORA_S - 3600, AHORA_S - 3600))
+        res = self.correr(dry_run=True)
+        self.assertEqual(res["codigo"], 1)
+        self.assertEqual(res["bases"]["futures-verdicts"]["tablas_sin_cubrir"], ["tabla_nueva_sin_archivo"])
+
+    def test_copia_de_una_base_que_no_se_archiva_es_fallo_salvo_caches(self):
+        self.copia()
+        for nombre in ("qwen-live__live-20261102-040000.sqlite", "qwen-live_cache__candles-PF_ETHUSD-20261102-040000.sqlite"):
+            with open(os.path.join(self.resp, nombre), "wb") as fh:
+                fh.write(b"x")
+        res = self.correr(dry_run=True)
+        self.assertEqual(res["codigo"], 1)
+        self.assertEqual(res["bases_sin_cubrir"], ["qwen-live__live"])
+
+    def reporte(self, **cambios):
+        rep = {"exportados": [], "reemplazados": [], "ya_confirmados": [], "no_confirmados": [], "tablas_ausentes": [],
+               "pendientes_por_abrir": [], "omitidos_por_retencion": [], "reemplazos_omitidos": [], "dry_run": []}
+        rep.update(cambios)
+        return rep
+
+    def test_huecos_del_reporte_cuentan_como_fallo_y_quedan_en_el_resumen(self):
+        self.copia()
+        casos = [
+            ("omitidos_por_retencion", [{"tabla": "market_events", "dia": "2026-11-01"}]),
+            ("reemplazos_omitidos", [{"tabla": "verdicts", "dia": "2026-11-01"}]),
+            ("avisos", [{"tabla": "verdicts", "columnas_sin_configurar": ["nueva"]}]),
+            ("tablas_ausentes", ["verdicts"]),
+        ]
+        for clave, valor in casos:
+            with self.subTest(clave=clave), mock.patch.object(nocturno, "exportar", return_value=self.reporte(**{clave: valor})):
+                res = self.correr(dry_run=True)
+                self.assertEqual(res["codigo"], 1)
+                self.assertEqual(res["bases"]["futures-verdicts"][clave], valor)
+                self.assertEqual(res["bases"]["futures-verdicts"]["estado"], "con_huecos")
+        # dias o meses que todavia no cerraron son lo normal de cada noche, no un hueco
+        abiertos = self.reporte(pendientes_por_abrir=[{"tabla": "verdicts", "dia": "2026-11-05"}])
+        with mock.patch.object(nocturno, "exportar", return_value=abiertos):
+            self.assertEqual(self.correr(dry_run=True)["codigo"], 0)
+
+    def test_cualquier_error_de_una_base_es_fallo_y_sigue_con_las_demas(self):
+        self.copia()
+        self.copia(base="positioning", tablas=("verdicts",))
+        with mock.patch.object(nocturno, "exportar", side_effect=[TypeError("int() de None"), self.reporte()]):
+            res = self.correr(dry_run=True, bases=("futures-verdicts", "positioning"))
+        self.assertEqual(res["codigo"], 1)
+        self.assertEqual(res["bases"]["futures-verdicts"]["estado"], "error")
+        self.assertIn("TypeError", res["bases"]["futures-verdicts"]["motivo"])
+        self.assertIn("estado", res["bases"]["positioning"])
+
+    def test_huerfanos_y_errores_de_verificar_son_fallo_y_la_linea_se_escribe_siempre(self):
+        self.copia()
+        with mock.patch.object(formato, "pq", object()), \
+                mock.patch.object(nocturno, "exportar", return_value=self.reporte()), \
+                mock.patch.object(nocturno, "verificar", return_value={"archivos": 1, "problemas": [], "huerfanos_sin_confirmar": ["a.parquet"]}):
+            self.assertEqual(self.correr()["codigo"], 1)
+        with mock.patch.object(formato, "pq", object()), \
+                mock.patch.object(nocturno, "exportar", return_value=self.reporte()), \
+                mock.patch.object(nocturno, "verificar", side_effect=RuntimeError("disco lleno")):
+            res = self.correr()
+        self.assertEqual((res["estado"], res["codigo"]), ("error", 1))
+        with open(os.path.join(self.destino, nocturno.NOMBRE_LOG)) as fh:
+            lineas = [json.loads(l) for l in fh if l.strip()]
+        self.assertEqual([l["codigo"] for l in lineas], [1, 1])
+        self.assertIn("disco lleno", lineas[-1]["motivo"])
 
     def test_candado_un_solo_proceso_a_la_vez(self):
         os.makedirs(self.destino)
