@@ -1,0 +1,28 @@
+docs/archivo-parquet.md
+  h_92dd6654ceb221 53-61,65-103,121,130-136,245
+odd/tasks/datos-utiles.md
+  h_92dd6654ceb221 34-35
+python/archivo_parquet/config.py
+  h_92dd6654ceb221 71-75,259-350
+python/archivo_parquet/exportar.py
+  h_92dd6654ceb221 57-63,271-276
+python/archivo_parquet/nocturno.py
+  h_92dd6654ceb221 33-95,247-248,250,255-262,268,281,284,350,398
+python/archivo_parquet/sintetico.py
+  h_92dd6654ceb221 344-575
+python/tests/test_archivo_parquet_fase2.py
+  h_92dd6654ceb221 123-256
+python/tests/test_archivo_parquet_nocturno.py
+  h_92dd6654ceb221 192,197,274-407
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "b3ccb2b8ce5c41cf31b2cfd86fba0f945170853d",
+  "prompts": {},
+  "humans": {
+    "h_92dd6654ceb221": {
+      "author": "Franco Sevillano <79455847+Sevillanof@users.noreply.github.com>"
+    }
+  }
+}
