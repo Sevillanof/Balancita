@@ -13,11 +13,11 @@ Solo lectura sobre las bases; no cambia el trader ni los esquemas.
 
 ## Tasks
 
-| ID | Specs | Ruta | Estado | Commit |
-|----|-------|------|--------|--------|
-| T1 | S1-S4 | parent (workers no arrancan fuera del repo): `python/balancita_engine/futures_news_effect.py`, `python/tests/test_futures_news_effect.py` | hecha (10 tests) | — (lo commitea el usuario) |
-| T2 | S5 | parent: `docs/medir-noticias.md` | hecha | — |
-| T3 | S1-S3 | parent: correr sobre el respaldo del VPS (`~/balancita-vps-respaldo/ultima-copia`) y resumir | hecha | — |
+| ID  | Specs | Ruta                                                                                                                                      | Estado           | Commit                     |
+| --- | ----- | ----------------------------------------------------------------------------------------------------------------------------------------- | ---------------- | -------------------------- |
+| T1  | S1-S4 | parent (workers no arrancan fuera del repo): `python/balancita_engine/futures_news_effect.py`, `python/tests/test_futures_news_effect.py` | hecha (10 tests) | — (lo commitea el usuario) |
+| T2  | S5    | parent: `docs/medir-noticias.md`                                                                                                          | hecha            | —                          |
+| T3  | S1-S3 | parent: correr sobre el respaldo del VPS (`~/balancita-vps-respaldo/ultima-copia`) y resumir                                              | hecha            | —                          |
 
 ## Log
 

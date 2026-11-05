@@ -13,12 +13,12 @@ Esta fase cubre los pasos 1 y 2; el borrado sigue apagado.
 
 ## Tasks
 
-| ID | Specs | Ruta | Estado | Commit |
-|----|-------|------|--------|--------|
-| T1 | S1 | parent: leer (solo lectura) scripts y programación actuales del VPS | hecha | — |
-| T2 | S2-S3 | parent: `python/archivo_parquet/nocturno.py` + `test_archivo_parquet_nocturno.py` (8 tests nuevos) + docs | hecha | — (lo commitea el usuario) |
-| T3 | S1, S4 | parent: `ops/vps/` (scripts + units + README), `archivo_parquet/estado.py` + CLI `estado` + 7 tests | hecha (falta instalar en el VPS: usuario) | — |
-| T4 | S5 | gateway/salud + UI | pendiente | — |
+| ID  | Specs  | Ruta                                                                                                      | Estado                                    | Commit                     |
+| --- | ------ | --------------------------------------------------------------------------------------------------------- | ----------------------------------------- | -------------------------- |
+| T1  | S1     | parent: leer (solo lectura) scripts y programación actuales del VPS                                       | hecha                                     | —                          |
+| T2  | S2-S3  | parent: `python/archivo_parquet/nocturno.py` + `test_archivo_parquet_nocturno.py` (8 tests nuevos) + docs | hecha                                     | — (lo commitea el usuario) |
+| T3  | S1, S4 | parent: `ops/vps/` (scripts + units + README), `archivo_parquet/estado.py` + CLI `estado` + 7 tests       | hecha (falta instalar en el VPS: usuario) | —                          |
+| T4  | S5     | gateway/salud + UI                                                                                        | pendiente                                 | —                          |
 
 ## Log
 
@@ -26,5 +26,5 @@ Esta fase cubre los pasos 1 y 2; el borrado sigue apagado.
 - **L2** (usuario, 2026-11-05): «Si a los dos» — aprueba pasos 1 y 2: (1) scripts del VPS en el repo encadenados; (2) todo hueco = fallo + alerta + salud.
 - **L3** (evidencia): `nocturno` 05-nov 03:49 UTC salteó news, verdicts y positioning por «copia muy nueva» (copias 03:30), código 1; el 04-nov una segunda corrida 08:48 completó. Scripts del VPS no están en el repo. Regla del repo: el agente no hace commit ni push.
 - **L4** (T2): nocturno espera copias que maduran (tope 1 h), y cuenta como fallo: sin_copias, bases_sin_cubrir (excepto qwen-live_cache__*), tablas_sin_cubrir, avisos, omitidos_por_retencion, reemplazos_omitidos, huérfanos y errores inesperados; la línea de nocturno.jsonl se escribe siempre. `pendientes_por_abrir` (períodos abiertos) no es hueco. Falla previa ajena: test_archivo_parquet_aislamiento detecta una copia del paquete en server/data/medicion-parquet (falla también sin estos cambios).
-- **L5** (dry-run sobre copia VPS 05-nov): código 1. Bases sin cubrir: forward, futures-strategies, maker-costs, qwen-live auditor y live. Tablas sin cubrir: 16 de futures-market (official_candles, funding_*, analytics_*, ticker_snapshots…), 2 verdicts, 2 llm, 1 forecast, 1 positioning (collector_run), 5 news (briefings, errors, meta, polls, source_sets). Es la lista de trabajo del paso 4 (cobertura).
+- **L5** (dry-run sobre copia VPS 05-nov): código 1. Bases sin cubrir: forward, futures-strategies, maker-costs, qwen-live auditor y live. Tablas sin cubrir: 16 de futures-market (official_candles, funding__, analytics__, ticker_snapshots…), 2 verdicts, 2 llm, 1 forecast, 1 positioning (collector_run), 5 news (briefings, errors, meta, polls, source_sets). Es la lista de trabajo del paso 4 (cobertura).
 - **L6** (T1/T3): en el VPS el respaldo ya estaba encadenado (`balancita-respaldo.sh`: VACUUM INTO + integrity_check y después nocturno), pero el export corría a los pocos minutos de la última copia → «muy nueva» (regla de 5 min); con T2 ahora espera. No había alerta del respaldo: el healthcheck (cada 5 min, healthchecks.io) no lo miraba. Se agregó ping propio `HC_PING_URL_RESPALDO` (éxito / `/fail` con el motivo de `archivo_parquet estado`).

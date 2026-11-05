@@ -9,20 +9,20 @@ Continúa `odd/tasks/parquet-respaldo-completo.md` (T4 de esa feature queda abso
 - **S2** — El Parquet archiva también, de `futures-market`: velas oficiales de ETH y BTC, `funding_periods` y `analytics_points`; posicionamiento, prima y noticias siguen archivados.
 - **S3** — Todas las demás tablas y bases quedan en una lista explícita de exclusión con su motivo, de modo que `nocturno` sale con código 0 solo cuando lo útil está completo.
 - **S4** — Se empieza a guardar un resumen por minuto de ETH derivado de los eventos de mercado (volumen comprador/vendedor, cantidad de trades, spread y profundidad), antes de recortar ningún dato crudo.
-- **S5** — Dejar de capturar eventos de mercado de los productos que no se operan (todo menos ETH), después de archivarlos una vez en Parquet. *Riesgo alto (datos): requiere OK explícito del usuario al ejecutarlo.*
-- **S6** — Dejar de guardar el cuerpo crudo de cada respuesta de funding (queda el dato interpretado y su hash), después de archivarlo. *Riesgo alto: OK explícito.*
-- **S7** — Apagar la captura del motor viejo D (`verdicts`, decisiones LLM viejas, puntaje de pronósticos) después de archivarla una vez. *Riesgo alto: OK explícito.*
+- **S5** — Dejar de capturar eventos de mercado de los productos que no se operan (todo menos ETH), después de archivarlos una vez en Parquet. _Riesgo alto (datos): requiere OK explícito del usuario al ejecutarlo._
+- **S6** — Dejar de guardar el cuerpo crudo de cada respuesta de funding (queda el dato interpretado y su hash), después de archivarlo. _Riesgo alto: OK explícito._
+- **S7** — Apagar la captura del motor viejo D (`verdicts`, decisiones LLM viejas, puntaje de pronósticos) después de archivarla una vez. _Riesgo alto: OK explícito._
 
 ## Tasks
 
-| ID | Specs | Ruta | Estado | Commit |
-|----|-------|------|--------|--------|
-| T1 | S1, S3 | `python/archivo_parquet/config.py` (+ `nocturno.BASES`, exclusiones) + tests | pendiente | — (lo commitea el usuario) |
-| T2 | S2, S3 | `python/archivo_parquet/config.py` + tests | pendiente | — |
-| T3 | S4 | captura de mercado (TS) + tabla nueva + tests | pendiente | — |
-| T4 | S5 | captura de mercado | pendiente (OK del usuario) | — |
-| T5 | S6 | funding | pendiente (OK del usuario) | — |
-| T6 | S7 | `scripts/dev-provider-env.mjs` hijos de D | pendiente (OK del usuario) | — |
+| ID  | Specs  | Ruta                                                                         | Estado                     | Commit                     |
+| --- | ------ | ---------------------------------------------------------------------------- | -------------------------- | -------------------------- |
+| T1  | S1, S3 | `python/archivo_parquet/config.py` (+ `nocturno.BASES`, exclusiones) + tests | pendiente                  | — (lo commitea el usuario) |
+| T2  | S2, S3 | `python/archivo_parquet/config.py` + tests                                   | pendiente                  | —                          |
+| T3  | S4     | captura de mercado (TS) + tabla nueva + tests                                | pendiente                  | —                          |
+| T4  | S5     | captura de mercado                                                           | pendiente (OK del usuario) | —                          |
+| T5  | S6     | funding                                                                      | pendiente (OK del usuario) | —                          |
+| T6  | S7     | `scripts/dev-provider-env.mjs` hijos de D                                    | pendiente (OK del usuario) | —                          |
 
 ## Log
 

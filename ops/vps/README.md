@@ -2,12 +2,12 @@
 
 Copia versionada de lo que corre en el VPS (antes vivía solo allá). Si se cambia algo acá, hay que instalarlo en el VPS.
 
-| Archivo | Instalado en | Qué hace |
-|---|---|---|
-| `balancita-respaldo.sh` | `/usr/local/bin/` | 04:30 Madrid: copia cada base de `server/data/dev-live` con `VACUUM INTO` + `integrity_check` a `/home/balancita/backups/AAAA-MM-DD` (7 días), después corre `archivo_parquet nocturno` sobre esas copias hacia `/home/balancita/parquet`, y avisa a healthchecks.io |
-| `balancita-respaldo.service` / `.timer` | `/etc/systemd/system/` | Programa el respaldo; lee `/etc/balancita/alert.env` |
-| `balancita-healthcheck.sh` | `/usr/local/bin/` | Cada 5 min: servicio, última vela, llama-server, disco y RAM → `HC_PING_URL` |
-| `balancita-healthcheck.service` / `.timer` | `/etc/systemd/system/` | Programa el chequeo |
+| Archivo                                    | Instalado en           | Qué hace                                                                                                                                                                                                                                                             |
+| ------------------------------------------ | ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `balancita-respaldo.sh`                    | `/usr/local/bin/`      | 04:30 Madrid: copia cada base de `server/data/dev-live` con `VACUUM INTO` + `integrity_check` a `/home/balancita/backups/AAAA-MM-DD` (7 días), después corre `archivo_parquet nocturno` sobre esas copias hacia `/home/balancita/parquet`, y avisa a healthchecks.io |
+| `balancita-respaldo.service` / `.timer`    | `/etc/systemd/system/` | Programa el respaldo; lee `/etc/balancita/alert.env`                                                                                                                                                                                                                 |
+| `balancita-healthcheck.sh`                 | `/usr/local/bin/`      | Cada 5 min: servicio, última vela, llama-server, disco y RAM → `HC_PING_URL`                                                                                                                                                                                         |
+| `balancita-healthcheck.service` / `.timer` | `/etc/systemd/system/` | Programa el chequeo                                                                                                                                                                                                                                                  |
 
 ## Alerta del respaldo
 
