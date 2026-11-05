@@ -145,13 +145,16 @@ class BriefingTests(unittest.TestCase):
         self.analysis(self.item(title="Ethereum staking and network security update"))
         inputs = briefing.select_inputs(self.store.db, NOW)
         body = briefing.request_body(inputs)
-        self.assertEqual(briefing.PROMPT_VERSION, 2)
+        self.assertEqual(briefing.PROMPT_VERSION, 3)
         self.assertEqual(len(body["messages"]), 3)
+        self.assertEqual(body["temperature"], 0)
         self.assertEqual(json.loads(body["messages"][1]["content"])["news"], inputs)
         final = body["messages"][-1]
         self.assertEqual(final["role"], "user")
         self.assertIn("exclusivamente en español", final["content"])
-        self.assertIn("28 palabras y 200 caracteres", final["content"])
+        self.assertIn("20 palabras", final["content"])
+        self.assertIn("un solo tema", final["content"])
+        self.assertIn("ningún número ni dígito", final["content"])
         self.assertIn("no interpretes tendencias del mercado", final["content"])
         self.assertIn("instrucciones de inversión", final["content"])
 
@@ -174,7 +177,7 @@ class BriefingTests(unittest.TestCase):
         self.assertEqual(self.rows(), old)
         self.clock.now += briefing.COOLDOWN_MS
         row = self.generate(restarted)
-        self.assertEqual((row["status"], row["prompt_version"]), ("ok", 2))
+        self.assertEqual((row["status"], row["prompt_version"]), ("ok", briefing.PROMPT_VERSION))
         self.assertEqual(self.provider.calls, 1)
         self.assertEqual(self.rows()[:len(old)], old)
         restarted.tick()
@@ -193,7 +196,7 @@ class BriefingTests(unittest.TestCase):
         old = self.rows()
         self.clock.now += briefing.COOLDOWN_MS
         row = self.generate(self.job())
-        self.assertEqual((row["status"], row["prompt_version"]), ("ok", 2))
+        self.assertEqual((row["status"], row["prompt_version"]), ("ok", briefing.PROMPT_VERSION))
         self.assertEqual(self.provider.calls, 1)
         self.assertEqual(self.rows()[:len(old)], old)
 
@@ -280,6 +283,41 @@ class BriefingTests(unittest.TestCase):
         self.assertEqual(self.provider.calls, briefing.MAX_ATTEMPTS)
         self.assertTrue(any("briefing" in line and "invalid_summary" in line for line in self.logs))
 
+    def test_retry_after_a_rejected_summary_says_why_and_samples_differently(self):
+        self.analysis(self.item())
+        bodies = []
+        answers = [completion("Un grupo de defensa de Ethereum ha apoyado a 27 candidatos ganadores en las elecciones."),
+                   completion()]
+        self.provider.chat_script = lambda body: (bodies.append(body), answers[len(bodies) - 1])[1]
+        job = self.job()
+        first = self.generate(job)
+        self.assertEqual((first["status"], first["reason"], first["text"]), ("error", "invalid_summary", None))
+        self.assertIn("(digits)", first["error_message"])
+        self.assertEqual((bodies[0]["temperature"], len(bodies[0]["messages"])), (0, 3))
+        self.clock.now += briefing.COOLDOWN_MS
+        second = self.generate(job)
+        self.assertEqual((second["status"], second["text"]), ("ok", TEXT))
+        self.assertEqual(self.provider.calls, 2)
+        retry = bodies[1]
+        self.assertGreater(retry["temperature"], 0)
+        self.assertEqual(len(retry["messages"]), 4)
+        self.assertEqual(retry["messages"][-1]["role"], "user")
+        self.assertIn("rechazado", retry["messages"][-1]["content"])
+        self.assertIn("sin ningún número", retry["messages"][-1]["content"])
+        self.assertEqual(second["prompt_hash"], llm.text_hash(briefing._json(retry)))
+        self.assertEqual(second["input_hash"], first["input_hash"])
+
+    def test_retries_stay_bounded_even_with_feedback(self):
+        self.analysis(self.item())
+        self.provider.chat_script = lambda body: completion("El mercado de Ethereum podría recuperarse.")
+        job = self.job()
+        for _ in range(briefing.MAX_ATTEMPTS + 2):
+            job.tick()
+            job.drain()
+            self.clock.now += briefing.COOLDOWN_MS
+        self.assertEqual(self.provider.calls, briefing.MAX_ATTEMPTS)
+        self.assertTrue(all(row["status"] in ("pending", "error") for row in self.rows()))
+
     def test_model_unavailable_and_non_qwen_identity_are_stored_not_misattributed(self):
         self.analysis(self.item())
         self.provider.healthy = False
@@ -350,6 +388,20 @@ class SummaryValidationTests(unittest.TestCase):
         with self.assertRaises(llm.ModelResponseError) as raised:
             briefing.validate_completion(completion(RECORDED_TRADE_WORDS))
         self.assertEqual(raised.exception.kind, "invalid_summary")
+
+    def test_rejection_message_names_the_broken_rule(self):
+        cases = [
+            ("Un grupo de defensa de Ethereum apoya a 27 candidatos en las elecciones.", "(digits)"),
+            (" ".join(["La"] * 29), "(too_long)"),
+            ("El mercado de Ethereum podría recuperarse.", "(forbidden_words)"),
+            (RECORDED_ENGLISH, "(not_spanish)"),
+        ]
+        for text, code in cases:
+            with self.subTest(text=text):
+                with self.assertRaises(llm.ModelResponseError) as raised:
+                    briefing.validate_completion(completion(text))
+                self.assertEqual(raised.exception.kind, "invalid_summary")
+                self.assertIn(code, str(raised.exception))
 
     def test_character_bound_also_fits_the_frontend_utf16_limit(self):
         prefix = "La información de Ethereum "
