@@ -54,6 +54,13 @@ def _contar(con, cfg: TablaConfig, d0: int, d1: int) -> int:
     return con.execute('SELECT COUNT(*) FROM "%s" WHERE %s' % (cfg.sqlite, _donde(cfg)), (d0, d1)).fetchone()[0]
 
 
+def _filas_que_pueden_cambiar(con: sqlite3.Connection, cfg: TablaConfig, d0: int, d1: int) -> int:
+    """Filas del periodo que SQLite todavia puede modificar (no cumplen ``inmutable_sql``). 0 si la tabla no declara esa regla."""
+    if not cfg.inmutable_sql:
+        return 0
+    return con.execute('SELECT COUNT(*) FROM "%s" WHERE %s AND NOT (%s)' % (cfg.sqlite, _donde(cfg), cfg.inmutable_sql), (d0, d1)).fetchone()[0]
+
+
 def periodos_de_la_tabla(con: sqlite3.Connection, cfg: TablaConfig) -> List[dt.date]:
     """Primer dia de cada periodo (dia o mes, segun la granularidad de la tabla) que tiene filas, en orden."""
     f = ' WHERE %s' % cfg.filtro_sql if cfg.filtro_sql else ""
@@ -261,8 +268,13 @@ def exportar(copia: str, base: str, destino: str, tablas: Optional[List[str]] = 
                 if not periodo_cerrado(dia, cfg.granularidad, ahora_ms, cfg.margen_cierre_ms):
                     reporte["pendientes_por_abrir"].append({"tabla": nombre, "dia": clave[2]})
                     continue
+                d0, d1 = rango_periodo(dia, cfg.granularidad)
+                cambian = _filas_que_pueden_cambiar(con, cfg, d0, d1)
+                if cambian:  # el periodo cerro, pero SQLite aun modifica filas suyas: se espera a una copia mas nueva (no es un hueco)
+                    reporte["pendientes_por_abrir"].append({"tabla": nombre, "dia": clave[2], "motivo": "%d filas del periodo todavia pueden cambiar "
+                                                            "(no cumplen %s)" % (cambian, cfg.inmutable_sql)})
+                    continue
                 if dry_run:
-                    d0, d1 = rango_periodo(dia, cfg.granularidad)
                     reporte["dry_run"].append({"tabla": nombre, "dia": clave[2], "filas": _contar(con, cfg, d0, d1), "reemplaza_formato_viejo": previa is not None})
                     continue
                 try:

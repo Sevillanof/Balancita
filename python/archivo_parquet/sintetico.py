@@ -341,3 +341,235 @@ def crear_copia_velas(ruta: str, dia0_ms: int, dias: int, productos: Sequence[st
     finally:
         con.close()
     return total
+
+
+# ---- datos-utiles: la base del trader en vivo (qwen-live), su auditor y tres tablas mas de futures-market. DDL copiado de
+# futures_qwen_live.py (``_SCHEMA_SQL`` + ``_ADDED_COLUMNS``), futures_auditor.py y futures-market-store.ts, sin triggers salvo los de los recibos. ----
+BUCKET_15M = 15 * MINUTO
+DDL.update({
+    "qwen_decisions": """CREATE TABLE decisions(
+        product TEXT NOT NULL, bucket_ms INTEGER NOT NULL, t_ms INTEGER NOT NULL, decided_at_ms INTEGER NOT NULL,
+        kind TEXT NOT NULL, action TEXT NOT NULL, model_action TEXT, p_action REAL, confidence REAL, probs_json TEXT,
+        orders_json TEXT, override TEXT, reason TEXT, reason_json TEXT, mirror_action TEXT, mirror_p REAL, wake_json TEXT,
+        state_text TEXT, state_hash TEXT, latency_ms INTEGER, threshold REAL, prompt_version TEXT, prompt_hash TEXT, model TEXT,
+        config_hash TEXT, position_json TEXT, net_bp_now REAL, trade_no INTEGER,
+        lean REAL, lean_m REAL, lean_num REAL, score REAL, best_score REAL, look_n INTEGER, mirror_ok INTEGER, factors_json TEXT,
+        formula_action TEXT, formula_json TEXT, opinion_agrees INTEGER, opinion_error TEXT,
+        PRIMARY KEY(product, bucket_ms))""",
+    "qwen_trades": """CREATE TABLE trades(
+        product TEXT NOT NULL, trade_no INTEGER NOT NULL, status TEXT NOT NULL, side TEXT NOT NULL, entry_ms INTEGER NOT NULL,
+        exit_ms INTEGER, entry_px TEXT, exit_px TEXT, qty TEXT, notional_usd TEXT, gross_usd TEXT, fees_usd TEXT,
+        funding_usd TEXT, net_usd TEXT, net_bp REAL, funding_status TEXT, closed_by TEXT, exit_reason TEXT, entry_reason TEXT,
+        entry_p REAL, hold_min INTEGER, mfe_bp REAL, mae_bp REAL, stop_px REAL, max_hold_ms INTEGER, mark_px REAL,
+        mark_ms INTEGER, net_now_usd TEXT, opened_at_ms INTEGER, closed_at_ms INTEGER, leverage TEXT, margin_usd TEXT,
+        funding_model TEXT, net_complete_usd TEXT, config_hash TEXT, execution_model TEXT, entry_receipt_id TEXT,
+        exit_receipt_id TEXT, mark_receipt_id TEXT, funding_receipt_id TEXT, execution_error TEXT, exit_plan_json TEXT,
+        PRIMARY KEY(product, trade_no))""",
+    "qwen_execution_receipts": """CREATE TABLE execution_receipts(
+        receipt_id TEXT PRIMARY KEY, product TEXT NOT NULL, trade_no INTEGER NOT NULL,
+        purpose TEXT NOT NULL CHECK(purpose IN ('entry','exit','mark','funding')),
+        signal_ms INTEGER NOT NULL, recorded_at_ms INTEGER NOT NULL,
+        evidence_hash TEXT NOT NULL, evidence_json TEXT NOT NULL
+      ) STRICT""",
+    "qwen_news_actions": """CREATE TABLE news_actions(
+        product TEXT NOT NULL, event_id TEXT NOT NULL, consumed_ms INTEGER NOT NULL,
+        action TEXT NOT NULL, evidence_json TEXT NOT NULL, PRIMARY KEY(product,event_id))""",
+    "qwen_config_versions": """CREATE TABLE config_versions(
+        id INTEGER PRIMARY KEY AUTOINCREMENT, previous_hash TEXT, config_hash TEXT NOT NULL,
+        activated_ms INTEGER NOT NULL, config_json TEXT NOT NULL, cash_usd TEXT NOT NULL)""",
+    "auditor_miradas": """CREATE TABLE miradas(
+        product TEXT NOT NULL, bucket_ms INTEGER NOT NULL, t_ms INTEGER NOT NULL,
+        estado TEXT NOT NULL, accion TEXT NOT NULL,
+        maestro INTEGER, puntaje REAL, umbral_flojo REAL, umbral_fuerte REAL,
+        portero_si INTEGER, portero_p REAL, portero_umbral REAL,
+        noticias_si INTEGER, noticias_lado INTEGER,
+        qwen TEXT, qwen_coincide INTEGER,
+        lado_posicion INTEGER NOT NULL DEFAULT 0,
+        horas_en_posicion REAL, neto_ahora_pb REAL, trade_no INTEGER,
+        condiciones_json TEXT NOT NULL, despues_json TEXT,
+        veredicto_12h_json TEXT, veredicto_24h_json TEXT, veredicto_36h_json TEXT,
+        resuelto_ms INTEGER, version TEXT NOT NULL,
+        PRIMARY KEY(product, bucket_ms))""",
+    "official_candles": """CREATE TABLE paper_futures_official_candles(
+        product_id TEXT NOT NULL, interval_ms INTEGER NOT NULL, bucket_start INTEGER NOT NULL,
+        revision_hash TEXT NOT NULL, known_at INTEGER NOT NULL, open_price TEXT NOT NULL,
+        high_price TEXT NOT NULL, low_price TEXT NOT NULL, close_price TEXT NOT NULL,
+        volume_btc TEXT NOT NULL, response_sha256 TEXT NOT NULL,
+        PRIMARY KEY(product_id, interval_ms, bucket_start, revision_hash)) STRICT""",
+    "funding_periods": """CREATE TABLE paper_futures_funding_periods(
+        response_sha256 TEXT NOT NULL,
+        start_ms INTEGER NOT NULL, end_ms INTEGER NOT NULL, funding_rate TEXT NOT NULL,
+        known_at INTEGER NOT NULL, unit TEXT NOT NULL, product_id TEXT NOT NULL DEFAULT 'PF_XBTUSD',
+        PRIMARY KEY(response_sha256,start_ms)) STRICT""",
+    "analytics_points": """CREATE TABLE paper_futures_analytics_points(
+        product_id TEXT NOT NULL, metric TEXT NOT NULL, interval_ms INTEGER NOT NULL,
+        bucket_start INTEGER NOT NULL, revision_hash TEXT NOT NULL, known_at INTEGER NOT NULL,
+        values_json TEXT NOT NULL, response_sha256 TEXT NOT NULL,
+        PRIMARY KEY(product_id, metric, interval_ms, bucket_start, revision_hash)) STRICT""",
+})
+# Tablas de qwen-live y del auditor que NO se archivan (estado vivo, o fuera de lo util); se crean en la copia sintetica para probar la exclusion.
+DDL_QWEN_EXCLUIDAS = {
+    "meta": "CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT NOT NULL)",
+    "account": "CREATE TABLE account(id INTEGER PRIMARY KEY CHECK(id=1), initial_usd TEXT NOT NULL, created_ms INTEGER NOT NULL)",
+    "examples": """CREATE TABLE examples(product TEXT NOT NULL, bucket_ms INTEGER NOT NULL, t_ms INTEGER NOT NULL, kind TEXT NOT NULL,
+        label TEXT NOT NULL, label_json TEXT NOT NULL, resolved_ms INTEGER NOT NULL, PRIMARY KEY(product, bucket_ms))""",
+    "skipped": """CREATE TABLE skipped(product TEXT NOT NULL, bucket_ms INTEGER NOT NULL, t_ms INTEGER NOT NULL, at_ms INTEGER NOT NULL,
+        reason TEXT NOT NULL, detail TEXT, wake_json TEXT, PRIMARY KEY(product, bucket_ms))""",
+    "rebotes": """CREATE TABLE rebotes(product TEXT NOT NULL, t_ms INTEGER NOT NULL, at_ms INTEGER NOT NULL, episodio_ms INTEGER NOT NULL,
+        caida_pct REAL NOT NULL, umbral_pct REAL NOT NULL, action TEXT NOT NULL, motivo TEXT, detalle TEXT, trade_no INTEGER,
+        PRIMARY KEY(product, t_ms))""",
+    "errors": """CREATE TABLE errors(id INTEGER PRIMARY KEY AUTOINCREMENT, at_ms INTEGER NOT NULL, place TEXT NOT NULL, product TEXT,
+        kind TEXT NOT NULL, detail TEXT)""",
+    "trader_state": """CREATE TABLE trader_state(product TEXT PRIMARY KEY, last_fed_ms INTEGER, trade_seq INTEGER NOT NULL,
+        cooldown_until INTEGER NOT NULL, last_call_ms INTEGER, position_json TEXT, updated_ms INTEGER NOT NULL, window_json TEXT,
+        positions_json TEXT, memo_json TEXT)""",
+}
+MIRADA_JSON = '{"condiciones": "sinteticas"}'
+EVIDENCIA = '{"evidence": "sintetica", "price": "2500.10"}'
+
+
+def _insertar(con, tabla: str, fila: dict) -> None:
+    con.execute("INSERT INTO %s(%s) VALUES(%s)" % (tabla, ", ".join(fila), ",".join("?" * len(fila))), tuple(fila.values()))
+
+
+def crear_copia_qwen_live(ruta: str, dia0_ms: int, con_excluidas: bool = True) -> dict:
+    """Base viva del trader (``live``) de 3 dias desde ``dia0_ms``, con lo que SQLite todavia puede cambiar y lo que ya no.
+
+    - decisions: 4 por dia (producto PF_ETHUSD), insertadas una vez y nunca modificadas.
+    - trades: dia 0 dos cerradas con funding completo; dia 1 una cerrada con funding completo y otra cerrada con funding pendiente
+      (``partial``: el motor todavia la reconcilia); dia 2 una abierta (sin salida). Numero de operacion = 10 * dia + orden.
+    - execution_receipts: por dia entry/exit/mark; ademas un recibo de funding con ``signal_ms`` del dia 0 grabado (``recorded_at_ms``) el dia 2.
+    - news_actions: una por dia. config_versions: dos filas el dia 0.
+    Devuelve las filas por tabla del archivo."""
+    con = sqlite3.connect(ruta)
+    n = {k: 0 for k in ("qwen_decisions", "qwen_trades", "qwen_execution_receipts", "qwen_news_actions", "qwen_config_versions")}
+    try:
+        for k in n:
+            con.execute(DDL[k])
+        if con_excluidas:
+            for sql in DDL_QWEN_EXCLUIDAS.values():
+                con.execute(sql)
+            con.execute("INSERT INTO meta VALUES('schema_version', '1')")
+            con.execute("INSERT INTO account VALUES(1, '1000', ?)", (dia0_ms,))
+            con.execute("INSERT INTO trader_state(product, trade_seq, cooldown_until, updated_ms) VALUES('PF_ETHUSD', 12, 0, ?)", (dia0_ms,))
+        for d in range(3):
+            base = dia0_ms + d * DAY_MS
+            for h in range(4):
+                t = base + h * 6 * 3_600_000 + BUCKET_15M
+                _insertar(con, "decisions", {
+                    "product": "PF_ETHUSD", "bucket_ms": t - BUCKET_15M, "t_ms": t, "decided_at_ms": t + 4000, "kind": "flat",
+                    "action": "ESPERAR" if h else "LARGO", "model_action": "ESPERAR", "p_action": 0.5 + h / 10, "confidence": 0.6,
+                    "probs_json": "[0.5, 0.5]", "orders_json": "[{}]", "reason": "sintetica", "wake_json": "{}",
+                    "state_text": "estado " * 40, "state_hash": "s-%d-%d" % (d, h), "latency_ms": 120, "threshold": 0.6,
+                    "prompt_version": "8", "model": "synthetic", "config_hash": "c" * 64, "lean": 0.1 * h, "lean_m": 1, "score": -0.5,
+                    "look_n": 3, "mirror_ok": 1, "factors_json": '{"maestro": 1}', "formula_action": "ESPERAR", "formula_json": '{"puntaje": 0.1}',
+                    "opinion_agrees": 1})
+                n["qwen_decisions"] += 1
+            for k in range(2):
+                no = 10 * d + k + 1
+                if d == 2 and k == 1:
+                    continue
+                abierta = d == 2
+                completo = not (d == 1 and k == 1)
+                _insertar(con, "trades", {
+                    "product": "PF_ETHUSD", "trade_no": no, "status": "open" if abierta else "closed", "side": "LONG",
+                    "entry_ms": base + (k + 1) * 3_600_000, "exit_ms": None if abierta else base + (k + 5) * 3_600_000,
+                    "entry_px": "2500.5", "exit_px": None if abierta else "2510.5", "qty": "0.04", "notional_usd": "100",
+                    "gross_usd": None if abierta else "0.4", "fees_usd": None if abierta else "0.08", "funding_usd": "0",
+                    "net_usd": None if abierta else "0.32", "net_bp": None if abierta else 32.0,
+                    "funding_status": "complete" if completo else "partial", "closed_by": None if abierta else "strategy_exit",
+                    "exit_reason": None if abierta else "salir", "entry_reason": "entrar", "entry_p": 0.7, "hold_min": 240,
+                    "mfe_bp": 40.0, "mae_bp": -5.0, "stop_px": None, "max_hold_ms": 129_600_000,
+                    "opened_at_ms": base + (k + 1) * 3_600_000 + 20, "closed_at_ms": None if abierta else base + (k + 5) * 3_600_000 + 20,
+                    "leverage": "1", "margin_usd": "100", "funding_model": "exact", "net_complete_usd": "0.32" if completo and not abierta else None,
+                    "config_hash": "c" * 64, "execution_model": "book", "entry_receipt_id": "e-%d" % no,
+                    "exit_receipt_id": None if abierta else "x-%d" % no})
+                n["qwen_trades"] += 1
+            for i, proposito in enumerate(("entry", "exit", "mark")):
+                _insertar(con, "execution_receipts", {
+                    "receipt_id": "r-%d-%s" % (d, proposito), "product": "PF_ETHUSD", "trade_no": 10 * d + 1, "purpose": proposito,
+                    "signal_ms": base + i * 3_600_000, "recorded_at_ms": base + i * 3_600_000 + 5000, "evidence_hash": "h" * 64,
+                    "evidence_json": EVIDENCIA})
+                n["qwen_execution_receipts"] += 1
+            _insertar(con, "news_actions", {"product": "PF_ETHUSD", "event_id": "n-%d" % d, "consumed_ms": base + 7_200_000, "action": "SALIR",
+                                            "evidence_json": EVIDENCIA})
+            n["qwen_news_actions"] += 1
+        # recibo de funding de una operacion del dia 0, grabado el dia 2 (la conciliacion llega tarde): cae en el dia en que se GRABO
+        _insertar(con, "execution_receipts", {
+            "receipt_id": "r-funding-tarde", "product": "PF_ETHUSD", "trade_no": 1, "purpose": "funding", "signal_ms": dia0_ms + 5 * 3_600_000,
+            "recorded_at_ms": dia0_ms + 2 * DAY_MS + 3_600_000, "evidence_hash": "g" * 64, "evidence_json": EVIDENCIA})
+        n["qwen_execution_receipts"] += 1
+        for i in range(2):
+            _insertar(con, "config_versions", {"previous_hash": None if i == 0 else "c" * 64, "config_hash": "c" * 64 if i == 0 else "d" * 64,
+                                               "activated_ms": dia0_ms + i * 3_600_000, "config_json": '{"v": %d}' % i, "cash_usd": "1000"})
+            n["qwen_config_versions"] += 1
+        con.commit()
+    finally:
+        con.close()
+    return n
+
+
+def crear_copia_auditor(ruta: str, dia0_ms: int, con_excluidas: bool = True) -> dict:
+    """``auditor.sqlite`` de 3 dias: 4 miradas por dia. Dia 0 todas resueltas (``resuelto_ms`` puesto, ya no cambian); dia 1 con UNA sin resolver
+    (el auditor todavia la actualiza); dia 2 ninguna resuelta. Devuelve las filas del archivo."""
+    con = sqlite3.connect(ruta)
+    total = 0
+    try:
+        con.execute(DDL["auditor_miradas"])
+        if con_excluidas:
+            con.execute(DDL_QWEN_EXCLUIDAS["meta"])
+            con.execute("INSERT INTO meta VALUES('schema', 'balancita-auditor.v1')")
+        for d in range(3):
+            base = dia0_ms + d * DAY_MS
+            for h in range(4):
+                t = base + h * 6 * 3_600_000 + BUCKET_15M
+                resuelta = d == 0 or (d == 1 and h != 3)
+                _insertar(con, "miradas", {
+                    "product": "PF_ETHUSD", "bucket_ms": t - BUCKET_15M, "t_ms": t, "estado": "plana", "accion": "NO_ENTRAR_portero",
+                    "maestro": 1, "puntaje": 0.4, "umbral_flojo": 0.3, "umbral_fuerte": 0.6, "portero_si": 0, "portero_p": 0.2,
+                    "portero_umbral": 0.5, "noticias_si": 0, "qwen": "ESPERAR", "qwen_coincide": 1, "lado_posicion": 0,
+                    "condiciones_json": MIRADA_JSON, "despues_json": '{"mov": 1}' if resuelta else None,
+                    "veredicto_36h_json": '{"acerto": true}' if resuelta else None, "resuelto_ms": t + 36 * 3_600_000 if resuelta else None,
+                    "version": "auditor.v1"})
+                total += 1
+        con.commit()
+    finally:
+        con.close()
+    return {"auditor_miradas": total}
+
+
+def crear_copia_mercado_util(ruta: str, dia0_ms: int) -> dict:
+    """Las tres tablas de futures-market que se suman al archivo (``official_candles``, ``funding_periods``, ``analytics_points``), 3 dias.
+    Cada dia hay ``known_at`` propio; ademas una REVISION tardia de una vela del dia 0 aprendida el dia 2 (la tabla es solo-agregar: ese dato
+    cae en el dia 2, no en el 0, y por eso el periodo no se cierra mal)."""
+    con = sqlite3.connect(ruta)
+    n = {"official_candles": 0, "funding_periods": 0, "analytics_points": 0}
+    try:
+        for k in n:
+            con.execute(DDL[k])
+        for d in range(3):
+            base = dia0_ms + d * DAY_MS
+            for p in ("PF_ETHUSD", "PF_XBTUSD"):
+                for i in range(3):
+                    b = base + i * MINUTO
+                    _insertar(con, "paper_futures_official_candles", {
+                        "product_id": p, "interval_ms": MINUTO, "bucket_start": b, "revision_hash": "r%d" % i, "known_at": b + 70_000,
+                        "open_price": "100.5", "high_price": "101", "low_price": "99.5", "close_price": "100.75", "volume_btc": "12.5",
+                        "response_sha256": "s" * 64})
+                    n["official_candles"] += 1
+                    _insertar(con, "paper_futures_analytics_points", {
+                        "product_id": p, "metric": "open-interest", "interval_ms": MINUTO, "bucket_start": b, "revision_hash": "r%d" % i,
+                        "known_at": b + 70_000, "values_json": '{"open": 1}', "response_sha256": "s" * 64})
+                    n["analytics_points"] += 1
+                _insertar(con, "paper_futures_funding_periods", {
+                    "response_sha256": "f%d%s" % (d, p), "start_ms": base, "end_ms": base + 3_600_000, "funding_rate": "0.000012",
+                    "known_at": base + 3_700_000, "unit": "USD/XBT/hour", "product_id": p})
+                n["funding_periods"] += 1
+        _insertar(con, "paper_futures_official_candles", {
+            "product_id": "PF_ETHUSD", "interval_ms": MINUTO, "bucket_start": dia0_ms, "revision_hash": "tarde", "known_at": dia0_ms + 2 * DAY_MS + 5000,
+            "open_price": "100.5", "high_price": "101", "low_price": "99.5", "close_price": "100.9", "volume_btc": "13", "response_sha256": "t" * 64})
+        n["official_candles"] += 1
+        con.commit()
+    finally:
+        con.close()
+    return n

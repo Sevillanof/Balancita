@@ -30,11 +30,69 @@ from .exportar import exportar
 from .util import ErrorArchivo, abrir_copia
 from .verificar import verificar
 
-BASES = ("futures-market", "futures-verdicts", "futures-llm-decisions", "futures-forecast-scores", "positioning", "futures-news")
-# Copias que no se archivan a proposito (se reconstruyen solas). Cualquier otra base con copia y fuera de BASES es un hueco.
-BASES_EXCLUIDAS_PREFIJOS = ("qwen-live_cache__",)
-# Tablas de una base archivada que no se exportan a proposito. Vacio: toda tabla fuera de config.TABLAS es un hueco hasta decidirla.
-TABLAS_EXCLUIDAS: frozenset = frozenset()
+BASES = ("futures-market", "futures-verdicts", "futures-llm-decisions", "futures-forecast-scores", "positioning", "futures-news",
+         "qwen-live__live", "qwen-live__auditor")
+_ESTADO_VIVO = "estado vivo, queda en SQLite y en las copias diarias"
+_METADATOS = "metadatos o configuracion que quedan en SQLite para siempre (no son datos de mercado ni de decisiones)"
+_CRUDA = "respuesta cruda guardada solo por procedencia: el dato util ya se archiva interpretado en %s"
+_DERIVADA = "copia derivada de %s, que ya se archiva"
+_DIAGNOSTICO = "diagnostico de la propia captura (no sirve para decidir ni evaluar), queda en SQLite y en las copias diarias"
+_MOTOR_D = "motor viejo D, superado por el trader en vivo; queda en SQLite y en las copias diarias hasta decidir apagarlo (S7)"
+_FUERA_DE_LO_UTIL = "fuera de lo util para mejorar al maestro y al portero; queda en SQLite y en las copias diarias"
+# Bases con copia que no se archivan a proposito, con su motivo. Una clave que termina en ``__`` es un PREFIJO (las bases anidadas llevan su
+# nombre despues de ``__``, a veces con fecha); el resto es el nombre exacto. Cualquier otra base con copia y fuera de BASES es un hueco.
+BASES_EXCLUIDAS = {
+    "qwen-live_cache__": "cache de velas que se reconstruye sola",
+    "forward__": "base chica de la vigilancia forward (casi sin filas); queda en SQLite y en las copias diarias",
+    "maker-costs__": "base chica de un estudio de costos maker de un dia; queda en SQLite y en las copias diarias",
+    "futures-strategies": "base chica del registro de estrategias (versiones y eventos); queda en SQLite y en las copias diarias",
+}
+# Tablas de una base archivada que no se exportan a proposito: base -> {tabla de SQLite: motivo}. La exclusion es POR BASE: ``meta`` de una base
+# no excluye la de otra. Toda tabla que ni se exporta (config.TABLAS) ni esta aca es un hueco (codigo 1).
+TABLAS_EXCLUIDAS = {
+    "futures-market": {
+        "paper_futures_analytics_responses": _CRUDA % "analytics_points",
+        "paper_futures_official_candle_responses": _CRUDA % "official_candles",
+        "paper_futures_book_snapshots": _DERIVADA % "market_events",
+        "paper_futures_ticker_snapshots": _DERIVADA % "market_events",
+        "paper_futures_funding_sightings": "avistamientos repetidos de un periodo de funding (diagnostico de la captura); el periodo ya se archiva en funding_periods",
+        "paper_futures_funding_polls": _DIAGNOSTICO,
+        "paper_futures_funding_ws_marks": _DIAGNOSTICO,
+        "paper_futures_funding_ws_observations": _DIAGNOSTICO,
+        "paper_futures_funding_backlog": "marca de estado de la captura de funding (una fila por producto): " + _ESTADO_VIVO,
+        "paper_futures_data_gaps": _DIAGNOSTICO,
+        "paper_futures_instrument_versions": _METADATOS,
+        "paper_futures_market_migrations": _METADATOS,
+        "paper_futures_market_quality_policies": _METADATOS,
+    },
+    "futures-verdicts": {
+        "paper_futures_verdict_meta": _METADATOS + " del motor D",
+        "paper_futures_verdict_products": _METADATOS + " del motor D",
+    },
+    "futures-llm-decisions": {
+        "paper_futures_llm_errors": "errores del motor D, que se esta por apagar (S7); " + _FUERA_DE_LO_UTIL,
+        "paper_futures_llm_meta": _METADATOS + " del motor D",
+    },
+    "futures-forecast-scores": {"paper_futures_forecast_meta": _METADATOS + " del motor D"},
+    "positioning": {"collector_run": "registro de arranques y paradas del recolector (diagnostico de la captura); " + _FUERA_DE_LO_UTIL},
+    "futures-news": {
+        "paper_futures_news_meta": _METADATOS,
+        "paper_futures_news_source_sets": "configuracion de las fuentes de noticias por version: " + _METADATOS,
+        "paper_futures_news_polls": _DIAGNOSTICO,
+        "paper_futures_news_errors": "errores del analizador de noticias; " + _FUERA_DE_LO_UTIL,
+        "paper_futures_news_briefings": "resumenes generados a partir de noticias que ya se archivan (news_items y news_analysis); " + _FUERA_DE_LO_UTIL,
+    },
+    "qwen-live__live": {
+        "trader_state": _ESTADO_VIVO,
+        "meta": _ESTADO_VIVO,
+        "account": "una sola fila inmutable (capital inicial) que queda en SQLite y en las copias diarias",
+        "examples": "ejemplos etiquetados para entrenar, derivados de decisions y las velas; " + _FUERA_DE_LO_UTIL,
+        "skipped": "despertares salteados (motivo y detalle): " + _DIAGNOSTICO,
+        "rebotes": "intentos del experto de rebote; " + _FUERA_DE_LO_UTIL,
+        "errors": "errores del trader en vivo: " + _DIAGNOSTICO,
+    },
+    "qwen-live__auditor": {"meta": _ESTADO_VIVO},
+}
 # Huecos del reporte de exportar que dejan el archivo incompleto (los periodos aun abiertos no lo son).
 HUECOS_DEL_REPORTE = ("omitidos_por_retencion", "reemplazos_omitidos", "avisos", "tablas_ausentes")
 EDAD_MINIMA_COPIA_S = 300
@@ -186,12 +244,20 @@ def _tablas_presentes(con) -> List[str]:
     return [n for n, c in TABLAS.items() if con.execute("PRAGMA table_info(\"%s\")" % c.sqlite).fetchall()]
 
 
-def _tablas_sin_cubrir(con) -> List[str]:
-    """Tablas de la copia que ni se exportan (config.TABLAS) ni estan excluidas a proposito."""
+def _tablas_sin_cubrir(con, base: str) -> List[str]:
+    """Tablas de la copia de ``base`` que ni se exportan (config.TABLAS) ni estan excluidas a proposito para esa base."""
     from .config import TABLAS
-    cubiertas = {c.sqlite for c in TABLAS.values()} | set(TABLAS_EXCLUIDAS)
+    cubiertas = {c.sqlite for c in TABLAS.values()} | set(TABLAS_EXCLUIDAS.get(base, {}))
     nombres = [r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name")]
     return [n for n in nombres if n not in cubiertas]
+
+
+def motivo_base_excluida(base: str) -> Optional[str]:
+    """Motivo por el que la copia de ``base`` no se archiva a proposito, o ``None`` si no esta excluida (clave ``...__`` = prefijo; el resto, nombre exacto)."""
+    for clave, motivo in BASES_EXCLUIDAS.items():
+        if base == clave or (clave.endswith("__") and base.startswith(clave)):
+            return motivo
+    return None
 
 
 def _bases_sin_cubrir(respaldos: str) -> List[str]:
@@ -199,7 +265,7 @@ def _bases_sin_cubrir(respaldos: str) -> List[str]:
     if not os.path.isdir(respaldos):
         return []
     vistas = {m.group("base") for m in map(_SELLO.match, os.listdir(respaldos)) if m}
-    return sorted(b for b in vistas if b not in BASES and not b.startswith(BASES_EXCLUIDAS_PREFIJOS))
+    return sorted(b for b in vistas if b not in BASES and motivo_base_excluida(b) is None)
 
 
 def _solo_por_madurar(motivo: Optional[str]) -> bool:
@@ -212,9 +278,10 @@ def _solo_por_madurar(motivo: Optional[str]) -> bool:
 
 
 def nocturno(destino: str, respaldos: str, bases=BASES, dry_run: bool = False, ahora_s: Optional[float] = None,
-             log: Callable[[str], None] = lambda m: None, despertar: Callable[[], Optional[float]] = ultimo_despertar_s,
+             log: Callable[[str], None] = lambda m: None, despertar: Optional[Callable[[], Optional[float]]] = None,
              aplicar_nice: bool = True, dormir: Callable[[float], None] = time.sleep, reloj: Callable[[], float] = time.time) -> dict:
     """Devuelve el resumen con ``codigo`` (ver docstring del modulo). Lanza ``OtraCorridaEnCurso`` si el candado esta tomado."""
+    despertar = despertar or ultimo_despertar_s  # resuelto al llamar: un mock del modulo llega igual
     ahora_s = reloj() if ahora_s is None else ahora_s
     resumen: dict = {"inicio": _iso(ahora_s), "destino": destino, "respaldos": respaldos, "dry_run": dry_run, "bases": {}}
     if aplicar_nice and not dry_run:
@@ -280,7 +347,7 @@ def nocturno(destino: str, respaldos: str, bases=BASES, dry_run: bool = False, a
             continue
         info["copia"] = os.path.basename(ruta)
         try:
-            faltan = _tablas_sin_cubrir(con)
+            faltan = _tablas_sin_cubrir(con, base)
             tablas = _tablas_presentes(con)
             if not tablas:
                 info["estado"] = "sin_tablas_del_archivo"
@@ -328,7 +395,7 @@ def _iso(s: float) -> str:
 
 
 def correr(destino: str, respaldos: str, dry_run: bool = False, bases=BASES, log: Callable[[str], None] = lambda m: None,
-           despertar: Callable[[], Optional[float]] = ultimo_despertar_s, ahora_s: Optional[float] = None, aplicar_nice: bool = True,
+           despertar: Optional[Callable[[], Optional[float]]] = None, ahora_s: Optional[float] = None, aplicar_nice: bool = True,
            dormir: Callable[[float], None] = time.sleep, reloj: Callable[[], float] = time.time) -> dict:
     """Candado + corrida + linea en ``nocturno.jsonl`` (esta no se escribe en dry-run). Sin candado en dry-run: solo lee."""
     if dry_run:
