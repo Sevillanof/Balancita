@@ -322,6 +322,37 @@ function briefingSources(
   })
 }
 
+const KNOWN_PROMPT_VERSIONS = [1, 2, 3]
+
+const BRIEFING_COLUMNS = `briefing_version,product,status,started_at_ms,known_at_ms,expires_at_ms,
+  input_hash,inputs_json,model_ref,model_info_json,prompt_hash,prompt_version,text,response_json,reason`
+
+// The latest row decides the state, except that a newer attempt that is still
+// running or that failed does not hide a summary that is still fresh.
+function shownBriefingRow(db: DatabaseSync, now: number) {
+  const latest = rowOf(
+    db
+      .prepare(
+        `SELECT ${BRIEFING_COLUMNS} FROM paper_futures_news_briefings
+          WHERE briefing_version=? AND product='PF_ETHUSD' AND known_at_ms<=?
+          ORDER BY briefing_id DESC LIMIT 1`,
+      )
+      .get(BRIEFING_VERSION, now),
+  )
+  if (latest.status !== 'pending' && latest.status !== 'error') return latest
+  const lastOk = rowOf(
+    db
+      .prepare(
+        `SELECT ${BRIEFING_COLUMNS} FROM paper_futures_news_briefings
+          WHERE briefing_version=? AND product='PF_ETHUSD' AND status='ok'
+            AND known_at_ms<=? AND expires_at_ms>?
+          ORDER BY briefing_id DESC LIMIT 1`,
+      )
+      .get(BRIEFING_VERSION, now, now),
+  )
+  return lastOk.status === undefined ? latest : lastOk
+}
+
 function briefingOf(db: DatabaseSync, now: number): NewsBriefing {
   try {
     if (
@@ -332,17 +363,7 @@ function briefingOf(db: DatabaseSync, now: number): NewsBriefing {
         .get()
     )
       return emptyBriefing(now)
-    const row = rowOf(
-      db
-        .prepare(
-          `SELECT briefing_version,product,status,started_at_ms,known_at_ms,expires_at_ms,
-                  input_hash,inputs_json,model_ref,model_info_json,prompt_hash,prompt_version,text,response_json,reason
-             FROM paper_futures_news_briefings
-            WHERE briefing_version=? AND product='PF_ETHUSD' AND known_at_ms<=?
-            ORDER BY briefing_id DESC LIMIT 1`,
-        )
-        .get(BRIEFING_VERSION, now),
-    )
+    const row = shownBriefingRow(db, now)
     if (row.status === undefined) return emptyBriefing(now)
     const started = timestamp(row.started_at_ms)
     const known = timestamp(row.known_at_ms)
@@ -354,7 +375,7 @@ function briefingOf(db: DatabaseSync, now: number): NewsBriefing {
       started > known ||
       (row.status !== 'off' && expires === null) ||
       (expires !== null && expires > known + BRIEFING_TTL_MS) ||
-      (row.prompt_version !== 1 && row.prompt_version !== 2) ||
+      !KNOWN_PROMPT_VERSIONS.includes(row.prompt_version as number) ||
       typeof row.prompt_hash !== 'string' ||
       !HASH.test(row.prompt_hash) ||
       typeof row.input_hash !== 'string' ||

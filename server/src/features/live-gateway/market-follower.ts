@@ -8,6 +8,7 @@ import { closedHistoryRows, toTerminalMarket } from './terminal-market.ts'
 import { PositioningStore } from '../positioning-collector/store.ts'
 import {
   chartCandles,
+  chartCandlesBefore,
   chartDepth,
   chartFlow,
   tickerStats,
@@ -437,6 +438,44 @@ export class LiveMarketFollower {
     } catch (error) {
       this.dropStore(error)
       return empty
+    }
+  }
+
+  /** Older candles (before `beforeMs`) for the chart's scroll-back; empty when the store is unavailable. */
+  terminalChartBefore(
+    intervalMs: number,
+    beforeMs: number,
+    limit: number,
+  ): Row {
+    const body = {
+      schema_version: 'futures-terminal-chart-history.v1',
+      product_id: this.productId,
+      interval_ms: intervalMs,
+      before_ms: beforeMs,
+      candles: [] as ChartCandle[],
+      flow: [] as unknown[],
+      has_more: false,
+    }
+    const store = this.open()
+    if (!store) return body
+    try {
+      const page = chartCandlesBefore(
+        store,
+        intervalMs,
+        beforeMs,
+        limit,
+        this.productId,
+        this.openPositioning(),
+      )
+      return {
+        ...body,
+        candles: page.candles,
+        flow: page.flow,
+        has_more: page.hasMore,
+      }
+    } catch (error) {
+      this.dropStore(error)
+      return body
     }
   }
 

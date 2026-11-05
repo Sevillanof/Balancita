@@ -185,3 +185,61 @@ export function useTerminalChart(
   }, [apiBase, intervalMs, enabled, refreshMs, product, limit])
   return enabled && data?.intervalMs === intervalMs ? data : null
 }
+
+export type TerminalChartHistory = {
+  candles: TerminalChartData['candles']
+  flow: ChartFlowPoint[]
+  hasMore: boolean
+}
+
+/**
+ * One page of candles older than `beforeSec` (seconds) for the scroll-back.
+ * Reuses the chart body parser; null on any failure (the chart keeps what it has).
+ */
+export async function fetchTerminalChartHistory(
+  apiBase: string,
+  intervalMs: number,
+  beforeSec: number,
+  product?: string,
+  limit = 1_000,
+  signal?: AbortSignal,
+): Promise<TerminalChartHistory | null> {
+  try {
+    const response = await fetch(
+      `${apiBase}/terminal/chart/history?interval_ms=${intervalMs}&before_ms=${Math.round(beforeSec * 1000)}&limit=${limit}${productQuery(product, false)}`,
+      { signal },
+    )
+    if (!response.ok) return null
+    const body = record(await response.json())
+    const parsed = parseTerminalChart({
+      ...body,
+      schema_version: 'futures-terminal-chart.v1',
+    })
+    if (!parsed || parsed.intervalMs !== intervalMs) return null
+    return {
+      candles: parsed.candles,
+      flow: parsed.flow,
+      hasMore: body.has_more === true,
+    }
+  } catch {
+    return null
+  }
+}
+
+/** Puts an older page before the current series, dropping repeated buckets. */
+export function prependHistory<T extends { time: number }>(
+  older: readonly T[],
+  current: readonly T[],
+): T[] {
+  const first = current[0]?.time ?? Number.POSITIVE_INFINITY
+  return [...older.filter((item) => item.time < first), ...current]
+}
+
+/** Same as `prependHistory` for flow points, which carry `time_ms`. */
+export function prependFlow(
+  older: readonly ChartFlowPoint[],
+  current: readonly ChartFlowPoint[],
+): ChartFlowPoint[] {
+  const first = current[0]?.time_ms ?? Number.POSITIVE_INFINITY
+  return [...older.filter((item) => item.time_ms < first), ...current]
+}

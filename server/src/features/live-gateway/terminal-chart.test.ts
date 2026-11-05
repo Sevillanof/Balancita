@@ -9,7 +9,11 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { FuturesMarketStore } from '../kraken-futures/futures-market-store.ts'
 import { parseAnalytics } from '../kraken-futures/market-analytics.ts'
 import { buildLiveGateway } from './gateway.ts'
-import { aggregateCandles, tickerStats } from './terminal-chart.ts'
+import {
+  aggregateCandles,
+  chartCandlesBefore,
+  tickerStats,
+} from './terminal-chart.ts'
 
 const M = 60_000
 const H = 60 * M
@@ -415,5 +419,30 @@ describe('terminal chart series', () => {
       await app.inject('/api/terminal/chart?interval_ms=300000')
     ).json() as any
     expect(body).toMatchObject({ interval_ms: 300000, candles: [], flow: [] })
+  })
+
+  it('pages history back and folds older 1h buckets from 5m candles', () => {
+    const store = new FuturesMarketStore(dbPath())
+    closers.push(() => store.close())
+    // Four hours of 5m candles from BASE (48), no official 1h at all.
+    saveOfficial(
+      store,
+      5 * M,
+      Array.from({ length: 48 }, (_, i) => BASE + i * 5 * M),
+    )
+    const page = chartCandlesBefore(store, H, BASE + 3 * H, 10)
+    expect(page.candles.map((c) => c.time_ms)).toEqual([
+      BASE,
+      BASE + H,
+      BASE + 2 * H,
+    ])
+    expect(page.candles.every((c) => c.closed)).toBe(true)
+    // Twelve 5m candles of volume 2 each.
+    expect(page.candles[0]!.volume_btc).toBe('24')
+    // 5m itself comes straight from the stored candles, newest page first.
+    const five = chartCandlesBefore(store, 5 * M, BASE + 10 * 5 * M, 4)
+    expect(five.candles).toHaveLength(4)
+    expect(five.hasMore).toBe(true)
+    expect(chartCandlesBefore(store, H, BASE, 10).candles).toEqual([])
   })
 })

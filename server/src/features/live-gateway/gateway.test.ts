@@ -306,6 +306,24 @@ describe('live market gateway', () => {
       await app.inject('/api/terminal/chart?product=PF_ETHUSD')
     ).json() as any
     expect(chart.product_id).toBe('PF_ETHUSD')
+    const history = (
+      await app.inject(
+        `/api/terminal/chart/history?product=PF_ETHUSD&interval_ms=60000&before_ms=${BASE + 100 * MINUTE}&limit=10`,
+      )
+    ).json() as any
+    expect(history).toMatchObject({
+      schema_version: 'futures-terminal-chart-history.v1',
+      product_id: 'PF_ETHUSD',
+      interval_ms: 60_000,
+    })
+    expect(Array.isArray(history.candles)).toBe(true)
+    expect(
+      history.candles.every((c: any) => c.time_ms < BASE + 100 * MINUTE),
+    ).toBe(true)
+    expect(
+      (await app.inject('/api/terminal/chart/history?product=PF_ETHUSD'))
+        .statusCode,
+    ).toBe(400)
     expect(
       (await app.inject('/api/terminal/bootstrap?product=PF_NOPE')).statusCode,
     ).toBe(400)

@@ -316,6 +316,27 @@ export async function buildLiveGateway(
       return reply.code(400).send({ error: { code: 'unsupported_limit' } })
     return view.follower.terminalChart(interval, limit)
   })
+  app.get<{
+    Querystring: {
+      interval_ms?: string
+      product?: string
+      limit?: string
+      before_ms?: string
+    }
+  }>('/api/terminal/chart/history', async (request, reply) => {
+    const view = requested(request.query.product)
+    if (!view) return reply.code(400).send(unknownProduct)
+    const interval = Number(request.query.interval_ms ?? 60_000)
+    if (!(CHART_INTERVALS_MS as readonly number[]).includes(interval))
+      return reply.code(400).send({ error: { code: 'unsupported_interval' } })
+    const before = Number(request.query.before_ms)
+    if (!Number.isSafeInteger(before) || before < 0)
+      return reply.code(400).send({ error: { code: 'unsupported_before' } })
+    const limit = Number(request.query.limit ?? 1_000)
+    if (!Number.isInteger(limit) || limit < 1 || limit > MAX_CHART_CANDLES)
+      return reply.code(400).send({ error: { code: 'unsupported_limit' } })
+    return view.follower.terminalChartBefore(interval, before, limit)
+  })
   app.get('/api/health', () => ({
     process: 'live-gateway',
     capture: defaultView.follower.status(),

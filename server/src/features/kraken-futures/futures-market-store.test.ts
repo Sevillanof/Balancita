@@ -847,6 +847,31 @@ describe('FuturesMarketStore official candles', () => {
     store.close()
   })
 
+  it('pages official candles back in time before a bucket', () => {
+    const store = new FuturesMarketStore(dbPath())
+    store.appendOfficialCandles(
+      response(T + 5 * M, [
+        official(T),
+        official(T + M),
+        official(T + 2 * M),
+        official(T + 3 * M),
+      ]),
+    )
+    expect(
+      store
+        .officialCandlesBefore(BTC, M, T + 3 * M, 10)
+        .map((row) => row.bucketStart),
+    ).toEqual([T, T + M, T + 2 * M])
+    expect(
+      store
+        .officialCandlesBefore(BTC, M, T + 3 * M, 2)
+        .map((row) => row.bucketStart),
+    ).toEqual([T + M, T + 2 * M])
+    expect(store.officialCandlesBefore(BTC, M, T, 10)).toEqual([])
+    expect(store.officialCandlesBefore(BTC, 300_000, T + 3 * M, 10)).toEqual([])
+    store.close()
+  })
+
   it('keeps a changed official candle as a new revision and reads the first known one', () => {
     const store = new FuturesMarketStore(dbPath())
     store.appendOfficialCandles(response(T + 2 * M, [official(T)]))
