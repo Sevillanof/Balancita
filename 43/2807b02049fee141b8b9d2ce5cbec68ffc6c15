@@ -1,0 +1,20 @@
+docs/medir-noticias.md
+  h_92dd6654ceb221 1-22
+odd/tasks/medir-noticias.md
+  h_92dd6654ceb221 1-26
+python/balancita_engine/futures_news_effect.py
+  h_92dd6654ceb221 1-207
+python/tests/test_futures_news_effect.py
+  h_92dd6654ceb221 1-190
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "432807b02049fee141b8b9d2ce5cbec68ffc6c15",
+  "prompts": {},
+  "humans": {
+    "h_92dd6654ceb221": {
+      "author": "Franco Sevillano <79455847+Sevillanof@users.noreply.github.com>"
+    }
+  }
+}
