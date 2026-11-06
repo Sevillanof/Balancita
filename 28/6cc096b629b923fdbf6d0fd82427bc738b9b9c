@@ -1,0 +1,50 @@
+docs/estrategias-laboratorio.md
+  h_92dd6654ceb221 148,156-186,188-191
+e2e/estrategias-inventario.pw.ts
+  h_92dd6654ceb221 66,311,319-321,323,326-328,330-332,334-347,349-392,394-395,397-411,413,420-426
+odd/tasks/estrategias-laboratorio.md
+  h_92dd6654ceb221 166-174,192-196
+src/features/strategy-lab/domain/estrategias-format.ts
+  h_92dd6654ceb221 328-341
+src/features/strategy-lab/domain/estrategias-velas.test.ts
+  h_92dd6654ceb221 3-6,8-18,34,42,51-65,93,96-97,104-110,163-164,170-171,174-193,196-197,199-203,207-322,325-352,355-365,368-443,447-448,450-451,455-466,470-505,509-558,560-580,582-587,590-594,596-613
+src/features/strategy-lab/domain/estrategias-velas.ts
+  h_92dd6654ceb221 5,27-29,63-67,77-80,103-104,154-160,163-168,171,173,175-176,190-191,194-202,204,206-213,215-220,222,227-239,241-248,251-257,260-279,282-289,291-326,328-449,451-505,507-528
+src/features/strategy-lab/presentation/EstrategiasPage.test.tsx
+  h_92dd6654ceb221 3,131,133-134,227,253-284,306
+src/features/strategy-lab/presentation/PanelSalidas.tsx
+  h_92dd6654ceb221 1-90
+src/features/strategy-lab/presentation/ResultadoComparacion.tsx
+  h_92dd6654ceb221 81,84,86,88,90,176-183,187,189-190,192,239,260,279-283,285
+src/features/strategy-lab/presentation/VarianteDetalle.tsx
+  h_92dd6654ceb221 158
+src/features/strategy-lab/presentation/VelasChart.tsx
+  h_92dd6654ceb221 1-5,7-10,13,16-21,24-25,27-50,53-54,57,60-63,65,67-86
+src/features/strategy-lab/presentation/VelasConOperaciones.test.tsx
+  h_92dd6654ceb221 1,4-5,16,19,24,26-27,30,32,35-38,44-46,52-55,60,62-63,67-70,72,75,77-79,81-83,85-97,99-107,112,114,117,120-123,125-159,162,164-255,257-263,265-266,269-270,274-277,281-284,287-288,290-292,295,298-301,313-314,317-330,338,350-384,387-482,497-539
+src/features/strategy-lab/presentation/VelasConOperaciones.tsx
+  h_92dd6654ceb221 5,7-10,13,18-21,26-82,85-87,91-95,98-101,103-117,119-126,128-147,149-181,190-229
+src/features/strategy-lab/presentation/VelasUna.tsx
+  h_92dd6654ceb221 1-241
+src/features/strategy-lab/presentation/VelasVarias.tsx
+  h_92dd6654ceb221 1-241
+src/features/strategy-lab/presentation/use-velas.test.tsx
+  h_92dd6654ceb221 1,15-16,19,21,24,30-31,34-36,40,42-44,46,48-51,76,78,86-87,94,100-102,104-106,108-114,118-135,145,149-154,158,160
+src/features/strategy-lab/presentation/use-velas.ts
+  h_92dd6654ceb221 1,4-5,7,18-19,25-27,31,33,36-40,44-45,49-89,93,95-97
+src/features/strategy-lab/presentation/velas-geometria.ts
+  h_92dd6654ceb221 1-40
+src/features/strategy-lab/presentation/velas-svg.tsx
+  h_92dd6654ceb221 2-4,7-8,10,12-51,53-117,119-161
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "286cc096b629b923fdbf6d0fd82427bc738b9b9c",
+  "prompts": {},
+  "humans": {
+    "h_92dd6654ceb221": {
+      "author": "Franco Sevillano <79455847+Sevillanof@users.noreply.github.com>"
+    }
+  }
+}
