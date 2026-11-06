@@ -81,18 +81,16 @@ describe('no real orders (server)', () => {
     const verbs = [
       /(?<!searchParams)\.(?:post|put|patch|delete)\(\s*['"`/]/,
       /method:\s*['"](?:POST|PUT|PATCH|DELETE)/i,
+      /method:[^,\n]*['"](?:POST|PUT|PATCH|DELETE)['"]/i,
     ]
-    // the only writes there are, to the local strategies API and not orders: the strategy gate client
-    // (start/cancel a backtest run) and the VectorBT client (start/cancel a research exploration, create a
-    // draft variant) and Qwen's quick test client (start a sample of past photos); none touches a market
+    // the only writes there are, to the local strategies API and not orders: the Estrategias client
+    // (create a Terminal variant, start its backtest comparison); it touches no market
     const writers = files.filter((file) => {
       const text = readFileSync(file, 'utf8')
       return verbs.some((verb) => verb.test(text))
     })
     expect(writers.map((file) => relative(frontendSrc, file)).sort()).toEqual([
-      join('features', 'strategy-lab', 'infrastructure', 'gate-api.ts'),
-      join('features', 'strategy-lab', 'infrastructure', 'quick-api.ts'),
-      join('features', 'strategy-lab', 'infrastructure', 'vectorbt-api.ts'),
+      join('features', 'strategy-lab', 'infrastructure', 'estrategias-api.ts'),
     ])
     for (const writer of writers)
       expect(readFileSync(writer, 'utf8')).not.toMatch(/kraken/i)

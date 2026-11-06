@@ -1085,7 +1085,8 @@ def make_handler(service):
             parts = [p for p in urlparse(self.path).path.split("/") if p]
             if parts[:1] == ["api-strategies"]:
                 parts = parts[1:]
-            return service.estrategias.route(method, parts, self._body)
+            api = getattr(service, "estrategias", None)
+            return api.route(method, parts, self._body) if api is not None else None
 
         def _handle(self, method):
             try:
