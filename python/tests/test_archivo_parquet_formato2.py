@@ -226,6 +226,41 @@ class Formato2Tests(unittest.TestCase):
         self.assertNotIn("RLE_DICTIONARY", cuerpo.encodings)
         self.assertLess(e["bytes"], 0.1 * sum(len(f[3]) for f in orig))  # los cuerpos casi iguales casi no pesan
 
+    def test_funding_responses_filas_viejas_y_nuevas_delgadas_ida_y_vuelta_exacta(self):
+        """S6: desde que la captura deja de guardar el cuerpo crudo, las filas nuevas llevan el cuerpo corto
+        (``balancitaSlim``: hash y tamano del cuerpo entero + solo el periodo nuevo). Las filas viejas no se tocan:
+        el archivo mensual mezcla ambas y la verificacion fila a fila sigue exacta."""
+        n = sintetico.crear_copia_funding(self.copia, DIA0, 3, por_dia=4, periodos=300, delgadas_desde=5)
+        r = self.exp(["funding_responses"])
+        self.assertEqual((r["no_confirmados"], len(r["exportados"])), ([], 1))
+        self.assertEqual(verificar(self.destino)["problemas"], [])
+        e = leer_manifiesto(self.destino)[0]
+        self.assertEqual((e["filas"], e["filas"] == n), (12, True))
+        con = sqlite3.connect(self.copia)
+        orig = con.execute("SELECT sha256, received_at, server_time, raw_response FROM paper_futures_funding_responses ORDER BY received_at, sha256").fetchall()
+        delgadas = [f for f in orig if f[3].startswith('{"balancitaSlim":true,')]
+        self.assertEqual((len(delgadas), len(orig) - len(delgadas)), (7, 5))  # 5 viejas enteras y 7 nuevas cortas
+        for sha, _, _, cuerpo in delgadas:
+            corto = json.loads(cuerpo)
+            self.assertEqual(corto["fullSha256"], sha)  # la clave sigue siendo el hash del cuerpo entero: la procedencia se verifica
+            self.assertGreater(corto["fullBytes"], 10_000)
+            self.assertEqual(len(corto["rates"]), 1)
+            self.assertLess(len(cuerpo), 400)
+        t, _ = buscar_archivo(self.destino, "futures-x", "funding_responses", DIA0, DIA0 + 31 * DAY_MS)
+        self.assertEqual([tuple(f.values()) for f in t.to_pylist()], orig)  # byte a byte, viejas y nuevas
+        self.assertLess(e["bytes"], 0.1 * sum(len(f[3]) for f in orig))
+
+    def test_funding_responses_solo_filas_delgadas(self):
+        n = sintetico.crear_copia_funding(self.copia, DIA0, 2, por_dia=3, periodos=50, delgadas_desde=0)
+        r = self.exp(["funding_responses"])
+        self.assertEqual((r["no_confirmados"], len(r["exportados"])), ([], 1))
+        self.assertEqual(verificar(self.destino)["problemas"], [])
+        con = sqlite3.connect(self.copia)
+        orig = con.execute("SELECT sha256, received_at, server_time, raw_response FROM paper_futures_funding_responses ORDER BY received_at, sha256").fetchall()
+        self.assertEqual(len(orig), n)
+        t, _ = buscar_archivo(self.destino, "futures-x", "funding_responses", DIA0, DIA0 + 31 * DAY_MS)
+        self.assertEqual([tuple(f.values()) for f in t.to_pylist()], orig)
+
     # ---------- candle_revisions ----------
     def test_candle_revisions_todas_las_revisiones_por_mes(self):
         n = sintetico.crear_copia_velas(self.copia, DIA0, 2, ("PF_XBTUSD",), revisiones=40)

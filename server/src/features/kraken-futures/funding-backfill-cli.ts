@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs'
+import { captureSavingsFromEnv } from './capture-savings.ts'
 import { FuturesMarketStore } from './futures-market-store.ts'
 import { createHistoricalFundingClient } from './historical-funding.ts'
 
@@ -23,7 +24,9 @@ const pinned = JSON.parse(
 ) as { products: { product_id: string }[] }
 const products =
   flag('--products')?.split(',') ?? pinned.products.map((p) => p.product_id)
-const store = new FuturesMarketStore(dbPath)
+const store = new FuturesMarketStore(dbPath, {
+  savings: captureSavingsFromEnv(process.env),
+})
 const client = createHistoricalFundingClient({
   clock: () => Date.now(),
   timeoutMs: 30_000,
