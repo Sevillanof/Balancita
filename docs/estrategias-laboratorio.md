@@ -103,6 +103,20 @@ Dos configuraciones iguales dan diferencia cero. Límites del replay (siempre en
 Cada variante probada es un intento más sobre la misma historia (el resultado es optimista): el comparador no lo registra
 todavía; anotá los intentos a mano hasta la fase de sombra.
 
+## API de la página (servidor del registro, `futures_estrategias_api.py`)
+
+Rutas bajo `/api-strategies` (el mismo proceso del puerto 8790; `--estrategias-dir` cambia la carpeta de overlays). Errores: `{"error", "detail"}`.
+
+| Ruta                                      | Qué hace                                                                                                                                                                                                                                                                                                                                                                                                         |
+| ----------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET /estrategias`                        | `snapshot.config_hash`, `ventana_honesta`, `perillas` (las de `PERILLAS_PERMITIDAS`: `clave`, `tipo` entero/decimal/opcion, `valor_actual`, `minimo`, `maximo`, `paso`, `admite_null`, `opciones`) y `estrategias` (`id`, `nombre`, `descripcion`, `cambios`, `base_config_hash`, `overlay_sha256`, `error`). Un archivo roto sale con su `error` sin romper la lista                                            |
+| `POST /estrategias`                       | Crea `<id>.json` con `{nombre, descripcion, cambios[, id]}` (sin `id`, sale del nombre). La base la pone el servidor: cualquier otro campo (p. ej. `base_config_hash`) da 400 `campos_desconocidos`. Clave prohibida o valor inválido: 400 `estrategia_invalida` nombrando la clave; id mal formado: 400 `id_invalido`; id existente: 409 `estrategia_existe` (nunca se pisa; no hay ruta para editar ni borrar) |
+| `POST /estrategias/<id>/comparar`         | Cuerpo opcional `{desde, hasta}` (por defecto la ventana honesta). Arranca `comparar` en un hilo y devuelve el trabajo `{job_id, estado: corriendo, ...}`. Solo corre uno a la vez (409 `comparacion_en_curso`). Una ventana que pase de la reserva: 400 `ventana_invalida`; `incluir_reserva` no existe (400 `campos_desconocidos`) y se llama siempre con `False`                                              |
+| `GET /estrategias/<id>/comparar/<job_id>` | `estado` corriendo \| listo \| error, con `informe` (el de `comparar`) o `error`                                                                                                                                                                                                                                                                                                                                 |
+| `GET /estrategias/<id>/comparar`          | El último trabajo de esa estrategia (404 `sin_comparacion`)                                                                                                                                                                                                                                                                                                                                                      |
+
+Los trabajos viven en memoria (se pierden al reiniciar el servidor).
+
 ## Replay contra el vivo (S4)
 
 ```

@@ -143,6 +143,20 @@ def _validar_ventana(desde, hasta, incluir_reserva, reserva_ms):
     return desde_ms, hasta_ms, reserva
 
 
+def validar_ventana(desde, hasta, reserva_desde_ms=None):
+    """Para quien NO puede tocar la reserva (la página Estrategias): ``(desde_ms, hasta_ms)`` de una ventana AAAA-MM-DD que no pasa
+    de la reserva; si no, ``ComparacionError`` sin ofrecer ninguna bandera para saltarla."""
+    reserva_ms = qt.load_holdout_ms() if reserva_desde_ms is None else reserva_desde_ms
+    desde_ms, hasta_ms = _fecha_ms(desde, "desde"), _fecha_ms(hasta, "hasta")
+    if desde_ms >= hasta_ms:
+        raise ComparacionError("La ventana está vacía: desde ({}) tiene que ser anterior a hasta ({}).".format(desde, hasta))
+    if hasta_ms > reserva_ms:
+        raise ComparacionError(
+            "La ventana {} → {} entra en la reserva (desde {}): la reserva se mira una sola vez por versión y no se puede usar desde "
+            "la página. Terminá el {} o antes.".format(desde, hasta, qt.stamp(reserva_ms), qt.stamp(reserva_ms)))
+    return desde_ms, hasta_ms
+
+
 # --------------------------------------------------------------------------- comparación
 
 

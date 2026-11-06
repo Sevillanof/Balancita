@@ -172,6 +172,12 @@ def cargar_estrategia(id, carpeta=None, snapshot=None):
         raise EstrategiaError("Estrategia '{}': no existe {}.".format(id, ruta)) from None
     except (OSError, ValueError) as error:
         raise EstrategiaError("Estrategia '{}': archivo ilegible ({}).".format(id, error)) from error
+    return config_desde_overlay(overlay, id, snapshot)
+
+
+def config_desde_overlay(overlay, id, snapshot=None):
+    """La config COMPLETA de un overlay ya leído (o recién armado): valida todo lo que valida ``cargar_estrategia`` y devuelve el
+    snapshot con ``cambios`` aplicados. No toca el disco (salvo leer el snapshot si no se pasa)."""
     if not isinstance(overlay, dict) or set(overlay) != OVERLAY_KEYS:
         raise EstrategiaError("Estrategia '{}': el archivo lleva exactamente {}.".format(id, ", ".join(sorted(OVERLAY_KEYS))))
     if overlay["id"] != id:
