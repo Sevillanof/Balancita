@@ -234,3 +234,28 @@ A strategy or model is declared a winner only if it **wins after real costs on o
 ### Unchanged
 
 Paper only without keys; exact Decimal accounting, canonical hashing and append-only storage; real per-product costs and observed funding (never inferred); each process writes only its own database; and no live trade on a late candle (15 s tolerance, `candle_late`). The complete-delete rule of 2026-10-19 stays.
+
+## Amendment 2026-11-06: one live engine, retired research processes
+
+Requested directly by the user (Fran) on 2026-11-06 («Apagalo y deja la enmienda»). Where it conflicts with the text above, this amendment prevails. Everything remains paper only: no real orders, no private Kraken endpoints, no credentials.
+
+### What operates
+
+The only live engine is the Terminal trader (`qwen-live`): the maestro and portero formula plus the entry and exit lifecycle (12/24/36 h rules, rebound expert, up to 3 positions of 33 % of the balance). Qwen no longer opines on trades (`runtime.opinion_enabled=false`); it only classifies news (relevance and direction) and writes the news summary.
+
+### Retired (off by default, data kept as history)
+
+- **Forward paper books of C25-C31 and Kronos** (process `forward`). The user no longer uses them; their measurement ends here instead of at 30 or 100 forward trades. Their books stay as read-only history. `FORWARD_ENABLED=1` turns the process back on.
+- **Engine D** (`verdict`, `scores`, `q`): verdicts, forecast scoring and the old LLM decisions. Their databases stay as history and are archived in Parquet. `ENGINE_D_ENABLED=1` turns them back on.
+
+### Role of the strategy registry
+
+The strategy registry (S, Estrategias page) becomes the laboratory of the Terminal: a strategy is a variant of the Terminal formula, tested by backtest and shadow paper before it can be promoted to the Terminal as a new configuration version. Until that redesign lands (`odd/tasks/estrategias-laboratorio.md`), the page keeps its last results frozen at the date engine D stopped.
+
+### Data
+
+Market events are captured only for PF_ETHUSD and PF_XBTUSD; funding responses keep a short body with the full body's hash. Official candles, funding periods and analytics of the 8 products are unchanged. Nightly Parquet archives everything the trader and its experts use (`odd/tasks/datos-utiles.md`).
+
+### Unchanged
+
+Paper only without keys; exact Decimal accounting, canonical hashing and append-only storage; real per-product costs and observed funding; declaring a winner (Amendment 2026-10-23).

@@ -18,8 +18,9 @@ perpetuals. Spot BTC-EUR is abandoned; its docs and plans live in
 2026-10-06 and 2026-10-11 amendments) is the governing decision record: long
 and short, 100 USD fixed per trade, one cost model per product, Qwen and Kronos
 allowed as described in the 2026-10-11 amendment. It does not authorize real
-orders, private endpoints or credentials. C25-C31 and Kronos are not modified
-until they reach 100 forward trades. The ADR is immutable and read-only:
+orders, private endpoints or credentials. Amendment 2026-11-06: the only live
+engine is the Terminal trader (maestro, portero, lifecycle); the forward books of
+C25-C31/Kronos and engine D are retired by default (data kept as history). The ADR is immutable and read-only:
 consult it, never edit it, unless the user directly requests an amendment.
 
 Amendment 2026-10-19 (requested by the user): a user-initiated delete of a strategy

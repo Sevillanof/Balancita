@@ -585,6 +585,8 @@ const POSITIONING_ARGS = [
  *   DB, sole writer of the latter),
  * - scores (engine D, only with ENGINE_D_ENABLED=1): Python forecast scorer E (market + verdicts DBs read-only -> scores
  *   DB, sole writer of the latter),
+ * - forward (only with FORWARD_ENABLED=1): Python forward paper books of the registered strategies (market DB read-only
+ *   -> its own forward DB and summary, sole writer of both),
  * - news (optional): Python news process N (public RSS -> news DB, sole writer
  *   of the latter; its own `command` instead of node). Ingest needs no model;
  *   it analyses with the local model (`--analyze`) only when llm is enabled,
@@ -614,6 +616,25 @@ export function engineDNotice(env = {}) {
     : '[dev] Motor D retirado: verdict, scores y q no arrancan (sus bases quedan en disco como historia). Para volver a arrancarlos: ENGINE_D_ENABLED=1 en .env.local.'
 }
 
+/**
+ * The ONE switch of the forward paper books (amendment 2026-11-06 of ADR 0001): the `forward` child writes the forward
+ * paper books of the registered strategies (C25-C31, Kronos' books among them) into `forward/forward.sqlite` and its
+ * summary. The user no longer uses them, so it is retired by default. Their databases stay on disk, untouched and readable
+ * as history (the gateway, the registry and the nightly Parquet backup keep reading them as they are).
+ * `FORWARD_ENABLED=1` (real environment or `.env.local`) starts it again; no code is removed.
+ * `carry`, `strategies`, `news`, `llm`, the Terminal trader and Kronos' own process are NOT part of this switch.
+ */
+export function forwardEnabled(env = {}) {
+  return (env.FORWARD_ENABLED ?? '').trim() === '1'
+}
+
+/** The `[dev]` line saying the forward is off and how to turn it on; empty when it is enabled. */
+export function forwardNotice(env = {}) {
+  return forwardEnabled(env)
+    ? ''
+    : '[dev] Forward retirado: el paper hacia delante de C25-C31 y Kronos no arranca (sus bases quedan en disco como historia). Para volver a arrancarlo: FORWARD_ENABLED=1 en .env.local.'
+}
+
 /** The children that make Qwen decide and operate: they ignore DEV_ONLY. */
 export const QWEN_CHILDREN = [
   'verdict',
@@ -627,7 +648,8 @@ export const QWEN_CHILDREN = [
 /**
  * `DEV_ONLY=vite,capture,live,forward,strategies` runs just those children (comma separated names of
  * `devChildSpecs`); unset or empty runs everything. Unknown names are ignored. Used to leave only the
- * forward measurement and the capture it reads running, without paper books or news. Qwen (see
+ * forward measurement and the capture it reads running, without paper books or news (the `forward` child itself
+ * still needs FORWARD_ENABLED=1: DEV_ONLY never brings a retired child back). Qwen (see
  * QWEN_CHILDREN) is never left out by it: only DECISIONS_ENABLED=0 (or a missing model) turns it off.
  */
 export function onlyChildSpecs(specs, env = {}) {
@@ -767,6 +789,7 @@ export function devChildSpecs({
   // Funding carry counter (no orders): its state and summary; the registry serves and toggles them.
   const carryDir = liveDb('carry')
   const engineD = engineDEnabled(env)
+  const forward = forwardEnabled(env)
   const llmOn =
     Boolean(python?.command && llm?.command) &&
     (env.DECISIONS_ENABLED ?? '').trim() !== '0' &&
@@ -811,6 +834,8 @@ export function devChildSpecs({
         BALANCITA_PYTHON_STATUS: pythonStatus(python),
         // Engine D retired: health and activity say so instead of reading it as a failure or as "no data".
         FUTURES_ENGINE_D_RETIRED: engineD ? '0' : '1',
+        // Forward retired: health and activity say so instead of reading its silence as a failure.
+        FUTURES_FORWARD_RETIRED: forward ? '0' : '1',
         // Per-process health written by the dev supervisor (scripts/dev.mjs).
         DEV_HEALTH_FILE: `${serverCwd}/data/dev-live/dev-health.json`,
         // `/api/observability/health` reads these read-only (forward's DB, the strategy registry).
@@ -1059,35 +1084,40 @@ export function devChildSpecs({
             },
           ]
         : []),
-      {
-        // Forward paper book of the strategies the user ACTIVATED in the registry (everything starts as a draft;
-        // market DB read-only -> its own forward DB and summary, sole writer of both). Full cycle every hour; every
-        // 60 s it also looks at the registry (a newly active strategy gets a cycle at once) and at delete requests.
-        name: 'forward',
-        command: python.command,
-        cwd: serverCwd,
-        args: [
-          ...python.prefixArgs,
-          '-m',
-          'balancita_engine.futures_forward',
-          '--market-db',
-          marketDb,
-          '--out',
-          forwardDir,
-          '--strategies-db',
-          strategiesDb,
-          '--loop-seconds',
-          '3600',
-          '--registry-poll-seconds',
-          '60',
-        ],
-        env: {
-          ...env,
-          PYTHONPATH: [`${root}/python`, env.PYTHONPATH]
-            .filter(Boolean)
-            .join(delimiter),
-        },
-      },
+      // Forward paper books: retired unless FORWARD_ENABLED=1 (see forwardEnabled).
+      ...(forward
+        ? [
+            {
+              // Forward paper book of the strategies the user ACTIVATED in the registry (everything starts as a draft;
+              // market DB read-only -> its own forward DB and summary, sole writer of both). Full cycle every hour; every
+              // 60 s it also looks at the registry (a newly active strategy gets a cycle at once) and at delete requests.
+              name: 'forward',
+              command: python.command,
+              cwd: serverCwd,
+              args: [
+                ...python.prefixArgs,
+                '-m',
+                'balancita_engine.futures_forward',
+                '--market-db',
+                marketDb,
+                '--out',
+                forwardDir,
+                '--strategies-db',
+                strategiesDb,
+                '--loop-seconds',
+                '3600',
+                '--registry-poll-seconds',
+                '60',
+              ],
+              env: {
+                ...env,
+                PYTHONPATH: [`${root}/python`, env.PYTHONPATH]
+                  .filter(Boolean)
+                  .join(delimiter),
+              },
+            },
+          ]
+        : []),
       {
         // Funding carry counter (long spot + short perpetual, paper): public Kraken data, every hour.
         name: 'carry',

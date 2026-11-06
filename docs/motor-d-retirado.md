@@ -16,7 +16,9 @@ Tres procesos hijos de `pnpm dev` (`scripts/dev-provider-env.mjs`):
 
 ## Qué sigue corriendo
 
-`vite`, `capture`, `positioning`, `live` (gateway), `forward`, `carry`, `strategies`, `news`, **`llm`** (llama-server: lo usan las noticias, el resumen y el trader), **`qwenlive`** (el trader: maestro, portero y ciclo de vida de entradas y salidas) y `qwenexit` si su interruptor lo permite. Nada de eso lee `verdicts`, `llm_decisions` ni los puntajes.
+(`forward` también está retirado por defecto, con su propio interruptor: `docs/forward-retirado.md`.)
+
+`vite`, `capture`, `positioning`, `live` (gateway), `carry`, `strategies`, `news`, **`llm`** (llama-server: lo usan las noticias, el resumen y el trader), **`qwenlive`** (el trader: maestro, portero y ciclo de vida de entradas y salidas) y `qwenexit` si su interruptor lo permite. Nada de eso lee `verdicts`, `llm_decisions` ni los puntajes.
 
 ## El interruptor
 
@@ -34,7 +36,7 @@ El lanzador le pasa al gateway `FUTURES_ENGINE_D_RETIRED=1|0` (siempre pisa un v
 | Terminal (gateway, `paper-engine-follower`)          | Sin cambios: ya filtraba los verdicts de estrategias no aprobadas y el estado del motor ya era `idle`                                                      |
 | `GET /api/qwen/scores`                               | Sin cambios: calcula sobre las bases viejas (historia); ninguna pantalla lo usa                                                                            |
 | Registro de estrategias / Estrategias (`strategies`) | Sigue corriendo. Los backtests anclan su ventana en el verdict más nuevo: **quedan congelados en la fecha del corte** (siguen funcionando, sobre historia) |
-| `forward`, `carry`, `news`, trader en vivo           | Sin cambios (no leen estas bases)                                                                                                                          |
+| `carry`, `news`, trader en vivo                      | Sin cambios (no leen estas bases)                                                                                                                          |
 | Parquet nocturno (`archivo_parquet.nocturno`)        | Sigue archivando las tres bases (ya sin filas nuevas); las copias existen mientras los archivos sigan; código 0                                            |
 
 ## Ahorro

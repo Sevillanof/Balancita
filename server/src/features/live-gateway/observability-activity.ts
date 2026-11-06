@@ -4,6 +4,10 @@ import {
   engineDRetiredFromEnv,
 } from './engine-d-retired.ts'
 import {
+  FORWARD_RETIRED_DETAIL,
+  forwardRetiredFromEnv,
+} from './forward-retired.ts'
+import {
   expectedPairs,
   num,
   readRegistry,
@@ -155,6 +159,11 @@ export interface ObservabilityActivityOptions {
    * instead of counting zeros. Default: `FUTURES_ENGINE_D_RETIRED=1`.
    */
   readonly engineDRetired?: boolean
+  /**
+   * The launcher did not start the forward paper books (C25-C31, Kronos): operations say «Forward retirado»
+   * instead of listing experiments that no longer run. Default: `FUTURES_FORWARD_RETIRED=1`.
+   */
+  readonly forwardRetired?: boolean
   readonly forwardDbPath?: string
   readonly strategiesDbPath?: string
   readonly forwardRegistrationPath?: string
@@ -466,14 +475,21 @@ export function createObservabilityActivity(
       const none = (detail: string) =>
         unavailable(verdictEvidence, detail) as Section<never>
 
-      const expected = expectedPairs(options, readRegistry(options))
-      const operations = readOperations(
-        options,
-        expected,
-        product ?? null,
-        fromMs,
-        toMs,
-      )
+      // A retired forward's database is not read at all.
+      const forwardRetired =
+        options.forwardRetired ?? forwardRetiredFromEnv(process.env)
+      const operations: Opened<{
+        set: PairSet
+        experiments: ExperimentActivity[]
+      }> = forwardRetired
+        ? { state: 'missing', detail: FORWARD_RETIRED_DETAIL }
+        : readOperations(
+            options,
+            expectedPairs(options, readRegistry(options)),
+            product ?? null,
+            fromMs,
+            toMs,
+          )
       const opsEvidence = evidenceOf(
         'forward_trade / forward_open / forward_status',
         options.forwardDbPath,
