@@ -1333,6 +1333,10 @@ class Trader:
         mult = D(str(analista.multiplier(self.cfg, self.movement, t_ms)))
         # Several places: each one takes ``fraccion`` (33 %) of the account balance at this moment; with one place, all of it as always.
         share = self.notional if self.max_positions == 1 else self.notional * D(str(self.fraction))
+        # tope-por-lugar: with several places the analista may only SHRINK a position (flojo x0.5); fuerte x1.5 is capped at one
+        # place (balance x ``fraccion``), so ``max`` places always fit. One place keeps the multiplier (the free balance caps it).
+        if self.max_positions > 1 and mult > 1:
+            mult = D(1)
         notional = share if mult == 1 else share * mult      # size 1 keeps the exact stored text ("1000", not "1000.0")
         if self.cfg.get("cuenta") == "entera":
             if not self.notional.is_finite() or self.notional <= 0:
