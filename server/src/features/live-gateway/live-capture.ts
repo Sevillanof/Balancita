@@ -34,6 +34,7 @@ import {
   createAnalyticsClient,
   type AnalyticsMetric,
 } from '../kraken-futures/market-analytics.ts'
+import { DEPTH_BAND } from '../market-summary/eth-minute-summary.ts'
 
 /** Backfill depth per interval: enough history for 5m indicator warm-up. */
 const OFFICIAL_LOOKBACK_MS: Readonly<Record<number, number>> = {
@@ -151,6 +152,33 @@ export function classifyFundingError(error: unknown): {
   return { outcome: 'network_error' }
 }
 
+/** One book snapshot is stored at most this often per extra feed (the deltas are never stored). */
+const EXTRA_BOOK_SAMPLE_MS = 30_000
+/** Levels kept per side of a stored book sample (a safety cap; the depth band normally cuts first). */
+const EXTRA_BOOK_MAX_LEVELS = 100
+/** A book that has not moved for this long is not sampled (the collector is about to re-request it). */
+const EXTRA_BOOK_MAX_AGE_MS = 10_000
+
+/**
+ * A second perpetual followed over its own WebSocket (trade, book, ticker). Its
+ * trades are stored one by one; its book is reconstructed in memory and stored
+ * as a trimmed snapshot at a bounded cadence, never as deltas (about 80 million
+ * a day per product). Its WebSocket ticker is dropped: REST tickers already
+ * cover every pinned product. Nothing here touches the PF_XBTUSD collector.
+ */
+export interface ExtraMarketFeedOptions {
+  /** Must be one of the pinned products, and one the store accepts trades and books for. */
+  readonly productId: string
+  /** Minimum time between two stored book snapshots (default 30 s). */
+  readonly bookSampleMs?: number
+  /** Levels farther than this fraction from the mid are not stored (default: the summary's depth band, 0.1 %). */
+  readonly bookBand?: number
+  /** Cap per side of a stored snapshot, closest to the mid first (default 100). */
+  readonly bookMaxLevels?: number
+  /** How often the sampler looks at the clock (default 1 s). */
+  readonly tickMs?: number
+}
+
 export interface LiveCaptureOptions {
   readonly store: FuturesMarketStore
   readonly makeSocket: (url: string) => FuturesSocket
@@ -184,6 +212,12 @@ export interface LiveCaptureOptions {
    * at runtime). The WebSocket feeds stay PF_XBTUSD only. Default: PF_XBTUSD.
    */
   readonly products?: readonly FuturesProduct[]
+  /**
+   * Also follow this perpetual over a second WebSocket (trades stored, book
+   * sampled). Off by default: without it the capture opens one socket for
+   * PF_XBTUSD exactly as before.
+   */
+  readonly extraMarketFeed?: ExtraMarketFeedOptions
   /** Pause between official-candle requests (default 250 ms). */
   readonly officialRequestGapMs?: number
   readonly officialCandlesFetch?: HistoricalFundingFetch
@@ -289,6 +323,8 @@ export function createLiveCapture(options: LiveCaptureOptions) {
     setImmediate(replaceSilentSocket)
   }
   let collector: KrakenFuturesMarketCollector | undefined
+  let extraCollector: KrakenFuturesMarketCollector | undefined
+  let extraSampleTimer: ReturnType<typeof setInterval> | undefined
   let candleTimer: ReturnType<typeof setInterval> | undefined
   let fundingTimer: ReturnType<typeof setTimeout> | undefined
   let catalogTimer: ReturnType<typeof setTimeout> | undefined
@@ -718,6 +754,138 @@ export function createLiveCapture(options: LiveCaptureOptions) {
     }, tickerPeriodMs)
   }
 
+  const startExtraFeed = (feed: ExtraMarketFeedOptions): void => {
+    const { productId } = feed
+    if (!products.some((item) => item.productId === productId)) {
+      log(
+        `extra market feed ${productId} skipped: not pinned in the products list`,
+      )
+      return
+    }
+    const sampleMs = feed.bookSampleMs ?? EXTRA_BOOK_SAMPLE_MS
+    const band = feed.bookBand ?? DEPTH_BAND
+    const maxLevels = Math.max(
+      1,
+      Math.floor(feed.bookMaxLevels ?? EXTRA_BOOK_MAX_LEVELS),
+    )
+    // Best effort: a store error here must never stop this collector (it would not reconnect)
+    // or touch BTC. Logged once per distinct message, not per trade.
+    let lastError: string | undefined
+    const logError = (text: string): void => {
+      if (text === lastError) return
+      lastError = text
+      log(text)
+    }
+    const extra = new KrakenFuturesMarketCollector({
+      productId,
+      clock,
+      random: Math.random,
+      makeSocket: options.makeSocket,
+      setTimeout,
+      clearTimeout,
+      staleAfterMs: options.staleAfterMs,
+      reconnectMinMs: options.reconnectMinMs,
+      reconnectMaxMs: options.reconnectMaxMs,
+      silenceMs: options.silenceMs,
+      dataSilenceMs: options.dataSilenceMs,
+      connectTimeoutMs: options.connectTimeoutMs,
+      watchdogIntervalMs: options.watchdogIntervalMs,
+      onResilience: (event) =>
+        note({
+          component: `websocket-${productId}`,
+          product: productId,
+          ...event,
+        }),
+      persist: (event) => {
+        // Book deltas and snapshots only feed the in-memory book (sampled below); the REST poll stores tickers.
+        if (event.type !== 'trade') return
+        try {
+          // Slim row: raw_json keeps the provider frame whole; the parsed `raw` object and the
+          // book-quality attestation (about the book, not the trade) are not copied into
+          // normalized_json. Roughly halves a trade's bytes (docs/resumen-minuto-eth.md).
+          return store.append(
+            Object.fromEntries(
+              Object.entries(event).filter(
+                ([key]) => key !== 'raw' && key !== 'marketQuality',
+              ),
+            ),
+          )
+        } catch (error) {
+          logError(`${productId} ${event.type} not stored: ${describe(error)}`)
+          return undefined
+        }
+      },
+      persistGap: (gap) => {
+        try {
+          store.appendGap(gap)
+        } catch (error) {
+          logError(`${productId} gap not stored: ${describe(error)}`)
+        }
+      },
+      onState: (state, reason) =>
+        log(`${productId} ${state}${reason ? ` ${reason}` : ''}`),
+    })
+    let lastSampleAt: number | undefined
+    const sample = (): void => {
+      if (stopped) return
+      const now = clock()
+      if (lastSampleAt !== undefined && now - lastSampleAt < sampleMs) return
+      const quality = extra.bookQuality
+      const age = extra.metrics.bookAgeMs
+      if (
+        !quality.valid ||
+        quality.sequenceIntegrity !== 'observed_contiguous' ||
+        quality.sequence === null ||
+        age === null ||
+        age > EXTRA_BOOK_MAX_AGE_MS
+      )
+        return
+      const book = extra.book
+      if (book.bids.length === 0 || book.asks.length === 0) return
+      const mid =
+        (Number(book.bids[0]!.price) + Number(book.asks[0]!.price)) / 2
+      // Same band and mid the summary uses for its depth columns, so the stored levels give the same depth as the full book.
+      const bids = book.bids
+        .filter((l, i) => i === 0 || Number(l.price) >= mid * (1 - band))
+        .slice(0, maxLevels)
+      const asks = book.asks
+        .filter((l, i) => i === 0 || Number(l.price) <= mid * (1 + band))
+        .slice(0, maxLevels)
+      try {
+        store.append({
+          type: 'book',
+          productId,
+          snapshot: true,
+          seq: quality.sequence,
+          epoch: quality.epoch,
+          eventTime: now,
+          receivedAt: now,
+          persistedAt: now,
+          bids,
+          asks,
+          sampled: {
+            // A string: canonical JSON only holds integers as numbers.
+            band: String(band),
+            maxLevelsPerSide: maxLevels,
+            source: 'reconstructed_book',
+          },
+          // Not a provider frame: a short marker, the levels live in normalized_json and the snapshot table.
+          rawJson: JSON.stringify({
+            feed: 'book_sample',
+            product_id: productId,
+            source_seq: quality.sequence,
+          }),
+        })
+        lastSampleAt = now
+      } catch (error) {
+        logError(`${productId} book sample not stored: ${describe(error)}`)
+      }
+    }
+    extraCollector = extra
+    extra.start()
+    extraSampleTimer = setInterval(sample, feed.tickMs ?? 1_000)
+  }
+
   const startCollecting = (): void => {
     // The terminal only draws 60 s candles; verdicts read the official series.
     const candles = new FuturesCandleBuilder(store, [
@@ -882,6 +1050,7 @@ export function createLiveCapture(options: LiveCaptureOptions) {
       onState: (state, reason) => log(`${state}${reason ? ` ${reason}` : ''}`),
     })
     collector.start()
+    if (options.extraMarketFeed) startExtraFeed(options.extraMarketFeed)
     officialClient = createOfficialCandlesClient({
       fetch: options.officialCandlesFetch,
       clock,
@@ -978,12 +1147,15 @@ export function createLiveCapture(options: LiveCaptureOptions) {
       stopped = true
       if (catalogTimer !== undefined) clearTimeout(catalogTimer)
       if (candleTimer !== undefined) clearInterval(candleTimer)
+      if (extraSampleTimer !== undefined) clearInterval(extraSampleTimer)
+      extraSampleTimer = undefined
       if (fundingTimer !== undefined) clearTimeout(fundingTimer)
       if (officialTimer !== undefined) clearTimeout(officialTimer)
       if (analyticsTimer !== undefined) clearTimeout(analyticsTimer)
       if (tickerTimer !== undefined) clearTimeout(tickerTimer)
       for (const wake of [...sleepers]) wake()
       collector?.stop()
+      extraCollector?.stop()
       fundingClient?.close()
       officialClient?.close()
       analyticsClient?.close()
@@ -1002,6 +1174,10 @@ export function createLiveCapture(options: LiveCaptureOptions) {
     },
     get collector(): KrakenFuturesMarketCollector | undefined {
       return collector
+    },
+    /** The second-product collector (`extraMarketFeed`), when one runs. */
+    get extraCollector(): KrakenFuturesMarketCollector | undefined {
+      return extraCollector
     },
     get health(): ConnectionHealth {
       return health
