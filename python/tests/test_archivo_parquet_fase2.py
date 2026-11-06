@@ -253,6 +253,27 @@ class DatosUtilesTests(unittest.TestCase):
         self.assertEqual({v[0] for v in velas}, {"PF_ETHUSD", "PF_XBTUSD"})
         self.assertEqual(verificar(self.destino)["problemas"], [])
 
+    def test_resumen_por_minuto_de_eth_ida_y_vuelta_y_no_es_hueco(self):  # datos-utiles S4
+        import sqlite3
+        from archivo_parquet import nocturno
+        con = sqlite3.connect(self.copia)
+        con.execute("""CREATE TABLE paper_futures_eth_minute_summary(minute_start_ms INTEGER PRIMARY KEY, product_id TEXT NOT NULL,
+            trade_count INTEGER, buy_volume REAL, sell_volume REAL, vwap REAL, last_price REAL, spread_bp REAL, top_bid_size REAL,
+            top_ask_size REAL, depth_bid REAL, depth_ask REAL, events_seen INTEGER NOT NULL, written_at_ms INTEGER NOT NULL) STRICT""")
+        filas = [(DIA0 + d * DAY_MS + m * 60_000, "PF_ETHUSD", 3 if m else None, 1.5, 2.0, 2300.5, 2301.0, 1.2, None, 4.0, 10.0, 12.5, 7,
+                  DIA0 + d * DAY_MS + m * 60_000 + 65_000) for d in range(2) for m in range(3)]
+        con.executemany("INSERT INTO paper_futures_eth_minute_summary VALUES(" + ",".join("?" * 14) + ")", filas)
+        con.commit()
+        self.assertNotIn("paper_futures_eth_minute_summary", nocturno._tablas_sin_cubrir(con, "futures-market"))
+        con.close()
+        r = self.exp("futures-market", ["eth_minute_summary"])
+        self.assertEqual((r["no_confirmados"], r["pendientes_por_abrir"]), ([], []))
+        self.assertEqual(self.filas_por_dia("eth_minute_summary"), {self.dia(0): 3, self.dia(1): 3})
+        cfg = TABLAS["eth_minute_summary"]
+        self.assertEqual(sorted(self.archivo("futures-market", "eth_minute_summary", DIA0, DIA0 + 40 * DAY_MS), key=repr),
+                         sorted(self.sqlite("SELECT %s FROM %s" % (", ".join(cfg.nombres), cfg.sqlite)), key=repr))
+        self.assertEqual(verificar(self.destino)["problemas"], [])
+
 
 @unittest.skipUnless(formato.disponible(), "pyarrow no esta instalado (entorno aparte, ver docs/archivo-parquet.md)")
 class GruposChicosTests(unittest.TestCase):

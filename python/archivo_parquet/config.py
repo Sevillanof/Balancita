@@ -327,6 +327,15 @@ TABLAS.update({
                        dicc=("product", "estado", "accion", "qwen", "version"),
                        sin_stats=("condiciones_json", "despues_json", "veredicto_12h_json", "veredicto_24h_json", "veredicto_36h_json")),
         filtro_tipico="accion", grupo_por=("product",), nivel_zstd=9, inmutable_sql='"resuelto_ms" IS NOT NULL'),
+    # ---- futures-market: resumen por minuto de ETH (docs/resumen-minuto-eth.md). Una fila por minuto cerrado, escrita una sola vez
+    # (INSERT OR IGNORE): no cambia despues. Dia por minute_start_ms.
+    "eth_minute_summary": TablaConfig(
+        nombre="eth_minute_summary", sqlite="paper_futures_eth_minute_summary", tiempo="minute_start_ms", clave=("minute_start_ms",),
+        granularidad="dia",
+        columnas=_cols("minute_start_ms:int product_id:text trade_count:int? buy_volume:real? sell_volume:real? vwap:real? last_price:real? "
+                       "spread_bp:real? top_bid_size:real? top_ask_size:real? depth_bid:real? depth_ask:real? events_seen:int written_at_ms:int",
+                       dicc=("product_id",)),
+        grupo_por=("product_id",)),
     # ---- futures-market: velas oficiales, funding por periodo y puntos de analytics. Las tres son solo-agregar (triggers) y se cierran por ``known_at``. ----
     # Todos los productos (ETH y BTC incluidos): la tabla es chica y filtrar no ahorra nada.
     "official_candles": TablaConfig(
