@@ -1,0 +1,56 @@
+docs/estrategias-laboratorio.md
+  h_92dd6654ceb221 133-134,142-170
+e2e/estrategias-inventario.pw.ts
+  h_92dd6654ceb221 53-67,114,140-178,182,210-217,270-272,287,292-293,310-379
+odd/tasks/estrategias-laboratorio.md
+  h_92dd6654ceb221 183-184
+python/balancita_engine/futures_estrategias_api.py
+  h_92dd6654ceb221 13-17,32,38-40,64-83,267-301,312-313
+python/tests/test_futures_estrategias_api.py
+  h_92dd6654ceb221 16,51-52,317-464
+src/features/strategy-lab/domain/estrategias-curva.test.ts
+  h_92dd6654ceb221 2
+src/features/strategy-lab/domain/estrategias-velas.test.ts
+  h_92dd6654ceb221 1-280
+src/features/strategy-lab/domain/estrategias-velas.ts
+  h_92dd6654ceb221 1-342
+src/features/strategy-lab/infrastructure/estrategias-api.test.ts
+  h_92dd6654ceb221 91-140
+src/features/strategy-lab/infrastructure/estrategias-api.ts
+  h_92dd6654ceb221 139-171,191-214,259-264
+src/features/strategy-lab/presentation/EstrategiasPage.test.tsx
+  h_92dd6654ceb221 3,21-25,136,138,182-204,207,214,227,275,354
+src/features/strategy-lab/presentation/EstrategiasPage.tsx
+  h_92dd6654ceb221 179
+src/features/strategy-lab/presentation/ResultadoComparacion.tsx
+  h_92dd6654ceb221 5-8,11,14,215,217,250
+src/features/strategy-lab/presentation/VarianteDetalle.tsx
+  h_92dd6654ceb221 8,16,145,174
+src/features/strategy-lab/presentation/VelasChart.tsx
+  h_92dd6654ceb221 1-327
+src/features/strategy-lab/presentation/VelasConOperaciones.test.tsx
+  h_92dd6654ceb221 1-271
+src/features/strategy-lab/presentation/VelasConOperaciones.tsx
+  h_92dd6654ceb221 1,3-14,16,18-19,22-23,25-38,40-71,73,75-83,85,87-90,93-105,107-116
+src/features/strategy-lab/presentation/VelasOperacionesPrimitive.ts
+  h_92dd6654ceb221 1-108
+src/features/strategy-lab/presentation/use-velas.test.tsx
+  h_92dd6654ceb221 1-153
+src/features/strategy-lab/presentation/use-velas.ts
+  h_92dd6654ceb221 1-110
+src/features/strategy-lab/testing/estrategias-fixture.ts
+  h_92dd6654ceb221 3,11,277-312,327
+src/features/strategy-lab/testing/lightweight-charts-mock.ts
+  h_92dd6654ceb221 1-80
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "be77e1e3b775f00fd0dba723a22234e3c1408112",
+  "prompts": {},
+  "humans": {
+    "h_92dd6654ceb221": {
+      "author": "Franco Sevillano <79455847+Sevillanof@users.noreply.github.com>"
+    }
+  }
+}
