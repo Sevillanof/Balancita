@@ -1,4 +1,4 @@
-import { act, renderHook, waitFor } from '@testing-library/react'
+import { renderHook, waitFor } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import type {
   ConsultaVelas,
@@ -12,63 +12,43 @@ const VENTANA = {
   desdeMs: Date.UTC(2026, 1, 3),
   hastaMs: Date.UTC(2026, 3, 19),
 }
+const MEDIO = Date.UTC(2026, 2, 10)
+const RANGO = { desdeMs: MEDIO - 60 * H, hastaMs: MEDIO + 60 * H }
 
 describe('useVelas', () => {
-  it('asks for the last ten days of the tested window first, in ascending order', async () => {
+  it('asks once for the stretch around the trade, inside the tested window, in ascending order', async () => {
     const api = fakeApi()
-    const { result } = renderHook(() => useVelas(api, VENTANA, '1h'))
+    const { result } = renderHook(() => useVelas(api, VENTANA, '1h', RANGO))
     expect(result.current.cargando).toBe(true)
     await waitFor(() => expect(result.current.cargando).toBe(false))
+    expect(api.velas).toHaveBeenCalledTimes(1)
     expect(api.velas).toHaveBeenCalledWith({
       producto: 'PF_ETHUSD',
       intervalo: '1h',
       desdeMs: VENTANA.desdeMs,
       hastaMs: VENTANA.hastaMs,
-      antesMs: VENTANA.hastaMs,
-      limite: 240,
+      antesMs: RANGO.hastaMs,
+      limite: 121,
     })
     const { velas } = result.current
-    expect(velas).toHaveLength(240)
-    expect(velas.at(-1)!.t).toBe(VENTANA.hastaMs - H)
+    expect(velas).toHaveLength(121)
+    expect(velas[0]!.t).toBe(RANGO.desdeMs - H)
+    expect(velas.at(-1)!.t).toBe(RANGO.hastaMs - H)
     expect(velas.map((v) => v.t)).toEqual([...velas.map((v) => v.t)].sort())
-    expect(result.current.hayMas).toBe(true)
   })
 
-  it('scrolling back asks for the page before the oldest candle held and merges it without gaps or repeats', async () => {
+  it('never reaches past the end of the window: the cursor is cut to it (the reserve starts there)', async () => {
     const api = fakeApi()
-    const { result } = renderHook(() => useVelas(api, VENTANA, '1h'))
-    await waitFor(() => expect(result.current.cargando).toBe(false))
-    const primera = result.current.velas[0]!.t
-    act(() => result.current.cargarAnteriores())
-    await waitFor(() => expect(api.velas).toHaveBeenCalledTimes(2))
-    expect(api.velas).toHaveBeenLastCalledWith(
-      expect.objectContaining({ antesMs: primera, limite: 500 }),
-    )
-    await waitFor(() => expect(result.current.velas).toHaveLength(740))
-    const tiempos = result.current.velas.map((v) => v.t)
-    expect(new Set(tiempos).size).toBe(740)
-    expect(tiempos.every((t, i) => i === 0 || t - tiempos[i - 1]! === H)).toBe(
-      true,
-    )
-  })
-
-  it('does not ask twice at once and stops when the window start is reached', async () => {
-    const api = fakeApi()
-    const corta = {
-      desdeMs: VENTANA.hastaMs - 12 * 24 * H,
-      hastaMs: VENTANA.hastaMs,
+    const alFinal = {
+      desdeMs: VENTANA.hastaMs - 50 * H,
+      hastaMs: VENTANA.hastaMs + 30 * H,
     }
-    const { result } = renderHook(() => useVelas(api, corta, '1h'))
+    const { result } = renderHook(() => useVelas(api, VENTANA, '1h', alFinal))
     await waitFor(() => expect(result.current.cargando).toBe(false))
-    act(() => {
-      result.current.cargarAnteriores()
-      result.current.cargarAnteriores()
-    })
-    await waitFor(() => expect(result.current.hayMas).toBe(false))
-    expect(api.velas).toHaveBeenCalledTimes(2)
-    expect(result.current.velas[0]!.t).toBe(corta.desdeMs)
-    act(() => result.current.cargarAnteriores())
-    expect(api.velas).toHaveBeenCalledTimes(2)
+    expect(api.velas).toHaveBeenCalledWith(
+      expect.objectContaining({ antesMs: VENTANA.hastaMs, limite: 51 }),
+    )
+    expect(result.current.velas.at(-1)!.t).toBe(VENTANA.hastaMs - H)
   })
 
   it('never keeps a candle outside the tested window even if the server sends one', async () => {
@@ -93,9 +73,9 @@ describe('useVelas', () => {
         ),
       },
     )
-    const { result } = renderHook(() => useVelas(api, VENTANA, '1h'))
+    const { result } = renderHook(() => useVelas(api, VENTANA, '1h', RANGO))
     await waitFor(() => expect(result.current.cargando).toBe(false))
-    expect(result.current.velas).toHaveLength(240)
+    expect(result.current.velas).toHaveLength(121)
     expect(
       result.current.velas.every(
         (v) => v.t >= VENTANA.desdeMs && v.t < VENTANA.hastaMs,
@@ -103,34 +83,56 @@ describe('useVelas', () => {
     ).toBe(true)
   })
 
-  it('starts over on another interval and drops the answer of the old one', async () => {
-    let soltar: (() => void) | null = null
+  it('starts over on another interval or stretch and drops the answer of the old one', async () => {
+    const control = { soltar: null as null | (() => void) }
     const api = fakeApi(
       [],
       {},
       {
         velas: vi.fn(async (consulta: ConsultaVelas) => {
           if (consulta.intervalo === '1h')
-            await new Promise<void>((listo) => (soltar = listo))
+            await new Promise<void>((listo) => (control.soltar = listo))
           return velasFalsas(consulta)
         }),
       },
     )
     const { result, rerender } = renderHook(
-      ({ intervalo }) => useVelas(api, VENTANA, intervalo),
-      { initialProps: { intervalo: '1h' as const } },
+      ({ intervalo }: { intervalo: '1h' | '4h' }) =>
+        useVelas(api, VENTANA, intervalo, RANGO),
+      { initialProps: { intervalo: '1h' as '1h' | '4h' } },
     )
-    rerender({ intervalo: '4h' as unknown as '1h' })
-    await waitFor(() => expect(result.current.velas).toHaveLength(60))
+    rerender({ intervalo: '4h' })
+    expect(result.current).toMatchObject({ cargando: true, velas: [] })
+    await waitFor(() => expect(result.current.velas).toHaveLength(31))
     expect(api.velas).toHaveBeenLastCalledWith(
-      expect.objectContaining({ intervalo: '4h', limite: 60 }),
+      expect.objectContaining({ intervalo: '4h', limite: 31 }),
     )
-    await act(async () => soltar?.())
-    expect(result.current.velas).toHaveLength(60)
-    expect(result.current.velas.at(-1)!.t).toBe(VENTANA.hastaMs - 4 * H)
+    control.soltar?.()
+    await new Promise((listo) => setTimeout(listo, 10))
+    expect(result.current.velas).toHaveLength(31)
+    expect(result.current.velas.at(-1)!.t).toBe(
+      Math.floor((RANGO.hastaMs - 1) / (4 * H)) * 4 * H,
+    )
   })
 
-  it('reports a failure and keeps what it had', async () => {
+  it('asks again for another stretch (another trade)', async () => {
+    const api = fakeApi()
+    const otro = { desdeMs: MEDIO + 10 * H, hastaMs: MEDIO + 130 * H }
+    const { result, rerender } = renderHook(
+      ({ rango }) => useVelas(api, VENTANA, '1h', rango),
+      { initialProps: { rango: RANGO } },
+    )
+    await waitFor(() => expect(result.current.cargando).toBe(false))
+    rerender({ rango: otro })
+    expect(result.current.cargando).toBe(true)
+    await waitFor(() => expect(result.current.cargando).toBe(false))
+    expect(api.velas).toHaveBeenCalledTimes(2)
+    expect(api.velas).toHaveBeenLastCalledWith(
+      expect.objectContaining({ antesMs: otro.hastaMs }),
+    )
+  })
+
+  it('reports a failure with no candles', async () => {
     const api = fakeApi(
       [],
       {},
@@ -140,14 +142,21 @@ describe('useVelas', () => {
         }),
       },
     )
-    const { result } = renderHook(() => useVelas(api, VENTANA, '1d'))
+    const { result } = renderHook(() => useVelas(api, VENTANA, '1d', RANGO))
     await waitFor(() =>
       expect(result.current.error).toBe('No hay velas guardadas de PF_ETHUSD.'),
     )
+    expect(result.current).toMatchObject({ cargando: false, velas: [] })
+  })
+
+  it('asks for nothing without a stretch', async () => {
+    const api = fakeApi()
+    const { result } = renderHook(() => useVelas(api, VENTANA, '1h', null))
     expect(result.current).toMatchObject({
       cargando: false,
       velas: [],
-      hayMas: false,
+      error: null,
     })
+    expect(api.velas).not.toHaveBeenCalled()
   })
 })

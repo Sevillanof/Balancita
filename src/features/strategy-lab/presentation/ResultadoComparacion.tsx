@@ -78,16 +78,16 @@ function Tile({
     <div
       role="group"
       aria-label={titulo}
-      className="grid gap-1.5 rounded-control bg-surface-2 px-4 py-3"
+      className="grid gap-1 rounded-control bg-surface-2 px-3 py-2"
     >
       <span className={EYEBROW}>{titulo}</span>
-      <div className="flex justify-between font-mono text-note">
+      <div className="flex justify-between gap-2 font-mono text-note">
         <span className="font-sans text-ink-2">oficial</span>
-        <span>{oficial}</span>
+        <span className="text-right">{oficial}</span>
       </div>
-      <div className="flex justify-between font-mono text-note">
+      <div className="flex justify-between gap-2 font-mono text-note">
         <span className="font-sans text-ink-2">variante</span>
-        <span>{variante}</span>
+        <span className="text-right">{variante}</span>
       </div>
       <span className={`font-mono text-hint font-medium ${TEXTO_TONO[tono]}`}>
         {delta}
@@ -173,23 +173,23 @@ const CONDICIONES = [
 const CHIP =
   'inline-flex h-6.5 items-center gap-1.5 rounded-full px-2.5 text-hint'
 
-function CerradasAlFinal({
-  quien,
-  cerradas,
-}: {
-  quien: string
-  cerradas: Metricas['cerradas_fin_ventana']
-}) {
-  if (!cerradas || cerradas.operaciones <= 0) return null
-  const { operaciones, neto_usd: neto } = cerradas
+/** One chip for both configurations: the trades the end of the tested window closed by force, «○ Fin de ventana 2 · 2». */
+function CerradasAlFinal({ informe }: { informe: Informe }) {
+  const oficial = informe.oficial.metricas.cerradas_fin_ventana
+  const variante = informe.variante.metricas.cerradas_fin_ventana
+  const cuantas = (c: Metricas['cerradas_fin_ventana']) => c?.operaciones ?? 0
+  if (cuantas(oficial) <= 0 && cuantas(variante) <= 0) return null
+  const detalle = (quien: string, c: Metricas['cerradas_fin_ventana']) =>
+    `${quien} ${cuantas(c)}${cuantas(c) > 0 ? ` · ${usd(c!.neto_usd)}` : ''}`
   return (
     <li
       className={`${CHIP} bg-surface-2 text-ink-2`}
-      title={`${quien}: lo que seguía abierto al terminar la ventana probada se cerró a la fuerza; no cuenta en las operaciones, el acierto, el neto ni las horas`}
+      title={`Cerradas a la fuerza al final de la ventana (no cuentan en las métricas): ${detalle('oficial', oficial)}; ${detalle('variante', variante)}`}
     >
-      <span className="sr-only">{quien}: </span>
+      <span aria-hidden="true">○</span>
+      Fin de ventana
       <span className="font-mono">
-        {`${operaciones} ${operaciones === 1 ? 'cerrada' : 'cerradas'} al final de la ventana · ${usd(neto)}`}
+        {cuantas(oficial)} · {cuantas(variante)}
       </span>
     </li>
   )
@@ -236,14 +236,7 @@ function Condiciones({ informe }: { informe: Informe }) {
           </li>
         )
       })}
-      <CerradasAlFinal
-        quien="Oficial"
-        cerradas={informe.oficial.metricas.cerradas_fin_ventana}
-      />
-      <CerradasAlFinal
-        quien="Variante"
-        cerradas={informe.variante.metricas.cerradas_fin_ventana}
-      />
+      <CerradasAlFinal informe={informe} />
     </ul>
   )
 }
@@ -264,7 +257,7 @@ export default function ResultadoComparacion({
       <div
         role="group"
         aria-label="Neto del backtest"
-        className="grid gap-2.5 border-y border-solid border-line py-3"
+        className="grid gap-2 border-y border-solid border-line py-2"
       >
         <Barra
           quien="Oficial"
@@ -283,9 +276,13 @@ export default function ResultadoComparacion({
           largo={largoVariante}
         />
       </div>
-      <VelasConOperaciones api={api} informe={informe} />
+      <VelasConOperaciones
+        key={`${informe.estrategia.id}|${informe.variante.config_hash}`}
+        api={api}
+        informe={informe}
+      />
       <Tiles informe={informe} />
-      <div className="flex flex-wrap items-center justify-between gap-4 border-t border-solid border-line pt-4">
+      <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 border-t border-solid border-line pt-3">
         <Condiciones informe={informe} />
         <span className="flex gap-2">
           <button

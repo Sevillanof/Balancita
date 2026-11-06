@@ -145,7 +145,7 @@ historial. No tiene título: la barra superior dice dónde se está. Diseño: `d
   variante vuelve a «Sin probar» hasta que se corra de nuevo.
 - **Derecha**: la variante elegida. Barra de etapas **Backtest → Sombra → Promover** (Sombra y Promover aparecen deshabilitadas con
   «próximamente»: son T5/S6); barras de neto Oficial (azul) y Variante (ámbar) con el número de operaciones dentro; el gráfico
-  de **velas de ETH con las operaciones** (ver abajo); cuatro tarjetas (Neto por operación, Acierto, Peor caída, Horas promedio con la diferencia) y el pie con la
+  de **velas de ETH con las operaciones** (ver abajo, una operación a la vez o varias); cuatro tarjetas (Neto por operación, Acierto, Peor caída, Horas promedio con la diferencia) y el pie con la
   ventana, «Reserva intacta» y las condiciones que el backtest no reproduce (Noticias, Libro, Posicionamiento, tachadas con su
   motivo en el tooltip, según `limites` del informe), **Ver operaciones** (lista de operaciones de la variante o de la oficial) y
   **Volver a correr**. Sin resultado se muestra el motivo: nunca probada (botón **Correr backtest**), corriendo, con error o sin
@@ -153,22 +153,42 @@ historial. No tiene título: la barra superior dice dónde se está. Diseño: `d
 - **Nueva variante** (panel en lugar del detalle): nombre y las perillas permitidas que devuelve `GET /estrategias`, cada una con
   su «hoy X». Los valores se muestran en la unidad habitual (2160 min → 36 h, 0,33 → 33 %) y se envían en la del servidor. Solo se
   envía lo que difiere de hoy; la descripción es el resumen del cambio. Al crearla se arranca su backtest.
-- **Velas con operaciones** (diseño `design/estrategias-laboratorio/08-velas-con-operaciones.html`; reemplaza a la curva «Saldo
-  acumulado»): velas de ETH como las de la Terminal (`lightweight-charts`, tokens del proyecto) con las operaciones de la **oficial
-  (azul)** y de la **variante (ámbar)** encima. Por operación: **▲ LONG / ▼ SHORT** en la entrada (sobre el cierre de la vela que
-  la contiene; las dos configuraciones se emparejan por instante de entrada y lado), una **línea horizontal** de la entrada a la
-  salida de cada configuración (la de la variante 4 px más abajo para que no se tapen), **●** en cada salida y **✕** ámbar donde la
-  variante la cortó por el tope de horas (salió antes que la oficial con motivo `tiempo`). Al pasar el puntero: lado, fecha, horas
-  y neto de las dos y, si corresponde, «La variante la cortó por el tope de horas». Botones **15m / 1h / 4h / 1d** (1 h al
-  abrir, con los últimos ~10 días de la ventana) y casillas **Oficial / Variante** para ocultar una. Arrastrar o hacer zoom hacia
-  la izquierda pide velas más viejas (500 por página) hasta el inicio de la ventana probada. Una operación aparece cuando su vela
-  de entrada ya está cargada. Una operación que cerró el fin de la ventana probada (`fin_examen`) se dibuja aparte: **línea
-  punteada** y **○ hueco** en la salida, y el puntero agrega «Oficial/Variante: cerrada al final de la ventana probada».
-- **Fichas de la prueba** (pie del resultado): además de ventana, reserva y condiciones, una ficha por configuración con
-  «N cerradas al final de la ventana · ±X US$» cuando `cerradas_fin_ventana.operaciones > 0` (no aparece con 0 ni en un informe
-  anterior). «Ver operaciones» sigue listándolas (motivo «Fin de la ventana») y avisa cuántas no cuentan.
+- **Velas con operaciones** (diseño `design/estrategias-laboratorio/09-lineas-que-se-separan.html`; reemplaza al gráfico de
+  `lightweight-charts` de la dirección 08 y a la curva «Saldo acumulado»). Es un SVG propio, con los tokens del proyecto, que se
+  ajusta al alto de su panel (sin logo de TradingView). Arriba: **‹ ›**, «Operación N de M», **▲ LONG / ▼ SHORT**, fecha y
+  «entra HH:MM», el selector **Una operación | Varias** y la leyenda en una línea (Oficial azul, Variante ámbar, Ideal verde). Abajo:
+  una línea de ayuda y la temporalidad **15m / 1h / 4h / 1d** (1 h al abrir). Las dos configuraciones se emparejan por instante de
+  entrada y lado; una operación que solo hizo una de las dos se muestra igual (la otra salida falta y el panel dice «—» / «no operó»).
+  Abre en la operación del medio de la lista (la primera que la variante cortó, si la hay).
+  - **Una operación** (por defecto): velas solo alrededor de la operación (10 h antes de la entrada, 8 h después de la última
+    salida), una banda mientras estuvo abierta, la **línea punteada** del precio de entrada con su píldora «entrada 2.034,00», el
+    triángulo de entrada y **tres salidas** con una píldora con su neto en US$ cada una: Oficial ●, Variante ● e Ideal ★. Las
+    píldoras no se pisan. Panel a la derecha: neto (verde/rojo), horas y motivo de cada salida (oficial: «tope 36 h» o «regla de
+    salida»; variante: «tope 30 h» —el de su `guardrails.max_hold_min`— o «igual que la oficial»; ideal: «mejor precio posible») y la caja
+    punteada **«Le faltó a la oficial»** = ideal − oficial, «contra la ideal».
+  - **Varias**: velas de unos 5 días centradas en la operación elegida y, debajo, **una barra redondeada por operación** (de la
+    entrada a la salida oficial) en filas que no se pisan (carriles), verde si la oficial ganó y roja si perdió, con «▲/▼ neto»,
+    una **raya ámbar** donde salió la variante si fue en otro momento, la elegida con borde, y un punteado de cada barra al precio de
+    entrada sobre las velas. Un clic (o Enter/Espacio) en una barra la elige y pasa a «Una operación».
+  - **Salida ideal**: el mejor precio posible mientras la operación podía seguir abierta: el máximo (LONG) o el mínimo (SHORT) de las
+    velas entre la entrada y entrada + 36 h (el tope de la oficial). Solo cuentan velas que caen enteras en ese tramo; la que contiene
+    la entrada solo aporta su cierre y el precio de entrada, y la que abre en el tope queda fuera. Nunca queda peor que el precio al
+    que salió la oficial o la variante dentro del tope. **Su neto** = neto de la oficial + `nocional × (precio ideal − precio de la
+    salida oficial) / precio de entrada` (± según el lado): mismo tamaño y mismos costos que la oficial, porque el informe no trae
+    comisiones ni precios por operación. Los precios de entrada y salida salen de las velas (interpolando entre apertura y cierre
+    dentro de la vela), por eso son aproximados con velas de 4 h o 1 d; los netos de la oficial y la variante son los del backtest.
+    Si el informe no trae `nocional_usd` (informe anterior), el neto ideal y «Le faltó» muestran «—».
+  - Solo se pide **una consulta de velas por operación elegida y temporalidad**, para el tramo que ve el modo «Una operación» o
+    «Varias» (la ventana ±60 h, y más si la temporalidad es gruesa), siempre dentro de la ventana probada.
+- **Fichas de la prueba** (pie del resultado): además de ventana, reserva y condiciones, **una sola** ficha «○ Fin de ventana 2 · 2»
+  (oficial · variante) cuando alguna de las dos tiene `cerradas_fin_ventana.operaciones > 0`; el tooltip dice «Cerradas a la fuerza
+  al final de la ventana (no cuentan en las métricas): oficial 2 · +1,00 US$; variante 2 · +0,97 US$». No aparece con 0 ni en un
+  informe anterior. «Ver operaciones» sigue listándolas (motivo «Fin de la ventana») y avisa cuántas no cuentan.
 - **La ventana del gráfico es la de la comparación**: del `ventana.desde_efectivo_ms` al `ventana.hasta_ms` del informe (nunca
-  antes ni desde la reserva, 2026-04-19). Lo exige el servidor (abajo) y también la página, que descarta cualquier vela fuera de ella.
+  antes ni desde la reserva, 2026-04-19). Lo exige el servidor (abajo) y también la página, que recorta el cursor a esa ventana y
+  descarta cualquier vela fuera de ella.
+- **Alto**: en pantallas de menos de ~860 px de alto el panel de detalle compacta espacios para que el gráfico, las tarjetas y los
+  botones quepan dentro del panel a 1280×800; si aun así no cupieran, el panel se desplaza por dentro (nada queda fuera de él).
 
 ### `GET /api-strategies/estrategias/velas/<producto>/<intervalo>/<desde_ms>/<hasta_ms>/<antes_ms>/<limite>`
 

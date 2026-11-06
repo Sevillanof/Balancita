@@ -63,6 +63,7 @@ const operaciones = (netos: number[], horas = 20) =>
       neto_usd: neto,
       neto_bp: neto * 10,
       motivo: 'tiempo',
+      nocional_usd: 300,
     }
   })
 const metricas = (patch: object) => ({
@@ -307,7 +308,7 @@ test('Estrategias lists the variants and draws the comparison of the chosen one'
   await expect(page.getByRole('dialog')).toHaveCount(0)
 })
 
-test('Estrategias draws the ETH candles of the tested window with the trades of both configurations', async ({
+test('Estrategias draws one trade at a time on the ETH candles of the tested window, with the exits of the official, the variant and the ideal', async ({
   page,
 }) => {
   await mockRegistry(page)
@@ -315,66 +316,114 @@ test('Estrategias draws the ETH candles of the tested window with the trades of 
   const detalle = page.getByRole('region', {
     name: /Detalle de «Salida a 30 h»/,
   })
-  const velas = detalle.getByRole('img', { name: /Velas de ETH/ })
-  await expect(velas).toBeVisible()
-  await expect(velas.locator('canvas').first()).toBeVisible()
+  const una = detalle.getByRole('img', { name: /Velas de ETH alrededor/ })
+  await expect(una).toBeVisible()
+  await expect(detalle.getByTestId('velas')).toBeVisible()
 
-  // First request: the tested window, 1 h, the last ten days (240 candles) before its end, never the reserve.
+  // The chart asks once for the stretch around the chosen trade (the 4th of 6), inside the tested window, never the reserve.
   await expect
     .poll(() => consultasVelas[0])
-    .toBe(`/estrategias/velas/PF_ETHUSD/1h/${DESDE}/${HASTA}/${HASTA}/240`)
+    .toBe(
+      `/estrategias/velas/PF_ETHUSD/1h/${DESDE}/${HASTA}/${HASTA - 30 * HORA}/121`,
+    )
 
-  // The trades of the official (blue) and the variant (amber) are drawn on top; the variant cut at the time cap shows ✕.
-  const operacionesDibujadas = detalle.getByTestId('operacion-en-velas')
-  await expect(operacionesDibujadas.first()).toBeVisible()
-  await expect
-    .poll(() => operacionesDibujadas.count())
-    .toBeGreaterThanOrEqual(5)
+  // Header: ‹ ›, «Operación N de M», side, date, mode toggle and a one-line legend.
+  await expect(detalle.getByText('Operación 4 de 6')).toBeVisible()
+  await expect(detalle.getByText('▲ LONG')).toBeVisible()
   await expect(
-    detalle.locator(
-      '[data-testid="operacion-en-velas"] [data-quien="oficial"]',
-    ),
-  ).not.toHaveCount(0)
-  await expect(
-    detalle.locator(
-      '[data-testid="operacion-en-velas"] [data-quien="variante"]',
-    ),
-  ).not.toHaveCount(0)
-  await expect(detalle.getByTestId('corte-variante').first()).toBeVisible()
+    detalle.getByRole('button', { name: 'Una operación' }),
+  ).toHaveAttribute('aria-pressed', 'true')
+  const leyenda = detalle.getByLabel('Leyenda')
+  await expect(leyenda).toHaveText('OficialVarianteIdeal')
+  const cajaLeyenda = (await leyenda.boundingBox())!
+  expect(cajaLeyenda.height).toBeLessThan(24)
 
-  // The checkboxes hide a configuration.
-  await detalle.getByRole('checkbox', { name: 'Variante' }).uncheck()
-  await expect(
-    detalle.locator(
-      '[data-testid="operacion-en-velas"] [data-quien="variante"]',
+  // Entry line, entry pill and one pill with the net per exit, none over another; the side panel has the three exits.
+  await expect(detalle.getByTestId('pildora-entrada')).toContainText('entrada')
+  for (const quien of ['oficial', 'variante', 'ideal'])
+    await expect(detalle.getByTestId(`pildora-${quien}`)).toBeVisible()
+  const cajas = await Promise.all(
+    ['entrada', 'oficial', 'variante', 'ideal'].map(
+      async (q) => (await detalle.getByTestId(`pildora-${q}`).boundingBox())!,
     ),
-  ).toHaveCount(0)
-  await detalle.getByRole('checkbox', { name: 'Variante' }).check()
-  await expect(detalle.getByTestId('corte-variante').first()).toBeVisible()
+  )
+  for (let a = 0; a < cajas.length; a++)
+    for (let b = a + 1; b < cajas.length; b++) {
+      const p = cajas[a]!
+      const q = cajas[b]!
+      expect(
+        p.x < q.x + q.width &&
+          q.x < p.x + p.width &&
+          p.y < q.y + q.height &&
+          q.y < p.y + p.height,
+      ).toBe(false)
+    }
+  const panel = detalle.getByRole('list', { name: 'Resultado de cada salida' })
+  await expect(panel).toContainText('+27,7 US$')
+  await expect(panel).toContainText('tope 30 h')
+  await expect(panel).toContainText('mejor precio posible')
+  await expect(panel).toContainText('Le faltó a la oficial')
 
-  // The timeframe buttons ask for that interval.
+  // Inside its panel, nothing sticks out, and no TradingView logo.
+  const figura = (await detalle.locator('figure').boundingBox())!
+  const seccion = (await detalle.boundingBox())!
+  const svg = (await una.boundingBox())!
+  expect(svg.y + svg.height).toBeLessThanOrEqual(figura.y + figura.height)
+  expect(svg.x + svg.width).toBeLessThanOrEqual(figura.x + figura.width)
+  expect(figura.y + figura.height).toBeLessThanOrEqual(
+    seccion.y + seccion.height,
+  )
+  const volver = (await detalle
+    .getByRole('button', { name: 'Volver a correr' })
+    .boundingBox())!
+  expect(volver.y + volver.height).toBeLessThanOrEqual(
+    seccion.y + seccion.height,
+  )
+  await expect(page.locator('a[href*="tradingview"]')).toHaveCount(0)
+  await expect(page.getByText(/tradingview/i)).toHaveCount(0)
+  await shot(page, 'estrategias-una-operacion')
+
+  // ‹ › move between trades.
+  await detalle.getByRole('button', { name: 'Operación siguiente' }).click()
+  await expect(detalle.getByText('Operación 5 de 6')).toBeVisible()
+  await detalle.getByRole('button', { name: 'Operación anterior' }).click()
+  await detalle.getByRole('button', { name: 'Operación anterior' }).click()
+  await expect(detalle.getByText('Operación 3 de 6')).toBeVisible()
+  await expect(detalle.getByText('▲ LONG')).toBeVisible()
+
+  // «Varias»: one bar per trade under the candles; clicking one zooms into it.
+  await detalle.getByRole('button', { name: 'Varias' }).click()
+  await expect(
+    detalle.getByRole('group', { name: /Velas de ETH de unos cinco días/ }),
+  ).toBeVisible()
+  const barras = detalle.getByTestId('barra-operacion')
+  await expect.poll(() => barras.count()).toBeGreaterThanOrEqual(3)
+  // a vertical line has no width: it is in the DOM, drawn amber where the variant left at another moment
+  await expect(detalle.getByTestId('corte-variante')).not.toHaveCount(0)
+  await shot(page, 'estrategias-varias')
+  await barras.nth(1).locator('rect').click()
+  await expect(
+    detalle.getByRole('button', { name: 'Una operación' }),
+  ).toHaveAttribute('aria-pressed', 'true')
+  await expect(
+    detalle.getByRole('img', { name: /Velas de ETH alrededor/ }),
+  ).toBeVisible()
+  await expect(detalle.getByText(/^Operación \d de 6$/)).toBeVisible()
+
+  // The timeframe buttons ask for that interval, always inside the tested window.
   await detalle.getByRole('button', { name: '4h', exact: true }).click()
   await expect(
     detalle.getByRole('button', { name: '4h', exact: true }),
   ).toHaveAttribute('aria-pressed', 'true')
   await expect
     .poll(() => consultasVelas.at(-1))
-    .toBe(`/estrategias/velas/PF_ETHUSD/4h/${DESDE}/${HASTA}/${HASTA}/60`)
-
-  // Hovering a trade shows side, date, hours and net of both.
-  await detalle.getByRole('button', { name: '1h', exact: true }).click()
-  await expect(detalle.getByTestId('operacion-en-velas').first()).toBeVisible()
-  await shot(page, 'estrategias-velas')
-  const linea = detalle
-    .locator('[data-testid="operacion-en-velas"] line')
-    .first()
-  await velas.scrollIntoViewIfNeeded()
-  const caja = (await linea.boundingBox())!
-  await page.mouse.move(caja.x + caja.width / 2, caja.y + caja.height / 2)
-  await expect(page.getByRole('tooltip')).toContainText(/LONG|SHORT/)
-  await expect(page.getByRole('tooltip')).toContainText('Oficial')
-  await expect(page.getByRole('tooltip')).toContainText('Variante')
-  await shot(page, 'estrategias-velas-tooltip')
+    .toMatch(
+      new RegExp(
+        `^/estrategias/velas/PF_ETHUSD/4h/${DESDE}/${HASTA}/\\d+/\\d+$`,
+      ),
+    )
+  for (const ruta of consultasVelas)
+    expect(Number(ruta.split('/')[7])).toBeLessThanOrEqual(HASTA)
 })
 
 test('Estrategias creates a variant with only the allowed knobs and starts its backtest', async ({

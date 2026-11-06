@@ -155,7 +155,7 @@ export default function VarianteDetalle({
   return (
     <section
       aria-label={`Detalle de «${fila.nombre}»`}
-      className={`${PANEL} flex min-w-0 flex-none flex-col gap-5 p-6 shadow-menu from-1000:min-h-0 from-1000:flex-1`}
+      className={`${PANEL} flex min-w-0 flex-none flex-col gap-3 p-4 shadow-menu from-1000:min-h-0 from-1000:flex-1 from-1000:overflow-y-auto`}
     >
       <Etapas trabajo={fila.error ? null : trabajo} />
       {aviso && (

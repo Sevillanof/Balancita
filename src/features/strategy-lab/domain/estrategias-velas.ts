@@ -2,7 +2,7 @@ import type {
   IntervaloVelas,
   Informe,
 } from '../infrastructure/estrategias-api.ts'
-import { instanteCorto, numero, usd } from './estrategias-format.ts'
+import { numero } from './estrategias-format.ts'
 
 export type { IntervaloVelas }
 
@@ -24,11 +24,9 @@ export const INTERVALOS_VELAS: ReadonlyArray<{
 
 export const INTERVALO_INICIAL: IntervaloVelas = '1h'
 
-const DIA_MS = 86_400_000
-const HORA_MS = 3_600_000
-const DIAS_INICIALES = 10
-const MIN_POR_PAGINA = 500
-const MAX_VELAS = 5000
+export const HORA_MS = 3_600_000
+/** The most candles the server sends in one answer. */
+export const MAX_VELAS = 5000
 
 export const segundosDe = (intervalo: IntervaloVelas) =>
   INTERVALOS_VELAS.find((i) => i.id === intervalo)!.segundos
@@ -59,18 +57,14 @@ export function ventanaDeInforme(informe: Informe): {
   }
 }
 
-/** The view opens on the last ten days of the window. */
-export const velasIniciales = (intervalo: IntervaloVelas) =>
-  Math.ceil((DIAS_INICIALES * DIA_MS) / (segundosDe(intervalo) * 1000))
-
-/** Scrolling back asks for more than the first load; the server caps it at 5000. */
-export const velasPorPagina = (intervalo: IntervaloVelas) =>
-  Math.min(MAX_VELAS, Math.max(MIN_POR_PAGINA, velasIniciales(intervalo)))
-
 // --------------------------------------------------------------------------- trades of both configurations
 
 export type Quien = 'oficial' | 'variante'
-export type Visibilidad = Record<Quien, boolean>
+export type Salida = Quien | 'ideal'
+
+/** The official Terminal closes by force after this many hours (`guardrails.max_hold_min` 2160 of the snapshot). */
+export const TOPE_OFICIAL_H = 36
+export const TOPE_OFICIAL_MS = TOPE_OFICIAL_H * HORA_MS
 
 export type TramoOperacion = {
   salidaMs: number
@@ -80,6 +74,10 @@ export type TramoOperacion = {
   cortada: boolean
   /** Closed by force at the end of the tested window; only present when true. */
   finVentana?: true
+  /** Why the replay closed it (`tiempo`, `maestro_vuelta`, `fin_examen`…). */
+  motivo: string
+  /** Position size, when the server sends it. */
+  nocionalUsd: number | null
 }
 
 /** The same entry as the official Terminal and the variant took it (either side may be missing). */
@@ -102,6 +100,8 @@ const tramo = (
   horas: (operacion.salida_ms - operacion.entrada_ms) / HORA_MS,
   cortada,
   ...(operacion.motivo === MOTIVO_FIN_VENTANA && { finVentana: true as const }),
+  motivo: operacion.motivo,
+  nocionalUsd: operacion.nocional_usd ?? null,
 })
 
 const claveDe = (o: OperacionInforme) => `${o.entrada_ms}|${o.lado}`
@@ -151,72 +151,29 @@ export function emparejar(informe: Informe): ParOperacion[] {
   return pares.sort((a, b) => a.entradaMs - b.entradaMs)
 }
 
-export type TramoVisible = {
-  quien: Quien
-  salidaMs: number
-  cortada: boolean
-  finVentana?: true
+/** The trade the chart opens on: the first one the variant cut at or after the middle of the list, else the middle one. */
+export function operacionInicial(pares: readonly ParOperacion[]): number {
+  const medio = Math.floor(pares.length / 2)
+  const cortada = pares.findIndex(
+    (par, i) => i >= medio && par.variante?.cortada,
+  )
+  return cortada >= 0 ? cortada : medio
 }
 
-export type MarcaOperacion = {
-  par: ParOperacion
-  tramos: TramoVisible[]
+/** The cap of hours the variant changed (`guardrails.max_hold_min`), `null` when it kept the official one. */
+export function topeVarianteDeInforme(informe: Informe): number | null {
+  const guardrails = informe.estrategia.cambios.guardrails
+  if (typeof guardrails !== 'object' || guardrails === null) return null
+  const minutos = guardrails.max_hold_min
+  return typeof minutos === 'number' ? minutos / 60 : null
 }
 
-/** What the checkboxes leave on the chart: a trade stays while at least one of its two lines is visible. */
-export function marcas(
-  pares: readonly ParOperacion[],
-  visibles: Visibilidad,
-): MarcaOperacion[] {
-  const out: MarcaOperacion[] = []
-  for (const par of pares) {
-    const tramos: TramoVisible[] = []
-    for (const quien of ['oficial', 'variante'] as const) {
-      const lado = par[quien]
-      if (visibles[quien] && lado)
-        tramos.push({
-          quien,
-          salidaMs: lado.salidaMs,
-          cortada: lado.cortada,
-          ...(lado.finVentana && { finVentana: true as const }),
-        })
-    }
-    if (tramos.length > 0) out.push({ par, tramos })
-  }
-  return out
-}
+// --------------------------------------------------------------------------- what the chart shows around one trade
 
-// --------------------------------------------------------------------------- projection on the chart
+const sentido = (lado: 'LONG' | 'SHORT') => (lado === 'LONG' ? 1 : -1)
 
-/** How the chart places instants and prices; `null` when it cannot (outside what it knows). */
-export type MapaProyeccion = {
-  ancho: number
-  alto: number
-  tiempo: (ms: number) => number | null
-  precio: (precio: number) => number | null
-}
-
-/** The variant's line sits a few pixels under the official one so both stay readable when they overlap. */
-export const DESPLAZAMIENTO_VARIANTE_PX = 4
-
-export type TramoProyectado = {
-  quien: Quien
-  x2: number
-  y: number
-  cortada: boolean
-  finVentana?: true
-}
-
-export type OperacionProyectada = {
-  par: ParOperacion
-  lado: 'LONG' | 'SHORT'
-  x: number
-  y: number
-  tramos: TramoProyectado[]
-}
-
-/** The close of the candle that holds `ms` (the price the entry marker sits on); `null` if it is not loaded. */
-export function precioEnVela(
+/** The price at an instant: the candle that holds it, between its open and its close in proportion; `null` if not loaded. */
+export function precioEnInstante(
   velas: readonly Vela[],
   ms: number,
   pasoMs: number,
@@ -230,133 +187,343 @@ export function precioEnVela(
     else alto = medio - 1
   }
   const vela = velas[bajo]!
-  return vela.t <= ms && ms < vela.t + pasoMs ? vela.c : null
+  if (!(vela.t <= ms && ms < vela.t + pasoMs)) return null
+  return vela.o + ((vela.c - vela.o) * (ms - vela.t)) / pasoMs
 }
 
-export function proyectar(
-  marcasVisibles: readonly MarcaOperacion[],
+export type PuntoIdeal = { salidaMs: number; precio: number }
+
+/**
+ * The best price a trade could have exited at while it was allowed to stay open: the highest high (LONG) or lowest low (SHORT)
+ * from the entry up to `entradaMs + topeMs` (36 h by default, the official cap). Only candles that lie inside that stretch
+ * count; the candle that holds the entry (opened before it) only offers its close and the entry price, since its high or low may
+ * have happened before the entry. A candle that opens at the cap or later is out. `null` when there is no candle to look at.
+ */
+export function salidaIdeal(
   velas: readonly Vela[],
+  entrada: { ms: number; px: number; lado: 'LONG' | 'SHORT' },
   pasoMs: number,
-  mapa: MapaProyeccion,
-): OperacionProyectada[] {
-  const items: OperacionProyectada[] = []
-  for (const { par, tramos } of marcasVisibles) {
-    const precio = precioEnVela(velas, par.entradaMs, pasoMs)
-    if (precio === null) continue
-    const x = mapa.tiempo(par.entradaMs)
-    const y = mapa.precio(precio)
-    if (x === null || y === null) continue
-    const proyectados: TramoProyectado[] = []
-    for (const t of tramos) {
-      const x2 = mapa.tiempo(t.salidaMs)
-      if (x2 === null) continue
-      proyectados.push({
-        quien: t.quien,
-        x2,
-        y: t.quien === 'variante' ? y + DESPLAZAMIENTO_VARIANTE_PX : y,
-        cortada: t.cortada,
-        ...(t.finVentana && { finVentana: true as const }),
-      })
-    }
-    if (proyectados.length === 0) continue
-    const fin = Math.max(x, ...proyectados.map((t) => t.x2))
-    if (fin < 0 || x > mapa.ancho) continue
-    items.push({ par, lado: par.lado, x, y, tramos: proyectados })
+  topeMs = TOPE_OFICIAL_MS,
+): PuntoIdeal | null {
+  const signo = sentido(entrada.lado)
+  const fin = entrada.ms + topeMs
+  let mejor: PuntoIdeal | null = null
+  const probar = (salidaMs: number, precio: number) => {
+    if (mejor === null || signo * (precio - mejor.precio) > 0)
+      mejor = { salidaMs, precio }
   }
-  return items
-}
-
-const RADIO_ACIERTO_PX = 10
-const MARGEN_X_PX = 8
-
-/** The trade under the pointer (its entry mark or either line); the nearest line wins, a later entry breaks ties. */
-export function buscarOperacion(
-  items: readonly OperacionProyectada[],
-  x: number,
-  y: number,
-): OperacionProyectada | null {
-  let mejor: OperacionProyectada | null = null
-  let distancia = Infinity
-  for (const item of items) {
-    for (const t of item.tramos) {
-      const lejos = Math.abs(t.y - y)
-      if (
-        lejos > RADIO_ACIERTO_PX ||
-        x < Math.min(item.x, t.x2) - MARGEN_X_PX ||
-        x > Math.max(item.x, t.x2) + MARGEN_X_PX
+  for (const vela of velas) {
+    if (vela.t + pasoMs <= entrada.ms || vela.t + pasoMs > fin) continue
+    if (vela.t < entrada.ms)
+      probar(
+        entrada.ms,
+        signo > 0 ? Math.max(entrada.px, vela.c) : Math.min(entrada.px, vela.c),
       )
-        continue
-      const desempata =
-        lejos === distancia && item.par.entradaMs > (mejor?.par.entradaMs ?? 0)
-      if (lejos < distancia || desempata) {
-        mejor = item
-        distancia = lejos
-      }
-    }
+    else probar(vela.t, signo > 0 ? vela.h : vela.l)
   }
   return mejor
 }
 
-// --------------------------------------------------------------------------- tooltip
-
-export type FilaTooltip = {
-  quien: Quien
-  etiqueta: string
-  neto: string
-  tono: 'long' | 'short' | 'neutral'
+/**
+ * What a position of `nocional` US$ gains (or loses) by exiting at `haciaPx` instead of `desdePx`, having entered at `entradaPx`.
+ * Fees, costs and funding are the same for both exits, so this is exactly the difference between their nets.
+ */
+export function mejoraDeSalida(
+  nocional: number,
+  lado: 'LONG' | 'SHORT',
+  entradaPx: number,
+  desdePx: number,
+  haciaPx: number,
+): number {
+  return (nocional * sentido(lado) * (haciaPx - desdePx)) / entradaPx
 }
 
-export type ContenidoTooltip = {
-  titulo: string
-  filas: FilaTooltip[]
-  aviso?: string
-  /** One per visible configuration whose trade the end of the tested window closed. */
-  avisosFin?: string[]
+export type SalidaDetalle = {
+  quien: Salida
+  salidaMs: number
+  precio: number
+  /** `null` when the size is unknown (an informe from before the server sent it) and the ideal cannot be priced. */
+  netoUsd: number | null
+  horas: number
+  motivo: string
 }
 
-const NOMBRE: Record<Quien, string> = {
-  oficial: 'Oficial',
-  variante: 'Variante',
+export type DetalleOperacion = {
+  par: ParOperacion
+  entradaPx: number
+  /** `null` = that exit does not exist (the configuration did not take the trade, or no candle to look at). */
+  salidas: Record<Salida, SalidaDetalle | null>
+  /** What the official one left on the table: ideal − official net, both with the same size and cost model. */
+  faltoUsd: number | null
 }
 
-export function contenidoTooltip(
+/** Rounding noise of the price round trip must not read as «−0,0». */
+const sinRuido = (valor: number) => (Math.abs(valor) < 1e-9 ? 0 : valor)
+
+const horasTexto = (horas: number) => `${numero(horas, 0)} h`
+
+function motivoDe(
+  quien: Quien,
   par: ParOperacion,
-  visibles: Visibilidad,
-): ContenidoTooltip {
-  const filas: FilaTooltip[] = []
-  for (const quien of ['oficial', 'variante'] as const) {
-    if (!visibles[quien]) continue
-    const lado = par[quien]
-    filas.push(
-      lado
-        ? {
-            quien,
-            etiqueta: `${NOMBRE[quien]} · ${numero(lado.horas, 1)} h`,
-            neto: usd(lado.netoUsd),
-            tono:
-              lado.netoUsd > 0
-                ? 'long'
-                : lado.netoUsd < 0
-                  ? 'short'
-                  : 'neutral',
-          }
-        : {
-            quien,
-            etiqueta: `${NOMBRE[quien]} · no operó`,
-            neto: '—',
-            tono: 'neutral',
-          },
+  topes: { oficialH: number; varianteH: number | null },
+): string {
+  const t = par[quien]!
+  if (quien === 'variante') {
+    if (t.cortada) return `tope ${horasTexto(topes.varianteH ?? t.horas)}`
+    if (par.oficial && par.oficial.salidaMs === t.salidaMs)
+      return 'igual que la oficial'
+  }
+  if (t.finVentana) return 'fin de la ventana'
+  if (t.motivo === 'tiempo')
+    return `tope ${horasTexto(quien === 'oficial' ? topes.oficialH : (topes.varianteH ?? topes.oficialH))}`
+  return 'regla de salida'
+}
+
+/**
+ * The three exits of one trade. The official and the variant keep the net the backtest recorded (fees, funding and fills
+ * included) and sit at the candle price of their exit instant. The ideal is the best price within the official cap; its net is
+ * the net of the official trade plus what moving the exit from its price to the ideal one gains with the same size, so the
+ * same costs apply (the informe has no per-trade fees or prices to price it any other way). `null` when the entry candle is not
+ * loaded.
+ */
+export function detalleDeOperacion(
+  par: ParOperacion,
+  velas: readonly Vela[],
+  pasoMs: number,
+  opciones: { topeVarianteH?: number | null } = {},
+): DetalleOperacion | null {
+  const entradaPx = precioEnInstante(velas, par.entradaMs, pasoMs)
+  if (entradaPx === null) return null
+  const topes = {
+    oficialH: TOPE_OFICIAL_H,
+    varianteH: opciones.topeVarianteH ?? null,
+  }
+  const real = (quien: Quien): SalidaDetalle | null => {
+    const t = par[quien]
+    if (!t) return null
+    return {
+      quien,
+      salidaMs: t.salidaMs,
+      precio: precioEnInstante(velas, t.salidaMs, pasoMs) ?? entradaPx,
+      netoUsd: t.netoUsd,
+      horas: t.horas,
+      motivo: motivoDe(quien, par, topes),
+    }
+  }
+  const oficial = real('oficial')
+  const variante = real('variante')
+  const signo = sentido(par.lado)
+  let punto = salidaIdeal(
+    velas,
+    { ms: par.entradaMs, px: entradaPx, lado: par.lado },
+    pasoMs,
+  )
+  // A price a recorded trade really got inside the cap is reachable: the ideal is never worse than either of them.
+  for (const s of [oficial, variante])
+    if (
+      s &&
+      s.salidaMs - par.entradaMs <= TOPE_OFICIAL_MS &&
+      (punto === null || signo * (s.precio - punto.precio) > 0)
     )
+      punto = { salidaMs: s.salidaMs, precio: s.precio }
+  // The size and costs of the official trade (the variant's when the official one did not take it) are the ideal's.
+  const base = oficial ?? variante
+  const baseTramo = par.oficial ?? par.variante
+  const nocional = baseTramo?.nocionalUsd ?? null
+  const ideal: SalidaDetalle | null = punto && {
+    quien: 'ideal',
+    salidaMs: punto.salidaMs,
+    precio: punto.precio,
+    netoUsd:
+      base && nocional !== null && nocional > 0
+        ? base.netoUsd! +
+          mejoraDeSalida(
+            nocional,
+            par.lado,
+            entradaPx,
+            base.precio,
+            punto.precio,
+          )
+        : null,
+    horas: (punto.salidaMs - par.entradaMs) / HORA_MS,
+    motivo: 'mejor precio posible',
   }
-  const contenido: ContenidoTooltip = {
-    titulo: `${par.lado === 'LONG' ? '▲' : '▼'} ${par.lado} · ${instanteCorto(par.entradaMs)}`,
-    filas,
+  return {
+    par,
+    entradaPx,
+    salidas: { oficial, variante, ideal },
+    faltoUsd:
+      oficial && ideal?.netoUsd != null
+        ? sinRuido(ideal.netoUsd - oficial.netoUsd!)
+        : null,
   }
-  if (visibles.variante && par.variante?.cortada)
-    contenido.aviso = 'La variante la cortó por el tope de horas'
-  const fin = (['oficial', 'variante'] as const)
-    .filter((quien) => visibles[quien] && par[quien]?.finVentana)
-    .map((quien) => `${NOMBRE[quien]}: cerrada al final de la ventana probada`)
-  if (fin.length > 0) contenido.avisosFin = fin
-  return contenido
+}
+
+// --------------------------------------------------------------------------- which candles to ask for and show
+
+export type RangoMs = { desdeMs: number; hastaMs: number }
+
+const MARGEN_ANTES_UNA_MS = 10 * HORA_MS
+const MARGEN_DESPUES_UNA_MS = 8 * HORA_MS
+const MEDIA_VENTANA_VARIAS_MS = 60 * HORA_MS
+/** At a coarse interval the margins grow so that there are still some candles around the trade. */
+const MIN_VELAS_MARGEN = 8
+const MIN_VELAS_MEDIA_VARIAS = 20
+
+/** «Una operación»: ten hours before the entry and eight after the last exit (at least eight candles each side). */
+export function rangoUna(
+  par: ParOperacion,
+  idealMs: number | null,
+  pasoMs: number,
+): RangoMs {
+  const fin = Math.max(
+    par.entradaMs,
+    par.oficial?.salidaMs ?? 0,
+    par.variante?.salidaMs ?? 0,
+    idealMs ?? 0,
+  )
+  return {
+    desdeMs:
+      par.entradaMs - Math.max(MARGEN_ANTES_UNA_MS, MIN_VELAS_MARGEN * pasoMs),
+    hastaMs: fin + Math.max(MARGEN_DESPUES_UNA_MS, MIN_VELAS_MARGEN * pasoMs),
+  }
+}
+
+/** «Varias»: about five days centred on the entry of the chosen trade (at least forty candles). */
+export function rangoVarias(par: ParOperacion, pasoMs: number): RangoMs {
+  const media = Math.max(
+    MEDIA_VENTANA_VARIAS_MS,
+    MIN_VELAS_MEDIA_VARIAS * pasoMs,
+  )
+  return { desdeMs: par.entradaMs - media, hastaMs: par.entradaMs + media }
+}
+
+/** What to load for a trade so that both modes (and its ideal exit, up to the official cap) have their candles. */
+export function rangoDeCarga(par: ParOperacion, pasoMs: number): RangoMs {
+  const una = rangoUna(par, par.entradaMs + TOPE_OFICIAL_MS, pasoMs)
+  const varias = rangoVarias(par, pasoMs)
+  return {
+    desdeMs: Math.min(una.desdeMs, varias.desdeMs),
+    hastaMs: Math.max(una.hastaMs, varias.hastaMs),
+  }
+}
+
+/**
+ * The server answers «the newest `limite` candles before `antesMs`» inside the tested window: this turns a range into that
+ * query, never reaching outside the window (the end of the window is the end of what is known, the reserve starts there).
+ */
+export function consultaDeRango(
+  rango: RangoMs,
+  ventana: RangoMs,
+  pasoMs: number,
+): { antesMs: number; limite: number } {
+  const antesMs = Math.min(rango.hastaMs, ventana.hastaMs)
+  const desde = Math.max(rango.desdeMs, ventana.desdeMs)
+  return {
+    antesMs,
+    limite: Math.min(
+      MAX_VELAS,
+      Math.max(1, Math.ceil((antesMs - desde) / pasoMs) + 1),
+    ),
+  }
+}
+
+// --------------------------------------------------------------------------- layout
+
+/**
+ * Rows for horizontal bars so that none touches another in the same row: bars go in order of start, each one in the first row
+ * whose last bar ended at or before its start. Returns the row (0-based) of each input, in the input order.
+ */
+export function asignarCarriles(
+  items: ReadonlyArray<{ inicio: number; fin: number }>,
+): number[] {
+  const orden = items
+    .map((item, i) => ({ ...item, i }))
+    .sort((a, b) => a.inicio - b.inicio || a.i - b.i)
+  const finDeCarril: number[] = []
+  const carril = new Array<number>(items.length).fill(0)
+  for (const item of orden) {
+    let c = 0
+    while (finDeCarril[c] !== undefined && finDeCarril[c]! > item.inicio) c++
+    finDeCarril[c] = item.fin
+    carril[item.i] = c
+  }
+  return carril
+}
+
+export type Pildora = {
+  /** Left edge. */
+  x0: number
+  ancho: number
+  /** Centre line the caller would like. */
+  y: number
+  /** Which way to move first when it collides: 1 = down, −1 = up. */
+  hacia: 1 | -1
+}
+
+/** A fixed box a pill must stay clear of (a marker on the chart). */
+export type Obstaculo = { x0: number; ancho: number; y: number; alto: number }
+
+/**
+ * Moves pills vertically, in order, until none overlaps one placed before it (a placed pill never moves) nor an obstacle, and
+ * all stay between `ymin` and `ymax`. Returns the centre line of each, in the input order. If nothing free is left the wanted
+ * one is kept.
+ */
+export function ubicarPildoras(
+  pildoras: readonly Pildora[],
+  {
+    alto,
+    ymin,
+    ymax,
+    obstaculos = [],
+  }: { alto: number; ymin: number; ymax: number; obstaculos?: Obstaculo[] },
+): number[] {
+  const ocupadas: Obstaculo[] = [...obstaculos]
+  const libre = (p: Pildora, y: number) =>
+    y >= ymin &&
+    y <= ymax &&
+    ocupadas.every(
+      (q) =>
+        p.x0 >= q.x0 + q.ancho ||
+        q.x0 >= p.x0 + p.ancho ||
+        Math.abs(q.y - y) >= (q.alto + alto) / 2,
+    )
+  const salida: number[] = []
+  const paso = alto + 2
+  const pasos = Math.ceil((ymax - ymin) / paso) + 1
+  for (const p of pildoras) {
+    let y = Math.min(ymax, Math.max(ymin, p.y))
+    search: for (let k = 0; k <= pasos; k++)
+      for (const dir of k === 0 ? [1] : [p.hacia, -p.hacia]) {
+        const candidato = p.y + dir * k * paso
+        if (libre(p, candidato)) {
+          y = candidato
+          break search
+        }
+      }
+    ocupadas.push({ x0: p.x0, ancho: p.ancho, y, alto })
+    salida.push(y)
+  }
+  return salida
+}
+
+/** Round prices for the horizontal grid: about `aprox` lines between `lo` and `hi` at 1, 2, 5 or 10 × a power of ten. */
+export function ticksDePrecio(lo: number, hi: number, aprox = 5): number[] {
+  if (!(hi > lo)) return []
+  const crudo = (hi - lo) / aprox
+  const potencia = 10 ** Math.floor(Math.log10(crudo))
+  const paso = [1, 2, 5, 10].map((m) => m * potencia).find((v) => v >= crudo)!
+  const ticks: number[] = []
+  for (let v = Math.ceil(lo / paso) * paso; v < hi; v += paso) ticks.push(v)
+  return ticks
+}
+
+const PASOS_EJE_HORAS = [1, 2, 3, 6, 12, 24, 48, 72, 168]
+
+/** How many hours between labels of the time axis so that a span carries about nine of them at most. */
+export function pasoEjeHoras(spanMs: number): number {
+  const horas = spanMs / HORA_MS
+  return (
+    PASOS_EJE_HORAS.find((paso) => horas / paso <= 9) ?? PASOS_EJE_HORAS.at(-1)!
+  )
 }
