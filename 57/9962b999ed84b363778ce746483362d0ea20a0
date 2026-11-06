@@ -1,0 +1,16 @@
+docs/archivo-parquet.md
+  h_92dd6654ceb221 122
+odd/tasks/datos-utiles.md
+  h_92dd6654ceb221 38
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "579962b999ed84b363778ce746483362d0ea20a0",
+  "prompts": {},
+  "humans": {
+    "h_92dd6654ceb221": {
+      "author": "Franco Sevillano <79455847+Sevillanof@users.noreply.github.com>"
+    }
+  }
+}
