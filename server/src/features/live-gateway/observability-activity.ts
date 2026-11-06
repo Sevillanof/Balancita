@@ -1,5 +1,9 @@
 import { basename } from 'node:path'
 import {
+  ENGINE_D_RETIRED_DETAIL,
+  engineDRetiredFromEnv,
+} from './engine-d-retired.ts'
+import {
   expectedPairs,
   num,
   readRegistry,
@@ -146,6 +150,11 @@ export interface ObservabilityActivityReport {
 export interface ObservabilityActivityOptions {
   readonly products: readonly string[]
   readonly verdictsDbPath?: string
+  /**
+   * The launcher did not start the old engine D: evaluations, signals and discards say «Motor D retirado»
+   * instead of counting zeros. Default: `FUTURES_ENGINE_D_RETIRED=1`.
+   */
+  readonly engineDRetired?: boolean
   readonly forwardDbPath?: string
   readonly strategiesDbPath?: string
   readonly forwardRegistrationPath?: string
@@ -441,7 +450,12 @@ export function createObservabilityActivity(
       const fromMs = toMs - span
       const scope = product ? [product] : options.products
 
-      const verdicts = readVerdicts(options, scope, fromMs, toMs)
+      // A retired engine's database is not read at all.
+      const retired =
+        options.engineDRetired ?? engineDRetiredFromEnv(process.env)
+      const verdicts: Opened<VerdictRead> = retired
+        ? { state: 'missing', detail: ENGINE_D_RETIRED_DETAIL }
+        : readVerdicts(options, scope, fromMs, toMs)
       const verdictRule = `filas de paper_futures_verdicts con bucket_start en [${window} hasta el minuto en curso); una por producto y minuto si el servicio escribe sin pausas`
       const verdictEvidence = evidenceOf(
         'paper_futures_verdicts',

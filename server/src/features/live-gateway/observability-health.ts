@@ -3,6 +3,10 @@ import { basename } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { isMalformedError } from '../../platform/sqlite-safety.ts'
 import { MARKET_EVENT_PRODUCTS } from '../kraken-futures/futures-market.ts'
+import {
+  ENGINE_D_RETIRED_DETAIL,
+  engineDRetiredFromEnv,
+} from './engine-d-retired.ts'
 
 /**
  * `GET /api/observability/health` (Mission Control B1): the state of six
@@ -81,6 +85,11 @@ export interface ObservabilityHealthOptions {
   readonly marketDbPath?: string
   readonly verdictsDbPath?: string
   readonly decisionsDbPath?: string
+  /**
+   * The launcher did not start the old engine D (verdict, scores, q): its checks are replaced by an explicit
+   * «Motor D retirado» instead of reading its silence as a failure. Default: `FUTURES_ENGINE_D_RETIRED=1`.
+   */
+  readonly engineDRetired?: boolean
   readonly forwardDbPath?: string
   readonly strategiesDbPath?: string
   /** `config/forward-strategies.json`: what the forward runner measures besides the registry. */
@@ -152,6 +161,16 @@ const CORE_PROCESSES = [
   'forward',
   'strategies',
 ] as const
+/** Engine D processes: not part of the pipeline once the launcher retires them (datos-utiles S7). */
+const ENGINE_D_PROCESSES: readonly string[] = ['verdict', 'scores', 'q']
+function coreProcesses(retired: boolean): readonly string[] {
+  return retired
+    ? CORE_PROCESSES.filter((name) => !ENGINE_D_PROCESSES.includes(name))
+    : CORE_PROCESSES
+}
+function isEngineDRetired(options: ObservabilityHealthOptions): boolean {
+  return options.engineDRetired ?? engineDRetiredFromEnv(process.env)
+}
 
 const RANK: Record<HealthStatus, number> = {
   ok: 0,
@@ -908,17 +927,19 @@ function processingComponent(
     }),
   )
   const items: Record<string, unknown>[] = []
+  const retired = isEngineDRetired(options)
+  const coreNames = coreProcesses(retired)
   for (const name of [...new Set([...CORE_PROCESSES, ...c.processes.keys()])]) {
     const state = processState(c, name)
     if (state === 'absent' || state === 'unknown') {
       items.push({
         process: name,
         state,
-        core: CORE_PROCESSES.includes(name as never),
+        core: coreNames.includes(name),
       })
       continue
     }
-    const core = (CORE_PROCESSES as readonly string[]).includes(name)
+    const core = coreNames.includes(name)
     const status: HealthStatus =
       state === 'running'
         ? 'ok'
@@ -954,7 +975,19 @@ function processingComponent(
       }),
     )
   const verdictProcess = processState(c, 'verdict')
-  if (verdicts.state !== 'read') {
+  if (retired) {
+    checks.push(
+      check({
+        id: 'engine_d_retired',
+        label: 'Motor D (verdicts, puntajes, decisiones LLM viejas)',
+        required: false,
+        status: 'ok',
+        value: 'retired',
+        rule: 'el lanzador no arranca verdict, scores ni q (ENGINE_D_ENABLED≠1): no se espera ningún verdict nuevo y su silencio no es un fallo',
+        detail: ENGINE_D_RETIRED_DETAIL,
+      }),
+    )
+  } else if (verdicts.state !== 'read') {
     checks.push(
       check({
         id: 'evaluations_continuity',
@@ -1033,6 +1066,35 @@ function decisionsComponent(
   verdicts: Opened<VerdictRead>,
 ): HealthComponent {
   const { now } = c
+  if (isEngineDRetired(options))
+    return makeComponent(
+      'decisions',
+      'Decisiones',
+      [
+        check({
+          id: 'engine_d_retired',
+          label: 'Motor D (decisiones C y Qwen viejo)',
+          status: 'unknown',
+          value: 'retired',
+          rule: 'el lanzador no arranca verdict, scores ni q (ENGINE_D_ENABLED≠1): sin cadencia que juzgar, nunca ok ni error',
+          detail: ENGINE_D_RETIRED_DETAIL,
+        }),
+      ],
+      [
+        {
+          source:
+            'motor D (paper_futures_verdicts, paper_futures_llm_decisions)',
+          origin: null,
+          last_updated_ms: null,
+          state: 'missing',
+          detail: 'engine_d_retired',
+        },
+      ],
+      [
+        ENGINE_D_RETIRED_DETAIL,
+        'Las decisiones vigentes (maestro, portero y el ciclo de entradas y salidas) están en la base de qwen-live y este informe no las evalúa.',
+      ],
+    )
   const checks: HealthCheck[] = []
   const evidence: HealthEvidence[] = []
   const items: Record<string, unknown>[] = []
@@ -1860,7 +1922,10 @@ export function createObservabilityHealth(
       if (cached && now - cached.at >= 0 && now - cached.at < cacheMs)
         return cached.value
       const collected = collectSupervisor(options, now)
-      const verdicts = readVerdicts(options, now)
+      // A retired engine's database is not read at all: nothing in the report depends on it.
+      const verdicts: Opened<VerdictRead> = isEngineDRetired(options)
+        ? { state: 'missing', detail: 'engine_d_retired' }
+        : readVerdicts(options, now)
       const forward = readForward(options)
       const registry = readRegistry(options)
       const expected = expectedPairs(options, registry)

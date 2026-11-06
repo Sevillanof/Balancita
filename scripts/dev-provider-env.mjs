@@ -579,11 +579,11 @@ const POSITIONING_ARGS = [
  * - capture: Kraken public WS -> live market DB (sole writer, no HTTP/engine),
  * - live: read-only gateway on 8789 tailing that DB plus the paper account and
  *   verdicts DBs (no collector, no engine),
- * - verdict: Python verdict service C (market DB read-only -> verdicts DB, sole
- *   writer of the latter; its own `command` instead of node),
+ * - verdict (engine D, only with ENGINE_D_ENABLED=1): Python verdict service C (market DB read-only ->
+ *   verdicts DB, sole writer of the latter; its own `command` instead of node),
  * - paper: Python paper execution D (market + verdicts DBs read-only -> account
  *   DB, sole writer of the latter),
- * - scores: Python forecast scorer E (market + verdicts DBs read-only -> scores
+ * - scores (engine D, only with ENGINE_D_ENABLED=1): Python forecast scorer E (market + verdicts DBs read-only -> scores
  *   DB, sole writer of the latter),
  * - news (optional): Python news process N (public RSS -> news DB, sole writer
  *   of the latter; its own `command` instead of node). Ingest needs no model;
@@ -591,9 +591,29 @@ const POSITIONING_ARGS = [
  *   under the same DECISIONS_ENABLED and model rules. `NEWS_ENABLED=0` turns
  *   it off,
  * - llm (optional): `llama-server` on loopback, only with a resolved binary,
- * - q (optional): Python LLM decisions Q (market + verdicts DBs read-only ->
- *   decisions DB, sole writer of the latter), started together with llm.
+ * - q (optional, engine D, only with ENGINE_D_ENABLED=1): Python LLM decisions Q (market + verdicts
+ *   DBs read-only -> decisions DB, sole writer of the latter), started together with llm.
  */
+/**
+ * The ONE switch of the old engine D (datos-utiles S7): the verdict service (`verdict` ->
+ * futures-verdicts.sqlite, 2.2 GB on the VPS), the forecast scorer (`scores` -> futures-forecast-scores.sqlite)
+ * and the old LLM decisions (`q` -> futures-llm-decisions.sqlite). Retired by default: they were archived to Parquet
+ * (nightly, code 0) and nothing the live trader (qwenlive: maestro, portero and the entry/exit lifecycle), news,
+ * the briefing or the UI needs reads them. Their databases stay on disk, untouched and readable as history.
+ * `ENGINE_D_ENABLED=1` (real environment or `.env.local`) starts the three again; no code is removed.
+ * `llm` (llama-server, used by news, the briefing and qwenlive) and everything else are NOT part of this switch.
+ */
+export function engineDEnabled(env = {}) {
+  return (env.ENGINE_D_ENABLED ?? '').trim() === '1'
+}
+
+/** The `[dev]` line saying engine D is off and how to turn it on; empty when it is enabled. */
+export function engineDNotice(env = {}) {
+  return engineDEnabled(env)
+    ? ''
+    : '[dev] Motor D retirado: verdict, scores y q no arrancan (sus bases quedan en disco como historia). Para volver a arrancarlos: ENGINE_D_ENABLED=1 en .env.local.'
+}
+
 /** The children that make Qwen decide and operate: they ignore DEV_ONLY. */
 export const QWEN_CHILDREN = [
   'verdict',
@@ -746,6 +766,7 @@ export function devChildSpecs({
   const kronosDir = kronosSummary.slice(0, kronosSummary.lastIndexOf('/'))
   // Funding carry counter (no orders): its state and summary; the registry serves and toggles them.
   const carryDir = liveDb('carry')
+  const engineD = engineDEnabled(env)
   const llmOn =
     Boolean(python?.command && llm?.command) &&
     (env.DECISIONS_ENABLED ?? '').trim() !== '0' &&
@@ -788,6 +809,8 @@ export function devChildSpecs({
         FUTURES_VERDICTS_DB_PATH: verdictsDb,
         FUTURES_PAPER_ACCOUNT_DB_PATH: accountDb,
         BALANCITA_PYTHON_STATUS: pythonStatus(python),
+        // Engine D retired: health and activity say so instead of reading it as a failure or as "no data".
+        FUTURES_ENGINE_D_RETIRED: engineD ? '0' : '1',
         // Per-process health written by the dev supervisor (scripts/dev.mjs).
         DEV_HEALTH_FILE: `${serverCwd}/data/dev-live/dev-health.json`,
         // `/api/observability/health` reads these read-only (forward's DB, the strategy registry).
@@ -902,7 +925,8 @@ export function devChildSpecs({
         ],
         env: { ...env },
       },
-      ...(!qwenNewsOnly
+      // q (the old LLM decisions) is part of engine D: it reads the verdicts that no longer get written.
+      ...(!qwenNewsOnly && engineD
         ? [
             {
               name: 'q',
@@ -988,48 +1012,53 @@ export function devChildSpecs({
 
   function pythonChildren() {
     return [
-      {
-        name: 'verdict',
-        command: python.command,
-        cwd: serverCwd,
-        args: [
-          ...python.prefixArgs,
-          '-m',
-          'balancita_engine.futures_verdicts',
-          '--market-db',
-          marketDb,
-          '--verdicts-db',
-          verdictsDb,
-        ],
-        env: {
-          ...env,
-          PYTHONPATH: [`${root}/python`, env.PYTHONPATH]
-            .filter(Boolean)
-            .join(delimiter),
-        },
-      },
-      {
-        name: 'scores',
-        command: python.command,
-        cwd: serverCwd,
-        args: [
-          ...python.prefixArgs,
-          '-m',
-          'balancita_engine.futures_forecast_scores',
-          '--market-db',
-          marketDb,
-          '--verdicts-db',
-          verdictsDb,
-          '--scores-db',
-          scoresDb,
-        ],
-        env: {
-          ...env,
-          PYTHONPATH: [`${root}/python`, env.PYTHONPATH]
-            .filter(Boolean)
-            .join(delimiter),
-        },
-      },
+      // Engine D (verdict, scores): retired unless ENGINE_D_ENABLED=1 (see engineDEnabled).
+      ...(engineD
+        ? [
+            {
+              name: 'verdict',
+              command: python.command,
+              cwd: serverCwd,
+              args: [
+                ...python.prefixArgs,
+                '-m',
+                'balancita_engine.futures_verdicts',
+                '--market-db',
+                marketDb,
+                '--verdicts-db',
+                verdictsDb,
+              ],
+              env: {
+                ...env,
+                PYTHONPATH: [`${root}/python`, env.PYTHONPATH]
+                  .filter(Boolean)
+                  .join(delimiter),
+              },
+            },
+            {
+              name: 'scores',
+              command: python.command,
+              cwd: serverCwd,
+              args: [
+                ...python.prefixArgs,
+                '-m',
+                'balancita_engine.futures_forecast_scores',
+                '--market-db',
+                marketDb,
+                '--verdicts-db',
+                verdictsDb,
+                '--scores-db',
+                scoresDb,
+              ],
+              env: {
+                ...env,
+                PYTHONPATH: [`${root}/python`, env.PYTHONPATH]
+                  .filter(Boolean)
+                  .join(delimiter),
+              },
+            },
+          ]
+        : []),
       {
         // Forward paper book of the strategies the user ACTIVATED in the registry (everything starts as a draft;
         // market DB read-only -> its own forward DB and summary, sole writer of both). Full cycle every hour; every

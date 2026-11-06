@@ -10,7 +10,7 @@ import {
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { DatabaseSync } from 'node:sqlite'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { buildLiveGateway } from './gateway.ts'
 import {
   assemble,
@@ -882,6 +882,161 @@ describe('observability health', () => {
       required: false,
     })
     expect(decisions.status).toBe('ok')
+  })
+
+  describe('engine D retired (datos-utiles S7)', () => {
+    /** The launcher no longer starts verdict, scores or q; their databases stay as history. */
+    function seedRetired(b: Sandbox): void {
+      seedHealthy(b)
+      fresh(b.verdictsDb)
+      seedVerdicts(b.verdictsDb, {
+        now: NOW,
+        newestAgeMs: everyProduct(2 * 24 * 3_600_000),
+      })
+      writeHealthFile(b.healthFile, NOW, {
+        capture: 'running',
+        live: 'running',
+        forward: 'running',
+        strategies: 'running',
+        news: 'running',
+        llm: 'running',
+        qwenlive: 'running',
+      })
+    }
+    const retired = (b: Sandbox) =>
+      createObservabilityHealth({ ...optionsOf(b), engineDRetired: true })
+
+    it('does not report the retired engine as a failure: processing stays ok, nothing is failing', () => {
+      const b = box()
+      seedRetired(b)
+      const report = retired(b).report()
+      const processing = component(report, 'processing')
+      expect(processing.status).toBe('ok')
+      expect(
+        processing.checks.find((c) => c.id === 'evaluations_continuity'),
+      ).toBeUndefined()
+      expect(check(processing, 'engine_d_retired')).toMatchObject({
+        status: 'ok',
+        required: false,
+        value: 'retired',
+      })
+      expect(report.overall.failing).toEqual([])
+      for (const id of ['data', 'strategies', 'paper'] as const)
+        expect(component(report, id).status, id).toBe('ok')
+    })
+
+    it('does not list verdict and scores as core processes that should be up', () => {
+      const b = box()
+      seedRetired(b)
+      const items = component(retired(b).report(), 'processing').items as any[]
+      for (const name of ['verdict', 'scores'])
+        expect(items.find((i) => i.process === name)).toMatchObject({
+          state: 'absent',
+          core: false,
+        })
+      expect(items.find((i) => i.process === 'capture')).toMatchObject({
+        core: true,
+        state: 'running',
+      })
+    })
+
+    it('shows Decisions as «Sin datos» with the explicit retirement, never as an error or as ok', () => {
+      const b = box()
+      seedRetired(b)
+      seedDecisions(b.decisionsDb, [60_000], NOW)
+      const report = retired(b).report()
+      const decisions = component(report, 'decisions')
+      expect(decisions.status).toBe('unknown')
+      expect(decisions.checks.map((c) => c.id)).toEqual(['engine_d_retired'])
+      expect(check(decisions, 'engine_d_retired')).toMatchObject({
+        status: 'unknown',
+        required: true,
+        value: 'retired',
+      })
+      expect(decisions.summary).toMatch(/Motor D retirado/)
+      expect(decisions.items ?? []).toEqual([])
+      expect(decisions.evidence[0]).toMatchObject({
+        state: 'missing',
+        detail: 'engine_d_retired',
+        last_updated_ms: null,
+      })
+      expect(report.overall.unverified).toEqual(['decisions', 'risk'])
+    })
+
+    it('works the same when the old databases are gone', () => {
+      const b = box()
+      seedHealthy(b)
+      writeHealthFile(b.healthFile, NOW, {
+        capture: 'running',
+        live: 'running',
+        forward: 'running',
+        strategies: 'running',
+      })
+      rmSync(b.verdictsDb, { force: true })
+      const report = createObservabilityHealth({
+        ...optionsOf(b),
+        verdictsDbPath: undefined,
+        decisionsDbPath: undefined,
+        engineDRetired: true,
+      }).report()
+      expect(component(report, 'processing').status).toBe('ok')
+      expect(report.overall.failing).toEqual([])
+    })
+
+    it('keeps judging the pipeline: a capture that is down is still an error', () => {
+      const b = box()
+      seedRetired(b)
+      writeHealthFile(b.healthFile, NOW, {
+        capture: 'down',
+        live: 'running',
+        forward: 'running',
+        strategies: 'running',
+      })
+      const report = retired(b).report()
+      expect(component(report, 'processing').status).toBe('error')
+    })
+
+    it('engine D enabled (false) keeps every previous check', () => {
+      const b = box()
+      seedHealthy(b)
+      const report = createObservabilityHealth({
+        ...optionsOf(b),
+        engineDRetired: false,
+      }).report()
+      expect(component(report, 'processing').status).toBe('ok')
+      expect(
+        check(component(report, 'processing'), 'evaluations_continuity').status,
+      ).toBe('ok')
+      expect(component(report, 'decisions').status).toBe('ok')
+      expect(
+        check(component(report, 'decisions'), 'verdict_cadence').status,
+      ).toBe('ok')
+    })
+
+    it('without the option it follows FUTURES_ENGINE_D_RETIRED, and the option wins', () => {
+      const b = box()
+      seedRetired(b)
+      vi.stubEnv('FUTURES_ENGINE_D_RETIRED', '1')
+      try {
+        expect(
+          component(
+            createObservabilityHealth(optionsOf(b)).report(),
+            'decisions',
+          ).checks.map((c) => c.id),
+        ).toEqual(['engine_d_retired'])
+        expect(
+          component(
+            createObservabilityHealth({
+              ...optionsOf(b),
+              engineDRetired: false,
+            }).report(),
+            'processing',
+          ).status,
+        ).not.toBe('ok')
+      } finally {
+        vi.unstubAllEnvs()
+      }
+    })
   })
 
   it('reuses the report for 15 s and recomputes afterwards', () => {
