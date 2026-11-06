@@ -67,6 +67,20 @@ export const PERILLAS: Perilla[] = [
     paso: 5,
   },
   {
+    clave: 'rebotes.caida_pct',
+    tipo: 'decimal',
+    valor_actual: 5,
+    admite_null: false,
+    minimo: 0,
+    maximo: 100,
+    minimo_exclusivo: true,
+    paso: null,
+  },
+]
+
+/** What a server from before the sizing rules became fixed still lists: the form must not offer them. */
+export const PERILLAS_DE_TAMANO: Perilla[] = [
+  {
     clave: 'posiciones.max',
     tipo: 'entero',
     valor_actual: 3,
@@ -83,16 +97,6 @@ export const PERILLAS: Perilla[] = [
     admite_null: false,
     minimo: 0,
     maximo: 1,
-    minimo_exclusivo: true,
-    paso: null,
-  },
-  {
-    clave: 'rebotes.caida_pct',
-    tipo: 'decimal',
-    valor_actual: 5,
-    admite_null: false,
-    minimo: 0,
-    maximo: 100,
     minimo_exclusivo: true,
     paso: null,
   },
@@ -125,14 +129,26 @@ export const REBOTES: EstrategiaFila = {
   error: null,
 }
 
-export const POSICIONES: EstrategiaFila = {
+export const ESPERA: EstrategiaFila = {
+  id: 'sin-espera',
+  nombre: 'Sin espera tras cerrar',
+  descripcion: 'Vuelve a entrar en cuanto cierra.',
+  cambios: { guardrails: { cooldown_min: 0 } },
+  base_config_hash: HASH,
+  overlay_sha256: 'c'.repeat(64),
+  error: null,
+}
+
+/** A file written when sizing was still a knob: the server now refuses it naming the key. */
+export const DE_TAMANO: EstrategiaFila = {
   id: 'dos-posiciones',
   nombre: 'Dos posiciones al 50 %',
   descripcion: 'Menos cupos, más grandes.',
   cambios: { posiciones: { max: 2, fraccion: 0.5 } },
   base_config_hash: HASH,
-  overlay_sha256: 'c'.repeat(64),
-  error: null,
+  overlay_sha256: 'f'.repeat(64),
+  error:
+    "Estrategia 'dos-posiciones': la clave 'posiciones.max' no se puede cambiar; solo hay perillas permitidas: guardrails.cooldown_min.",
 }
 
 export const VIEJA: EstrategiaFila = {
@@ -167,6 +183,8 @@ const metricas = (patch: Partial<Metricas>): Metricas => ({
   max_drawdown_usd: 31.4,
   max_drawdown_bp: 314,
   horas_promedio: 21.4,
+  horas_max: 36,
+  nocional_promedio_usd: 335.2,
   por_motivo: { tiempo: 150, maestro_vuelta: 30 },
   ...patch,
 })
@@ -231,6 +249,8 @@ export const INFORME: Informe = {
       max_drawdown_usd: 38.2,
       max_drawdown_bp: 382,
       horas_promedio: 18.9,
+      horas_max: 30,
+      nocional_promedio_usd: 321.6,
     }),
     operaciones: [
       op(1, 18, 20),
@@ -248,6 +268,8 @@ export const INFORME: Informe = {
     max_drawdown_usd: 6.8,
     max_drawdown_bp: 68,
     horas_promedio: -2.5,
+    horas_max: -6,
+    nocional_promedio_usd: -13.6,
   },
 }
 

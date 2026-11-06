@@ -8,14 +8,16 @@ import {
   etiquetaPerilla,
   firmado,
   leerEntrada,
+  perillasEditables,
   resumenCambios,
   segmentosCambios,
   usd,
   valorTexto,
 } from './estrategias-format.ts'
-import { PERILLAS } from '../testing/estrategias-fixture.ts'
+import { PERILLAS, PERILLAS_DE_TAMANO } from '../testing/estrategias-fixture.ts'
 
-const por = (clave: string) => PERILLAS.find((p) => p.clave === clave)!
+const por = (clave: string) =>
+  [...PERILLAS, ...PERILLAS_DE_TAMANO].find((p) => p.clave === clave)!
 
 describe('knob helpers', () => {
   it('flattens and rebuilds the nested changes of an overlay', () => {
@@ -36,11 +38,11 @@ describe('knob helpers', () => {
   it('shows each value in the unit people think in', () => {
     expect(valorTexto('guardrails.max_hold_min', 2160)).toBe('36 h')
     expect(valorTexto('guardrails.cooldown_min', 15)).toBe('15 min')
-    expect(valorTexto('posiciones.fraccion', 0.33)).toBe('33 %')
+    expect(valorTexto('guardrails.max_stop_pct', 0.03)).toBe('3 %')
     expect(valorTexto('rebotes.caida_pct', 5)).toBe('5 %')
     expect(valorTexto('guardrails.stop_sigma_24h', null)).toBe('sin stop')
     expect(valorTexto('analista.modo', 'fuerte')).toBe('Fuerte')
-    expect(valorTexto('posiciones.max', 3)).toBe('3')
+    expect(valorTexto('posiciones.max', 3)).toBe('3') // a legacy file still reads
   })
 
   it('prefills an input with today value in the displayed unit', () => {
@@ -92,11 +94,14 @@ describe('knob helpers', () => {
       cambiosDeEntradas(PERILLAS, {
         ...entradas,
         'guardrails.max_hold_min': '30',
-        'posiciones.max': '2',
-        'posiciones.fraccion': '33',
+        'rebotes.caida_pct': '6',
+        'wake.flat_every_min': '15',
       }),
     ).toEqual({
-      cambios: { guardrails: { max_hold_min: 1800 }, posiciones: { max: 2 } },
+      cambios: {
+        guardrails: { max_hold_min: 1800 },
+        rebotes: { caida_pct: 6 },
+      },
       error: null,
     })
     const malo = cambiosDeEntradas(PERILLAS, {
@@ -108,11 +113,11 @@ describe('knob helpers', () => {
 
   it('describes the changes against today: «Tope de horas 36 h → 30 h»', () => {
     const cambios = {
-      posiciones: { max: 2, fraccion: 0.5 },
+      rebotes: { caida_pct: 6 },
       guardrails: { max_hold_min: 1800 },
     }
     expect(resumenCambios(cambios, PERILLAS)).toBe(
-      'Tope de horas 36 h → 30 h · Máximo abiertas 3 → 2 · Tamaño de cada una 33 % → 50 %',
+      'Tope de horas 36 h → 30 h · Caída que dispara 5 % → 6 %',
     )
     expect(segmentosCambios({ rebotes: { caida_pct: 6 } }, PERILLAS)).toEqual([
       {
@@ -125,6 +130,19 @@ describe('knob helpers', () => {
     expect(resumenCambios(null, PERILLAS)).toBe('Sin cambios')
   })
 
+  it('never offers the sizing rules as knobs: they are fixed like the Terminal', () => {
+    const todas = [...PERILLAS, ...PERILLAS_DE_TAMANO]
+    expect(todas.length).toBeGreaterThan(PERILLAS.length)
+    expect(perillasEditables(todas).map((p) => p.clave)).toEqual(
+      PERILLAS.map((p) => p.clave),
+    )
+    expect(
+      perillasEditables(todas).filter((p) =>
+        /^(posiciones|analista)\./.test(p.clave),
+      ),
+    ).toEqual([])
+  })
+
   it('groups the knobs the way the form shows them and keeps unknown ones', () => {
     const grupos = agruparPerillas([
       ...PERILLAS,
@@ -133,7 +151,6 @@ describe('knob helpers', () => {
     expect(grupos.map((g) => g.grupo)).toEqual([
       'Salidas',
       'Ritmo',
-      'Posiciones',
       'Rebotes',
       'Otras',
     ])

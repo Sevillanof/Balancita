@@ -9,8 +9,10 @@ import {
 } from '../infrastructure/estrategias-api.ts'
 import {
   EJEMPLO,
+  ESPERA,
   INFORME,
-  POSICIONES,
+  PERILLAS,
+  PERILLAS_DE_TAMANO,
   REBOTES,
   VIEJA,
   fakeApi,
@@ -54,10 +56,10 @@ describe('Estrategias: the Terminal laboratory', () => {
   })
 
   it('lists the variants with what they change and their status', async () => {
-    const api = fakeApi([EJEMPLO, REBOTES, POSICIONES], {
+    const api = fakeApi([EJEMPLO, REBOTES, ESPERA], {
       [EJEMPLO.id]: trabajoListo(),
-      [POSICIONES.id]: trabajo({
-        estrategia_id: POSICIONES.id,
+      [ESPERA.id]: trabajo({
+        estrategia_id: ESPERA.id,
         iniciado_ms: Date.now() - 12_000,
       }),
     })
@@ -78,11 +80,9 @@ describe('Estrategias: the Terminal laboratory', () => {
     expect(sinProbar).toHaveTextContent('Caída que dispara 5 % → 6 %')
     expect(sinProbar).not.toHaveAttribute('aria-current', 'true')
 
-    const probando = tarjeta('Dos posiciones al 50 %')
+    const probando = tarjeta('Sin espera tras cerrar')
     await waitFor(() => expect(probando).toHaveTextContent('Probando…'))
-    expect(probando).toHaveTextContent(
-      'Máximo abiertas 3 → 2 · Tamaño de cada una 33 % → 50 %',
-    )
+    expect(probando).toHaveTextContent('Espera tras cerrar 15 min → 0 min')
     expect(probando).toHaveTextContent(/corriendo · \d+ s/)
   })
 
@@ -138,7 +138,7 @@ describe('Estrategias: the Terminal laboratory', () => {
     expect(within(detalle).getByText('ETH / USD')).toBeVisible()
 
     const neto = within(detalle).getByRole('group', {
-      name: 'Neto por operación',
+      name: 'Neto por operación (ponderado por tamaño)',
     })
     expect(neto).toHaveTextContent('oficial+5,4 pb')
     expect(neto).toHaveTextContent('variante+2,9 pb')
@@ -154,8 +154,8 @@ describe('Estrategias: the Terminal laboratory', () => {
     const horas = within(detalle).getByRole('group', {
       name: 'Horas promedio',
     })
-    expect(horas).toHaveTextContent('21,4 h')
-    expect(horas).toHaveTextContent('18,9 h')
+    expect(horas).toHaveTextContent('21,4 h · máx. 36 h')
+    expect(horas).toHaveTextContent('18,9 h · máx. 30 h')
     expect(horas).toHaveTextContent('−2,5 h')
 
     const condiciones = within(detalle).getByRole('list', {
@@ -432,22 +432,39 @@ describe('New variant', () => {
     expect(
       within(form).getByRole('heading', { name: 'Nueva variante' }),
     ).toBeVisible()
-    expect(within(form).getAllByRole('textbox')).toHaveLength(1 + 8)
-    expect(within(form).getAllByRole('combobox')).toHaveLength(1)
+    expect(within(form).getAllByRole('textbox')).toHaveLength(1 + 6)
+    expect(within(form).queryAllByRole('combobox')).toHaveLength(0)
     const tope = within(form).getByLabelText('Tope de horas')
     expect(tope).toHaveValue('36')
     expect(tope).toHaveAccessibleDescription('hoy 36 h')
-    expect(within(form).getByLabelText('Tamaño de cada una')).toHaveValue('33')
-    expect(within(form).getByText('hoy 33 %')).toBeVisible()
     expect(within(form).getByText('hoy sin stop')).toBeVisible()
-    expect(within(form).getByLabelText('Tamaño según volatilidad')).toHaveValue(
-      'fuerte',
-    )
-    for (const grupo of ['Salidas', 'Ritmo', 'Posiciones', 'Rebotes'])
+    for (const grupo of ['Salidas', 'Ritmo', 'Rebotes'])
       expect(within(form).getByText(grupo)).toBeVisible()
     expect(form).toHaveTextContent('maestro y portero no se tocan')
     expect(form.textContent ?? '').not.toMatch(
       /maestro_hash|portero\b.*umbral|notional/i,
+    )
+  })
+
+  it('never offers the sizing rules: the backtest invests exactly like the Terminal', async () => {
+    const api = fakeApi([EJEMPLO], { [EJEMPLO.id]: trabajoListo() })
+    // a server from before the rule still lists the sizing knobs: the form hides them anyway
+    api.listar.mockResolvedValue({
+      ...(await api.listar()),
+      perillas: [...PERILLAS, ...PERILLAS_DE_TAMANO],
+    })
+    const { form } = await abrir(api)
+    for (const etiqueta of [
+      'Máximo abiertas',
+      'Tamaño de cada una',
+      'Espera entre entradas',
+      'Tamaño según volatilidad',
+    ])
+      expect(within(form).queryByLabelText(etiqueta)).toBeNull()
+    expect(within(form).queryByText('Posiciones')).toBeNull()
+    expect(within(form).getAllByRole('textbox')).toHaveLength(1 + 6)
+    expect(form).toHaveTextContent(
+      'El tamaño de cada posición es el de la Terminal y no cambia.',
     )
   })
 

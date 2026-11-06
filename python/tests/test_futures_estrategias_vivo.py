@@ -29,9 +29,15 @@ def decision(t_ms, action, *, kind="flat", maestro=0, puntaje=0.1, portero=1, mo
     return {"t_ms": t_ms, "kind": kind, "action": action, "maestro": maestro, "puntaje": puntaje, "portero": portero, "motivo": motivo}
 
 
-def operacion(side, entrada_ms, salida_ms, neto_bp=10.0, estado="closed", motivo="maestro_vuelta"):
-    return {"side": side, "entry_ms": entrada_ms, "exit_ms": salida_ms, "net_bp": neto_bp, "status": estado, "closed_by": "formula",
-            "exit_reason": motivo}
+def operacion(side, entrada_ms, salida_ms, neto_bp=10.0, estado="closed", motivo="maestro_vuelta", nocional=500.0, **importes):
+    """Una operación como la leen ``comparar_operaciones`` (vivo o replay). Por defecto los importes son coherentes con ``neto_bp``."""
+    cerrada = estado == "closed" and salida_ms is not None
+    base = {"notional_usd": nocional, "qty": nocional / 2000.0, "entry_px": 2000.0,
+            "net_usd": nocional * neto_bp / 1e4 if cerrada and neto_bp is not None else None,
+            "fees_usd": nocional * 0.001 if cerrada else None, "funding_usd": nocional * 0.0003 if cerrada else None}
+    base.update(importes)
+    return dict({"side": side, "entry_ms": entrada_ms, "exit_ms": salida_ms, "net_bp": neto_bp, "status": estado, "closed_by": "formula",
+                 "exit_reason": motivo}, **base)
 
 
 class DecisionesTests(unittest.TestCase):
@@ -108,6 +114,95 @@ class OperacionesTests(unittest.TestCase):
         self.assertEqual(r["abiertas_en_vivo"], 1)
 
 
+class ImportesTests(unittest.TestCase):
+    """S4 ampliado: además de la hora y los bp, cada operación emparejada compara TAMAÑO, importes en US$ y horas (el chequeo anterior
+    no miraba el tamaño: un replay con otro saldo daba las mismas decisiones y bp con otros dólares)."""
+
+    def par(self, vivo, replay):
+        r = bt.comparar_operaciones([vivo], [replay])
+        [par] = r["pares"]
+        return r, par
+
+    def test_every_amount_of_a_paired_trade_is_shown_with_both_sides_the_difference_and_the_verdict(self):
+        vivo = operacion("LONG", 100 * MIN + 4_000, 700 * MIN + 3_000, 100.0, nocional=494.34)
+        replay = operacion("LONG", 100 * MIN, 700 * MIN, 99.0, nocional=495.0)
+        r, par = self.par(vivo, replay)
+        imp = par["importes"]
+        self.assertEqual(sorted(imp), ["comisiones_usd", "funding_usd", "horas", "neto_usd", "nocional_usd", "qty"])
+        self.assertEqual((imp["nocional_usd"]["vivo"], imp["nocional_usd"]["replay"]), (494.34, 495.0))
+        self.assertAlmostEqual(imp["nocional_usd"]["diferencia"], 0.66)
+        self.assertAlmostEqual(imp["neto_usd"]["diferencia"], 495.0 * 99e-4 - 494.34 * 100e-4)
+        self.assertAlmostEqual(imp["horas"]["vivo"], 600 / 60 + 3 / 3600 - 4 / 3600)
+        for campo, dato in imp.items():
+            self.assertTrue(dato["dentro"], campo)
+        self.assertEqual((r["importes"]["nocional_usd"]["comparadas"], r["importes"]["nocional_usd"]["fuera"]), (1, 0))
+        self.assertAlmostEqual(r["importes"]["nocional_usd"]["dif_max"], 0.66)
+        self.assertEqual(r["fuera_de_tolerancia"], [])
+
+    def test_a_different_size_is_flagged_listed_and_does_not_hide_behind_equal_bp(self):
+        vivo = operacion("LONG", 100 * MIN, 700 * MIN, 100.0, nocional=494.0)
+        replay = operacion("LONG", 100 * MIN, 700 * MIN, 100.0, nocional=330.0)
+        r, par = self.par(vivo, replay)
+        self.assertFalse(par["importes"]["nocional_usd"]["dentro"])
+        self.assertFalse(par["importes"]["qty"]["dentro"])
+        self.assertTrue(par["importes"]["neto_usd"]["dentro"])               # a igual tamaño el neto coincide: lo que difiere es el tamaño
+        self.assertEqual(r["importes"]["nocional_usd"]["fuera"], 1)
+        campos = {x["campo"] for x in r["fuera_de_tolerancia"]}
+        self.assertEqual(campos, {"nocional_usd", "qty"})
+        item = next(x for x in r["fuera_de_tolerancia"] if x["campo"] == "nocional_usd")
+        self.assertEqual((item["vivo"], item["replay"], item["side"]), (494.0, 330.0, "LONG"))
+        self.assertAlmostEqual(item["diferencia"], -164.0)
+        self.assertIn("entrada", item)
+
+    def test_a_different_net_fee_funding_or_hold_is_flagged_by_field(self):
+        base = operacion("LONG", 100 * MIN, 700 * MIN, 100.0, nocional=500.0)
+        casos = {"neto_usd": dict(net_usd=500.0 * 110 / 1e4),                  # 10 bp más: fuera de los 2 bp
+                 "comisiones_usd": dict(fees_usd=500.0 * 0.0016),               # 6 bp más de comisión
+                 "funding_usd": dict(funding_usd=500.0 * 0.0003 + 500.0 * 0.0003)}  # 3 bp más de funding
+        for campo, cambio in casos.items():
+            with self.subTest(campo=campo):
+                r, par = self.par(base, operacion("LONG", 100 * MIN, 700 * MIN, 100.0, nocional=500.0, **cambio))
+                self.assertFalse(par["importes"][campo]["dentro"])
+                self.assertEqual([x["campo"] for x in r["fuera_de_tolerancia"]], [campo])
+        r, par = self.par(base, operacion("LONG", 100 * MIN, 720 * MIN, 100.0, nocional=500.0))      # sale 20 min tarde (4 velas)
+        self.assertFalse(par["importes"]["horas"]["dentro"])
+        self.assertAlmostEqual(par["importes"]["horas"]["diferencia"], 20 / 60)
+
+    def test_amounts_are_compared_at_equal_size_so_a_size_gap_is_reported_once_not_in_every_dollar_field(self):
+        vivo = operacion("LONG", 100 * MIN, 700 * MIN, 100.0, nocional=500.0)
+        replay = operacion("LONG", 100 * MIN, 700 * MIN, 100.0, nocional=400.0)       # 20 % menos, todo proporcional
+        r, par = self.par(vivo, replay)
+        self.assertFalse(par["importes"]["nocional_usd"]["dentro"])
+        for campo in ("neto_usd", "comisiones_usd", "funding_usd"):
+            self.assertTrue(par["importes"][campo]["dentro"], campo)
+            self.assertLess(par["importes"][campo]["diferencia"], 0)                  # la diferencia cruda sí se muestra (en US$)
+
+    def test_the_small_third_slot_tolerates_a_dollar_of_balance_drift_and_not_more(self):
+        vivo = operacion("LONG", 100 * MIN, 700 * MIN, 100.0, nocional=9.98)
+        cerca = self.par(vivo, operacion("LONG", 100 * MIN, 700 * MIN, 100.0, nocional=9.995))[1]
+        lejos = self.par(vivo, operacion("LONG", 100 * MIN, 700 * MIN, 100.0, nocional=12.5))[1]
+        self.assertTrue(cerca["importes"]["nocional_usd"]["dentro"])
+        self.assertFalse(lejos["importes"]["nocional_usd"]["dentro"])
+
+    def test_an_open_live_trade_compares_size_but_not_the_amounts_that_need_a_close(self):
+        vivo = operacion("SHORT", 100 * MIN, None, None, estado="open", nocional=511.0)
+        replay = operacion("SHORT", 100 * MIN, 900 * MIN, -500.0, motivo="fin_examen", nocional=512.0)
+        r, par = self.par(vivo, replay)
+        self.assertTrue(par["importes"]["nocional_usd"]["dentro"])
+        for campo in ("neto_usd", "comisiones_usd", "funding_usd", "horas"):
+            self.assertIsNone(par["importes"][campo]["dentro"], campo)
+            self.assertIsNone(par["importes"][campo]["diferencia"], campo)
+        self.assertEqual(r["importes"]["neto_usd"]["comparadas"], 0)
+        self.assertEqual(r["fuera_de_tolerancia"], [])
+
+    def test_the_tolerances_are_published_in_the_report(self):
+        r = bt.comparar_operaciones([], [])
+        for clave in ("nocional_rel", "nocional_abs_usd", "neto_bp", "comisiones_bp", "funding_bp", "horas_ms"):
+            self.assertIn(clave, r["tolerancias"])
+        self.assertEqual(r["tolerancias"]["horas_ms"], bt.TOLERANCIA_OPERACION_MS)
+        self.assertEqual(r["tolerancias"], bt.TOLERANCIAS_IMPORTES)
+
+
 class VivoBase(unittest.TestCase):
     """Un snapshot de prueba (expertos reales, sin analista ni funding exacto), velas sintéticas y una base viva falsa."""
 
@@ -145,7 +240,7 @@ class VivoBase(unittest.TestCase):
             db.commit()
             db.close()
 
-    def replay_directo(self):
+    def replay_directo(self, capital="1000"):
         """Lo que el replay hace con los mismos datos: sus eventos, para fabricar la base viva a partir de ellos."""
         class Lector:
             def __init__(self, barras):
@@ -161,24 +256,27 @@ class VivoBase(unittest.TestCase):
         eventos = []
         hasta = qt.date_ms(HASTA)
         desde = -(-ACTIVADA_MS // qt.BAR_MS) * qt.BAR_MS
-        exam.replay_formula(Lector(self.barras), self.cfg, hasta, desde_ms=desde, on_event=eventos.append)
+        exam.replay_formula(Lector(self.barras), self.cfg, hasta, desde_ms=desde, on_event=eventos.append, capital_usd=capital)
         return eventos
 
-    def crear_vivo(self, eventos, nombre="qwen-live__live-{}.sqlite".format(SELLO), activada_ms=ACTIVADA_MS, cambiar=None, omitidos=()):
+    def crear_vivo(self, eventos, nombre="qwen-live__live-{}.sqlite".format(SELLO), activada_ms=ACTIVADA_MS, cambiar=None, omitidos=(),
+                   saldo="1000", tamano=1.0):
+        """``saldo``: el ``cash_usd`` de la activación; ``tamano``: factor del nocional/qty/importes que registra el vivo (1 = el mismo)."""
         ruta = os.path.join(self.carpeta, nombre)
         db = sqlite3.connect(ruta)
         db.executescript("""
 CREATE TABLE decisions(product TEXT NOT NULL, bucket_ms INTEGER NOT NULL, t_ms INTEGER NOT NULL, kind TEXT NOT NULL, action TEXT NOT NULL,
   config_hash TEXT, formula_json TEXT, trade_no INTEGER);
 CREATE TABLE trades(product TEXT NOT NULL, trade_no INTEGER NOT NULL, status TEXT NOT NULL, side TEXT NOT NULL, entry_ms INTEGER NOT NULL,
-  exit_ms INTEGER, net_bp REAL, closed_by TEXT, exit_reason TEXT, entry_reason TEXT, config_hash TEXT);
+  exit_ms INTEGER, net_bp REAL, closed_by TEXT, exit_reason TEXT, entry_reason TEXT, config_hash TEXT, entry_px TEXT, qty TEXT,
+  notional_usd TEXT, fees_usd TEXT, funding_usd TEXT, net_usd TEXT);
 CREATE TABLE skipped(product TEXT NOT NULL, bucket_ms INTEGER NOT NULL, t_ms INTEGER NOT NULL, at_ms INTEGER NOT NULL, reason TEXT NOT NULL,
   detail TEXT, wake_json TEXT);
 CREATE TABLE config_versions(id INTEGER PRIMARY KEY AUTOINCREMENT, previous_hash TEXT, config_hash TEXT NOT NULL, activated_ms INTEGER NOT NULL,
   config_json TEXT NOT NULL, cash_usd TEXT NOT NULL);
 """)
-        db.execute("INSERT INTO config_versions(previous_hash, config_hash, activated_ms, config_json, cash_usd) VALUES(NULL,?,?,'{}','1000')",
-                   (self.snapshot["config_hash"], activada_ms))
+        db.execute("INSERT INTO config_versions(previous_hash, config_hash, activated_ms, config_json, cash_usd) VALUES(NULL,?,?,'{}',?)",
+                   (self.snapshot["config_hash"], activada_ms, saldo))
         cambiar = cambiar or {}
         n = 0
         for e in eventos:
@@ -194,12 +292,16 @@ CREATE TABLE config_versions(id INTEGER PRIMARY KEY AUTOINCREMENT, previous_hash
                 n += 1
                 t = e["trade"]
                 if t["closed_by"] == "fin_examen":               # el replay la cierra al final de los datos; en vivo sigue abierta
-                    db.execute("INSERT INTO trades VALUES('PF_ETHUSD',?,'open',?,?,NULL,NULL,NULL,NULL,'formula',?)",
-                               (n, t["side"], t["entry_ms"] + 4_000, self.snapshot["config_hash"]))
+                    db.execute("INSERT INTO trades VALUES('PF_ETHUSD',?,'open',?,?,NULL,NULL,NULL,NULL,'formula',?,?,?,?,NULL,NULL,NULL)",
+                               (n, t["side"], t["entry_ms"] + 4_000, self.snapshot["config_hash"], t["entry_px"],
+                                str(float(t["qty"]) * tamano), str(float(t["notional_usd"]) * tamano)))
                     continue
-                db.execute("INSERT INTO trades VALUES('PF_ETHUSD',?,'closed',?,?,?,?,?,?,?,?)",
+                nocional = float(t["notional_usd"]) * tamano
+                db.execute("INSERT INTO trades VALUES('PF_ETHUSD',?,'closed',?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                            (n, t["side"], t["entry_ms"] + 4_000, t["exit_ms"] + 3_000, t["net_bp"] + 1.5, t["closed_by"], t["exit_reason"],
-                            "formula", self.snapshot["config_hash"]))
+                            "formula", self.snapshot["config_hash"], t["entry_px"], str(float(t["qty"]) * tamano), str(nocional),
+                            str(float(t["fees_usd"]) * tamano), str(float(t["funding_usd"]) * tamano),
+                            str(float(t["net_usd"]) * tamano + 1.5 / 1e4 * nocional)))
         for t in omitidos:
             db.execute("INSERT INTO skipped VALUES('PF_ETHUSD',?,?,?,'proceso_detenido','x','[]')", (t - 15 * MIN, t, t))
         db.commit()
@@ -233,6 +335,42 @@ class CompararConVivoTests(VivoBase):
         self.assertTrue(all(p["salida_igual"] for p in o["pares"] if p["salida_igual"] is not None))
         self.assertEqual(informe["schema"], bt.SCHEMA_VIVO)
         self.assertEqual(informe["snapshot"]["config_hash"], self.snapshot["config_hash"])
+
+    def test_every_paired_trade_is_also_compared_in_size_net_fees_funding_and_hours(self):
+        informe = self.comparar(self.crear_vivo(self.replay_directo()))
+        o = informe["operaciones"]
+        self.assertGreater(o["emparejadas"], 0)
+        self.assertEqual(o["fuera_de_tolerancia"], [])
+        self.assertEqual(o["importes"]["nocional_usd"], {"comparadas": o["emparejadas"], "fuera": 0, "dif_max": 0.0})
+        cerradas = o["emparejadas"] - o["abiertas_en_vivo"]
+        for campo in ("neto_usd", "comisiones_usd", "funding_usd", "horas"):
+            self.assertEqual((o["importes"][campo]["comparadas"], o["importes"][campo]["fuera"]), (cerradas, 0), campo)
+        par = next(p for p in o["pares"] if p["salida_igual"])
+        self.assertAlmostEqual(par["importes"]["neto_usd"]["diferencia"], -1.5 / 1e4 * par["importes"]["nocional_usd"]["vivo"], places=6)
+        self.assertEqual(o["tolerancias"], bt.TOLERANCIAS_IMPORTES)
+
+    def test_the_replay_starts_with_the_balance_the_live_terminal_had_when_the_config_was_activated(self):
+        informe = self.comparar(self.crear_vivo(self.replay_directo(capital="950"), saldo="950"))
+        self.assertEqual(informe["vivo"]["saldo_inicial_usd"], 950.0)
+        o = informe["operaciones"]
+        self.assertGreater(o["emparejadas"], 0)
+        self.assertEqual(o["importes"]["nocional_usd"]["fuera"], 0)
+        self.assertEqual(o["fuera_de_tolerancia"], [])
+
+    def test_a_live_trade_sized_differently_from_the_replay_is_listed_with_both_sizes(self):
+        informe = self.comparar(self.crear_vivo(self.replay_directo(), tamano=0.5))
+        o = informe["operaciones"]
+        self.assertEqual(o["importes"]["nocional_usd"]["fuera"], o["emparejadas"])
+        item = o["fuera_de_tolerancia"][0]
+        self.assertEqual(item["campo"], "nocional_usd")
+        self.assertAlmostEqual(item["replay"], 2 * item["vivo"], places=6)
+        self.assertEqual(informe["decisiones"]["difieren"], 0)               # las decisiones son las mismas: lo que cambia es el tamaño
+
+    def test_the_text_report_shows_the_size_and_amount_checks(self):
+        informe = self.comparar(self.crear_vivo(self.replay_directo(), tamano=0.5))
+        texto = bt.texto_vivo(informe)
+        for pedazo in ("Tamaño e importes", "nocional_usd", "fuera de tolerancia", "tolerancia"):
+            self.assertIn(pedazo, texto)
 
     def test_the_window_starts_when_the_live_config_started_and_decisions_before_it_are_not_compared(self):
         eventos = self.replay_directo()

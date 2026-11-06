@@ -39,6 +39,13 @@ def abre_si_esta_plana(trader, t_ms, reasons):
     return []
 
 
+def abre_hasta_tres(trader, t_ms, reasons):
+    """Como la fórmula con cupos: una entrada por mirada mientras haya lugar (el tamaño lo decide el Trader, no la prueba)."""
+    if len(trader.positions) < 3 and not trader.opened_this_look:
+        trader._open(t_ms, "LONG", 1, "controlled_test")
+    return []
+
+
 class ReplayConfigTests(unittest.TestCase):
     def setUp(self):
         patcher = mock.patch.object(qt.Trader, "_decide", abre_si_esta_plana)
@@ -137,6 +144,42 @@ class EnvPathTests(unittest.TestCase):
         self.assertNotIn("rebotes", con["cfg"])
         self.assertEqual((con["cfg"]["cuenta"], con["cfg"]["notional_usd"]), ("fija", "100"))
         self.assertEqual(con["holdout"], START)
+
+
+class ReplaySizingTests(unittest.TestCase):
+    """«El backtest debe invertir igual que la Terminal»: el tamaño sale de ``Trader._open`` (el mismo código del paper vivo), con el saldo
+    de cada momento; el replay solo decide con qué saldo EMPIEZA."""
+
+    def setUp(self):
+        patcher = mock.patch.object(qt.Trader, "_decide", abre_hasta_tres)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def replay(self, cfg, **kw):
+        return exam.replay_formula(lector(), cfg, START + 3 * qt.DAY_MS, **kw)
+
+    def cupos(self):
+        cfg = config()
+        cfg["posiciones"] = {"max": 3, "fraccion": 0.33, "espera_entre_entradas_min": 0}
+        return cfg
+
+    def test_each_position_takes_the_fraction_of_the_current_balance_and_the_free_balance_caps_it(self):
+        curvas = sorted(self.replay(self.cupos())["curvas"]["formula"], key=lambda c: c["entrada_ms"])
+        self.assertEqual([c["notional_usd"] for c in curvas[:3]], ["330.00", "330.00", "330.00"])
+        self.assertGreater(len(curvas), 3)
+
+    def test_the_balance_the_replay_starts_with_is_a_parameter_and_defaults_to_1000(self):
+        con_saldo = self.replay(self.cupos(), capital_usd="998.6751624387873")
+        curvas = sorted(con_saldo["curvas"]["formula"], key=lambda c: c["entrada_ms"])
+        self.assertEqual(con_saldo["capital_inicial_usd"], "998.6751624387873")
+        self.assertEqual(curvas[0]["notional_usd"], str(qt.D("998.6751624387873") * qt.D("0.33")))
+        self.assertEqual(self.replay(self.cupos())["capital_inicial_usd"], "1000")
+        self.assertEqual(self.replay(self.cupos()), self.replay(self.cupos(), capital_usd="1000"))
+
+    def test_a_non_positive_or_unreadable_starting_balance_is_refused(self):
+        for malo in ("0", "-5", "abc", "nan"):
+            with self.subTest(capital=malo), self.assertRaises(qt.TraderError):
+                self.replay(self.cupos(), capital_usd=malo)
 
 
 if __name__ == "__main__":

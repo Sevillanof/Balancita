@@ -97,6 +97,11 @@ function Tile({
 
 const pb = (v: number | null) => (v === null ? '—' : `${firmado(v, 1)} pb`)
 const horas = (v: number | null) => (v === null ? '—' : `${numero(v, 1)} h`)
+/** «21,4 h · máx. 36 h»: the longest trade shows that a cap (30 h, 36 h) holds. */
+const horasConMaximo = (promedio: number | null, maximo?: number | null) =>
+  maximo === null || maximo === undefined
+    ? horas(promedio)
+    : `${horas(promedio)} · máx. ${numero(maximo, 0)} h`
 const pct = (v: number | null) => (v === null ? '—' : `${numero(v * 100, 0)} %`)
 const dinero = (v: number | null) => (v === null ? '—' : `${numero(v)} US$`)
 
@@ -108,7 +113,7 @@ function Tiles({ informe }: { informe: Informe }) {
   return (
     <div className="grid grid-cols-2 gap-3 from-1100:grid-cols-4">
       <Tile
-        titulo="Neto por operación"
+        titulo="Neto por operación (ponderado por tamaño)"
         oficial={pb(o.neto_bp_por_operacion)}
         variante={pb(v.neto_bp_por_operacion)}
         delta={pb(d.neto_bp_por_operacion)}
@@ -134,8 +139,8 @@ function Tiles({ informe }: { informe: Informe }) {
       />
       <Tile
         titulo="Horas promedio"
-        oficial={horas(o.horas_promedio)}
-        variante={horas(v.horas_promedio)}
+        oficial={horasConMaximo(o.horas_promedio, o.horas_max)}
+        variante={horasConMaximo(v.horas_promedio, v.horas_max)}
         delta={
           d.horas_promedio === null ? '—' : `${firmado(d.horas_promedio, 1)} h`
         }

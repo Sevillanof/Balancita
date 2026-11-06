@@ -70,16 +70,13 @@ class EstrategiasTests(unittest.TestCase):
 
     def test_allowed_knobs_apply_change_the_hash_and_leave_the_rest_untouched(self):
         cambios = {"guardrails": {"max_hold_min": 1800, "cooldown_min": 30, "stop_sigma_24h": 2.0},
-                   "wake": {"position_every_min": 5}, "posiciones": {"max": 2, "fraccion": 0.5},
-                   "rebotes": {"caida_pct": 4.0, "salida_min": 120}, "analista": {"modo": "suave"}}
+                   "wake": {"position_every_min": 5}, "rebotes": {"caida_pct": 4.0, "salida_min": 120}}
         cfg = self.load(self.overlay(cambios))
         base = self.snapshot["config"]
         self.assertEqual(cfg["guardrails"], dict(base["guardrails"], max_hold_min=1800, cooldown_min=30, stop_sigma_24h=2.0))
         self.assertEqual(cfg["wake"], dict(base["wake"], position_every_min=5))
-        self.assertEqual(cfg["posiciones"], {"espera_entre_entradas_min": 0, "fraccion": 0.5, "max": 2})
         self.assertEqual(cfg["rebotes"], dict(base["rebotes"], caida_pct=4.0, salida_min=120))
-        self.assertEqual(cfg["analista"], {"modo": "suave"})
-        for untouched in ("corta", "products", "notional_usd", "cuenta", "execution", "funding_model", "noticias"):
+        for untouched in ("corta", "products", "notional_usd", "cuenta", "execution", "funding_model", "noticias", "posiciones", "analista"):
             self.assertEqual(cfg[untouched], base[untouched])
         self.assertNotEqual(est.hash_config(cfg), self.base_hash)
         self.assertEqual(est.hash_config(cfg), qt.config_hash(cfg))
@@ -88,8 +85,7 @@ class EstrategiasTests(unittest.TestCase):
     def test_each_single_knob_change_produces_a_different_hash(self):
         seen = {self.base_hash}
         for cambios in ({"guardrails": {"exhaust_hold_min": 720}}, {"guardrails": {"max_hold_min": 1440}},
-                        {"wake": {"flat_every_min": 60}}, {"rebotes": {"enfriamiento_min": 60}},
-                        {"posiciones": {"espera_entre_entradas_min": 30}}):
+                        {"wake": {"flat_every_min": 60}}, {"rebotes": {"enfriamiento_min": 60}}):
             digest = est.hash_config(self.load(self.overlay(cambios)))
             self.assertNotIn(digest, seen)
             seen.add(digest)
@@ -110,6 +106,29 @@ class EstrategiasTests(unittest.TestCase):
                 self.assertIn("'{}' no se puede cambiar".format(key), str(caught.exception))
                 self.assertIn("perillas permitidas", str(caught.exception))
 
+    def test_sizing_and_account_knobs_are_fixed_like_the_live_terminal_and_rejected(self):
+        """«El backtest debe invertir igual que la Terminal, esas reglas no cambian»: tamaño por posición, cupos y tamaño por
+        volatilidad no son perillas; ninguna variante los cambia (ni con el valor que ya tienen)."""
+        for cambios, key in (({"posiciones": {"max": 2}}, "posiciones.max"), ({"posiciones": {"fraccion": 0.5}}, "posiciones.fraccion"),
+                             ({"posiciones": {"fraccion": 0.33}}, "posiciones.fraccion"),
+                             ({"posiciones": {"espera_entre_entradas_min": 30}}, "posiciones.espera_entre_entradas_min"),
+                             ({"analista": {"modo": "suave"}}, "analista.modo"), ({"analista": {"modo": "fuerte"}}, "analista.modo"),
+                             ({"cuenta": "fija"}, "cuenta"), ({"notional_usd": "500"}, "notional_usd"), ({"leverage": "2"}, "leverage")):
+            with self.subTest(key=key):
+                with self.assertRaises(est.EstrategiaError) as caught:
+                    self.load(self.overlay(cambios))
+                self.assertIn("'{}' no se puede cambiar".format(key), str(caught.exception))
+        for clave in est.PERILLAS_PERMITIDAS:
+            self.assertFalse(clave.startswith(("posiciones.", "analista.")), clave)
+            self.assertNotIn(clave, est.REGLAS_DE_INVERSION_FIJAS)
+        self.assertEqual(sorted({clave.split(".")[0] for clave in est.PERILLAS_PERMITIDAS}), ["guardrails", "rebotes", "wake"])
+
+    def test_the_variant_config_sizes_exactly_like_the_snapshot(self):
+        cfg = self.load(self.overlay({"guardrails": {"max_hold_min": 1800}, "rebotes": {"caida_pct": 4.0}}))
+        base = self.snapshot["config"]
+        for clave in ("posiciones", "analista", "cuenta", "notional_usd", "leverage"):
+            self.assertEqual(cfg.get(clave), base.get(clave), clave)
+
     def test_wrong_base_hash_is_rejected(self):
         id = self.overlay({"guardrails": {"max_hold_min": 1800}}, base_config_hash="0" * 64)
         with self.assertRaises(est.EstrategiaError) as caught:
@@ -125,9 +144,6 @@ class EstrategiasTests(unittest.TestCase):
                              ({"guardrails": {"max_hold_min": 600}}, "guardrails.exhaust_hold_min"),
                              ({"guardrails": {"min_stop_pct": 0.5}}, "guardrails.min_stop_pct"),
                              ({"wake": {"flat_every_min": 7}}, "wake.flat_every_min"),
-                             ({"analista": {"modo": "loco"}}, "analista.modo"),
-                             ({"posiciones": {"max": 4}}, "posiciones"),
-                             ({"posiciones": {"max": 3, "fraccion": 0.5}}, "posiciones.fraccion"),
                              ({"rebotes": {"caida_pct": 150}}, "rebotes.caida_pct"),
                              ({"rebotes": {"ventana_min": 62}}, "rebotes.ventana_min")):
             with self.subTest(cambios=cambios):

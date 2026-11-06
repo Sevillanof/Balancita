@@ -4,7 +4,8 @@
   con su hash. El hash es el MISMO que calcula el trader (``futures_qwen_trader.config_hash``); si no coincide se falla.
 - ``config/estrategias/<id>.json``: ``{id, nombre, descripcion, base_config_hash, cambios}``. Nunca se edita (otra versión = otro
   archivo). ``cambios`` solo puede tocar las perillas de ``PERILLAS_PERMITIDAS``; todo lo demás (expertos, fechas de ajuste, rutas de
-  modelos, producto, cuenta, costos) se rechaza nombrando la clave.
+  modelos, producto, cuenta, costos y TODAS las reglas de inversión: tamaño por posición, cupos, tamaño por volatilidad) se rechaza
+  nombrando la clave: el backtest invierte siempre igual que la Terminal.
 
 La mezcla reutiliza ``futures_qwen_live._apply_pending_changes`` (la de los traspasos de la Terminal); la validación de cupos, rebotes y
 analista reutiliza ``futures_qwen_posiciones`` y ``futures_qwen_analista``. No lee ni escribe ninguna base.
@@ -38,15 +39,17 @@ PERILLAS_PERMITIDAS = {
     "guardrails.cooldown_min": ("int", 0, 1440),
     "wake.flat_every_min": ("int5", 5, 1440),               # cada cuánto mira la fórmula sin posición
     "wake.position_every_min": ("int5", 5, 1440),           # ... y con posición
-    "posiciones.max": ("int", 1, posiciones.LIMIT),
-    "posiciones.fraccion": ("float", 0, 1),
-    "posiciones.espera_entre_entradas_min": ("int", 0, 1440),
     "rebotes.caida_pct": ("float", 0, 100),
     "rebotes.ventana_min": ("int", 5, 1440),
     "rebotes.salida_min": ("int", 5, 2880),
     "rebotes.enfriamiento_min": ("int", 0, 2880),
-    "analista.modo": ("enum", None, None),                  # tamaño según volatilidad: apagado | suave | fuerte
 }
+# Reglas de inversión FIJAS (usuario, 2026-11-06: «El backtest debe invertir igual que la Terminal, esas reglas no cambian»): cuánto se
+# invierte por posición (``posiciones.fraccion`` del saldo actual), cuántas a la vez (``posiciones.max``), la espera entre entradas, el
+# tamaño por volatilidad (``analista.modo``), la cuenta, el nocional y el apalancamiento. Ninguna es perilla: el backtest dimensiona
+# SIEMPRE como la Terminal activa (el snapshot) y una variante que las nombre se rechaza como cualquier clave no permitida.
+REGLAS_DE_INVERSION_FIJAS = ("posiciones.max", "posiciones.fraccion", "posiciones.espera_entre_entradas_min", "analista.modo",
+                             "cuenta", "notional_usd", "leverage")
 
 
 class EstrategiaError(qt.TraderError):

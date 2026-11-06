@@ -39,9 +39,13 @@ versión activa nueva es un snapshot nuevo (y las estrategias se vuelven a basar
 | `guardrails.min_stop_pct`, `guardrails.max_stop_pct`                    | topes del stop (solo actúan con stop)                                  | 0,005 / 0,03       |
 | `guardrails.cooldown_min`                                               | espera tras cerrar                                                     | 15                 |
 | `wake.flat_every_min`, `wake.position_every_min`                        | cada cuántos minutos (múltiplo de 5) mira la fórmula                   | 15 / 15            |
-| `posiciones.max`, `.fraccion`, `.espera_entre_entradas_min`             | cupos paralelos (1–3) y tamaño por cupo                                | 3 / 0,33 / 0       |
 | `rebotes.caida_pct`, `.ventana_min`, `.salida_min`, `.enfriamiento_min` | experto de rebote                                                      | 5 / 60 / 240 / 240 |
-| `analista.modo`                                                         | tamaño según volatilidad: `apagado`, `suave`, `fuerte`                 | `fuerte`           |
+
+**Las reglas de inversión no son perillas** (usuario, 2026-11-06: «El backtest debe invertir igual que la Terminal, esas reglas no
+cambian»): el tamaño de cada posición (`posiciones.fraccion`, 33 % del saldo del momento), los cupos (`posiciones.max`, 3),
+`posiciones.espera_entre_entradas_min`, el tamaño por volatilidad (`analista.modo`: ×1,5 / ×0,5), la cuenta, el nocional y el
+apalancamiento son los de la Terminal activa y ninguna variante los cambia (`futures_estrategias.REGLAS_DE_INVERSION_FIJAS`). Un
+archivo que los nombre se rechaza como cualquier clave no permitida, y el formulario «Nueva variante» no los ofrece.
 
 Todo lo demás se rechaza con un error que nombra la clave: expertos (`corta.*`), fechas de ajuste, rutas de modelos, productos,
 cuenta y capital, funding, ejecución, noticias, costos. Los umbrales de entrada del maestro y del portero viven en los archivos
@@ -73,19 +77,23 @@ completa (sin variables de entorno), sobre **la misma ventana y los mismos datos
 
 ### Cómo leer el informe
 
-| Campo                                   | Qué es                                                                                                                  |
-| --------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
-| `oficial` / `variante` → `metricas`     | Después de costos y funding, una por config                                                                             |
-| `operaciones`                           | Cantidad de operaciones cerradas (la última se cierra a la fuerza al final de la ventana: motivo `fin_examen`)          |
-| `neto_usd`, `neto_bp_cuenta`            | Suma del neto de las operaciones, en USD y en puntos básicos del capital inicial (1000 USD)                             |
-| `neto_bp_por_operacion`                 | Promedio del neto de cada operación, en bp de lo que arriesgó                                                           |
-| `acierto`                               | Parte de las operaciones con neto > 0                                                                                   |
-| `max_drawdown_usd`, `max_drawdown_bp`   | Mayor caída del saldo realizado desde su máximo (el saldo cambia al cerrar cada operación); bp sobre ese máximo         |
-| `horas_promedio`, `por_motivo`          | Tiempo abierta por operación y cuántas cerraron por tiempo, por vuelta del maestro, stop, rebote, etc.                  |
-| `diferencia`                            | **variante − oficial** de cada métrica numérica (`null` si una de las dos no tiene operaciones). Menos horas = negativo |
-| `estrategia`                            | id, `overlay_sha256` (de los bytes del archivo), `cambios`                                                              |
-| `snapshot.config_hash`, `*.config_hash` | Hash del snapshot y de cada config comparada (la oficial siempre es la del snapshot)                                    |
-| `ventana`, `datos`, `limites`           | Fechas pedidas y efectivas, fuente de datos, y lo que el replay no puede medir                                          |
+| Campo                                     | Qué es                                                                                                                       |
+| ----------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| `oficial` / `variante` → `metricas`       | Después de costos y funding, una por config                                                                                  |
+| `operaciones`                             | Cantidad de operaciones cerradas (la última se cierra a la fuerza al final de la ventana: motivo `fin_examen`)               |
+| `neto_usd`, `neto_bp_cuenta`              | Suma del neto de las operaciones, en USD y en puntos básicos del capital inicial (1000 USD)                                  |
+| `neto_bp_por_operacion`                   | **Ponderado por tamaño**: Σ neto USD / Σ nocional USD × 10000 (lo que ganó cada dólar puesto). Mismo signo que el neto       |
+| `neto_bp_promedio_simple`                 | Promedio sin ponderar del bp de cada operación; solo referencia (un resto de 10 US$ pesa como una de 500 US$)                |
+| `nocional_promedio_usd`, `_min_`, `_max_` | Tamaño de las posiciones: 33 % del saldo del momento, ×1,5 / ×0,5 por volatilidad, tope por saldo libre (3.er cupo ≈ 10 US$) |
+| `acierto`                                 | Parte de las operaciones con neto > 0 (cada una cuenta igual, sea de 10 o de 500 US$)                                        |
+| `max_drawdown_usd`, `max_drawdown_bp`     | Mayor caída del saldo realizado desde su máximo (el saldo cambia al cerrar cada operación); bp sobre ese máximo              |
+| `horas_promedio`, `horas_max`             | Tiempo abierta por operación; el máximo muestra que un tope (p. ej. 30 h) se cumple                                          |
+| `por_motivo`                              | Cuántas cerraron por cada razón: `maestro_vuelta`, `maestro_agotado`, `tiempo`, stop, `fin_examen`…                          |
+| `funding_operaciones_incompletas`         | Operaciones que tocaron una hora sin funding en el archivo (el booleano `funding_completo` se apaga con una sola hora)       |
+| `diferencia`                              | **variante − oficial** de cada métrica numérica (`null` si una de las dos no tiene operaciones). Menos horas = negativo      |
+| `estrategia`                              | id, `overlay_sha256` (de los bytes del archivo), `cambios`                                                                   |
+| `snapshot.config_hash`, `*.config_hash`   | Hash del snapshot y de cada config comparada (la oficial siempre es la del snapshot)                                         |
+| `ventana`, `datos`, `limites`             | Fechas pedidas y efectivas, fuente de datos, y lo que el replay no puede medir                                               |
 
 Dos configuraciones iguales dan diferencia cero. Límites del replay (siempre en `limites`): sin noticias, sin libro de órdenes
 (costos del modelo, no fills reales), sin posicionamiento; las perillas que dependen de eso solo se miden en sombra.
@@ -190,8 +198,16 @@ período vivo es posterior a la reserva, no se registran intentos y el resultado
   `solo_vivo` y `solo_replay` (con su explicación si el vivo omitió esa mirada, p. ej. `proceso_detenido`, o por el enfriamiento
   contado desde la hora real del fill). `senal_coincide` cuenta las miradas donde el maestro y el portero dicen lo mismo sin importar
   las posiciones (una diferencia de posición arrastra las acciones siguientes) y `puntaje_dif_max` es la mayor diferencia del puntaje.
+- **Saldo inicial**: el replay empieza con el `cash_usd` que tenía la Terminal al activarse esa config (`vivo.saldo_inicial_usd`),
+  porque cada posición toma su fracción del saldo del momento (con 1000 US$ fijos el tamaño salía 0,1 % distinto y el tercer cupo, un
+  resto de saldo, hasta 10 %).
 - **Operaciones**: se emparejan por lado y vela de entrada; de cada par, si la salida cae en la misma vela y el neto replay − vivo en
   bp. Una operación todavía abierta en la copia del vivo no se juzga por su salida.
+- **Tamaño e importes** (`operaciones.importes`, `operaciones.fuera_de_tolerancia`, `operaciones.tolerancias`): de cada par, el
+  nocional, la cantidad, el neto en US$, las comisiones, el funding y las horas abierta, con vivo, replay, diferencia y si cae dentro
+  de la tolerancia (`TOLERANCIAS_IMPORTES`): nocional y cantidad 1 % o 1 US$ (el tercer cupo es un resto de ~10 US$); neto 2 bp,
+  comisiones 0,5 bp y funding 0,5 bp del nocional vivo, comparados **a igual tamaño** (el tamaño ya tiene su propia comparación);
+  horas, una vela (5 min). Lo que queda fuera se lista con ambos valores. Las operaciones abiertas en el vivo solo comparan tamaño.
 - **Límites** (en el informe): el vivo llena contra el libro y el replay al cierre de la vela (unos bp de neto); noticias no
   reproducibles; esperas y omisiones del vivo.
 
@@ -199,4 +215,6 @@ período vivo es posterior a la reserva, no se registran intentos y el resultado
 
 213 de 213 decisiones del vivo coinciden (misma acción, mismo maestro y portero, puntaje idéntico); las 33 miradas que solo tiene el
 replay se explican (30 con el proceso del vivo detenido, 3 por el enfriamiento desde la hora real del fill); 9 de 9 operaciones
-emparejadas (6 cerradas con la salida en la misma vela y neto dentro de ±2 bp; 3 siguen abiertas en el vivo).
+emparejadas (6 cerradas con la salida en la misma vela y neto dentro de ±2 bp; 3 siguen abiertas en el vivo). Con el saldo inicial del
+vivo (998,68 US$) **el tamaño coincide**: 494,34 / 494,34 US$ (33 % × 1,5 del saldo), el tercer cupo 9,98 / 9,98 US$; comisiones y
+funding difieren menos de 0,0001 US$ y el neto hasta 0,09 US$ (≤ 2 bp: libro vs. vela).
