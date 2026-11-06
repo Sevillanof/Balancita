@@ -2,6 +2,7 @@ import { closeSync, openSync, readFileSync, readSync, statSync } from 'node:fs'
 import { basename } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { isMalformedError } from '../../platform/sqlite-safety.ts'
+import { MARKET_EVENT_PRODUCTS } from '../kraken-futures/futures-market.ts'
 
 /**
  * `GET /api/observability/health` (Mission Control B1): the state of six
@@ -72,6 +73,11 @@ export interface ObservabilityHealthReport {
 
 export interface ObservabilityHealthOptions {
   readonly products: readonly string[]
+  /**
+   * Products whose market events (tickers) the capture stores; the others have no ticker to be
+   * fresh or stale and are judged on their official candles only. Default: `MARKET_EVENT_PRODUCTS`.
+   */
+  readonly eventProducts?: readonly string[]
   readonly marketDbPath?: string
   readonly verdictsDbPath?: string
   readonly decisionsDbPath?: string
@@ -539,6 +545,7 @@ function dataComponent(
   const okMs = options.staleAfterMs ?? 15 * SECOND
   const errorMs = okMs * TICKER_WARN_FACTOR
   const captureProcess = processState(c, 'capture')
+  const eventProducts = options.eventProducts ?? MARKET_EVENT_PRODUCTS
   const market = withDb(options.marketDbPath, (db) => {
     const ticker = db.prepare(
       `SELECT MAX(received_at) AS at FROM paper_futures_market_events
@@ -564,9 +571,13 @@ function dataComponent(
     return {
       tickers: options.products.map((product) => ({
         product,
-        at: num(
-          (ticker.get(product, now - TICKER_WINDOW_MS) as Row | undefined)?.at,
-        ),
+        captured: eventProducts.includes(product),
+        at: eventProducts.includes(product)
+          ? num(
+              (ticker.get(product, now - TICKER_WINDOW_MS) as Row | undefined)
+                ?.at,
+            )
+          : null,
         candle: candle.get(product, MINUTE, now - CANDLE_ERROR_MS * 2) as
           Row | undefined,
       })),
@@ -629,10 +640,12 @@ function dataComponent(
     let newestCandle: number | null = null
     for (const row of tickers) {
       const age = row.at === null ? null : now - row.at
-      const tickerStatus = ageStatus(age, okMs, errorMs)
+      // A product without captured market events has no ticker to judge (datos-utiles S5).
+      const tickerStatus = row.captured ? ageStatus(age, okMs, errorMs) : null
       // No ticker in the lookback window is an error, not an unknown: the
       // source is readable and says there is nothing recent.
-      tickerStatuses.push(tickerStatus === 'unknown' ? 'error' : tickerStatus)
+      if (tickerStatus !== null)
+        tickerStatuses.push(tickerStatus === 'unknown' ? 'error' : tickerStatus)
       if (row.at !== null && (newestTicker === null || row.at > newestTicker))
         newestTicker = row.at
       const bucket = num(row.candle?.bucket)
@@ -646,14 +659,20 @@ function dataComponent(
         newestCandle = bucket + MINUTE
       items.push({
         product_id: row.product,
-        ticker_status: tickerStatus === 'unknown' ? 'error' : tickerStatus,
+        ticker_status:
+          tickerStatus === null
+            ? 'not_captured'
+            : tickerStatus === 'unknown'
+              ? 'error'
+              : tickerStatus,
         ticker_age_ms: age,
         candle_status: candleStatus === 'unknown' ? 'error' : candleStatus,
         last_closed_candle_age_ms: closeAge,
         candle_known_at_ms: num(row.candle?.known),
       })
     }
-    const tickerStatus = worst(tickerStatuses)
+    const tickerStatus: HealthStatus =
+      tickerStatuses.length === 0 ? 'unknown' : worst(tickerStatuses)
     const otherFeedFresh =
       latestAt !== null && latestFeed !== 'ticker' && now - latestAt <= okMs
     const tickerPair = pairStatus(
@@ -675,7 +694,9 @@ function dataComponent(
         rule: `peor producto: ok ≤ ${okMs / SECOND} s (límite de captura), warning ≤ ${errorMs / SECOND} s; el ticker llega por REST cada 1 s`,
         detail:
           tickerStatus === 'ok'
-            ? 'Los 8 productos recibieron ticker dentro del límite.'
+            ? tickerStatuses.length === tickers.length
+              ? `Los ${tickerStatuses.length} productos recibieron ticker dentro del límite.`
+              : `Los ${tickerStatuses.length} productos con eventos capturados (de ${tickers.length}) recibieron ticker dentro del límite.`
             : otherFeedFresh
               ? `Hay eventos recientes de otro feed (${latestFeed}) pero el ticker no se actualiza.`
               : `Ticker desactualizado en ${tickerStatuses.filter((s) => s !== 'ok').length} producto(s).`,

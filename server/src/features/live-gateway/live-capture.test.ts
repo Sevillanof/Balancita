@@ -2483,3 +2483,249 @@ describe('second WebSocket feed for PF_ETHUSD (extraMarketFeed)', () => {
     h.store.close()
   })
 })
+
+describe('market events only for the captured products (datos-utiles S5)', () => {
+  const T = 1_791_356_400_000 + 10_000
+  const PINNED = [
+    { productId: 'PF_XBTUSD', tickSize: '1' },
+    { productId: 'PF_ETHUSD', tickSize: '0.1' },
+    { productId: 'PF_SOLUSD', tickSize: '0.01' },
+    { productId: 'PF_XRPUSD', tickSize: '0.0001' },
+  ]
+  const offline = async (): Promise<Response> => {
+    throw new Error('offline in test')
+  }
+  const restTicker = (symbol: string, bid: number) => ({
+    symbol,
+    bid,
+    ask: bid + 1,
+    markPrice: bid + 0.5,
+    bidSize: 1,
+    askSize: 1,
+    suspended: false,
+  })
+  const allTickers = () =>
+    new Response(
+      JSON.stringify({
+        result: 'success',
+        tickers: PINNED.map(({ productId }, index) =>
+          restTicker(productId, 100 * (index + 1)),
+        ),
+      }),
+    )
+  const send = (socket: FuturesSocket, value: unknown) =>
+    socket.onmessage!({ data: JSON.stringify(value) })
+
+  function setup(extra: Partial<Parameters<typeof createLiveCapture>[0]> = {}) {
+    const dir = mkdtempSync(join(tmpdir(), 'balancita-capture-'))
+    dirs.push(dir)
+    const path = join(dir, 'market.sqlite')
+    const store = new FuturesMarketStore(path)
+    const sockets: Array<ReturnType<typeof fakeSocket>> = []
+    const lines: string[] = []
+    const clock = { now: T }
+    const capture = createLiveCapture({
+      store,
+      clock: () => clock.now,
+      makeSocket: () => {
+        const made = fakeSocket()
+        sockets.push(made)
+        return made.socket
+      },
+      fetchCatalog: async () => catalog,
+      fundingFetch: offline,
+      officialCandlesFetch: offline,
+      tickerFetch: offline,
+      products: PINNED,
+      candleTickMs: 5,
+      log: (line) => lines.push(line),
+      ...extra,
+    })
+    const events = () => {
+      const db = new DatabaseSync(path, { readOnly: true })
+      try {
+        return db
+          .prepare(
+            'SELECT feed, product_id FROM paper_futures_market_events ORDER BY rowid',
+          )
+          .all() as Array<{ feed: string; product_id: string }>
+      } finally {
+        db.close()
+      }
+    }
+    const productsOf = (feed: string) => [
+      ...new Set(
+        events()
+          .filter((event) => event.feed === feed)
+          .map((event) => event.product_id),
+      ),
+    ]
+    return { store, sockets, lines, clock, capture, events, productsOf }
+  }
+
+  it('stores REST tickers only for the captured products', async () => {
+    const h = setup({
+      eventProducts: ['PF_XBTUSD', 'PF_ETHUSD'],
+      tickerPollMs: 5,
+      tickerFetch: async () => allTickers(),
+    })
+    await h.capture.start()
+    await until(() => h.productsOf('ticker').length > 0)
+    // Let several polls run: a product that was going to appear has had its chance.
+    await wait(40)
+    await h.capture.stop()
+    // BTC's ticker comes from its WebSocket, not from the poll; ETH is the only polled product left.
+    expect(h.productsOf('ticker')).toEqual(['PF_ETHUSD'])
+    h.store.close()
+  })
+
+  it('keeps ETH tickers in the REST poll when only ETH is captured', async () => {
+    const h = setup({
+      eventProducts: ['PF_ETHUSD'],
+      tickerPollMs: 5,
+      tickerFetch: async () => allTickers(),
+    })
+    await h.capture.start()
+    await until(() => h.productsOf('ticker').length > 0)
+    await wait(40)
+    await h.capture.stop()
+    expect(h.productsOf('ticker')).toEqual(['PF_ETHUSD'])
+    h.store.close()
+  })
+
+  it('without eventProducts every pinned product keeps its ticker (previous behaviour)', async () => {
+    const h = setup({
+      tickerPollMs: 5,
+      tickerFetch: async () => allTickers(),
+    })
+    await h.capture.start()
+    await until(() => h.productsOf('ticker').length >= 3)
+    await h.capture.stop()
+    expect(new Set(h.productsOf('ticker'))).toEqual(
+      new Set(['PF_ETHUSD', 'PF_SOLUSD', 'PF_XRPUSD']),
+    )
+    h.store.close()
+  })
+
+  it('does not change official candles or funding polls of the products whose events are not captured', async () => {
+    const candleRequests = new Set<string>()
+    const fundingRequests = new Set<string>()
+    const h = setup({
+      eventProducts: ['PF_XBTUSD', 'PF_ETHUSD'],
+      officialPollMs: 5,
+      officialRequestGapMs: 0,
+      officialCandlesFetch: async (input) => {
+        const url = new URL(String(input))
+        candleRequests.add(url.pathname.split('/').at(-2)!)
+        return new Response(
+          JSON.stringify({ candles: [], more_candles: false }),
+        )
+      },
+      fundingFetch: async (input) => {
+        fundingRequests.add(String(input))
+        throw new Error('offline')
+      },
+      fundingPollMs: 5,
+    })
+    await h.capture.start()
+    await until(() => candleRequests.size >= PINNED.length)
+    await until(() =>
+      PINNED.every(({ productId }) =>
+        [...fundingRequests].some((url) => url.includes(productId)),
+      ),
+    )
+    await h.capture.stop()
+    expect([...candleRequests].sort()).toEqual(
+      PINNED.map(({ productId }) => productId).sort(),
+    )
+    h.store.close()
+  })
+
+  it('keeps the BTC trades, ticker and 60 s candles when BTC is among the captured products', async () => {
+    const h = setup({ eventProducts: ['PF_XBTUSD', 'PF_ETHUSD'] })
+    await h.capture.start()
+    expect(h.sockets).toHaveLength(1)
+    h.sockets[0]!.socket.onopen!()
+    send(h.sockets[0]!.socket, {
+      feed: 'ticker',
+      product_id: 'PF_XBTUSD',
+      time: T,
+      seq: 1,
+      bid: 90000,
+      ask: 90001,
+      last: 90000.5,
+      markPrice: 90000,
+      index: 89999,
+      suspended: false,
+    })
+    send(h.sockets[0]!.socket, {
+      feed: 'trade',
+      product_id: 'PF_XBTUSD',
+      uid: 'b1',
+      side: 'buy',
+      type: 'fill',
+      seq: 2,
+      time: T,
+      qty: 0.01,
+      price: 90000.5,
+    })
+    h.clock.now += 120_000
+    await until(() =>
+      (h.store.candleRevisions() as Array<{ is_closed: number }>).some(
+        (row) => row.is_closed === 1,
+      ),
+    )
+    await h.capture.stop()
+    expect(h.productsOf('ticker')).toEqual(['PF_XBTUSD'])
+    expect(h.productsOf('trade')).toEqual(['PF_XBTUSD'])
+    expect(h.capture.collector).toBeDefined()
+    h.store.close()
+  })
+
+  it('opens no BTC WebSocket when BTC is not captured, and the ETH feed still stores its trades', async () => {
+    const h = setup({
+      eventProducts: ['PF_ETHUSD'],
+      extraMarketFeed: { productId: 'PF_ETHUSD', tickMs: 5 },
+    })
+    await h.capture.start()
+    expect(h.sockets).toHaveLength(1)
+    expect(h.capture.collector).toBeUndefined()
+    expect(h.capture.extraCollector).toBeDefined()
+    h.sockets[0]!.socket.onopen!()
+    expect(
+      h.sockets[0]!.sent.map((message) => JSON.parse(message).product_ids),
+    ).toEqual([['PF_ETHUSD'], ['PF_ETHUSD'], ['PF_ETHUSD']])
+    send(h.sockets[0]!.socket, {
+      feed: 'trade',
+      product_id: 'PF_ETHUSD',
+      uid: 'e1',
+      side: 'buy',
+      type: 'fill',
+      seq: 1,
+      time: T,
+      qty: 1.25,
+      price: 2500,
+    })
+    expect(h.productsOf('trade')).toEqual(['PF_ETHUSD'])
+    await h.capture.stop()
+    h.store.close()
+  })
+
+  it('skips an extra feed whose product is not captured, with a log line', async () => {
+    const h = setup({
+      eventProducts: ['PF_XBTUSD'],
+      extraMarketFeed: { productId: 'PF_ETHUSD' },
+    })
+    await h.capture.start()
+    expect(h.sockets).toHaveLength(1)
+    expect(h.capture.extraCollector).toBeUndefined()
+    expect(
+      h.lines.some(
+        (line) =>
+          line.includes('PF_ETHUSD') && line.includes('not a captured product'),
+      ),
+    ).toBe(true)
+    await h.capture.stop()
+    h.store.close()
+  })
+})

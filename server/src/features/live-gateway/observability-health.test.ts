@@ -208,6 +208,63 @@ describe('observability health', () => {
     expect(report.overall.failing).toContain('data')
   })
 
+  it('judges the ticker only on the products whose market events are captured (datos-utiles S5)', () => {
+    const b = box()
+    seedHealthy(b)
+    // Only BTC and ETH still have market events; the other products have none, and candles stay fresh everywhere.
+    fresh(b.marketDb)
+    seedMarket(b.marketDb, {
+      now: NOW,
+      tickerAgeMs: { PF_XBTUSD: 2_000, PF_ETHUSD: 3_000 },
+      candleAgeMs: everyProduct(20_000),
+    })
+    const report = createObservabilityHealth(optionsOf(b)).report()
+    const data = component(report, 'data')
+    expect(check(data, 'ticker_freshness').status).toBe('ok')
+    expect(check(data, 'ticker_freshness').detail).toBe(
+      'Los 2 productos con eventos capturados (de 8) recibieron ticker dentro del límite.',
+    )
+    expect(check(data, 'candle_freshness').status).toBe('ok')
+    expect(check(data, 'capture_process').status).toBe('ok')
+    expect(data.items).toHaveLength(PRODUCTS.length)
+    expect(data.items![0]).toMatchObject({
+      product_id: 'PF_XBTUSD',
+      ticker_status: 'ok',
+      ticker_age_ms: 2_000,
+    })
+    expect(data.items![2]).toMatchObject({
+      product_id: 'PF_SOLUSD',
+      ticker_status: 'not_captured',
+      ticker_age_ms: null,
+      candle_status: 'ok',
+    })
+    // The ticker evidence is the newest captured ticker.
+    expect(
+      data.evidence.find((e) => e.source.includes('ticker')),
+    ).toMatchObject({ last_updated_ms: NOW - 2_000 })
+  })
+
+  it('still flags a stale ticker of a captured product and a stale candle of any product', () => {
+    const b = box()
+    seedHealthy(b)
+    fresh(b.marketDb)
+    seedMarket(b.marketDb, {
+      now: NOW,
+      tickerAgeMs: { PF_XBTUSD: 2_000, PF_ETHUSD: 180_000 },
+      candleAgeMs: { ...everyProduct(20_000), PF_SOLUSD: 20 * 60_000 },
+    })
+    const data = component(
+      createObservabilityHealth(optionsOf(b)).report(),
+      'data',
+    )
+    expect(check(data, 'ticker_freshness').status).toBe('error')
+    expect(check(data, 'candle_freshness').status).toBe('error')
+    expect(data.items![1]).toMatchObject({
+      product_id: 'PF_ETHUSD',
+      ticker_status: 'error',
+    })
+  })
+
   it('does not take a running process for a producing one: no recent evaluations is an error', () => {
     const b = box()
     seedHealthy(b)
@@ -956,11 +1013,16 @@ describe('observability health', () => {
       dirname(fileURLToPath(import.meta.url)),
       '../../../../docs/mission-control/b1',
     )
+    // The published examples show a capture that stores market events for every product.
+    const allCaptured = (b: Sandbox): ObservabilityHealthOptions => ({
+      ...optionsOf(b),
+      eventProducts: PRODUCTS,
+    })
     const scenarios: Record<string, () => ObservabilityHealthReport> = {
       'ejemplo-saludable': () => {
         const b = box()
         seedHealthy(b)
-        return createObservabilityHealth(optionsOf(b)).report()
+        return createObservabilityHealth(allCaptured(b)).report()
       },
       'ejemplo-degradado': () => {
         const b = box()
@@ -990,7 +1052,7 @@ describe('observability health', () => {
             'C30/PF_SOLUSD': 3 * 3_600_000,
           },
         })
-        return createObservabilityHealth(optionsOf(b)).report()
+        return createObservabilityHealth(allCaptured(b)).report()
       },
       'ejemplo-sin-datos': () =>
         createObservabilityHealth({

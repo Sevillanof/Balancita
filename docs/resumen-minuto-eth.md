@@ -46,6 +46,22 @@ La captura abre un **segundo WebSocket** solo para `PF_ETHUSD` (`extraMarketFeed
 - La retención existente (`trimRawEvents`, `futures-market-prune.ts`) **no cambió** y alcanza a ETH: tickers 48 h; trades y libros 7 días; la copia duplicada del mensaje se recorta a las 48 h (hay un test que lo verifica con eventos de ETH).
 - `futures_maker.py` (`tape_ranges`/`replay_trades`) lee trades de **cualquier** producto: ahora también verá los de ETH.
 
+## Qué eventos de mercado se capturan, por producto (datos-utiles S5)
+
+Desde el 2026-11-06 `paper_futures_market_events` (tickers, trades, libros) se guarda **solo** para los productos de `MARKET_EVENT_PRODUCTS` (`server/src/features/kraken-futures/futures-market.ts`, pasada a la captura como `eventProducts` en `capture-main.ts`): **`PF_ETHUSD`** (el que se opera) y **`PF_XBTUSD`**. Los otros 6 perpetuos fijados (`PF_SOLUSD`, `PF_ZECUSD`, `PF_XRPUSD`, `PF_NEARUSD`, `PF_HYPEUSD`, `PF_ADAUSD`) ya **no** tienen poll REST de ticker.
+
+| Producto    | Eventos de mercado               | Por qué                                                                                                                                                                                                                                                                                                               |
+| ----------- | -------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `PF_ETHUSD` | Se siguen guardando (sin cambio) | Es el producto operado y alimenta este resumen.                                                                                                                                                                                                                                                                       |
+| `PF_XBTUSD` | Se siguen guardando (sin cambio) | Su WebSocket de trades es la única fuente de las velas observadas de 60 s (el «tramo vivo» de BTC y sus revisiones, archivadas en Parquet), de las observaciones WS de funding y del producto por defecto del gateway (`PRODUCT_ID`). La terminal de la interfaz es solo de ETH, pero el gateway sigue sirviendo BTC. |
+| Los otros 6 | **Ya no se guardan**             | Sin lector vivo: la terminal es solo de ETH, el motor viejo D (único que leía sus tickers) está apagado, y el trader (`qwen-live`) lee velas por API, no esta tabla.                                                                                                                                                  |
+
+- **No cambia** para ningún producto: velas oficiales (REST, tabla aparte), funding (REST), analíticas, metadatos de instrumento. La salud (`observability-health`) deja de exigir ticker a los productos sin eventos capturados (`ticker_status: 'not_captured'`); su vela de 1 min se sigue exigiendo.
+- Lo ya guardado de esos 6 productos no se toca: la retención lo borra a las 48 h (tickers) y está archivado en Parquet.
+- Quitar BTC también es sacar `PF_XBTUSD` de esa lista: la captura deja de abrir su WebSocket (sin trades, ticker, velas observadas ni observaciones de funding de BTC). No se hizo porque deja sin datos al producto por defecto del gateway y a las velas observadas.
+- Efecto en disco (estimado, no medido: no se consultan las bases vivas): un ticker por segundo y producto, ≈ 1 GB por día entre los 8 según la nota de `docs/archivo-parquet.md` (48 h frente a 24 h) → ≈ 125 MB por día y producto, ≈ 0,75 GB por día de menos para los 6 productos, ≈ 1,5 GB menos en régimen con la retención de 48 h. El archivo SQLite no se encoge solo: el espacio liberado se reutiliza.
+- Herramientas de investigación que leen eventos de cualquier producto (`futures_maker.py`, `quotes:archive`, `capture_inventory.py`) ven los 6 productos hasta donde llegan los datos guardados y después solo BTC y ETH.
+
 ## Qué se llena
 
 Con esto se llenan todas las columnas: trades → `trade_count`, `buy_volume`, `sell_volume`, `vwap`, `last_price`; tickers REST → `spread_bp`, `top_bid_size`, `top_ask_size` (y `last_price` si no hubo trades); fotos del libro → `depth_bid`, `depth_ask` (promedio de las fotos del minuto: con la cadencia de 30 s son 2 por minuto). Un minuto sin fotos o sin trades deja esas columnas en `NULL`.
