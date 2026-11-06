@@ -72,7 +72,8 @@ async function main(): Promise<void> {
   // readers (gateway, Python) never take this lock.
   const lock = acquireWriterLock(config.futuresMarketDbPath)
   process.once('exit', () => lock.release())
-  // "Save less" switches, all OFF unless their variable is set (capture-savings.ts, docs/operacion-base-de-datos.md).
+  // "Save less" switches, OFF unless their variable is set, except the funding body, which defaults to
+  // FUTURES_FUNDING_BODY=none (short body; capture-savings.ts, docs/funding-cuerpo-respuestas.md).
   const savings = captureSavingsFromEnv(process.env)
   // docs/operacion-base-de-datos.md: NORMAL by default; FUTURES_DB_SYNCHRONOUS=full fsyncs every commit.
   const store = new FuturesMarketStore(config.futuresMarketDbPath, {

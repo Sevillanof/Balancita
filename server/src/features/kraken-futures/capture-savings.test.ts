@@ -63,9 +63,10 @@ describe('retention defaults and switches', () => {
     ).toBe(48 * H)
   })
 
-  it('has every saving switch off by default and on only for an explicit yes', () => {
+  it('has the other saving switches off by default and on only for an explicit yes; the funding body is not kept by default', () => {
     expect(captureSavingsFromEnv({})).toEqual({
       fundingBodyDaily: false,
+      fundingBodyNone: true,
       analyticsRawSlim: false,
     })
     expect(
@@ -74,7 +75,11 @@ describe('retention defaults and switches', () => {
         FUTURES_ANALYTICS_RAW_SLIM: '',
         FUTURES_CANDLE_REVISIONS_COMPACT: 'no',
       }),
-    ).toEqual({ fundingBodyDaily: false, analyticsRawSlim: false })
+    ).toEqual({
+      fundingBodyDaily: false,
+      fundingBodyNone: true,
+      analyticsRawSlim: false,
+    })
     expect(
       captureSavingsFromEnv({
         FUTURES_FUNDING_BODY_DAILY: '1',
@@ -83,6 +88,7 @@ describe('retention defaults and switches', () => {
       }),
     ).toEqual({
       fundingBodyDaily: true,
+      fundingBodyNone: false,
       analyticsRawSlim: true,
       candleCompaction: { settleMs: 6 * H },
     })
@@ -92,6 +98,36 @@ describe('retention defaults and switches', () => {
         FUTURES_CANDLE_REVISIONS_SETTLE_HOURS: '2',
       }).candleCompaction,
     ).toEqual({ settleMs: 2 * H })
+  })
+})
+
+describe('funding body mode: FUTURES_FUNDING_BODY', () => {
+  const mode = (env: Record<string, string>) => {
+    const s = captureSavingsFromEnv(env)
+    return [s.fundingBodyNone, s.fundingBodyDaily]
+  }
+  it('none is the default; full and daily restore the former storage; junk falls back to none', () => {
+    expect(mode({})).toEqual([true, false])
+    expect(mode({ FUTURES_FUNDING_BODY: 'none' })).toEqual([true, false])
+    expect(mode({ FUTURES_FUNDING_BODY: 'full' })).toEqual([false, false])
+    expect(mode({ FUTURES_FUNDING_BODY: ' FULL ' })).toEqual([false, false])
+    expect(mode({ FUTURES_FUNDING_BODY: 'daily' })).toEqual([false, true])
+    expect(mode({ FUTURES_FUNDING_BODY: 'maybe' })).toEqual([true, false])
+  })
+  it('the legacy FUTURES_FUNDING_BODY_DAILY=1 still means daily, but the new variable wins', () => {
+    expect(mode({ FUTURES_FUNDING_BODY_DAILY: '1' })).toEqual([false, true])
+    expect(
+      mode({
+        FUTURES_FUNDING_BODY_DAILY: '1',
+        FUTURES_FUNDING_BODY: 'none',
+      }),
+    ).toEqual([true, false])
+    expect(
+      mode({
+        FUTURES_FUNDING_BODY_DAILY: '1',
+        FUTURES_FUNDING_BODY: 'full',
+      }),
+    ).toEqual([false, false])
   })
 })
 
@@ -287,6 +323,142 @@ describe('funding responses: FUTURES_FUNDING_BODY_DAILY', () => {
     store.appendNewFundingKnowledge(second)
     expect(() => store.appendFundingResponse(second)).not.toThrow()
     store.close()
+  })
+
+  it('none: no response keeps its whole body, but hash, metadata, periods and sightings are identical', () => {
+    const offPath = dbPath()
+    const off = new FuturesMarketStore(offPath)
+    fill(off)
+    off.close()
+    const path = dbPath()
+    const store = new FuturesMarketStore(path, {
+      savings: { fundingBodyNone: true },
+    })
+    fill(store)
+    store.close()
+    const all = stored(path)
+    const former = stored(offPath)
+    expect(all.map((r) => isFundingSlimBody(r.raw_response))).toEqual([
+      true,
+      true,
+      true,
+      true,
+    ])
+    // Same primary key (hash of the full body), same arrival time, same periods.
+    expect(all.map((r) => [r.sha256, r.received_at])).toEqual(
+      former.map((r) => [r.sha256, r.received_at]),
+    )
+    expect(periods(path)).toEqual(periods(offPath))
+    expect(
+      rows(path, 'SELECT server_time FROM paper_futures_funding_responses'),
+    ).toEqual(
+      rows(offPath, 'SELECT server_time FROM paper_futures_funding_responses'),
+    )
+    // The hash and size of the full body stay in the row; the body text does not.
+    all.forEach((row, i) => {
+      const slim = JSON.parse(row.raw_response) as {
+        fullSha256: string
+        fullBytes: number
+        serverTime: string
+      }
+      expect(slim.fullSha256).toBe(row.sha256)
+      expect(slim.fullBytes).toBe(Buffer.byteLength(former[i]!.raw_response))
+      // The first response lists every period (nothing to drop yet); every later one shrinks.
+      if (i > 0)
+        expect(row.raw_response.length).toBeLessThan(
+          former[i]!.raw_response.length,
+        )
+    })
+    // A reader of `["rates"]` finds the period that was new, in Kraken's own text.
+    expect(all[1]!.raw_response).toContain(period(9, '0.000010'))
+  })
+
+  it('none: the very first response keeps the literal text of all its periods (no information is lost)', () => {
+    const path = dbPath()
+    const store = new FuturesMarketStore(path, {
+      savings: { fundingBodyNone: true },
+    })
+    store.appendNewFundingKnowledge(response(8, D + 9 * H + 1_000))
+    store.close()
+    const [row] = stored(path)
+    const slim = JSON.parse(row!.raw_response) as { rates: unknown[] }
+    expect(slim.rates).toHaveLength(9)
+    for (let h = 0; h <= 8; h++)
+      expect(row!.raw_response).toContain(period(h, `0.0000${h + 1}`))
+  })
+
+  it('none: fundingRecordsAsOf and fundingForInterval give the same rows as with full bodies', () => {
+    const offPath = dbPath()
+    const off = new FuturesMarketStore(offPath)
+    fill(off)
+    const path = dbPath()
+    const store = new FuturesMarketStore(path, {
+      savings: { fundingBodyNone: true },
+    })
+    fill(store)
+    expect(store.fundingRecordsAsOf(Number.MAX_SAFE_INTEGER)).toEqual(
+      off.fundingRecordsAsOf(Number.MAX_SAFE_INTEGER),
+    )
+    expect(store.fundingForInterval(D + 9 * H + 1, D + DAY)).toEqual(
+      off.fundingForInterval(D + 9 * H + 1, D + DAY),
+    )
+    expect(store.fundingSourceEvidence()).toEqual(off.fundingSourceEvidence())
+    off.close()
+    store.close()
+  })
+
+  it('none: a response whose literals cannot be isolated keeps its full body instead of being lost', () => {
+    const path = dbPath()
+    const store = new FuturesMarketStore(path, {
+      savings: { fundingBodyNone: true },
+    })
+    // A brace inside a value defeats the literal-object scan (same case as the poll extract).
+    const raw = JSON.stringify({
+      result: 'success',
+      serverTime: new Date(D + 2 * H).toISOString(),
+      rates: [
+        {
+          timestamp: new Date(D + H).toISOString(),
+          fundingRate: 0.2,
+          relativeFundingRate: 0.00001,
+          note: '}',
+        },
+      ],
+    })
+    expect(
+      store.appendNewFundingKnowledge(
+        parseHistoricalFundingResponse(raw, D + 2 * H + 1_000),
+      ),
+    ).toEqual({ stored: true, newPeriods: 1 })
+    store.close()
+    expect(stored(path).map((r) => r.raw_response)).toEqual([raw])
+    expect(periods(path)).toHaveLength(1)
+  })
+
+  it('none: re-recording a slim response in full (appendFundingResponse) is not a hash conflict', () => {
+    const path = dbPath()
+    const store = new FuturesMarketStore(path, {
+      savings: { fundingBodyNone: true },
+    })
+    const first = response(8, D + 9 * H + 1_000)
+    store.appendNewFundingKnowledge(first)
+    expect(() => store.appendFundingResponse(first)).not.toThrow()
+    store.close()
+  })
+
+  it('none wins over daily if a caller sets both (never a full body)', () => {
+    const path = dbPath()
+    const store = new FuturesMarketStore(path, {
+      savings: { fundingBodyDaily: true, fundingBodyNone: true },
+    })
+    fill(store)
+    store.close()
+    expect(stored(path).map((r) => isFundingSlimBody(r.raw_response))).toEqual([
+      true,
+      true,
+      true,
+      true,
+    ])
   })
 
   it('a slim body refuses to drop a period it must keep', () => {

@@ -874,19 +874,25 @@ export class FuturesMarketStore {
       (record) => !known.has(`${record.startMs}:${record.fundingRate}`),
     )
     if (fresh.length === 0) return { stored: false, newPeriods: 0 }
-    // Switch FUTURES_FUNDING_BODY_DAILY: the first new response of a UTC day keeps its full body,
-    // the others only the lines of their new periods (see fundingSlimBody).
+    // Switch FUTURES_FUNDING_BODY: `none` never keeps the full body; `daily` keeps the first new response of a
+    // UTC day and product in full. Either way the others keep only the lines of their new periods
+    // (see fundingSlimBody). If those lines cannot be isolated, the full body is kept: nothing is lost.
     const slim =
-      this.savings.fundingBodyDaily === true &&
-      this.fundingFullBodyOfDay(productId, response.receivedAtMs)
-    this.writeFundingResponse(
-      response,
-      fresh,
-      productId,
-      slim
-        ? fundingSlimBody(response, new Set(fresh.map((r) => r.startMs)))
-        : undefined,
-    )
+      this.savings.fundingBodyNone === true ||
+      (this.savings.fundingBodyDaily === true &&
+        this.fundingFullBodyOfDay(productId, response.receivedAtMs))
+    let storedBody: string | undefined
+    if (slim) {
+      try {
+        storedBody = fundingSlimBody(
+          response,
+          new Set(fresh.map((r) => r.startMs)),
+        )
+      } catch {
+        storedBody = undefined
+      }
+    }
+    this.writeFundingResponse(response, fresh, productId, storedBody)
     return { stored: true, newPeriods: fresh.length }
   }
 
@@ -1305,7 +1311,11 @@ export class FuturesMarketStore {
         )
       }
       this.db.exec('COMMIT')
-      if (storedBody === undefined && this.savings.fundingBodyDaily)
+      if (
+        storedBody === undefined &&
+        this.savings.fundingBodyNone !== true &&
+        this.savings.fundingBodyDaily
+      )
         this.fundingFullDay.set(
           productId,
           Math.floor(response.receivedAtMs / 86_400_000),
