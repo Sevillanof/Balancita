@@ -174,7 +174,7 @@ historial. No tiene título: la barra superior dice dónde se está. Diseño: `d
     velas entre la entrada y entrada + 36 h (el tope de la oficial). Solo cuentan velas que caen enteras en ese tramo; la que contiene
     la entrada solo aporta su cierre y el precio de entrada, y la que abre en el tope queda fuera. Nunca queda peor que el precio al
     que salió la oficial o la variante dentro del tope. **Su neto** = neto de la oficial + `nocional × (precio ideal − precio de la
-    salida oficial) / precio de entrada` (± según el lado): mismo tamaño y mismos costos que la oficial, porque el informe no trae
+salida oficial) / precio de entrada` (± según el lado): mismo tamaño y mismos costos que la oficial, porque el informe no trae
     comisiones ni precios por operación. Los precios de entrada y salida salen de las velas (interpolando entre apertura y cierre
     dentro de la vela), por eso son aproximados con velas de 4 h o 1 d; los netos de la oficial y la variante son los del backtest.
     Si el informe no trae `nocional_usd` (informe anterior), el neto ideal y «Le faltó» muestran «—».
