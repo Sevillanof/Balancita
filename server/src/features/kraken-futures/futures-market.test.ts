@@ -734,3 +734,160 @@ describe('collector without the book feed', () => {
     })
   })
 })
+
+describe('collector for another perpetual (PF_ETHUSD)', () => {
+  function harness(options: { productId?: string } = {}) {
+    const now = 100_000
+    let socket!: {
+      onopen: (() => void) | null
+      onmessage: ((event: { data: unknown }) => void) | null
+      onerror: (() => void) | null
+      onclose: (() => void) | null
+      send: (message: string) => void
+      close: () => void
+    }
+    const sent: string[] = []
+    const persisted: Array<Record<string, unknown>> = []
+    const gaps: Array<Record<string, unknown>> = []
+    const states: string[] = []
+    const collector = new KrakenFuturesMarketCollector({
+      ...options,
+      clock: () => now,
+      random: () => 0.5,
+      makeSocket: () =>
+        (socket = {
+          onopen: null,
+          onmessage: null,
+          onerror: null,
+          onclose: null,
+          send: (message) => sent.push(message),
+          close: () => {},
+        }),
+      setTimeout: () => 0 as unknown as ReturnType<typeof setTimeout>,
+      clearTimeout: () => {},
+      persist: (event) => {
+        persisted.push(event as unknown as Record<string, unknown>)
+      },
+      persistGap: (gap) => {
+        gaps.push(gap as unknown as Record<string, unknown>)
+      },
+      onState: (state, reason) => states.push(`${state}:${reason ?? ''}`),
+      staleAfterMs: 3000,
+    })
+    collector.start()
+    socket.onopen!()
+    const send = (value: unknown) =>
+      socket.onmessage!({ data: JSON.stringify(value) })
+    return { collector, sent, persisted, gaps, states, send, now: () => now }
+  }
+
+  it('marketSubscriptions takes the product and keeps PF_XBTUSD by default', () => {
+    expect(marketSubscriptions(['trade'], 'PF_ETHUSD')).toEqual([
+      '{"event":"subscribe","feed":"trade","product_ids":["PF_ETHUSD"]}',
+    ])
+    expect(marketSubscriptions(['trade'])).toEqual([
+      '{"event":"subscribe","feed":"trade","product_ids":["PF_XBTUSD"]}',
+    ])
+  })
+
+  it('subscribes to its own product and persists its trades and book with that product', () => {
+    const h = harness({ productId: 'PF_ETHUSD' })
+    expect(h.sent.map((m) => JSON.parse(m).product_ids)).toEqual([
+      ['PF_ETHUSD'],
+      ['PF_ETHUSD'],
+      ['PF_ETHUSD'],
+    ])
+    h.send({
+      feed: 'book_snapshot',
+      product_id: 'PF_ETHUSD',
+      seq: 1,
+      timestamp: 100_000,
+      bids: [{ price: 2500, qty: 3 }],
+      asks: [{ price: 2500.1, qty: 2 }],
+    })
+    h.send({
+      feed: 'trade',
+      product_id: 'PF_ETHUSD',
+      uid: 'e1',
+      side: 'sell',
+      type: 'fill',
+      seq: 1,
+      time: 100_000,
+      qty: 1.5,
+      price: 2500,
+    })
+    expect(h.persisted.map((e) => [e.type, e.productId])).toEqual([
+      ['book', 'PF_ETHUSD'],
+      ['trade', 'PF_ETHUSD'],
+    ])
+    expect(h.collector.book.bids).toEqual([{ price: '2500', quantity: '3' }])
+  })
+
+  it('records book gaps against its own product and re-requests the snapshot for it', () => {
+    const h = harness({ productId: 'PF_ETHUSD' })
+    h.send({
+      feed: 'book_snapshot',
+      product_id: 'PF_ETHUSD',
+      seq: 1,
+      timestamp: 100_000,
+      bids: [{ price: 2500, qty: 3 }],
+      asks: [{ price: 2500.1, qty: 2 }],
+    })
+    h.send({
+      feed: 'book',
+      product_id: 'PF_ETHUSD',
+      side: 'buy',
+      seq: 5,
+      timestamp: 100_001,
+      price: 2499,
+      qty: 1,
+    })
+    expect(h.gaps).toHaveLength(1)
+    expect(h.gaps[0]).toMatchObject({ productId: 'PF_ETHUSD', feed: 'book' })
+    const resubscribe = h.sent.slice(3).map((m) => JSON.parse(m))
+    expect(resubscribe.map((m) => [m.event, m.product_ids[0]])).toEqual([
+      ['unsubscribe', 'PF_ETHUSD'],
+      ['subscribe', 'PF_ETHUSD'],
+    ])
+  })
+
+  it('the default collector still rejects a PF_ETHUSD message (BTC behaviour unchanged)', () => {
+    const h = harness()
+    expect(h.sent.map((m) => JSON.parse(m).product_ids)).toEqual([
+      ['PF_XBTUSD'],
+      ['PF_XBTUSD'],
+      ['PF_XBTUSD'],
+    ])
+    h.send({
+      feed: 'trade',
+      product_id: 'PF_ETHUSD',
+      uid: 'e1',
+      side: 'sell',
+      type: 'fill',
+      seq: 1,
+      time: 100_000,
+      qty: 1.5,
+      price: 2500,
+    })
+    expect(h.persisted).toEqual([])
+    expect(h.collector.metrics.rejectedCount).toBe(1)
+    expect(h.states.at(-1)).toBe('degraded:Unexpected futures product_id.')
+  })
+
+  it('a PF_ETHUSD collector rejects a PF_XBTUSD message', () => {
+    const h = harness({ productId: 'PF_ETHUSD' })
+    h.send({
+      feed: 'trade',
+      product_id: 'PF_XBTUSD',
+      uid: 'b1',
+      side: 'buy',
+      type: 'fill',
+      seq: 1,
+      time: 100_000,
+      qty: 0.1,
+      price: 90_000,
+    })
+    expect(h.persisted).toEqual([])
+    expect(h.collector.metrics.rejectedCount).toBe(1)
+  })
+})
