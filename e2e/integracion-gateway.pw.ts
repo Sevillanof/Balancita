@@ -215,9 +215,13 @@ test('Terminal on the real gateway: every interaction answers without 404', asyn
 
   saveLog('solicitudes-terminal.json', log)
   // With every service up, nothing may answer 4xx/5xx and nothing may touch MOCK
-  // (the sandbox registry has no gate database: its gate reads are not judged).
+  // (the sandbox registry has no gate database: its gate reads are not judged;
+  // a variant never compared answers 404 sin_comparacion on purpose).
   const failed = log.filter(
-    (entry) => entry.status >= 400 && !entry.url.includes('/gate/'),
+    (entry) =>
+      entry.status >= 400 &&
+      !entry.url.includes('/gate/') &&
+      !entry.url.endsWith('/comparar'),
   )
   expect(failed, JSON.stringify(failed, null, 2)).toEqual([])
   expect(log.filter((entry) => entry.url.startsWith('/api-mock'))).toEqual([])
