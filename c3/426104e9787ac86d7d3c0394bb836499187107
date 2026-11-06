@@ -1,0 +1,22 @@
+config/estrategias/ejemplo-salida-30h.json
+  h_92dd6654ceb221 1-11
+config/terminal-activa.json
+  h_92dd6654ceb221 1-338
+docs/estrategias-laboratorio.md
+  h_92dd6654ceb221 1-56
+python/balancita_engine/futures_estrategias.py
+  h_92dd6654ceb221 1-184
+python/tests/test_futures_estrategias.py
+  h_92dd6654ceb221 1-167
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "c3426104e9787ac86d7d3c0394bb836499187107",
+  "prompts": {},
+  "humans": {
+    "h_92dd6654ceb221": {
+      "author": "Franco Sevillano <79455847+Sevillanof@users.noreply.github.com>"
+    }
+  }
+}
