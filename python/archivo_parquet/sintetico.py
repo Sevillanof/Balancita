@@ -5,7 +5,7 @@ import hashlib
 import json
 import random
 import sqlite3
-from typing import Sequence
+from typing import Optional, Sequence
 
 from .config import DAY_MS
 
@@ -277,8 +277,13 @@ TRIGGERS_FUNDING = ("""CREATE TRIGGER paper_futures_funding_responses_no_update 
         BEGIN SELECT RAISE(ABORT, 'funding evidence is immutable'); END""")
 
 
-def crear_copia_funding(ruta: str, dia0_ms: int, dias: int, por_dia: int = 24, periodos: int = 8760, semilla: int = 5) -> int:
-    """Una respuesta por hora de ~1 MB (el ano de funding): cada una es la anterior con un periodo nuevo al final y el mas viejo fuera."""
+def crear_copia_funding(ruta: str, dia0_ms: int, dias: int, por_dia: int = 24, periodos: int = 8760, semilla: int = 5,
+                        delgadas_desde: Optional[int] = None) -> int:
+    """Una respuesta por hora de ~1 MB (el ano de funding): cada una es la anterior con un periodo nuevo al final y el mas viejo fuera.
+
+    ``delgadas_desde=N``: desde la respuesta N (0 = todas) la fila lleva el cuerpo corto que guarda hoy la captura
+    (``fundingSlimBody`` de ``historical-funding.ts``: ``balancitaSlim``, hash y tamano del cuerpo entero, ``serverTime`` y solo el
+    periodo nuevo). La clave ``sha256`` sigue siendo la del cuerpo entero. Las anteriores quedan enteras, como las filas viejas reales."""
     rng = random.Random(semilla)
     con = sqlite3.connect(ruta)
     paso = 3_600_000
@@ -293,10 +298,15 @@ def crear_copia_funding(ruta: str, dia0_ms: int, dias: int, por_dia: int = 24, p
             recibido = dia0_ms + k * (DAY_MS // por_dia) + 2_000
             cola.append((cola[-1][0] + paso, "%.12f" % rng.gauss(0, 3e-5), "%.12f" % rng.gauss(0, 1e-4)))
             cola.pop(0)
-            cuerpo = json.dumps({"result": "success", "serverTime": "synthetic", "rates": [
-                {"timestamp": dt_iso(t), "fundingRate": a, "relativeFundingRate": b} for t, a, b in cola]})
-            con.execute("INSERT INTO paper_futures_funding_responses VALUES(?,?,?,?)",
-                        (hashlib.sha256(cuerpo.encode()).hexdigest(), recibido, dt_iso(recibido), cuerpo))
+            literales = [json.dumps({"timestamp": dt_iso(t), "fundingRate": a, "relativeFundingRate": b}) for t, a, b in cola]
+            cuerpo = json.dumps({"result": "success", "serverTime": "synthetic", "rates": [json.loads(x) for x in literales]})
+            sha = hashlib.sha256(cuerpo.encode()).hexdigest()
+            if delgadas_desde is not None and k >= delgadas_desde:
+                cuerpo_fila = '{"balancitaSlim":true,"fullSha256":"%s","fullBytes":%d,"serverTime":"synthetic","rates":[%s]}' % (
+                    sha, len(cuerpo.encode()), literales[-1])
+            else:
+                cuerpo_fila = cuerpo
+            con.execute("INSERT INTO paper_futures_funding_responses VALUES(?,?,?,?)", (sha, recibido, dt_iso(recibido), cuerpo_fila))
             total += 1
         con.commit()
     finally:

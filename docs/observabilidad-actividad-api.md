@@ -147,3 +147,4 @@ latencia depende de la ventana, no del historial (14× más historial: mismo ord
 - Mediciones solo en Linux con caché de páginas caliente; en la Mac con disco frío la primera lectura puede tardar más
   (no se midió allí por indicación de no tocar la captura).
 - Veredictos reconstruidos de un respaldo se cuentan por su minuto, no por cuándo se escribieron.
+- **Motor D retirado (datos-útiles S7).** Con `FUTURES_ENGINE_D_RETIRED=1` (o la opción `engineDRetired`) `evaluations`, `signals` y `discards` salen `unavailable` con el detalle «Motor D retirado…» (y `evidence.state: "missing"`) en vez de contar ceros sobre una base que ya no crece; no se abre la base de verdicts. `operations` (forward) no cambia. Sin la variable el comportamiento es el de antes.

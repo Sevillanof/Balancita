@@ -140,7 +140,9 @@ TABLAS = {
             Derivada("j_schema_version", "payload_json", ("schema_version",), "text", diccionario=True),
             Derivada("j_proposals_n", "payload_json", ("proposals",), "int", op="len"),
         )),
-    # funding_responses: ~1 MB por fila, cuerpos casi iguales entre si. 1 archivo por MES, zstd 19, paginas de 64 MB para que zstd vea
+    # funding_responses: las filas viejas pesan ~1 MB y sus cuerpos son casi iguales entre si; desde S6 (datos-utiles) la captura guarda en
+    # raw_response un cuerpo corto (`{"balancitaSlim":true,"fullSha256":...,"fullBytes":...,"serverTime":...,"rates":[solo lo nuevo]}`, <1 KB) y la
+    # clave sha256 sigue siendo la del cuerpo entero. Mismas columnas y tipos: un mes puede mezclar ambas y vuelve exacto. 1 archivo por MES, zstd 19, paginas de 64 MB para que zstd vea
     # cuerpos enteros, grupos de 16 filas (~16 MB: memoria acotada), sin diccionario ni estadisticas en el cuerpo. Sin producto.
     "funding_responses": TablaConfig(
         nombre="funding_responses", sqlite="paper_futures_funding_responses", tiempo="received_at", clave=("received_at", "sha256"),

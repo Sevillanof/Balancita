@@ -382,6 +382,34 @@ class ListaDeExclusion(Base):
         self.assertIsNone(nocturno.motivo_base_excluida("otra-base__x"))
         self.assertIsNone(nocturno.motivo_base_excluida("futures-strategies-extra"))  # nombre exacto, no prefijo
 
+    def test_los_motivos_del_motor_d_dicen_que_esta_apagado_y_no_que_se_va_a_apagar(self):  # S7
+        for base in ("futures-verdicts", "futures-llm-decisions", "futures-forecast-scores"):
+            for tabla, motivo in nocturno.TABLAS_EXCLUIDAS[base].items():
+                self.assertIn("motor D apagado (S7)", motivo, (base, tabla))
+                self.assertNotIn("por apagar", motivo, (base, tabla))
+        self.assertNotIn("hasta decidir", nocturno._MOTOR_D)
+        self.assertIn("apagado", nocturno._MOTOR_D)
+
+    def test_las_tres_bases_del_motor_d_siguen_en_el_archivo_y_sin_filas_nuevas_no_hacen_fallar_la_noche(self):  # S7
+        # Apagado el motor D, sus bases no crecen pero el respaldo del VPS las sigue copiando cada noche (los archivos siguen ahi):
+        # la copia de una noche posterior, con las mismas filas, sale con codigo 0 igual que la anterior.
+        for base in ("futures-verdicts", "futures-llm-decisions", "futures-forecast-scores"):
+            self.assertIn(base, nocturno.BASES)
+        self.crear_vps()
+        for sello in ("20261102-040000", "20261103-040000"):
+            for base in ("futures-verdicts", "futures-llm-decisions", "futures-forecast-scores"):
+                import shutil
+                origen = os.path.join(self.resp, "%s-20261102-040000.sqlite" % base)
+                destino = os.path.join(self.resp, "%s-%s.sqlite" % (base, sello))
+                if origen != destino:
+                    shutil.copy(origen, destino)
+                    os.utime(destino, (AHORA_S - 3600, AHORA_S - 3600))
+        res = self.correr(dry_run=True, bases=nocturno.BASES, ahora_s=AHORA_S + DAY_MS / 1000)
+        self.assertEqual(res["codigo"], 0, res)
+        for base in ("futures-verdicts", "futures-llm-decisions", "futures-forecast-scores"):
+            self.assertEqual(res["bases"][base]["estado"], "ok", (base, res["bases"][base]))
+            self.assertNotIn("tablas_sin_cubrir", res["bases"][base])
+
     def test_tabla_nueva_en_qwen_live_o_excluida_de_otra_base_sigue_siendo_hueco(self):  # S3: lo no exportado y no excluido es fallo
         import sqlite3
         self.crear_vps()
