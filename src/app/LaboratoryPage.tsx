@@ -15,6 +15,7 @@ export default function LaboratoryPage() {
       navigation={appNavigation('estrategias')}
       center={<AccountBalance />}
       status={<AppStatusChips apiBase={terminalApiBase()} b1={health} />}
+      viewport
     >
       <StrategyLab />
     </AppShell>

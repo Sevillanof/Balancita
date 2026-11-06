@@ -117,6 +117,33 @@ Rutas bajo `/api-strategies` (el mismo proceso del puerto 8790; `--estrategias-d
 
 Los trabajos viven en memoria (se pierden al reiniciar el servidor).
 
+## La página Estrategias (`/estrategias`)
+
+Solo muestra variantes de la Terminal (T4, S5). Las estrategias de reglas C25–C33, su editor, VectorBT, el ranking, la puerta, la
+prueba rápida con Qwen y los diálogos de activar/borrar ya no están en la página; sus datos y su backend siguen guardados como
+historial. No tiene título: la barra superior dice dónde se está. Diseño: `design/estrategias-laboratorio/01-lista-y-detalle.html`.
+
+- **Izquierda**: la tarjeta «Terminal activa · la que opera» (versión y fecha de `origen`, hash corto y, si hay una comparación
+  lista, su resultado en la ventana honesta), «Variantes · N» con **+ Nueva variante** y una tarjeta por variante: qué cambia
+  («Tope de horas 36 h → 30 h»), estado (**Sin probar**, **Probando…**, **Mejor que la oficial**, **Peor que la oficial**, **Falló**,
+  **No se puede probar**) y el resumen del backtest (operaciones y diferencia de neto contra la oficial). El estado sale del
+  último trabajo de `GET /estrategias/<id>/comparar`; como el servidor guarda los trabajos en memoria, tras reiniciarlo una
+  variante vuelve a «Sin probar» hasta que se corra de nuevo.
+- **Derecha**: la variante elegida. Barra de etapas **Backtest → Sombra → Promover** (Sombra y Promover aparecen deshabilitadas con
+  «próximamente»: son T5/S6); barras de neto Oficial (azul) y Variante (ámbar) con el número de operaciones dentro; la curva
+  **Saldo acumulado**; cuatro tarjetas (Neto por operación, Acierto, Peor caída, Horas promedio con la diferencia) y el pie con la
+  ventana, «Reserva intacta» y las condiciones que el backtest no reproduce (Noticias, Libro, Posicionamiento, tachadas con su
+  motivo en el tooltip, según `limites` del informe), **Ver operaciones** (lista de operaciones de la variante o de la oficial) y
+  **Volver a correr**. Sin resultado se muestra el motivo: nunca probada (botón **Correr backtest**), corriendo, con error o sin
+  poder usarse.
+- **Nueva variante** (panel en lugar del detalle): nombre y las perillas permitidas que devuelve `GET /estrategias`, cada una con
+  su «hoy X». Los valores se muestran en la unidad habitual (2160 min → 36 h, 0,33 → 33 %) y se envían en la del servidor. Solo se
+  envía lo que difiere de hoy; la descripción es el resumen del cambio. Al crearla se arranca su backtest.
+- **Curva de saldo**: se arma en el navegador con las operaciones del informe (`oficial.operaciones` y `variante.operaciones`).
+  Cada configuración acumula `neto_usd` por orden de `salida_ms`, escalonado: arranca en 0 al inicio efectivo de la ventana
+  (`ventana.desde_efectivo_ms`), cambia al cerrar cada operación y sigue plana hasta `ventana.hasta_ms`. Las dos comparten ejes
+  y el cero siempre está dentro. Es neto después de costos, el mismo que suman las barras.
+
 ## Replay contra el vivo (S4)
 
 ```
