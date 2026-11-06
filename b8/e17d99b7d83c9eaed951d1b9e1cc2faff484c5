@@ -1,0 +1,26 @@
+docs/estrategias-laboratorio.md
+  h_92dd6654ceb221 46,80-96,214-219
+odd/tasks/estrategias-laboratorio.md
+  h_92dd6654ceb221 188
+odd/tasks/tope-por-lugar.md
+  h_92dd6654ceb221 1-24
+python/balancita_engine/futures_qwen_analista.py
+  h_92dd6654ceb221 12-13
+python/balancita_engine/futures_qwen_posiciones.py
+  h_92dd6654ceb221 6-7
+python/balancita_engine/futures_qwen_trader.py
+  h_92dd6654ceb221 1336-1339
+python/tests/test_futures_qwen_posiciones.py
+  h_92dd6654ceb221 9,183-245
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "b8e17d99b7d83c9eaed951d1b9e1cc2faff484c5",
+  "prompts": {},
+  "humans": {
+    "h_92dd6654ceb221": {
+      "author": "Franco Sevillano <79455847+Sevillanof@users.noreply.github.com>"
+    }
+  }
+}
