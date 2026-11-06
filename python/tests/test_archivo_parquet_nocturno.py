@@ -221,6 +221,29 @@ class Corrida(Base):
         with mock.patch.object(nocturno, "exportar", return_value=abiertos):
             self.assertEqual(self.correr(dry_run=True)["codigo"], 0)
 
+    def test_dia_perdido_aceptado_no_es_hueco_pero_otro_dia_si(self):
+        self.copia()
+        aceptado = {"tabla": "market_events", "dia": "2026-11-02", "motivo": "la copia ya no tiene el inicio del periodo"}
+        nuevo = {"tabla": "market_events", "dia": "2026-11-07", "motivo": "la copia ya no tiene el inicio del periodo"}
+        perdidos = {("futures-verdicts", "market_events", "2026-11-02"): "recortado por la retencion antes de que existiera el respaldo"}
+        with mock.patch.object(nocturno, "PERIODOS_PERDIDOS_ACEPTADOS", perdidos):
+            with mock.patch.object(nocturno, "exportar", return_value=self.reporte(omitidos_por_retencion=[aceptado])):
+                res = self.correr(dry_run=True)
+            self.assertEqual(res["codigo"], 0)
+            info = res["bases"]["futures-verdicts"]
+            self.assertEqual(info["estado"], "ok")
+            self.assertNotIn("omitidos_por_retencion", info)
+            self.assertEqual(info["perdidos_aceptados"], [dict(aceptado, aceptado=perdidos[("futures-verdicts", "market_events", "2026-11-02")])])
+            with mock.patch.object(nocturno, "exportar", return_value=self.reporte(omitidos_por_retencion=[aceptado, nuevo])):
+                res = self.correr(dry_run=True)
+            self.assertEqual(res["codigo"], 1)
+            self.assertEqual(res["bases"]["futures-verdicts"]["omitidos_por_retencion"], [nuevo])
+
+    def test_la_lista_de_perdidos_aceptados_tiene_motivo(self):
+        self.assertIn(("futures-market", "market_events", "2026-11-02"), nocturno.PERIODOS_PERDIDOS_ACEPTADOS)
+        for clave, motivo in nocturno.PERIODOS_PERDIDOS_ACEPTADOS.items():
+            self.assertTrue(motivo.strip(), clave)
+
     def test_cualquier_error_de_una_base_es_fallo_y_sigue_con_las_demas(self):
         self.copia()
         self.copia(base="positioning", tablas=("verdicts",))
