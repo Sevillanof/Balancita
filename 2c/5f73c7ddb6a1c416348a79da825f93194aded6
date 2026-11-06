@@ -1,0 +1,64 @@
+docs/estrategias-laboratorio.md
+  h_92dd6654ceb221 120-146
+e2e/estrategias-inventario.pw.ts
+  h_92dd6654ceb221 1,3,6-8,11-14,16-36,38-52,54-120,122-133,135-142,144-152,154-177,179-180,182-184,188-189,193-194,197,200,203,205-212,214-216,218,220,222-253,256-257,259-269,271-288,290-299
+odd/tasks/estrategias-laboratorio.md
+  h_92dd6654ceb221 182
+src/app/LaboratoryPage.tsx
+  h_92dd6654ceb221 18
+src/features/strategy-lab/domain/estrategias-curva.test.ts
+  h_92dd6654ceb221 2-7,9-12,14-23,26-30,33-40,43-48,50-67
+src/features/strategy-lab/domain/estrategias-curva.ts
+  h_92dd6654ceb221 1-2,4-20,22-23,26-39,42-51,53-54,58,60-73,75-83
+src/features/strategy-lab/domain/estrategias-estado.test.ts
+  h_92dd6654ceb221 3-13,15-20,23-33,35-40,42-49
+src/features/strategy-lab/domain/estrategias-estado.ts
+  h_92dd6654ceb221 1-4,6,8-19,22-45,48-54,57-63,66-70
+src/features/strategy-lab/domain/estrategias-format.test.ts
+  h_92dd6654ceb221 3-16,18,20-30,32-33,36-43,46-50,53-72,76-80,83-106,109-125,128-145,148-154
+src/features/strategy-lab/domain/estrategias-format.ts
+  h_92dd6654ceb221 1,3,5-14,16-96,99,101-104,107,109-113,115-116,118,120-127,130-137,140-148,151,153-171,174-177,179-189,192-203,205,208-226,229-233,236-252,255-263,266-267,269-272,274-275,277-299,302-305,308-316
+src/features/strategy-lab/infrastructure/estrategias-api.test.ts
+  h_92dd6654ceb221 1-6,9,11-14,16-17,21-27,29-43,47-52,56-59,61-64,66,70-87
+src/features/strategy-lab/infrastructure/estrategias-api.ts
+  h_92dd6654ceb221 2-3,5,7,9-19,22,24,26-32,35-91,93-103,105-108,110-127,130-134,137,139,141-144,146,150-157,160-161,163-164,168,171-176,178-182,184,187-191,194,196-202,204-208,214-215,217-224
+src/features/strategy-lab/presentation/CurvaSaldo.tsx
+  h_92dd6654ceb221 1-8,10-26,29-47,51-53,55-64,66-111,113-127
+src/features/strategy-lab/presentation/EstadoTag.tsx
+  h_92dd6654ceb221 1-2,4-5,7-11
+src/features/strategy-lab/presentation/EstrategiasPage.test.tsx
+  h_92dd6654ceb221 3-5,7-19,21,23-25,28-29,31-34,36-40,42-57,59-60,62-81,84-90,92-94,96,99-113,115-157,159-174,177-180,183-187,189-223,226-228,230-232,234,236-238,240-241,243-247,249-251,255-261,263-275,278-284,286-288,290-292,295,297-302,304-309,312,314-316,318-325,328-361,364-383,388-391,393-395,397-398,401-446,448-452,454-458,461-470,473-485,488-502,504-521,523
+src/features/strategy-lab/presentation/EstrategiasPage.tsx
+  h_92dd6654ceb221 1,4-13,16,18,21-22,25-26,28,33,44-75,77-101,105-106,109-110,112-114,116-120,123-161,163-165,167-173,176-184,186-193,195
+src/features/strategy-lab/presentation/NuevaVarianteForm.tsx
+  h_92dd6654ceb221 1,3-23,26-28,30,33-35,37-38,40,42,44,46-49,51-53,55-58,60-66,69-78,83-177,179,181,185-186,190-192,194,197
+src/features/strategy-lab/presentation/OperacionesModal.tsx
+  h_92dd6654ceb221 1,3-9,11-15,18,21-24,26-45,47-89
+src/features/strategy-lab/presentation/ResultadoComparacion.tsx
+  h_92dd6654ceb221 1-8,11-13,16-71,75-76,78-81,83-111,113-118,120-138,144-168,170-172,174-196,198-203,205-207,211-220,222-226,228-253,255-270
+src/features/strategy-lab/presentation/StrategyLab.tsx
+  h_92dd6654ceb221 3-6,9-10,13,15-20,45
+src/features/strategy-lab/presentation/TerminalActivaCard.tsx
+  h_92dd6654ceb221 1-3,6-8,11-19,21-23,25-30,32-42,44
+src/features/strategy-lab/presentation/VarianteCard.tsx
+  h_92dd6654ceb221 1-13,16-20,23-52,54-55,57-62,64-77,79-81,83-84
+src/features/strategy-lab/presentation/VarianteDetalle.tsx
+  h_92dd6654ceb221 2-12,15-22,25,27-35,37-64,67-74,76-96,98-160,163-189,192-194,196,198-228
+src/features/strategy-lab/presentation/estrategias-styles.ts
+  h_92dd6654ceb221 1-32
+src/features/strategy-lab/presentation/use-comparaciones.ts
+  h_92dd6654ceb221 1-6,8-9,11-12,15-16,18-21,23-25,28,30,32,34,36-85,87-96,98
+src/features/strategy-lab/testing/estrategias-fixture.ts
+  h_92dd6654ceb221 1,3-11,13-14,16,18-25,28-35,38-45,48-55,58-65,68-75,78-85,88-95,98-102,106-152,154-157,159-192,194-203,205-293
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "2c5f73c7ddb6a1c416348a79da825f93194aded6",
+  "prompts": {},
+  "humans": {
+    "h_92dd6654ceb221": {
+      "author": "Franco Sevillano <79455847+Sevillanof@users.noreply.github.com>"
+    }
+  }
+}
