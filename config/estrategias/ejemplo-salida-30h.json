@@ -1,0 +1,11 @@
+{
+ "id": "ejemplo-salida-30h",
+ "nombre": "Ejemplo: tope a 30 h",
+ "descripcion": "La Terminal activa con el cierre obligatorio a 30 h en lugar de 36 h. Ejemplo del formato; no es una recomendación.",
+ "base_config_hash": "37f572a841d35a7b7a8d01569378c508c6bcd9c8a4a6a2adb96e5d1097eade07",
+ "cambios": {
+  "guardrails": {
+   "max_hold_min": 1800
+  }
+ }
+}
