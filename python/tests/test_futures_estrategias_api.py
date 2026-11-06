@@ -13,6 +13,7 @@ from http.server import ThreadingHTTPServer
 from balancita_engine import futures_estrategias as est
 from balancita_engine import futures_estrategias_api as api
 from balancita_engine import futures_estrategias_backtest as bt
+from balancita_engine import futures_history as history
 from balancita_engine import futures_qwen_trader as qt
 from balancita_engine.futures_strategy_registry import StrategyRegistry, StrategyService, make_handler
 
@@ -47,7 +48,8 @@ class Servidor(unittest.TestCase):
         self.registry = StrategyRegistry(os.path.join(self.dir, "strategies.sqlite"))
         self.addCleanup(self.registry.close)
         service = StrategyService(self.registry, None, {})
-        service.estrategias = api.EstrategiasApi(carpeta=self.carpeta, comparador=self.comparador)
+        self.api = api.EstrategiasApi(carpeta=self.carpeta, comparador=self.comparador)
+        service.estrategias = self.api
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(service))
         self.base = "http://127.0.0.1:{}/api-strategies".format(self.server.server_address[1])
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
@@ -310,6 +312,154 @@ class CompararTests(Servidor):
         self.crear(id="otra", nombre="Otra")
         status, out = self.call("/estrategias/otra/comparar/{}".format(job["job_id"]))
         self.assertEqual((status, out["error"]), (404, "trabajo_no_existe"))
+
+
+HORA, DIA = 3_600_000, 86_400_000
+CINCO = 5 * 60_000
+
+
+def sembrar_velas(cache_dir, producto, tramos):
+    """Escribe velas de 5 m en la caché como lo hace el trader. Vela i del tramo: open 100+i, high open+5, low open-5, close open+1, volumen 1."""
+    cache = history.CandleCache(os.path.join(cache_dir, "candles-{}.sqlite".format(producto)))
+    try:
+        filas = []
+        for desde, hasta in tramos:
+            for i, t in enumerate(range(desde, hasta, CINCO)):
+                abre = 100 + i
+                filas.append(("5m", t, str(abre), str(abre + 5), str(abre - 5), str(abre + 1), "1"))
+        with cache.db:
+            cache.db.executemany("INSERT OR REPLACE INTO candles VALUES(?,?,?,?,?,?,?)", filas)
+    finally:
+        cache.close()
+
+
+class VelasTests(Servidor):
+    """``GET estrategias/velas/<producto>/<intervalo>/<desde_ms>/<hasta_ms>/<antes_ms>/<limite>``.
+
+    ``[desde_ms, hasta_ms)`` es la ventana PROBADA de la comparación (la del informe): nada fuera de ella se sirve, y ``hasta_ms`` nunca pasa
+    de la reserva. ``antes_ms`` es el cursor de paginación (velas anteriores a él); ``limite`` cuenta las más nuevas. Velas de la caché que
+    leyó el backtest."""
+
+    def setUp(self):
+        super().setUp()
+        self.cache = os.path.join(self.dir, "cache")
+        self.desde = qt.date_ms(bt.DESDE_HONESTA)
+        self.reserva = qt.load_holdout_ms()
+        sembrar_velas(self.cache, "PF_ETHUSD", [(self.desde - 2 * DIA, self.desde + 2 * DIA), (self.reserva - 2 * DIA, self.reserva + 2 * DIA)])
+        self.api.cache_dir = self.cache
+
+    def velas(self, intervalo="1h", desde=None, hasta=None, antes=None, limite=100, producto="PF_ETHUSD"):
+        desde = self.desde if desde is None else desde
+        hasta = self.reserva if hasta is None else hasta
+        antes = hasta if antes is None else antes
+        return self.call("/estrategias/velas/{}/{}/{}/{}/{}/{}".format(producto, intervalo, desde, hasta, antes, limite))
+
+    def test_one_hour_candle_aggregates_twelve_5m_candles(self):
+        status, out = self.velas("1h", limite=2)
+        self.assertEqual(status, 200)
+        self.assertEqual((out["producto"], out["intervalo"]), ("PF_ETHUSD", "1h"))
+        self.assertEqual([v["t"] for v in out["velas"]], [self.reserva - 2 * HORA, self.reserva - HORA])
+        # la última hora antes de la reserva son las 12 últimas velas del segundo tramo (i = 564..575)
+        self.assertEqual(out["velas"][-1], {"t": self.reserva - HORA, "o": 100.0 + 564, "h": 100.0 + 575 + 5, "l": 100.0 + 564 - 5,
+                                            "c": 100.0 + 575 + 1, "v": 12.0})
+
+    def test_every_interval_buckets_on_utc_boundaries(self):
+        for intervalo, paso in (("15m", 15 * 60_000), ("1h", HORA), ("4h", 4 * HORA), ("1d", DIA)):
+            status, out = self.velas(intervalo, limite=2)
+            self.assertEqual(status, 200, intervalo)
+            self.assertEqual(len(out["velas"]), 2, intervalo)
+            self.assertTrue(all(v["t"] % paso == 0 for v in out["velas"]), intervalo)
+            self.assertEqual(out["velas"][-1]["t"], self.reserva - paso, intervalo)
+            self.assertEqual(out["velas"][-1]["v"], paso / CINCO, intervalo)
+
+    def test_the_reserve_is_refused_as_the_end_of_the_window_and_never_served(self):
+        for hasta in (self.reserva + 1, self.reserva + 3 * DIA, self.reserva + 10**13):
+            status, out = self.velas("1h", hasta=hasta, limite=5000)
+            self.assertEqual((status, out["error"]), (400, "ventana_invalida"))
+            self.assertIn("reserva", out["detail"])
+            self.assertNotIn("velas", out)
+        status, out = self.velas("1h", hasta=self.reserva, antes=self.reserva + 3 * DIA, limite=5000)     # el cursor se recorta al fin
+        self.assertEqual(status, 200)
+        self.assertEqual(out["hasta_ms"], self.reserva)
+        self.assertTrue(all(v["t"] + HORA <= self.reserva for v in out["velas"]))
+
+    def test_the_last_candle_of_the_window_is_the_one_that_closes_at_its_end(self):
+        fin = self.reserva - 3 * HORA
+        for intervalo, paso in (("1h", HORA), ("15m", 15 * 60_000)):
+            _, out = self.velas(intervalo, hasta=fin, limite=5000)
+            self.assertEqual(out["velas"][-1]["t"], fin - paso, intervalo)
+            self.assertTrue(all(v["t"] + paso <= fin for v in out["velas"]), intervalo)
+
+    def test_nothing_before_the_start_of_the_tested_window_is_served(self):
+        inicio = self.reserva - 2 * DIA + 90 * 60_000                  # 01:30: ni 1 h ni 1 d empiezan ahí
+        _, una_hora = self.velas("1h", desde=inicio, limite=5000)
+        self.assertEqual(una_hora["desde_ms"], self.reserva - 2 * DIA + 2 * HORA)
+        self.assertEqual(una_hora["velas"][0]["t"], self.reserva - 2 * DIA + 2 * HORA)
+        self.assertFalse(una_hora["hay_mas"])
+        _, un_dia = self.velas("1d", desde=inicio, limite=5000)
+        self.assertEqual([v["t"] for v in un_dia["velas"]], [self.reserva - DIA])
+        _, cuatro_horas = self.velas("4h", desde=inicio, limite=5000)
+        self.assertEqual(cuatro_horas["velas"][0]["t"], self.reserva - 2 * DIA + 4 * HORA)
+        _, quince = self.velas("15m", desde=inicio, limite=5000)
+        self.assertEqual(quince["velas"][0]["t"], self.reserva - 2 * DIA + 90 * 60_000)
+
+    def test_the_start_of_the_window_wins_over_the_cache_that_has_older_candles(self):
+        # la caché tiene velas desde dos días antes de la ventana honesta: no salen
+        status, out = self.velas("1h", hasta=self.desde + DIA, limite=5000)
+        self.assertEqual(status, 200)
+        self.assertEqual(out["velas"][0]["t"], self.desde)
+        self.assertEqual(len(out["velas"]), 24)
+        self.assertFalse(out["hay_mas"])
+        status, out = self.velas("1h", hasta=self.desde + DIA, antes=self.desde, limite=5000)     # cursor en el inicio: nada más atrás
+        self.assertEqual((status, out["velas"], out["hay_mas"]), (200, [], False))
+
+    def test_limit_keeps_the_newest_candles_and_paging_back_is_contiguous(self):
+        _, primera = self.velas("1h", limite=3)
+        self.assertEqual(len(primera["velas"]), 3)
+        self.assertTrue(primera["hay_mas"])
+        _, previa = self.velas("1h", antes=primera["velas"][0]["t"], limite=3)
+        self.assertEqual([v["t"] for v in previa["velas"]] + [v["t"] for v in primera["velas"]],
+                         [self.reserva - k * HORA for k in range(6, 0, -1)])
+
+    def test_an_unaligned_end_only_serves_complete_candles(self):
+        status, out = self.velas("1h", hasta=self.reserva - HORA // 2, limite=2)
+        self.assertEqual(status, 200)
+        self.assertEqual(out["velas"][-1]["t"], self.reserva - 2 * HORA)
+        self.assertEqual(out["hasta_ms"], self.reserva - HORA)
+
+    def test_a_cursor_outside_the_window_answers_empty_not_an_error(self):
+        status, out = self.velas("1h", antes=self.desde - DIA, limite=10)
+        self.assertEqual((status, out["velas"], out["hay_mas"]), (200, [], False))
+
+    def test_bad_parameters_are_400_with_a_clear_message(self):
+        casos = (
+            (self.velas("2h"), "intervalo_invalido", "15m"),
+            (self.velas("1h", limite=0), "limite_invalido", "5000"),
+            (self.velas("1h", limite=5001), "limite_invalido", "5000"),
+            (self.velas("1h", limite="mucho"), "limite_invalido", "entero"),
+            (self.velas("1h", desde="ayer"), "desde_invalido", "milisegundos"),
+            (self.velas("1h", hasta="ayer"), "hasta_invalido", "milisegundos"),
+            (self.velas("1h", hasta=-5), "hasta_invalido", "milisegundos"),
+            (self.velas("1h", antes="x"), "antes_invalido", "milisegundos"),
+            (self.velas("1h", desde=self.reserva - DIA, hasta=self.reserva - DIA), "ventana_invalida", "anterior"),
+            (self.velas("1h", desde=self.reserva - DIA, hasta=self.reserva - 2 * DIA), "ventana_invalida", "anterior"),
+            (self.velas("1h", producto="..%2Fx"), "producto_invalido", "PF_"),
+            (self.velas("1h", producto="ETH"), "producto_invalido", "PF_"),
+        )
+        for (status, out), codigo, pista in casos:
+            self.assertEqual((status, out["error"]), (400, codigo))
+            self.assertIn(pista, out["detail"])
+        self.assertEqual(self.call("/estrategias/velas/PF_ETHUSD/1h")[0], 404)
+
+    def test_a_product_without_candles_is_404_and_nothing_is_created(self):
+        antes = sorted(os.listdir(self.cache))
+        status, out = self.velas("1h", producto="PF_SOLUSD")
+        self.assertEqual((status, out["error"]), (404, "sin_velas"))
+        self.assertEqual(sorted(os.listdir(self.cache)), antes)
+
+    def test_the_other_estrategias_routes_are_unchanged(self):
+        self.assertEqual(self.call("/estrategias")[0], 200)
+        self.assertEqual(self.call("/estrategias/no-existe/comparar")[0], 404)
 
 
 class VentanaTests(unittest.TestCase):

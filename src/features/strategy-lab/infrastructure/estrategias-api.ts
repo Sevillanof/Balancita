@@ -136,6 +136,39 @@ export type NuevaEstrategia = {
 
 export type Ventana = { desde?: string; hasta?: string }
 
+export type IntervaloVelas = '15m' | '1h' | '4h' | '1d'
+
+/** One page of candles of the tested window (`GET estrategias/velas/…`); `t` is the open instant in ms. */
+export type RespuestaVelas = {
+  producto: string
+  intervalo: IntervaloVelas
+  desde_ms: number
+  hasta_ms: number
+  velas: Array<{
+    t: number
+    o: number
+    h: number
+    l: number
+    c: number
+    v: number
+  }>
+  /** There are older candles inside the window than the first one sent. */
+  hay_mas: boolean
+}
+
+/**
+ * `[desdeMs, hastaMs)` is the tested window of the comparison: the server never sends a candle outside it and refuses one that
+ * ends inside the reserve. `antesMs` is the paging cursor; `limite` counts the newest candles before it.
+ */
+export type ConsultaVelas = {
+  producto: string
+  intervalo: IntervaloVelas
+  desdeMs: number
+  hastaMs: number
+  antesMs: number
+  limite: number
+}
+
 export class EstrategiasApiError extends Error {
   readonly status: number
   readonly code: string
@@ -155,6 +188,30 @@ export interface EstrategiasApi {
   trabajo(id: string, jobId: string): Promise<Trabajo>
   /** The latest comparison of that strategy since the server started, or `null`. */
   ultimo(id: string): Promise<Trabajo | null>
+  /** Read-only candles of the cache the backtest used, inside the tested window. */
+  velas(consulta: ConsultaVelas): Promise<RespuestaVelas>
+}
+
+function leerVelas(payload: unknown): RespuestaVelas {
+  const respuesta = payload as Partial<RespuestaVelas> | null
+  const valida =
+    respuesta !== null &&
+    typeof respuesta === 'object' &&
+    Array.isArray(respuesta.velas) &&
+    respuesta.velas.every(
+      (vela) =>
+        vela !== null &&
+        typeof vela === 'object' &&
+        (['t', 'o', 'h', 'l', 'c', 'v'] as const).every((campo) =>
+          Number.isFinite(vela[campo]),
+        ),
+    )
+  if (!valida)
+    throw new EstrategiasApiError(
+      'El servidor no devolvió una lista de velas válida.',
+      200,
+    )
+  return respuesta as RespuestaVelas
 }
 
 export function httpEstrategiasApi(
@@ -199,6 +256,12 @@ export function httpEstrategiasApi(
       request<Trabajo>(`/estrategias/${id(estrategia)}/comparar`, ventana),
     trabajo: (estrategia, jobId) =>
       request<Trabajo>(`/estrategias/${id(estrategia)}/comparar/${id(jobId)}`),
+    velas: async (consulta) =>
+      leerVelas(
+        await request<unknown>(
+          `/estrategias/velas/${id(consulta.producto)}/${consulta.intervalo}/${consulta.desdeMs}/${consulta.hastaMs}/${consulta.antesMs}/${consulta.limite}`,
+        ),
+      ),
     ultimo: async (estrategia) => {
       try {
         return await request<Trabajo>(`/estrategias/${id(estrategia)}/comparar`)

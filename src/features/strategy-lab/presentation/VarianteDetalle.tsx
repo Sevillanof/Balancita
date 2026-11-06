@@ -5,6 +5,7 @@ import {
 import { segmentosCambios } from '../domain/estrategias-format.ts'
 import type {
   EstrategiaFila,
+  EstrategiasApi,
   Perilla,
   Trabajo,
 } from '../infrastructure/estrategias-api.ts'
@@ -12,6 +13,7 @@ import { AVISO, BOTON, BOTON_PRIMARIO, PANEL } from './estrategias-styles.ts'
 import ResultadoComparacion from './ResultadoComparacion.tsx'
 
 type Props = {
+  api: EstrategiasApi
   fila: EstrategiaFila
   perillas: Perilla[]
   /** `undefined` while the server is still asked. */
@@ -140,6 +142,7 @@ function Vacio({ children }: { children: React.ReactNode }) {
  * Without a result it shows why (never run, running, failed or unusable) instead of empty charts.
  */
 export default function VarianteDetalle({
+  api,
   fila,
   perillas,
   trabajo,
@@ -168,6 +171,7 @@ export default function VarianteDetalle({
         </Vacio>
       ) : informe ? (
         <ResultadoComparacion
+          api={api}
           informe={informe}
           ocupado={ocupado}
           onVolverACorrer={onCorrer}

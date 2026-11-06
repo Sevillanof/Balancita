@@ -130,8 +130,8 @@ historial. No tiene título: la barra superior dice dónde se está. Diseño: `d
   último trabajo de `GET /estrategias/<id>/comparar`; como el servidor guarda los trabajos en memoria, tras reiniciarlo una
   variante vuelve a «Sin probar» hasta que se corra de nuevo.
 - **Derecha**: la variante elegida. Barra de etapas **Backtest → Sombra → Promover** (Sombra y Promover aparecen deshabilitadas con
-  «próximamente»: son T5/S6); barras de neto Oficial (azul) y Variante (ámbar) con el número de operaciones dentro; la curva
-  **Saldo acumulado**; cuatro tarjetas (Neto por operación, Acierto, Peor caída, Horas promedio con la diferencia) y el pie con la
+  «próximamente»: son T5/S6); barras de neto Oficial (azul) y Variante (ámbar) con el número de operaciones dentro; el gráfico
+  de **velas de ETH con las operaciones** (ver abajo); cuatro tarjetas (Neto por operación, Acierto, Peor caída, Horas promedio con la diferencia) y el pie con la
   ventana, «Reserva intacta» y las condiciones que el backtest no reproduce (Noticias, Libro, Posicionamiento, tachadas con su
   motivo en el tooltip, según `limites` del informe), **Ver operaciones** (lista de operaciones de la variante o de la oficial) y
   **Volver a correr**. Sin resultado se muestra el motivo: nunca probada (botón **Correr backtest**), corriendo, con error o sin
@@ -139,10 +139,35 @@ historial. No tiene título: la barra superior dice dónde se está. Diseño: `d
 - **Nueva variante** (panel en lugar del detalle): nombre y las perillas permitidas que devuelve `GET /estrategias`, cada una con
   su «hoy X». Los valores se muestran en la unidad habitual (2160 min → 36 h, 0,33 → 33 %) y se envían en la del servidor. Solo se
   envía lo que difiere de hoy; la descripción es el resumen del cambio. Al crearla se arranca su backtest.
-- **Curva de saldo**: se arma en el navegador con las operaciones del informe (`oficial.operaciones` y `variante.operaciones`).
-  Cada configuración acumula `neto_usd` por orden de `salida_ms`, escalonado: arranca en 0 al inicio efectivo de la ventana
-  (`ventana.desde_efectivo_ms`), cambia al cerrar cada operación y sigue plana hasta `ventana.hasta_ms`. Las dos comparten ejes
-  y el cero siempre está dentro. Es neto después de costos, el mismo que suman las barras.
+- **Velas con operaciones** (diseño `design/estrategias-laboratorio/08-velas-con-operaciones.html`; reemplaza a la curva «Saldo
+  acumulado»): velas de ETH como las de la Terminal (`lightweight-charts`, tokens del proyecto) con las operaciones de la **oficial
+  (azul)** y de la **variante (ámbar)** encima. Por operación: **▲ LONG / ▼ SHORT** en la entrada (sobre el cierre de la vela que
+  la contiene; las dos configuraciones se emparejan por instante de entrada y lado), una **línea horizontal** de la entrada a la
+  salida de cada configuración (la de la variante 4 px más abajo para que no se tapen), **●** en cada salida y **✕** ámbar donde la
+  variante la cortó por el tope de horas (salió antes que la oficial con motivo `tiempo`). Al pasar el puntero: lado, fecha, horas
+  y neto de las dos y, si corresponde, «La variante la cortó por el tope de horas». Botones **15m / 1h / 4h / 1d** (1 h al
+  abrir, con los últimos ~10 días de la ventana) y casillas **Oficial / Variante** para ocultar una. Arrastrar o hacer zoom hacia
+  la izquierda pide velas más viejas (500 por página) hasta el inicio de la ventana probada. Una operación aparece cuando su vela
+  de entrada ya está cargada.
+- **La ventana del gráfico es la de la comparación**: del `ventana.desde_efectivo_ms` al `ventana.hasta_ms` del informe (nunca
+  antes ni desde la reserva, 2026-04-19). Lo exige el servidor (abajo) y también la página, que descarta cualquier vela fuera de ella.
+
+### `GET /api-strategies/estrategias/velas/<producto>/<intervalo>/<desde_ms>/<hasta_ms>/<antes_ms>/<limite>`
+
+Solo lectura. Velas OHLC de ETH agregadas desde las de 5 m de la **misma caché que lee el backtest** (`data/qwen-trader/cache`,
+por `History`, sin red ni escritura; no se usa `/terminal/chart`: la base de velas oficiales no cubre feb–abr).
+
+- Es una ruta con segmentos (no query string) porque el despachador del servidor solo pasa el camino a esta API.
+- `producto`: símbolo `PF_…` con velas en la caché (si no, 404 `sin_velas`). `intervalo`: `15m`, `1h`, `4h` o `1d`.
+- `[desde_ms, hasta_ms)` es la **ventana probada** (la del informe). Nunca sale una vela fuera de ella: solo velas completas,
+  alineadas a UTC (`desde` se sube y `hasta` se baja al múltiplo del intervalo; `desde_ms`/`hasta_ms` de la respuesta son los
+  alineados). Un `hasta_ms` posterior a la reserva se **rechaza** (400 `ventana_invalida`); `desde_ms >= hasta_ms` también.
+- `antes_ms`: cursor de paginación (se recorta a `hasta_ms`); `limite` (1–5000): cuántas velas, **las más nuevas** anteriores al cursor.
+  Para ir hacia atrás: `antes_ms` = `t` de la vela más vieja que se tiene.
+- Respuesta: `{producto, intervalo, desde_ms, hasta_ms, velas, hay_mas}` con `velas: [{t, o, h, l, c, v}]` en orden ascendente (`t` = apertura en ms);
+  `hay_mas` dice si hay velas más viejas dentro de la ventana. Un cursor fuera de la ventana da `velas: []` y `hay_mas: false`.
+- 400 con mensaje claro: `producto_invalido`, `intervalo_invalido`, `desde_invalido` / `hasta_invalido` / `antes_invalido`
+  (milisegundos enteros), `limite_invalido`, `ventana_invalida`.
 
 ## Replay contra el vivo (S4)
 

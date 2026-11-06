@@ -88,3 +88,53 @@ describe('Terminal laboratory client', () => {
     )
   })
 })
+
+describe('candles of the tested window', () => {
+  const respuesta = {
+    producto: 'PF_ETHUSD',
+    intervalo: '1h',
+    desde_ms: 1000,
+    hasta_ms: 9000,
+    velas: [{ t: 1000, o: 1, h: 2, l: 0.5, c: 1.5, v: 3 }],
+    hay_mas: true,
+  }
+  const consulta = {
+    producto: 'PF_ETHUSD',
+    intervalo: '1h' as const,
+    desdeMs: 1000,
+    hastaMs: 9000,
+    antesMs: 5000,
+    limite: 240,
+  }
+
+  it('asks GET /estrategias/velas/<producto>/<intervalo>/<desde>/<hasta>/<antes>/<limite> and parses the answer', async () => {
+    const fetcher = reply(200, respuesta)
+    const out = await httpEstrategiasApi('/x', fetcher).velas(consulta)
+    expect(fetcher).toHaveBeenCalledWith(
+      '/x/estrategias/velas/PF_ETHUSD/1h/1000/9000/5000/240',
+      expect.objectContaining({ method: 'GET' }),
+    )
+    expect(out).toEqual(respuesta)
+  })
+
+  it('rejects an answer that is not a candle list', async () => {
+    await expect(
+      httpEstrategiasApi('/x', reply(200, { velas: 'x' })).velas(consulta),
+    ).rejects.toThrow('velas')
+    await expect(
+      httpEstrategiasApi(
+        '/x',
+        reply(200, { ...respuesta, velas: [{ t: 1 }] }),
+      ).velas(consulta),
+    ).rejects.toThrow('velas')
+  })
+
+  it('surfaces the server refusal with its code', async () => {
+    await expect(
+      httpEstrategiasApi(
+        '/x',
+        reply(404, { error: 'sin_velas', detail: 'No hay velas.' }),
+      ).velas(consulta),
+    ).rejects.toMatchObject({ status: 404, code: 'sin_velas' })
+  })
+})

@@ -2,12 +2,16 @@ import { useState } from 'react'
 import { barrasDeNeto } from '../domain/estrategias-curva.ts'
 import { tonoDeSigno } from '../domain/estrategias-estado.ts'
 import { diaCorto, firmado, numero, usd } from '../domain/estrategias-format.ts'
-import type { Informe } from '../infrastructure/estrategias-api.ts'
-import CurvaSaldo from './CurvaSaldo.tsx'
+import type {
+  EstrategiasApi,
+  Informe,
+} from '../infrastructure/estrategias-api.ts'
 import { BOTON, EYEBROW, TEXTO_TONO } from './estrategias-styles.ts'
 import OperacionesModal from './OperacionesModal.tsx'
+import VelasConOperaciones from './VelasConOperaciones.tsx'
 
 type Props = {
+  api: EstrategiasApi
   informe: Informe
   ocupado: boolean
   onVolverACorrer: () => void
@@ -208,8 +212,9 @@ function Condiciones({ informe }: { informe: Informe }) {
   )
 }
 
-/** The finished comparison: net bars, equity curve, four metric tiles and the conditions of the test. */
+/** The finished comparison: net bars, ETH candles with the trades, four metric tiles and the conditions of the test. */
 export default function ResultadoComparacion({
+  api,
   informe,
   ocupado,
   onVolverACorrer,
@@ -242,7 +247,7 @@ export default function ResultadoComparacion({
           largo={largoVariante}
         />
       </div>
-      <CurvaSaldo informe={informe} />
+      <VelasConOperaciones api={api} informe={informe} />
       <Tiles informe={informe} />
       <div className="flex flex-wrap items-center justify-between gap-4 border-t border-solid border-line pt-4">
         <Condiciones informe={informe} />
