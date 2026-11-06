@@ -1,0 +1,48 @@
+docs/estrategias-laboratorio.md
+  h_92dd6654ceb221 43-48,80-96,201-203,206-210,218-220
+odd/tasks/estrategias-laboratorio-auditoria.md
+  h_92dd6654ceb221 1-73
+odd/tasks/estrategias-laboratorio.md
+  h_92dd6654ceb221 185-187
+python/balancita_engine/futures_estrategias.py
+  h_92dd6654ceb221 7-8,47-52
+python/balancita_engine/futures_estrategias_backtest.py
+  h_92dd6654ceb221 41,55-61,63-65,70,75,84-87,92-96,100-101,200-201,204,208,258-260,269-278,393-421,426-431,444-452,456,469-470,473-475,490-492,494-497,547-549,553-557,585,622-623,628-630,632,673-690
+python/balancita_engine/futures_qwen_trader_exam.py
+  h_92dd6654ceb221 964-977,986,1061-1064,1072-1074,1079,1081,1097
+python/tests/test_futures_estrategias.py
+  h_92dd6654ceb221 73,79,88,109-131
+python/tests/test_futures_estrategias_api.py
+  h_92dd6654ceb221 102,194-195
+python/tests/test_futures_estrategias_backtest.py
+  h_92dd6654ceb221 86-89,91,100-101,106,109-127,136-138,147,159-178,280-318
+python/tests/test_futures_estrategias_vivo.py
+  h_92dd6654ceb221 32-40,117-205,243,259,262-264,271-272,278-279,295-297,299-300,302-304,339-374
+python/tests/test_futures_qwen_trader_exam_replay_config.py
+  h_92dd6654ceb221 42-48,149-184,186
+src/features/strategy-lab/domain/estrategias-format.test.ts
+  h_92dd6654ceb221 11,17,19-20,41,45,97-98,101-104,116,120,133-145
+src/features/strategy-lab/domain/estrategias-format.ts
+  h_92dd6654ceb221 118-127
+src/features/strategy-lab/infrastructure/estrategias-api.ts
+  h_92dd6654ceb221 46,48-52,57-58,74,84-86,94-95
+src/features/strategy-lab/presentation/EstrategiasPage.test.tsx
+  h_92dd6654ceb221 12,14-15,59,61-62,83,85,141,157-158,435-436,441,449-470
+src/features/strategy-lab/presentation/NuevaVarianteForm.tsx
+  h_92dd6654ceb221 8,47,50,64,122,178-180
+src/features/strategy-lab/presentation/ResultadoComparacion.tsx
+  h_92dd6654ceb221 100-104,116,142-143
+src/features/strategy-lab/testing/estrategias-fixture.ts
+  h_92dd6654ceb221 69-82,132-143,149-151,186-187,252-253,271-272
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "d3f4455eef9f89545e00081da67706a7d90ba6f4",
+  "prompts": {},
+  "humans": {
+    "h_92dd6654ceb221": {
+      "author": "Franco Sevillano <79455847+Sevillanof@users.noreply.github.com>"
+    }
+  }
+}
