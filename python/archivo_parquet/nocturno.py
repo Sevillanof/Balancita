@@ -95,6 +95,13 @@ TABLAS_EXCLUIDAS = {
 }
 # Huecos del reporte de exportar que dejan el archivo incompleto (los periodos aun abiertos no lo son).
 HUECOS_DEL_REPORTE = ("omitidos_por_retencion", "reemplazos_omitidos", "avisos", "tablas_ausentes")
+# Periodos que ya no se pueden archivar completos y cuya perdida el usuario acepto: (base, tabla, dia) -> motivo.
+# Se informan en ``perdidos_aceptados`` y no son hueco; cualquier otro periodo omitido sigue siendo fallo.
+PERIODOS_PERDIDOS_ACEPTADOS: Dict[tuple, str] = {
+    ("futures-market", "market_events", "2026-11-02"):
+        "la retencion de la captura recorto los tickers del inicio del dia antes de que existiera el respaldo del VPS (03-nov); "
+        "aceptado por el usuario el 06-nov",
+}
 EDAD_MINIMA_COPIA_S = 300
 TOPE_ESPERA_COPIA_S = 3600
 TMP_RECIENTE_S = 2 * 3600
@@ -365,6 +372,12 @@ def nocturno(destino: str, respaldos: str, bases=BASES, dry_run: bool = False, a
             sin_confirmar += 1
             log("%s: error inesperado: %s" % (base, info["motivo"]))
             continue
+        aceptados = [dict(o, aceptado=PERIODOS_PERDIDOS_ACEPTADOS[(base, o.get("tabla"), o.get("dia"))])
+                     for o in rep.get("omitidos_por_retencion") or [] if (base, o.get("tabla"), o.get("dia")) in PERIODOS_PERDIDOS_ACEPTADOS]
+        if aceptados:
+            rep["omitidos_por_retencion"] = [o for o in rep["omitidos_por_retencion"]
+                                             if (base, o.get("tabla"), o.get("dia")) not in PERIODOS_PERDIDOS_ACEPTADOS]
+            info["perdidos_aceptados"] = aceptados
         huecos = {k: rep[k] for k in HUECOS_DEL_REPORTE if rep.get(k)}
         if faltan:
             huecos["tablas_sin_cubrir"] = faltan
