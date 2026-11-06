@@ -781,6 +781,36 @@ describe('ObserverPanel (right column)', () => {
     expect(screen.getAllByText('No disponible').length).toBeGreaterThan(0)
   })
 
+  it('shows «Forward retirado» as information, never as an error, when the forward books are retired', async () => {
+    const retired = clone(activityQuiet) as any
+    retired.window = '3h'
+    retired.product = 'PF_XBTUSD'
+    retired.operations = {
+      state: 'unavailable',
+      evidence: {
+        source: 'forward_trade / forward_open / forward_status',
+        origin: 'forward.sqlite',
+        state: 'missing',
+        detail:
+          'Forward retirado: el paper hacia delante de C25-C31 y Kronos ya no corre. Para volver a arrancarlo: FORWARD_ENABLED=1 y reiniciar pnpm dev.',
+        rule: 'x',
+      },
+      detail:
+        'Forward retirado: el paper hacia delante de C25-C31 y Kronos ya no corre. Para volver a arrancarlo: FORWARD_ENABLED=1 y reiniciar pnpm dev.',
+    }
+    serve({ activity: () => json(retired) })
+    render(<Observer />)
+    expect(await screen.findByTestId('stored-total')).toHaveTextContent(
+      'Sin datos',
+    )
+    expect(screen.getByText(/Forward retirado/)).toBeInTheDocument()
+    expect(screen.getByText(/FORWARD_ENABLED=1/)).toBeInTheDocument()
+    expect(screen.queryByRole('alert')).toBeNull()
+    expect(
+      screen.queryByText('No se pudo leer la actividad'),
+    ).not.toBeInTheDocument()
+  })
+
   it('shows an error and no earlier value as current when the read fails', async () => {
     serve({ activity: () => json({}, 503) })
     render(<Observer />)

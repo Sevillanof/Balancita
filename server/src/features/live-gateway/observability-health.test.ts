@@ -1039,6 +1039,205 @@ describe('observability health', () => {
     })
   })
 
+  describe('forward retired (amendment 2026-11-06)', () => {
+    /** The launcher no longer starts forward; its database stays as a stale history. */
+    function seedForwardRetired(b: Sandbox): void {
+      seedHealthy(b)
+      fresh(b.forwardDb)
+      seedForward(b.forwardDb, {
+        now: NOW,
+        strategies: ['C29', 'C30'],
+        checkedAgeMs: 3 * 24 * 3_600_000,
+        trades: 2,
+      })
+      writeHealthFile(b.healthFile, NOW, {
+        capture: 'running',
+        live: 'running',
+        strategies: 'running',
+        news: 'running',
+        llm: 'running',
+        qwenlive: 'running',
+      })
+    }
+    const retired = (b: Sandbox) =>
+      createObservabilityHealth({
+        ...optionsOf(b),
+        engineDRetired: true,
+        forwardRetired: true,
+      })
+
+    it('never reports the retired forward as a failure: nothing is failing and nothing is an error', () => {
+      const b = box()
+      seedForwardRetired(b)
+      const report = retired(b).report()
+      expect(report.overall.failing).toEqual([])
+      for (const c of report.components)
+        for (const k of c.checks) expect(k.status, k.id).not.toBe('error')
+      for (const id of ['data', 'processing', 'strategies'] as const)
+        expect(component(report, id).status, id).toBe('ok')
+    })
+
+    it('without the retirement a running forward with stale cycles is an error (the previous behaviour)', () => {
+      const b = box()
+      seedForwardRetired(b)
+      writeHealthFile(b.healthFile, NOW, {
+        capture: 'running',
+        live: 'running',
+        forward: 'running',
+        strategies: 'running',
+      })
+      const report = createObservabilityHealth({
+        ...optionsOf(b),
+        engineDRetired: true,
+        forwardRetired: false,
+      }).report()
+      expect(report.overall.failing).toContain('strategies')
+      expect(report.overall.failing).toContain('paper')
+    })
+
+    it('does not list forward as a core process that should be up, and says so in Processing', () => {
+      const b = box()
+      seedForwardRetired(b)
+      const processing = component(retired(b).report(), 'processing')
+      expect(
+        (processing.items as any[]).find((i) => i.process === 'forward'),
+      ).toMatchObject({ state: 'absent', core: false })
+      expect(
+        (processing.items as any[]).find((i) => i.process === 'strategies'),
+      ).toMatchObject({ core: true, state: 'running' })
+      expect(check(processing, 'forward_retired')).toMatchObject({
+        status: 'ok',
+        required: false,
+        value: 'retired',
+      })
+      expect(check(processing, 'forward_retired').detail).toMatch(
+        /Forward retirado/,
+      )
+    })
+
+    it('replaces the forward coverage in Strategies by an informational line and keeps the rest', () => {
+      const b = box()
+      seedForwardRetired(b)
+      const strategies = component(retired(b).report(), 'strategies')
+      expect(
+        strategies.checks.find((c) => c.id === 'forward_coverage'),
+      ).toBeUndefined()
+      expect(check(strategies, 'forward_retired')).toMatchObject({
+        status: 'ok',
+        required: false,
+        value: 'retired',
+      })
+      expect(check(strategies, 'forward_retired').detail).toMatch(
+        /Forward retirado/,
+      )
+      expect(check(strategies, 'registry').status).toBe('ok')
+      expect(
+        (strategies.items ?? []).filter((i) => 'strategy_id' in i),
+      ).toEqual([])
+      expect(
+        strategies.evidence.find((e) => e.source.startsWith('forward')),
+      ).toMatchObject({ state: 'missing', detail: 'forward_retired' })
+    })
+
+    it('shows Paper execution as «Sin datos» with the explicit retirement, never as an error or as ok', () => {
+      const b = box()
+      seedForwardRetired(b)
+      const report = retired(b).report()
+      const paper = component(report, 'paper')
+      expect(paper.status).toBe('unknown')
+      expect(paper.checks.map((c) => c.id)).toEqual(['forward_retired'])
+      expect(check(paper, 'forward_retired')).toMatchObject({
+        status: 'unknown',
+        required: true,
+        value: 'retired',
+      })
+      expect(paper.summary).toMatch(/Forward retirado/)
+      expect(paper.items ?? []).toEqual([])
+      expect(paper.evidence[0]).toMatchObject({
+        state: 'missing',
+        detail: 'forward_retired',
+        last_updated_ms: null,
+      })
+      expect(report.overall.unverified).toContain('paper')
+    })
+
+    it('works the same when the forward database is gone', () => {
+      const b = box()
+      seedForwardRetired(b)
+      rmSync(b.forwardDb, { force: true })
+      const report = createObservabilityHealth({
+        ...optionsOf(b),
+        forwardDbPath: undefined,
+        engineDRetired: true,
+        forwardRetired: true,
+      }).report()
+      expect(report.overall.failing).toEqual([])
+      expect(component(report, 'paper').status).toBe('unknown')
+    })
+
+    it('keeps judging the pipeline: a capture that is down is still an error', () => {
+      const b = box()
+      seedForwardRetired(b)
+      writeHealthFile(b.healthFile, NOW, {
+        capture: 'down',
+        live: 'running',
+        strategies: 'running',
+      })
+      expect(component(retired(b).report(), 'processing').status).toBe('error')
+    })
+
+    it('forward enabled (false) keeps every previous check', () => {
+      const b = box()
+      seedHealthy(b)
+      const report = createObservabilityHealth({
+        ...optionsOf(b),
+        forwardRetired: false,
+      }).report()
+      expect(component(report, 'paper').status).toBe('ok')
+      expect(check(component(report, 'paper'), 'forward_cycle').status).toBe(
+        'ok',
+      )
+      expect(
+        check(component(report, 'strategies'), 'forward_coverage').status,
+      ).toBe('ok')
+    })
+
+    it('without the option it follows FUTURES_FORWARD_RETIRED, and the option wins', () => {
+      const b = box()
+      seedForwardRetired(b)
+      writeHealthFile(b.healthFile, NOW, {
+        capture: 'running',
+        live: 'running',
+        forward: 'running',
+        strategies: 'running',
+      })
+      vi.stubEnv('FUTURES_FORWARD_RETIRED', '1')
+      try {
+        expect(
+          component(
+            createObservabilityHealth({
+              ...optionsOf(b),
+              engineDRetired: true,
+            }).report(),
+            'paper',
+          ).checks.map((c) => c.id),
+        ).toEqual(['forward_retired'])
+        expect(
+          component(
+            createObservabilityHealth({
+              ...optionsOf(b),
+              engineDRetired: true,
+              forwardRetired: false,
+            }).report(),
+            'paper',
+          ).status,
+        ).toBe('error')
+      } finally {
+        vi.unstubAllEnvs()
+      }
+    })
+  })
+
   it('reuses the report for 15 s and recomputes afterwards', () => {
     const b = box()
     seedHealthy(b)

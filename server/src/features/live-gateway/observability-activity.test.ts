@@ -173,6 +173,68 @@ describe('observability activity', () => {
     })
   })
 
+  describe('forward retired (amendment 2026-11-06)', () => {
+    const retiredReport = (b: Sandbox) =>
+      createObservabilityActivity({
+        ...optionsOf(b),
+        engineDRetired: true,
+        forwardRetired: true,
+      }).report('3h')
+
+    it('says «Forward retirado» in operations instead of listing a forward that no longer runs', () => {
+      const b = box()
+      seedForwardWorld(b)
+      const r = retiredReport(b)
+      expect(r.operations.state).toBe('unavailable')
+      expect((r.operations as any).detail).toMatch(/Forward retirado/)
+      expect((r.operations as any).detail).toMatch(/FORWARD_ENABLED=1/)
+      expect(r.operations.evidence).toMatchObject({
+        state: 'missing',
+        origin: 'forward.sqlite',
+      })
+      expect((r.operations as any).experiments).toBeUndefined()
+    })
+
+    it('does not read the forward database at all when retired', () => {
+      const b = box()
+      const r = retiredReport(b)
+      expect(r.operations.state).toBe('unavailable')
+      expect((r.operations as any).detail).toMatch(/Forward retirado/)
+    })
+
+    it('leaves the verdict sections alone (engine D has its own switch)', () => {
+      const b = box()
+      seedVerdictRows(b.verdictsDb, continuous(['PF_XBTUSD'], 60))
+      const r = createObservabilityActivity({
+        ...optionsOf(b),
+        forwardRetired: true,
+      }).report('3h')
+      expect(r.evaluations.state).toBe('ok')
+    })
+
+    it('forwardRetired=false keeps listing the forward operations as before', () => {
+      const b = box()
+      seedForwardWorld(b)
+      const r = createObservabilityActivity({
+        ...optionsOf(b),
+        forwardRetired: false,
+      }).report('3h')
+      expect(r.operations.state).toBe('ok')
+      expect((r.operations as any).experiments.length).toBeGreaterThan(0)
+    })
+
+    it('without the option it follows FUTURES_FORWARD_RETIRED', () => {
+      const b = box()
+      seedForwardWorld(b)
+      vi.stubEnv('FUTURES_FORWARD_RETIRED', '1')
+      try {
+        expect(report(b).operations.state).toBe('unavailable')
+      } finally {
+        vi.unstubAllEnvs()
+      }
+    })
+  })
+
   describe('evaluations, signals and discards (verdicts)', () => {
     it('counts the rows of each window, not those of the whole table', () => {
       const b = box()

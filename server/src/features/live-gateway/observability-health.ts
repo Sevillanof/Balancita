@@ -7,6 +7,10 @@ import {
   ENGINE_D_RETIRED_DETAIL,
   engineDRetiredFromEnv,
 } from './engine-d-retired.ts'
+import {
+  FORWARD_RETIRED_DETAIL,
+  forwardRetiredFromEnv,
+} from './forward-retired.ts'
 
 /**
  * `GET /api/observability/health` (Mission Control B1): the state of six
@@ -90,6 +94,11 @@ export interface ObservabilityHealthOptions {
    * «Motor D retirado» instead of reading its silence as a failure. Default: `FUTURES_ENGINE_D_RETIRED=1`.
    */
   readonly engineDRetired?: boolean
+  /**
+   * The launcher did not start the forward paper books (C25-C31, Kronos): its checks are replaced by an explicit
+   * «Forward retirado» instead of reading its silence as a failure. Default: `FUTURES_FORWARD_RETIRED=1`.
+   */
+  readonly forwardRetired?: boolean
   readonly forwardDbPath?: string
   readonly strategiesDbPath?: string
   /** `config/forward-strategies.json`: what the forward runner measures besides the registry. */
@@ -163,13 +172,23 @@ const CORE_PROCESSES = [
 ] as const
 /** Engine D processes: not part of the pipeline once the launcher retires them (datos-utiles S7). */
 const ENGINE_D_PROCESSES: readonly string[] = ['verdict', 'scores', 'q']
-function coreProcesses(retired: boolean): readonly string[] {
-  return retired
-    ? CORE_PROCESSES.filter((name) => !ENGINE_D_PROCESSES.includes(name))
-    : CORE_PROCESSES
+/** The forward process: not part of the pipeline once the launcher retires it (amendment 2026-11-06). */
+const FORWARD_PROCESSES: readonly string[] = ['forward']
+function coreProcesses(
+  engineDRetired: boolean,
+  forwardRetired: boolean,
+): readonly string[] {
+  return CORE_PROCESSES.filter(
+    (name) =>
+      !(engineDRetired && ENGINE_D_PROCESSES.includes(name)) &&
+      !(forwardRetired && FORWARD_PROCESSES.includes(name)),
+  )
 }
 function isEngineDRetired(options: ObservabilityHealthOptions): boolean {
   return options.engineDRetired ?? engineDRetiredFromEnv(process.env)
+}
+function isForwardRetired(options: ObservabilityHealthOptions): boolean {
+  return options.forwardRetired ?? forwardRetiredFromEnv(process.env)
 }
 
 const RANK: Record<HealthStatus, number> = {
@@ -928,7 +947,8 @@ function processingComponent(
   )
   const items: Record<string, unknown>[] = []
   const retired = isEngineDRetired(options)
-  const coreNames = coreProcesses(retired)
+  const forwardRetired = isForwardRetired(options)
+  const coreNames = coreProcesses(retired, forwardRetired)
   for (const name of [...new Set([...CORE_PROCESSES, ...c.processes.keys()])]) {
     const state = processState(c, name)
     if (state === 'absent' || state === 'unknown') {
@@ -972,6 +992,18 @@ function processingComponent(
         value: 0,
         rule: 'ok si al menos un proceso del pipeline corre',
         detail: 'El supervisor no informa ningún proceso en ejecución.',
+      }),
+    )
+  if (forwardRetired)
+    checks.push(
+      check({
+        id: 'forward_retired',
+        label: 'Forward (paper hacia delante de C25-C31 y Kronos)',
+        required: false,
+        status: 'ok',
+        value: 'retired',
+        rule: 'el lanzador no arranca forward (FORWARD_ENABLED≠1): no se espera ningún ciclo nuevo y su silencio no es un fallo',
+        detail: FORWARD_RETIRED_DETAIL,
       }),
     )
   const verdictProcess = processState(c, 'verdict')
@@ -1470,6 +1502,17 @@ function experimentRow(
   }
 }
 
+/** Evidence line of a retired forward: its books are history and are not read here. */
+function forwardRetiredEvidence(source: string): HealthEvidence {
+  return {
+    source,
+    origin: null,
+    last_updated_ms: null,
+    state: 'missing',
+    detail: 'forward_retired',
+  }
+}
+
 function strategiesComponent(
   options: ObservabilityHealthOptions,
   c: Collected,
@@ -1515,7 +1558,20 @@ function strategiesComponent(
   )
   const coverageRule =
     'por estrategia esperada: ok si todos sus productos tienen un ciclo forward vigente (≤ 45 min); warning si algunos no; error si ninguno. Una fila antigua no cuenta como actividad'
-  if (expected.state === 'unknown') {
+  if (isForwardRetired(options)) {
+    checks.push(
+      check({
+        id: 'forward_retired',
+        label: 'Forward (paper hacia delante de C25-C31 y Kronos)',
+        required: false,
+        status: 'ok',
+        value: 'retired',
+        rule: 'el lanzador no arranca forward (FORWARD_ENABLED≠1): no se espera ningún ciclo ni se juzga la cobertura; sus libros son historia',
+        detail: FORWARD_RETIRED_DETAIL,
+      }),
+    )
+    evidence.push(forwardRetiredEvidence('forward_status (historia)'))
+  } else if (expected.state === 'unknown') {
     checks.push(
       check({
         id: 'forward_coverage',
@@ -1697,6 +1753,26 @@ function paperComponent(
   expected: Expected,
 ): HealthComponent {
   const { now } = c
+  if (isForwardRetired(options))
+    return makeComponent(
+      'paper',
+      'Ejecución paper',
+      [
+        check({
+          id: 'forward_retired',
+          label: 'Forward (paper hacia delante de C25-C31 y Kronos)',
+          status: 'unknown',
+          value: 'retired',
+          rule: 'el lanzador no arranca forward (FORWARD_ENABLED≠1): sin ciclo que juzgar, nunca ok ni error',
+          detail: FORWARD_RETIRED_DETAIL,
+        }),
+      ],
+      [forwardRetiredEvidence('forward (forward_status, forward_open)')],
+      [
+        FORWARD_RETIRED_DETAIL,
+        'El libro D también está retirado; el trader vigente (qwen-live) está en su base y este informe no lo evalúa.',
+      ],
+    )
   const forwardProcess = processState(c, 'forward')
   const checks: HealthCheck[] = []
   const evidence: HealthEvidence[] = []
@@ -1926,7 +2002,9 @@ export function createObservabilityHealth(
       const verdicts: Opened<VerdictRead> = isEngineDRetired(options)
         ? { state: 'missing', detail: 'engine_d_retired' }
         : readVerdicts(options, now)
-      const forward = readForward(options)
+      const forward: Opened<ForwardRead> = isForwardRetired(options)
+        ? { state: 'missing', detail: 'forward_retired' }
+        : readForward(options)
       const registry = readRegistry(options)
       const expected = expectedPairs(options, registry)
       const value = assemble(
