@@ -1,0 +1,46 @@
+README.md
+  h_92dd6654ceb221 24,55-67,142
+docs/archivo-parquet.md
+  h_92dd6654ceb221 94
+docs/motor-d-retirado.md
+  h_92dd6654ceb221 1-44
+docs/observabilidad-actividad-api.md
+  h_92dd6654ceb221 150
+docs/observabilidad-salud-api.md
+  h_92dd6654ceb221 189
+odd/tasks/datos-utiles.md
+  h_92dd6654ceb221 42
+python/archivo_parquet/nocturno.py
+  h_92dd6654ceb221 40,69-70,73-74,76
+python/tests/test_archivo_parquet_nocturno.py
+  h_92dd6654ceb221 385-412
+scripts/dev-provider-env.mjs
+  h_92dd6654ceb221 582-583,586,594-595,597-616,769,812-813,928-929,1015-1061
+scripts/dev.mjs
+  h_92dd6654ceb221 17,136,138-139
+scripts/dev.node-test.mjs
+  h_92dd6654ceb221 8-10,106-112,407-411,646-647,1026-1032,1633-1791
+server/src/features/live-gateway/engine-d-retired.test.ts
+  h_92dd6654ceb221 1-25
+server/src/features/live-gateway/engine-d-retired.ts
+  h_92dd6654ceb221 1-15
+server/src/features/live-gateway/observability-activity.test.ts
+  h_92dd6654ceb221 13,118-175
+server/src/features/live-gateway/observability-activity.ts
+  h_92dd6654ceb221 2-5,153-157,453-458
+server/src/features/live-gateway/observability-health.test.ts
+  h_92dd6654ceb221 13,887-1041
+server/src/features/live-gateway/observability-health.ts
+  h_92dd6654ceb221 6-9,88-92,164-173,930-931,938,942,978-990,1069-1097,1925-1928
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "6237654ca16e8317b84f1835d2a9a4c3debf951d",
+  "prompts": {},
+  "humans": {
+    "h_92dd6654ceb221": {
+      "author": "Franco Sevillano <79455847+Sevillanof@users.noreply.github.com>"
+    }
+  }
+}
