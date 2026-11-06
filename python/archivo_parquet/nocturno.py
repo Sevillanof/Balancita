@@ -37,7 +37,7 @@ _METADATOS = "metadatos o configuracion que quedan en SQLite para siempre (no so
 _CRUDA = "respuesta cruda guardada solo por procedencia: el dato util ya se archiva interpretado en %s"
 _DERIVADA = "copia derivada de %s, que ya se archiva"
 _DIAGNOSTICO = "diagnostico de la propia captura (no sirve para decidir ni evaluar), queda en SQLite y en las copias diarias"
-_MOTOR_D = "motor viejo D, superado por el trader en vivo; queda en SQLite y en las copias diarias hasta decidir apagarlo (S7)"
+_MOTOR_D = "motor D apagado (S7): ya no recibe filas nuevas; sus bases y copias diarias quedan como historia"
 _FUERA_DE_LO_UTIL = "fuera de lo util para mejorar al maestro y al portero; queda en SQLite y en las copias diarias"
 # Bases con copia que no se archivan a proposito, con su motivo. Una clave que termina en ``__`` es un PREFIJO (las bases anidadas llevan su
 # nombre despues de ``__``, a veces con fecha); el resto es el nombre exacto. Cualquier otra base con copia y fuera de BASES es un hueco.
@@ -66,14 +66,14 @@ TABLAS_EXCLUIDAS = {
         "paper_futures_market_quality_policies": _METADATOS,
     },
     "futures-verdicts": {
-        "paper_futures_verdict_meta": _METADATOS + " del motor D",
-        "paper_futures_verdict_products": _METADATOS + " del motor D",
+        "paper_futures_verdict_meta": _METADATOS + " del " + _MOTOR_D,
+        "paper_futures_verdict_products": _METADATOS + " del " + _MOTOR_D,
     },
     "futures-llm-decisions": {
-        "paper_futures_llm_errors": "errores del motor D, que se esta por apagar (S7); " + _FUERA_DE_LO_UTIL,
-        "paper_futures_llm_meta": _METADATOS + " del motor D",
+        "paper_futures_llm_errors": "errores del " + _MOTOR_D + "; " + _FUERA_DE_LO_UTIL,
+        "paper_futures_llm_meta": _METADATOS + " del " + _MOTOR_D,
     },
-    "futures-forecast-scores": {"paper_futures_forecast_meta": _METADATOS + " del motor D"},
+    "futures-forecast-scores": {"paper_futures_forecast_meta": _METADATOS + " del " + _MOTOR_D},
     "positioning": {"collector_run": "registro de arranques y paradas del recolector (diagnostico de la captura); " + _FUERA_DE_LO_UTIL},
     "futures-news": {
         "paper_futures_news_meta": _METADATOS,

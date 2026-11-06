@@ -5,6 +5,9 @@ import {
   checkDevPorts,
   describeChildExit,
   devChildSpecs,
+  engineDEnabled,
+  engineDNotice,
+  onlyChildSpecs,
   qwenExitSwitch,
   readQwenNewsOnly,
   devProxyConfig,
@@ -100,7 +103,13 @@ describe('devChildSpecs', () => {
 
   const specs = devChildSpecs({
     root,
-    env: { FUTURES_MODE: 'paper_live', PORT: '9999', KEEP: 'yes' },
+    // The old engine D is retired by default; these cases describe it re-enabled (ENGINE_D_ENABLED=1).
+    env: {
+      FUTURES_MODE: 'paper_live',
+      PORT: '9999',
+      KEEP: 'yes',
+      ENGINE_D_ENABLED: '1',
+    },
     allowedFlags: noFlags,
   })
   const byName = Object.fromEntries(specs.map((spec) => [spec.name, spec]))
@@ -395,7 +404,11 @@ describe('resolvePython', () => {
 })
 
 describe('devChildSpecs with a resolved Python', () => {
-  const base = { root, env: { KEEP: 'yes' }, allowedFlags: noFlags }
+  const base = {
+    root,
+    env: { KEEP: 'yes', ENGINE_D_ENABLED: '1' },
+    allowedFlags: noFlags,
+  }
   const byName = (specs) => Object.fromEntries(specs.map((s) => [s.name, s]))
 
   it('injects the command and its prefix args into verdict and scores', () => {
@@ -630,7 +643,8 @@ describe('optional LLM decision children (llm and q)', () => {
     exists: () => false,
   }
   const llm = { command: 'llama-server' }
-  const local = { LLAMA_MODEL_PATH: '/models/q.gguf' }
+  // Engine D (q included) is retired by default; this suite describes it re-enabled.
+  const local = { LLAMA_MODEL_PATH: '/models/q.gguf', ENGINE_D_ENABLED: '1' }
   const byName = (specs) => Object.fromEntries(specs.map((s) => [s.name, s]))
   const names = (specs) => specs.map((s) => s.name)
 
@@ -1009,7 +1023,13 @@ describe('optional news child (n)', () => {
 
   it('keeps news independent of llm and q: it starts before them and a stopped model does not matter', () => {
     const specs = devChildSpecs({ ...base, env: local, llm })
-    assert.deepEqual(names(specs).slice(-4), ['news', 'llm', 'q', 'qwenlive'])
+    assert.deepEqual(names(specs).slice(-3), ['news', 'llm', 'qwenlive'])
+    const withD = devChildSpecs({
+      ...base,
+      env: { ...local, ENGINE_D_ENABLED: '1' },
+      llm,
+    })
+    assert.deepEqual(names(withD).slice(-4), ['news', 'llm', 'q', 'qwenlive'])
   })
 
   it('never hands the news child a remote LLM setting', () => {
@@ -1608,5 +1628,164 @@ describe('loraMismatchWarning', () => {
       exists: () => false,
     })
     assert.match(text, /no hay ninguno/)
+  })
+})
+
+describe('engine D switch (datos-utiles S7): verdict, scores and q', () => {
+  const base = {
+    root,
+    allowedFlags: noFlags,
+    python: { command: 'python3', prefixArgs: [] },
+    exists: () => false,
+  }
+  const llm = { command: 'llama-server' }
+  const local = { LLAMA_MODEL_PATH: '/models/q.gguf' }
+  const names = (specs) => specs.map((s) => s.name)
+  const byName = (specs) => Object.fromEntries(specs.map((s) => [s.name, s]))
+  const D = ['verdict', 'scores', 'q']
+
+  it('engineDEnabled is true only for ENGINE_D_ENABLED=1 (blank, 0 or junk keep it retired)', () => {
+    assert.equal(engineDEnabled({}), false)
+    assert.equal(engineDEnabled({ ENGINE_D_ENABLED: '' }), false)
+    assert.equal(engineDEnabled({ ENGINE_D_ENABLED: '0' }), false)
+    assert.equal(engineDEnabled({ ENGINE_D_ENABLED: 'yes' }), false)
+    assert.equal(engineDEnabled({ ENGINE_D_ENABLED: ' 1 ' }), true)
+  })
+
+  it('by default starts none of verdict, scores or q, with the model and Python available', () => {
+    const specs = devChildSpecs({ ...base, env: local, llm })
+    for (const name of D) assert.ok(!names(specs).includes(name), name)
+    assert.ok(
+      !specs.some((s) =>
+        s.args.some((a) =>
+          /futures_verdicts|futures_forecast_scores|futures_llm_decisions/.test(
+            String(a),
+          ),
+        ),
+      ),
+    )
+  })
+
+  it('keeps everything the live trader, news, Qwen and the UI need running', () => {
+    const specs = devChildSpecs({ ...base, env: local, llm })
+    assert.deepEqual(names(specs), [
+      'vite',
+      'capture',
+      'positioning',
+      'live',
+      'forward',
+      'carry',
+      'strategies',
+      'news',
+      'llm',
+      'qwenlive',
+    ])
+    // llama-server is what news and the briefing use; qwenlive is the live trader.
+    assert.ok(byName(specs).news.args.includes('--analyze'))
+    assert.equal(byName(specs).qwenlive.env.LLAMA_PORT, '8088')
+  })
+
+  it('also keeps the live trader and news without a model: only D leaves', () => {
+    assert.deepEqual(names(devChildSpecs({ ...base, env: {}, llm: null })), [
+      'vite',
+      'capture',
+      'positioning',
+      'live',
+      'forward',
+      'carry',
+      'strategies',
+      'news',
+    ])
+  })
+
+  it('ENGINE_D_ENABLED=1 brings the three back, in the order they had', () => {
+    const specs = devChildSpecs({
+      ...base,
+      env: { ...local, ENGINE_D_ENABLED: '1' },
+      llm,
+    })
+    assert.deepEqual(names(specs), [
+      'vite',
+      'capture',
+      'positioning',
+      'live',
+      'verdict',
+      'scores',
+      'forward',
+      'carry',
+      'strategies',
+      'news',
+      'llm',
+      'q',
+      'qwenlive',
+    ])
+  })
+
+  it('q stays out in news-only mode even when D is enabled (it was already out)', () => {
+    const specs = devChildSpecs({
+      ...base,
+      env: { ...local, ENGINE_D_ENABLED: '1' },
+      llm,
+      qwenNewsOnly: true,
+    })
+    assert.ok(names(specs).includes('verdict'))
+    assert.ok(!names(specs).includes('q'))
+  })
+
+  it('tells the gateway the engine is retired, and overrides an inherited value', () => {
+    const live = (env) =>
+      byName(devChildSpecs({ ...base, env })).live.env.FUTURES_ENGINE_D_RETIRED
+    assert.equal(live({}), '1')
+    assert.equal(live({ FUTURES_ENGINE_D_RETIRED: '0' }), '1')
+    assert.equal(live({ ENGINE_D_ENABLED: '1' }), '0')
+    assert.equal(
+      live({ ENGINE_D_ENABLED: '1', FUTURES_ENGINE_D_RETIRED: '1' }),
+      '0',
+    )
+  })
+
+  it('keeps the gateway and the registry reading the existing D databases as history', () => {
+    const { live, strategies } = byName(
+      devChildSpecs({ ...base, env: local, llm }),
+    )
+    assert.equal(
+      live.env.FUTURES_VERDICTS_DB_PATH,
+      './data/dev-live/futures-verdicts.sqlite',
+    )
+    assert.equal(
+      live.env.FUTURES_DECISIONS_DB_PATH,
+      './data/dev-live/futures-llm-decisions.sqlite',
+    )
+    assert.equal(
+      live.env.FUTURES_PAPER_ACCOUNT_DB_PATH,
+      './data/dev-live/futures-paper-account.sqlite',
+    )
+    assert.equal(
+      strategies.args[strategies.args.indexOf('--verdicts-db') + 1],
+      './data/dev-live/futures-verdicts.sqlite',
+    )
+    assert.equal(
+      strategies.args[strategies.args.indexOf('--decisions-db') + 1],
+      './data/dev-live/futures-llm-decisions.sqlite',
+    )
+  })
+
+  it('DEV_ONLY never leaves out qwenlive, llm or news; retired D children are simply absent', () => {
+    const all = devChildSpecs({ ...base, env: local, llm })
+    const only = onlyChildSpecs(all, { DEV_ONLY: 'vite,capture' })
+    assert.deepEqual(names(only), [
+      'vite',
+      'capture',
+      'news',
+      'llm',
+      'qwenlive',
+    ])
+  })
+
+  it('engineDNotice says what is off and how to turn it back on', () => {
+    assert.match(engineDNotice({}), /motor D retirado/i)
+    assert.match(engineDNotice({}), /verdict/)
+    assert.match(engineDNotice({}), /ENGINE_D_ENABLED=1/)
+    assert.equal(engineDNotice({ ENGINE_D_ENABLED: '1' }), '')
   })
 })

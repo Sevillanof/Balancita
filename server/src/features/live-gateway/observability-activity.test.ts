@@ -10,7 +10,7 @@ import {
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { DatabaseSync } from 'node:sqlite'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { buildLiveGateway } from './gateway.ts'
 import {
   createObservabilityActivity,
@@ -115,6 +115,64 @@ const sha = (path: string) =>
   createHash('sha256').update(readFileSync(path)).digest('hex')
 
 describe('observability activity', () => {
+  describe('engine D retired (datos-utiles S7)', () => {
+    const retiredReport = (b: Sandbox) =>
+      createObservabilityActivity({
+        ...optionsOf(b),
+        engineDRetired: true,
+      }).report('3h')
+
+    it('says «Motor D retirado» in evaluations, signals and discards instead of counting zeros', () => {
+      const b = box()
+      seedVerdictRows(b.verdictsDb, continuous(['PF_XBTUSD'], 60))
+      const r = retiredReport(b)
+      for (const section of [r.evaluations, r.signals, r.discards] as any[]) {
+        expect(section.state).toBe('unavailable')
+        expect(section.detail).toMatch(/Motor D retirado/)
+        expect(section.detail).toMatch(/ENGINE_D_ENABLED=1/)
+        expect(section.evidence).toMatchObject({
+          state: 'missing',
+          origin: 'futures-verdicts.sqlite',
+        })
+      }
+    })
+
+    it('leaves the forward operations untouched', () => {
+      const b = box()
+      seedForwardWorld(b)
+      const r = retiredReport(b)
+      expect(r.operations.state).toBe('ok')
+      expect((r.operations as any).experiments.length).toBeGreaterThan(0)
+    })
+
+    it('does not read the verdicts database at all when retired', () => {
+      const b = box()
+      const r = retiredReport(b)
+      expect((r.evaluations as any).detail).toMatch(/Motor D retirado/)
+    })
+
+    it('engineDRetired=false keeps counting the verdicts as before', () => {
+      const b = box()
+      seedVerdictRows(b.verdictsDb, continuous(['PF_XBTUSD'], 60))
+      const r = createObservabilityActivity({
+        ...optionsOf(b),
+        engineDRetired: false,
+      }).report('3h')
+      expect(r.evaluations.state).toBe('ok')
+    })
+
+    it('without the option it follows FUTURES_ENGINE_D_RETIRED', () => {
+      const b = box()
+      seedVerdictRows(b.verdictsDb, continuous(['PF_XBTUSD'], 60))
+      vi.stubEnv('FUTURES_ENGINE_D_RETIRED', '1')
+      try {
+        expect(report(b).evaluations.state).toBe('unavailable')
+      } finally {
+        vi.unstubAllEnvs()
+      }
+    })
+  })
+
   describe('evaluations, signals and discards (verdicts)', () => {
     it('counts the rows of each window, not those of the whole table', () => {
       const b = box()

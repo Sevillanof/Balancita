@@ -21,7 +21,7 @@ Espacio de trading personal, local y **solo futuros perpetuos de Kraken (`PF_*`)
 - Ni las reglas de velas ni Qwen han mostrado ventaja neta tras costes. C25-C28 se dan por cerradas; C29, C30, C31 y Kronos siguen en paper hasta 100 operaciones y no se tocan mientras tanto.
 - La ejecución pasiva (maker) se simuló contra la cinta pública de Kraken y no crea ventaja: archivada.
 - Qwen decide solo en replays (brazo A/B) y como decisor de salida de C31; el reglamento está en la enmienda 2026-10-11 del [ADR 0001](docs/adr/0001-isolated-paper-futures-accounting.md).
-- `DEV_ONLY=vite,capture,live,forward,strategies pnpm dev` arranca solo los procesos que mide el seguimiento, sin libros paper; Qwen (modelo, veredictos, decisiones y salida C31) arranca siempre, salvo `DECISIONS_ENABLED=0`.
+- `DEV_ONLY=vite,capture,live,forward,strategies pnpm dev` arranca solo los procesos que mide el seguimiento, sin libros paper; Qwen (modelo y salida C31) arranca siempre, salvo `DECISIONS_ENABLED=0`; los veredictos y las decisiones del motor D solo con `ENGINE_D_ENABLED=1`.
 
 ## Arquitectura
 
@@ -52,19 +52,19 @@ flowchart LR
 
 ### Procesos de `pnpm dev`
 
-| Proceso      | Puerto | Qué es                                                                                                                                                                                          |
-| ------------ | ------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `vite`       | 5173   | App web y proxy (`/api-live` → 8789, `/api-strategies` → 8790)                                                                                                                                  |
-| `capture`    | -      | WebSocket y REST públicos de Kraken → `server/data/dev-live/futures-market.sqlite` (único escritor)                                                                                             |
-| `live`       | 8789   | Gateway de solo lectura: sirve `/api/terminal/*` leyendo el market DB; no arranca recolector ni motor                                                                                           |
-| `verdict`    | -      | **C**: lee el market DB y escribe veredictos de entrada (`futures-verdicts.sqlite`)                                                                                                             |
-| `paper`      | -      | Retirado (2026-10-11): D, el motor viejo, ya no corre; su `futures-paper-account.sqlite` queda como historial. Toda estrategia opera en el seguimiento forward (motor nuevo)                    |
-| `scores`     | -      | **E**: puntúa cada propuesta contra las velas oficiales posteriores (`futures-forecast-scores.sqlite`)                                                                                          |
-| `forward`    | -      | Libro de paper hacia delante de toda estrategia activa en el registro (y C30 de `config/forward-strategies.json`), cada hora (`server/data/dev-live/forward/`); Q y el registro leen su resumen |
-| `strategies` | 8790   | Registro de estrategias **S**: validar, evaluar, backtest, versiones y ciclo de vida                                                                                                            |
-| `news`       | -      | **N**: RSS/Atom → `futures-news.sqlite`; con Qwen, relevancia y dirección por noticia                                                                                                           |
-| `llm` / `q`  | 8088   | `llama-server` local y servicio de decisiones **Q** (opcionales, nunca bloquean el arranque)                                                                                                    |
-| `qwenexit`   | -      | **C31**: entradas de C25/C26/C27/C30 y salida decidida solo por Qwen, cada 30 min (`server/data/dev-live/qwen-exit/`); necesita el modelo local, ver `docs/qwen-exit.md`                        |
+| Proceso      | Puerto | Qué es                                                                                                                                                                                                    |
+| ------------ | ------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `vite`       | 5173   | App web y proxy (`/api-live` → 8789, `/api-strategies` → 8790)                                                                                                                                            |
+| `capture`    | -      | WebSocket y REST públicos de Kraken → `server/data/dev-live/futures-market.sqlite` (único escritor)                                                                                                       |
+| `live`       | 8789   | Gateway de solo lectura: sirve `/api/terminal/*` leyendo el market DB; no arranca recolector ni motor                                                                                                     |
+| `verdict`    | -      | **C**: lee el market DB y escribe veredictos de entrada (`futures-verdicts.sqlite`). Apagado por defecto desde 2026-11-06 (motor D retirado, `docs/motor-d-retirado.md`); vuelve con `ENGINE_D_ENABLED=1` |
+| `paper`      | -      | Retirado (2026-10-11): D, el motor viejo, ya no corre; su `futures-paper-account.sqlite` queda como historial. Toda estrategia opera en el seguimiento forward (motor nuevo)                              |
+| `scores`     | -      | **E**: puntúa cada propuesta contra las velas oficiales posteriores (`futures-forecast-scores.sqlite`). Apagado por defecto (motor D retirado); vuelve con `ENGINE_D_ENABLED=1`                           |
+| `forward`    | -      | Libro de paper hacia delante de toda estrategia activa en el registro (y C30 de `config/forward-strategies.json`), cada hora (`server/data/dev-live/forward/`); Q y el registro leen su resumen           |
+| `strategies` | 8790   | Registro de estrategias **S**: validar, evaluar, backtest, versiones y ciclo de vida                                                                                                                      |
+| `news`       | -      | **N**: RSS/Atom → `futures-news.sqlite`; con Qwen, relevancia y dirección por noticia                                                                                                                     |
+| `llm` / `q`  | 8088   | `llama-server` local y servicio de decisiones **Q** (opcionales, nunca bloquean el arranque)                                                                                                              |
+| `qwenexit`   | -      | **C31**: entradas de C25/C26/C27/C30 y salida decidida solo por Qwen, cada 30 min (`server/data/dev-live/qwen-exit/`); necesita el modelo local, ver `docs/qwen-exit.md`                                  |
 
 Un proceso opcional que cae se reinicia con _backoff_ (1 s hasta 30 s; se rinde tras 8 fallos rápidos o `EADDRINUSE`) y su estado se ve como chip en la Terminal.
 
@@ -139,6 +139,7 @@ Sin red, `capture` y la fuente Real avisan; `vite` y el resto siguen funcionando
 | ----------------------- | ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `BALANCITA_PYTHON`      | autodetectado | Ejecutable de Python (sin _fallback_ si falla)                                                                                                                                                          |
 | `DECISIONS_ENABLED`     | activo        | `0` desactiva `llm` y `q`                                                                                                                                                                               |
+| `ENGINE_D_ENABLED`      | apagado       | `1` vuelve a arrancar el motor D: `verdict`, `scores` y `q` (`docs/motor-d-retirado.md`)                                                                                                                |
 | `LLAMA_MODEL_PATH`      | -             | GGUF local; si falta se busca Qwen en las cachés habituales                                                                                                                                             |
 | `LLAMA_HF`              | -             | Referencia Hugging Face explícita (siempre `--offline`)                                                                                                                                                 |
 | `LLAMA_PORT`            | `8088`        | Puerto loopback                                                                                                                                                                                         |

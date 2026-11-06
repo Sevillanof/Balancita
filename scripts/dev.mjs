@@ -14,6 +14,7 @@ import {
   STRATEGIES_PORT,
   describeChildExit,
   devChildSpecs,
+  engineDNotice,
   findQwenModel,
   llamaPort,
   loadDevEnv,
@@ -132,8 +133,10 @@ if (python.command === undefined)
   process.stderr.write(`[dev] ${python.message}\n`)
 else
   process.stdout.write(
-    `[dev] Python for verdict/scores: ${[python.command, ...python.prefixArgs].join(' ')} (${python.version})\n`,
+    `[dev] Python for the Python children: ${[python.command, ...python.prefixArgs].join(' ')} (${python.version})\n`,
   )
+// Engine D (verdict, scores, q) is retired by default: one line, and how to bring it back.
+if (engineDNotice(env)) process.stdout.write(`${engineDNotice(env)}\n`)
 // One search, one line.
 let llmModelPath
 if (llmModel) {
