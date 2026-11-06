@@ -1,0 +1,36 @@
+docs/archivo-parquet.md
+  h_92dd6654ceb221 172-173
+docs/funding-cuerpo-respuestas.md
+  h_92dd6654ceb221 1-43
+docs/operacion-base-de-datos.md
+  h_92dd6654ceb221 78-83
+odd/tasks/datos-utiles.md
+  h_92dd6654ceb221 40-41
+python/archivo_parquet/config.py
+  h_92dd6654ceb221 143-145
+python/archivo_parquet/sintetico.py
+  h_92dd6654ceb221 8,280-286,301-309
+python/tests/test_archivo_parquet_formato2.py
+  h_92dd6654ceb221 229-263
+server/src/app/capture-main.ts
+  h_92dd6654ceb221 75-76
+server/src/features/kraken-futures/capture-savings.test.ts
+  h_92dd6654ceb221 66,69,78-82,91,104-133,328-463
+server/src/features/kraken-futures/capture-savings.ts
+  h_92dd6654ceb221 9-10,64-69,76-89,91,93-94
+server/src/features/kraken-futures/funding-backfill-cli.ts
+  h_92dd6654ceb221 2,27-29
+server/src/features/kraken-futures/futures-market-store.ts
+  h_92dd6654ceb221 877-879,881-895,1314-1318
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "2135ba4e6ad114502ee2fc100dd08acbc808ceac",
+  "prompts": {},
+  "humans": {
+    "h_92dd6654ceb221": {
+      "author": "Franco Sevillano <79455847+Sevillanof@users.noreply.github.com>"
+    }
+  }
+}
