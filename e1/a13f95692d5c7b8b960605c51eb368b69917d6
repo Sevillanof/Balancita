@@ -1,0 +1,28 @@
+docs/resumen-minuto-eth.md
+  h_92dd6654ceb221 49-64
+odd/tasks/datos-utiles.md
+  h_92dd6654ceb221 39
+server/src/app/capture-main.ts
+  h_92dd6654ceb221 29-32,105-108,113
+server/src/features/kraken-futures/futures-market.ts
+  h_92dd6654ceb221 11-23
+server/src/features/live-gateway/live-capture.test.ts
+  h_92dd6654ceb221 2486-2731
+server/src/features/live-gateway/live-capture.ts
+  h_92dd6654ceb221 215-221,737-740,744,777-782,1029-1062,1064-1072
+server/src/features/live-gateway/observability-health.test.ts
+  h_92dd6654ceb221 211-267,1016-1020,1025,1055
+server/src/features/live-gateway/observability-health.ts
+  h_92dd6654ceb221 5,76-80,548,574-580,643-644,647-648,662-667,674-675,697-699
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "e1a13f95692d5c7b8b960605c51eb368b69917d6",
+  "prompts": {},
+  "humans": {
+    "h_92dd6654ceb221": {
+      "author": "Franco Sevillano <79455847+Sevillanof@users.noreply.github.com>"
+    }
+  }
+}
