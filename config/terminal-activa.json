@@ -1,0 +1,338 @@
+{
+ "config": {
+  "analista": {
+   "modo": "fuerte"
+  },
+  "corta": {
+   "maestro": "candidates/maestro-eth-cold-funding-v2-20261031.json",
+   "maestro_hash": "881cbc1083a5",
+   "portero_autonomo": {
+    "path": "candidates/portero-eth-cold-funding-v2-20261031.json",
+    "sha256": "abef6cf4576188c91ff3d9d784048b5206c2c4ee1648795e5bc7e7e220743355"
+   }
+  },
+  "cuenta": "entera",
+  "decide_by": "formula",
+  "entry_threshold": 0.5,
+  "entry_threshold_grid": [
+   0.5,
+   0.6,
+   0.7,
+   0.8
+  ],
+  "exam": {
+   "from": "2025-10-01",
+   "horizons_min": [
+    720,
+    1440,
+    2880
+   ],
+   "products": [
+    "PF_ETHUSD"
+   ],
+   "seed": 20261020,
+   "snapshots": 2000,
+   "time_bins": 10
+  },
+  "exam_lean": {
+   "decide_horizon_min": 1440,
+   "extreme_share": 0.2,
+   "min_percentile_vs_random": 95,
+   "min_photos": 500,
+   "sign_min_abs": 0.05
+  },
+  "exam_rules": {
+   "min_operations": 100,
+   "min_percentile_vs_random": 95,
+   "random_draws": 1000
+  },
+  "execution": {
+   "model": "kraken-futures-book.v1"
+  },
+  "funding_model": "kraken-absolute-quantity.v2",
+  "guardrails": {
+   "cooldown_min": 15,
+   "exhaust_hold_min": 1440,
+   "max_hold_min": 2160,
+   "max_stop_pct": 0.03,
+   "min_stop_pct": 0.005,
+   "stop_sigma_24h": null
+  },
+  "leverage": "1",
+  "live": {
+   "force_min_looks": 6,
+   "force_min_score": 0.15,
+   "force_neutral_lean": 0.05,
+   "force_question": {
+    "id": "trader_force",
+    "instruction": "Estás en una exploración en papel y sin posición: tenés que elegir un lado, el que creas más probable. Hace {hours} horas que no abrís una posición.",
+    "options": [
+     {
+      "description": "abrir una posición larga (apostás a que sube)",
+      "id": "LARGO"
+     },
+     {
+      "description": "abrir una posición corta (apostás a que baja)",
+      "id": "CORTO"
+     }
+    ],
+    "type": "choice",
+    "version": 4
+   },
+   "force_record_tol": 0.03,
+   "force_side_after_h": 0,
+   "force_window_h": 0,
+   "funding_refresh_minutes": 30,
+   "max_late_seconds": 15,
+   "model_timeout_seconds": 60,
+   "poll_seconds": 5,
+   "positioning_refresh_minutes": 10,
+   "wake_budget_seconds": 240,
+   "warmup_days": 8
+  },
+  "lora": {
+   "adapter": "qwen-destila.gguf",
+   "dataset": "balancita-qwen-destila-dataset.v1",
+   "note": "Destilación: Qwen lee la ficha como la fórmula (acuerdo 92 %, espejo 100 %). Solo opina; decide la fórmula. Se carga con escala 0 (llama-server) y cada pedido de esta config lo pide con escala 1.",
+   "request": [
+    {
+     "id": 0,
+     "scale": 1.0
+    }
+   ],
+   "steps": 250,
+   "trained": "2026-10-28"
+  },
+  "mirror": true,
+  "note": "Varias posiciones (33 % del saldo, hasta 3) y experto rebotes (caída 5 % en 60 min, salida a 4 h).",
+  "noticias": {
+   "policy": "priority_v2",
+   "source_licenses": {
+    "fed": {
+     "host": "federalreserve.gov",
+     "status": "public_domain",
+     "url": "https://www.federalreserve.gov/disclaimer.htm"
+    },
+    "fed_monetary": {
+     "host": "federalreserve.gov",
+     "status": "public_domain",
+     "url": "https://www.federalreserve.gov/disclaimer.htm"
+    }
+   },
+   "version": 2
+  },
+  "notional_usd": "1000",
+  "opinion_enabled": false,
+  "outcome_window_min": 60,
+  "posiciones": {
+   "espera_entre_entradas_min": 0,
+   "fraccion": 0.33,
+   "max": 3
+  },
+  "practice": {
+   "block_days": 3,
+   "calibration_share": 0.6,
+   "from": "2025-01-01",
+   "seed": 20261019,
+   "target_blocks": 60,
+   "time_bins": 10,
+   "warmup_days": 8
+  },
+  "practice_entry_threshold": 0.5,
+  "products": [
+   "PF_ETHUSD"
+  ],
+  "prompt": {
+   "answer_line": "Respondé con una sola letra ({letters}):",
+   "name": "qwen-trader",
+   "orders": {
+    "2": [
+     [
+      0,
+      1
+     ],
+     [
+      1,
+      0
+     ]
+    ],
+    "3": [
+     [
+      0,
+      1,
+      2
+     ],
+     [
+      1,
+      2,
+      0
+     ]
+    ],
+    "7": [
+     [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6
+     ],
+     [
+      4,
+      5,
+      6,
+      0,
+      1,
+      2,
+      3
+     ]
+    ]
+   },
+   "prefill": null,
+   "probability_source": "auto",
+   "questions": {
+    "flat": {
+     "id": "trader_flat",
+     "instruction": "No tenés ninguna posición. Con la ficha de abajo, ¿qué harías ahora? Vos NO operás: decide la fórmula (el maestro y el portero) y tu opinión se guarda al lado para aprender de ella; opiná con tu propio criterio. Entrar y salir cuesta ~{cost} % del tamaño: solo vale la pena entrar si esperás un movimiento claramente mayor. Si entrás, la salida se decide cada 15 min y hay un cierre obligatorio a las 36 h como red de seguridad. Si no ves una ventaja clara, esperá.",
+     "options": [
+      {
+       "description": "abrir una posición larga (apostás a que sube)",
+       "id": "LARGO"
+      },
+      {
+       "description": "abrir una posición corta (apostás a que baja)",
+       "id": "CORTO"
+      },
+      {
+       "description": "no operar ahora",
+       "id": "ESPERAR"
+      }
+     ],
+     "type": "choice",
+     "version": 8
+    },
+    "position": {
+     "id": "trader_position",
+     "instruction": "Tenés una posición abierta. Con la ficha de abajo, ¿qué harías ahora: mantenerla o cerrarla? Vos NO operás: decide la fórmula y tu opinión se guarda al lado para aprender de ella. Cerrar solo agrega el costo de salida (~{exit_cost} % del tamaño, ya descontado del resultado que se muestra); el de entrada ya está pagado. No hay stop; la fórmula la cierra cuando el maestro se da vuelta y, si no pasa, hay un cierre obligatorio a las 36 h. La regla que mejor funcionó en el pasado es salir cuando el maestro se da vuelta en contra de la posición.",
+     "options": [
+      {
+       "description": "seguir con la posición abierta",
+       "id": "MANTENER"
+      },
+      {
+       "description": "cerrar la posición ahora",
+       "id": "CERRAR"
+      }
+     ],
+     "type": "choice",
+     "version": 8
+    },
+    "reason": {
+     "id": "trader_reason",
+     "instruction": "Opinaste {action}. ¿Cuál es el motivo principal?",
+     "options": [
+      {
+       "description": "el precio se movió de más y espero que vuelva",
+       "id": "movimiento_exagerado"
+      },
+      {
+       "description": "hay una tendencia clara y la sigo",
+       "id": "tendencia"
+      },
+      {
+       "description": "el funding está en un extremo",
+       "id": "funding_extremo"
+      },
+      {
+       "description": "no veo ventaja suficiente para seguir",
+       "id": "sin_ventaja"
+      },
+      {
+       "description": "asegurar la ganancia que ya hay",
+       "id": "proteger_ganancia"
+      },
+      {
+       "description": "cortar una pérdida antes de que crezca",
+       "id": "cortar_perdida"
+      },
+      {
+       "description": "otro motivo",
+       "id": "otro"
+      }
+     ],
+     "type": "choice",
+     "version": 8
+    }
+   },
+   "reason_orders": "both",
+   "state_last": true,
+   "system": "Sos un operador de futuros perpetuos en papel (sin dinero real). Respondé con exactamente una línea con el formato que se pide y nada más.",
+   "temperature": 1.0,
+   "version": 8
+  },
+  "rebotes": {
+   "caida_pct": 5.0,
+   "enfriamiento_min": 240,
+   "salida_min": 240,
+   "ventana_min": 60
+  },
+  "rules": {
+   "bootstrap_draws": 2000,
+   "ci_level": 0.95,
+   "cost_stress_multiplier": 1.5,
+   "min_percentile_vs_random": 95,
+   "min_positive_group_share": 0.6,
+   "min_positive_product_share": 0.5,
+   "min_trades": 100,
+   "random_draws": 1000
+  },
+  "runtime": {
+   "activation_request_sha256": "f7f64f5c99974b8a0997133d74c27e349eaeb90781f0a35961b942ba7860d67e",
+   "concurrent_orders": true,
+   "opinion_enabled": false,
+   "skip_entry_reason": true
+  },
+  "schema": "balancita-qwen-trader.v1",
+  "state_context": [
+   "PF_XBTUSD",
+   "PF_ETHUSD",
+   "PF_SOLUSD"
+  ],
+  "state_corta": true,
+  "state_variant": 3,
+  "threshold_rule": {
+   "if_none_positive": "max_grid",
+   "min_calibration_trades": 30,
+   "objective": "total_net_bp"
+  },
+  "timeframe_min": 5,
+  "version": "live",
+  "wake": {
+   "extra_wake_min_gap_min": 10,
+   "extra_wakes": false,
+   "flat_every_min": 15,
+   "funding_change_abs_rate": 3e-05,
+   "funding_extreme_abs_rate": 5e-05,
+   "hooks": [],
+   "position_big_move_gap_min": 60,
+   "position_big_move_sigma_24h": 1.0,
+   "position_every_min": 15,
+   "strong_move_sigmas": 2.0,
+   "strong_move_windows_min": [
+    15,
+    30
+   ]
+  }
+ },
+ "config_hash": "37f572a841d35a7b7a8d01569378c508c6bcd9c8a4a6a2adb96e5d1097eade07",
+ "origen": {
+  "activada_utc": "2026-11-02T14:15:54.811Z",
+  "activated_ms": 1793628954811,
+  "copia": "qwen-live__live-20261105-033001.sqlite (respaldo de la VPS, solo lectura)",
+  "previous_hash": "be042985e3b0447b325225106dd48ea4a7dff6ec889281fc65605a8a2d9b4e80",
+  "tabla": "config_versions",
+  "version_id": 3
+ },
+ "schema": "balancita-terminal-activa.v1"
+}

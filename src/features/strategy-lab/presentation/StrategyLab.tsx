@@ -1,21 +1,24 @@
 import { useEffect, useState } from 'react'
 import {
-  connectStrategyApi,
-  type StrategyApi,
-} from '../infrastructure/strategy-api.ts'
-import StrategiesPage from './StrategiesPage.tsx'
+  connectEstrategiasApi,
+  type EstrategiasApi,
+} from '../infrastructure/estrategias-api.ts'
+import EstrategiasPage from './EstrategiasPage.tsx'
 
 type Props = {
-  connect?: () => Promise<StrategyApi>
+  connect?: () => Promise<EstrategiasApi>
+  pollMs?: number
 }
 
-const defaultConnect = () => connectStrategyApi()
+const defaultConnect = () => connectEstrategiasApi()
 
-/** The Estrategias screen: connects to the registry and shows the list with the chosen strategy's card. */
-export default function StrategyLab({ connect = defaultConnect }: Props) {
-  const [api, setApi] = useState<StrategyApi | null>(null)
+/** The Estrategias screen: connects to the registry and shows the Terminal laboratory. */
+export default function StrategyLab({
+  connect = defaultConnect,
+  pollMs,
+}: Props) {
+  const [api, setApi] = useState<EstrategiasApi | null>(null)
   const [connectError, setConnectError] = useState<string | null>(null)
-  const [selectedId, setSelectedId] = useState<string | null>(null)
 
   useEffect(() => {
     let active = true
@@ -39,14 +42,6 @@ export default function StrategyLab({ connect = defaultConnect }: Props) {
   }, [connect])
 
   return (
-    <div className="grid gap-4 text-body">
-      <StrategiesPage
-        api={api}
-        connectError={connectError}
-        reload={0}
-        selectedId={selectedId}
-        onSelect={setSelectedId}
-      />
-    </div>
+    <EstrategiasPage api={api} connectError={connectError} pollMs={pollMs} />
   )
 }
