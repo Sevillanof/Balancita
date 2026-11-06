@@ -115,6 +115,16 @@ const decimales = (valor: number, minimo: number, maximo: number) =>
 export const etiquetaPerilla = (clave: string) => META[clave]?.etiqueta ?? clave
 export const etiquetaOpcion = (opcion: string) => OPCIONES[opcion] ?? opcion
 
+/**
+ * The sizing rules are FIXED, like the live Terminal («El backtest debe invertir igual que la Terminal»): how much goes into each
+ * position, how many at once, the wait between entries and the volatility sizing. The server no longer lists them as knobs; this
+ * keeps the form from offering them even if a server from before the rule still does.
+ */
+const REGLAS_DE_INVERSION_FIJAS = /^(posiciones|analista)\./
+
+export const perillasEditables = (perillas: Perilla[]): Perilla[] =>
+  perillas.filter((perilla) => !REGLAS_DE_INVERSION_FIJAS.test(perilla.clave))
+
 export type GrupoPerillas = { grupo: string; perillas: Perilla[] }
 
 /** Knobs in the order and groups of the form; a key this file does not know goes to «Otras». */

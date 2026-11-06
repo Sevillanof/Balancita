@@ -5,6 +5,7 @@ import {
   entradaInicial,
   etiquetaOpcion,
   etiquetaPerilla,
+  perillasEditables,
   resumenCambios,
   valorTexto,
 } from '../domain/estrategias-format.ts'
@@ -43,9 +44,10 @@ export default function NuevaVarianteForm({
   onClose,
   onCreated,
 }: Props) {
+  const editables = perillasEditables(perillas)
   const [nombre, setNombre] = useState('')
   const [entradas, setEntradas] = useState<Record<string, string>>(() =>
-    Object.fromEntries(perillas.map((p) => [p.clave, entradaInicial(p)])),
+    Object.fromEntries(editables.map((p) => [p.clave, entradaInicial(p)])),
   )
   const [error, setError] = useState<string | null>(null)
   const [ocupado, setOcupado] = useState(false)
@@ -59,7 +61,7 @@ export default function NuevaVarianteForm({
 
   const crear = async (event: FormEvent) => {
     event.preventDefault()
-    const { cambios, error: invalido } = cambiosDeEntradas(perillas, entradas)
+    const { cambios, error: invalido } = cambiosDeEntradas(editables, entradas)
     if (invalido) return setError(invalido)
     if (Object.keys(cambios).length === 0)
       return setError('Cambiá al menos una perilla: ninguna difiere de hoy.')
@@ -117,7 +119,7 @@ export default function NuevaVarianteForm({
             }}
           />
         </label>
-        {agruparPerillas(perillas).map(({ grupo, perillas: delGrupo }) => (
+        {agruparPerillas(editables).map(({ grupo, perillas: delGrupo }) => (
           <fieldset key={grupo} className="m-0 grid min-w-0 gap-2 border-0 p-0">
             <legend className={`${EYEBROW} mb-2 p-0`}>{grupo}</legend>
             {delGrupo.map((perilla) => {
@@ -173,8 +175,9 @@ export default function NuevaVarianteForm({
           </fieldset>
         ))}
         <p className="m-0 text-hint text-ink-2">
-          Solo se ofrecen perillas permitidas; maestro y portero no se tocan.
-          Una variante no se edita después: para otra idea, otra variante.
+          Solo se ofrecen perillas permitidas; maestro y portero no se tocan. El
+          tamaño de cada posición es el de la Terminal y no cambia. Una variante
+          no se edita después: para otra idea, otra variante.
         </p>
       </div>
       {error && (

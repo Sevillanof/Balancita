@@ -38,7 +38,7 @@ DESDE_HONESTA, HASTA_HONESTA = "2026-02-01", "2026-04-19"
 CAPITAL_USD = "1000"
 # métricas numéricas que se restan (variante − oficial)
 NUMERICAS = ("operaciones", "neto_usd", "neto_bp_cuenta", "neto_bp_por_operacion", "acierto", "max_drawdown_usd",
-             "max_drawdown_bp", "horas_promedio")
+             "max_drawdown_bp", "horas_promedio", "horas_max", "nocional_promedio_usd")
 
 
 class ComparacionError(est.EstrategiaError):
@@ -52,20 +52,27 @@ def metricas(curvas, capital_usd=CAPITAL_USD):
     """Métricas de una corrida a partir de sus operaciones (``replay_formula()["curvas"]["formula"]``), todas después de costos.
 
     - ``neto_usd``: suma del neto de cada operación; ``neto_bp_cuenta``: ese neto sobre el capital inicial (puntos básicos de la
-      cuenta); ``neto_bp_por_operacion``: promedio del ``neto_bp`` de cada operación (sobre lo que arriesgó cada una).
-    - ``acierto``: parte de las operaciones con neto > 0 (``None`` sin operaciones).
+      cuenta).
+    - ``neto_bp_por_operacion``: PONDERADO por tamaño, Σ neto USD / Σ nocional USD × 10000: lo que ganó cada dólar puesto. Cada posición
+      tiene su tamaño (la Terminal reparte el saldo en hasta 3 cupos, uno puede ser un resto de ~10 US$), así que el promedio simple de
+      los bp de cada operación no se parece al neto en US$ (llegó a dar −0,6 bp con +97,70 US$). ``neto_bp_promedio_simple`` es ese
+      promedio sin ponderar, solo como referencia.
+    - ``nocional_promedio_usd`` / ``_min_`` / ``_max_``: tamaño de las posiciones (``notional_usd`` de cada una).
+    - ``acierto``: parte de las operaciones con neto > 0, cada una cuenta igual sin importar su tamaño (``None`` sin operaciones).
     - ``max_drawdown_usd`` / ``_bp``: la mayor caída del saldo realizado desde su máximo (el saldo cambia cuando cierra cada
-      operación, en orden de salida); ``_bp`` es esa caída sobre el máximo previo (el mayor de los cocientes).
-    - ``horas_promedio``: tiempo abierta de cada operación."""
+      operación, en orden de salida; no marca las abiertas); ``_bp`` es esa caída sobre el máximo previo (el mayor de los cocientes).
+    - ``horas_promedio`` / ``horas_max``: tiempo abierta de cada operación (el máximo muestra que un tope, p. ej. 30 h, se cumple).
+    - ``por_motivo``: cuántas cerraron por cada razón de salida (``razon`` de la operación, p. ej. maestro_vuelta; si no hay, el motivo)."""
     capital = Decimal(str(capital_usd))
     ordenadas = sorted(curvas, key=lambda c: (c["salida_ms"], c["entrada_ms"]))
     saldo = pico = capital
     caida, caida_rel = Decimal(0), Decimal(0)
-    neto = Decimal(0)
+    neto = nocional = Decimal(0)
     ganadoras = 0
     for curva in ordenadas:
         pnl = Decimal(str(curva["pnl_usd"]))
         neto += pnl
+        nocional += Decimal(str(curva["notional_usd"]))
         ganadoras += pnl > 0
         saldo += pnl
         pico = max(pico, saldo)
@@ -74,16 +81,24 @@ def metricas(curvas, capital_usd=CAPITAL_USD):
     n = len(ordenadas)
     por_motivo = {}
     for curva in ordenadas:
-        por_motivo[curva["motivo"]] = por_motivo.get(curva["motivo"], 0) + 1
+        razon = curva.get("razon") or curva["motivo"]
+        por_motivo[razon] = por_motivo.get(razon, 0) + 1
+    tamanos = [float(Decimal(str(c["notional_usd"]))) for c in ordenadas]
+    horas = [(c["salida_ms"] - c["entrada_ms"]) / qt.HOUR_MS for c in ordenadas]
     return {
         "operaciones": n,
         "neto_usd": float(neto),
         "neto_bp_cuenta": float(neto / capital * 10000),
-        "neto_bp_por_operacion": sum(c["neto_bp"] for c in ordenadas) / n if n else None,
+        "neto_bp_por_operacion": float(neto / nocional * 10000) if n and nocional else None,
+        "neto_bp_promedio_simple": sum(c["neto_bp"] for c in ordenadas) / n if n else None,
+        "nocional_promedio_usd": float(nocional / n) if n else None,
+        "nocional_min_usd": min(tamanos) if n else None,
+        "nocional_max_usd": max(tamanos) if n else None,
         "acierto": ganadoras / n if n else None,
         "max_drawdown_usd": float(caida),
         "max_drawdown_bp": float(caida_rel * 10000),
-        "horas_promedio": sum(c["salida_ms"] - c["entrada_ms"] for c in ordenadas) / n / qt.HOUR_MS if n else None,
+        "horas_promedio": sum(horas) / n if n else None,
+        "horas_max": max(horas) if n else None,
         "por_motivo": por_motivo,
     }
 
@@ -182,14 +197,15 @@ def _limite_posicionamiento(config):
 
 def _operaciones(curvas):
     return [{"entrada_ms": c["entrada_ms"], "salida_ms": c["salida_ms"], "lado": "LONG" if c["lado"] > 0 else "SHORT",
-             "neto_usd": float(Decimal(str(c["pnl_usd"]))), "neto_bp": c["neto_bp"], "motivo": c["motivo"]} for c in curvas]
+             "neto_usd": float(Decimal(str(c["pnl_usd"]))), "neto_bp": c["neto_bp"], "motivo": c["motivo"], "razon": c.get("razon"),
+             "nocional_usd": float(Decimal(str(c["notional_usd"])))} for c in curvas]
 
 
-def _correr(config, ventana, desde_ms, hasta_ms, funding_archivo, on_event=None):
+def _correr(config, ventana, desde_ms, hasta_ms, funding_archivo, on_event=None, capital_usd=CAPITAL_USD):
     cfg = json.loads(json.dumps(config))             # copia propia: el replay no toca la del llamador ni su hash
     if funding_archivo:
         cfg["funding_archive"] = funding_archivo      # solo lectura (``mode=ro``); no entra al hash del informe
-    return exam.replay_formula(ventana, cfg, hasta_ms, desde_ms=desde_ms, on_event=on_event)
+    return exam.replay_formula(ventana, cfg, hasta_ms, desde_ms=desde_ms, on_event=on_event, capital_usd=capital_usd)
 
 
 def comparar(estrategia_id, desde=DESDE_HONESTA, hasta=HASTA_HONESTA, datos=None, *, incluir_reserva=False, carpeta=None,
@@ -239,7 +255,9 @@ def comparar(estrategia_id, desde=DESDE_HONESTA, hasta=HASTA_HONESTA, datos=None
     for nombre, config in (("oficial", base["config"]), ("variante", config_variante)):
         curvas = corridas[nombre]["curvas"]["formula"]
         informe[nombre] = {"config_hash": est.hash_config(config), "metricas": metricas(curvas, corridas[nombre]["capital_inicial_usd"]),
-                           "operaciones": _operaciones(curvas), "funding_completo": corridas[nombre]["funding_complete"]}
+                           "operaciones": _operaciones(curvas), "funding_completo": corridas[nombre]["funding_complete"],
+                           # el booleano de arriba se apaga con UNA hora sin dato; esto dice cuántas operaciones tocaron un hueco
+                           "funding_operaciones_incompletas": sum(1 for c in curvas if c["funding_status"] != "complete")}
     informe["diferencia"] = diferencia(informe["oficial"]["metricas"], informe["variante"]["metricas"])
     return informe
 
@@ -248,6 +266,16 @@ def comparar(estrategia_id, desde=DESDE_HONESTA, hasta=HASTA_HONESTA, datos=None
 
 SCHEMA_VIVO = "balancita-estrategias-vs-vivo.v1"
 TOLERANCIA_OPERACION_MS = qt.BAR_MS            # una vela: el vivo llena segundos después de la señal; el replay, al cierre de la vela
+# Tolerancias por operación emparejada (S4). El replay entra al cierre de la vela con el modelo de costos y el vivo llena contra el libro
+# unos segundos después, y el saldo del replay es el del vivo solo al empezar (después cada uno compone sus propios netos):
+#  - nocional / cantidad: 1 % del vivo o 1 US$ (el tercer cupo es un resto de saldo de ~10 US$: 1 US$ de saldo de diferencia lo mueve 1 US$);
+#  - neto, comisiones y funding: se comparan A IGUAL TAMAÑO (el importe del replay escalado al nocional del vivo; el tamaño ya tiene su
+#    propia comparación) y se aceptan hasta los bp del nocional vivo de abajo: el neto 2 bp (libro vs. vela, el mismo margen que ya se
+#    aceptaba), comisiones y funding 0,5 bp (mismo modelo de costos: solo cambia el precio del fill y la hora de entrada);
+#  - horas abierta: una vela (la salida del vivo cae segundos después de la vela del replay).
+TOLERANCIAS_IMPORTES = {"nocional_rel": 0.01, "nocional_abs_usd": 1.0, "neto_bp": 2.0, "comisiones_bp": 0.5, "funding_bp": 0.5,
+                        "horas_ms": TOLERANCIA_OPERACION_MS}
+CAMPOS_IMPORTES = ("nocional_usd", "qty", "neto_usd", "comisiones_usd", "funding_usd", "horas")
 NOTA_VIVO = ("Chequeo de equivalencia de código: ¿el replay de la Terminal oficial toma las mismas decisiones que tomó el vivo en el "
              "mismo período? Esto no es una evaluación de estrategia (el período vivo es posterior a la reserva), no registra intentos y su "
              "resultado no se usa para elegir ni promover nada.")
@@ -362,13 +390,45 @@ def comparar_decisiones(vivas, replay, *, cooldown_ms=0, omitidos_vivos=None, sa
 def _resumen_operacion(o):
     return {"side": o["side"], "entry_ms": o["entry_ms"], "entrada": _hora(o["entry_ms"]), "exit_ms": o["exit_ms"],
             "salida": None if o["exit_ms"] is None else _hora(o["exit_ms"]), "neto_bp": o["net_bp"], "estado": o["status"],
-            "motivo": o["exit_reason"] or o["closed_by"]}
+            "motivo": o["exit_reason"] or o["closed_by"], "nocional_usd": o.get("notional_usd"), "qty": o.get("qty"),
+            "neto_usd": o.get("net_usd"), "comisiones_usd": o.get("fees_usd"), "funding_usd": o.get("funding_usd")}
+
+
+def _importe(vivo, replay, tolerancia):
+    return {"vivo": vivo, "replay": replay, "diferencia": None if vivo is None or replay is None else replay - vivo,
+            "dentro": None if vivo is None or replay is None else abs(replay - vivo) <= tolerancia}
+
+
+def _importes(v, r, cerrada):
+    """Tamaño, importes en US$ y horas de un par vivo/replay, cada uno con ``{vivo, replay, diferencia, dentro}`` (``dentro`` es ``None``
+    cuando no se puede juzgar: sin dato o la operación vivo sigue abierta). Ver ``TOLERANCIAS_IMPORTES``."""
+    tol = TOLERANCIAS_IMPORTES
+    nocional_v, nocional_r = v.get("notional_usd"), r.get("notional_usd")
+    sin_tamano = not nocional_v or not nocional_r
+    out = {"nocional_usd": _importe(nocional_v, nocional_r, max(tol["nocional_rel"] * (nocional_v or 0), tol["nocional_abs_usd"])),
+           "qty": _importe(v.get("qty"), r.get("qty"), max(tol["nocional_rel"] * (v.get("qty") or 0),
+                                                           tol["nocional_abs_usd"] / (v.get("entry_px") or float("inf"))))}
+    for campo, clave, bp in (("neto_usd", "net_usd", tol["neto_bp"]), ("comisiones_usd", "fees_usd", tol["comisiones_bp"]),
+                             ("funding_usd", "funding_usd", tol["funding_bp"])):
+        vivo, replay = (v.get(clave), r.get(clave)) if cerrada else (None, None)
+        item = _importe(vivo, replay, bp / 1e4 * (nocional_v or 0))
+        if item["dentro"] is not None and not sin_tamano:
+            escalado = replay * nocional_v / nocional_r                      # a igual tamaño: el tamaño se juzga aparte
+            item["dentro"] = abs(escalado - vivo) <= bp / 1e4 * nocional_v
+        out[campo] = item
+    horas = (None, None) if not cerrada else ((v["exit_ms"] - v["entry_ms"]) / qt.HOUR_MS, (r["exit_ms"] - r["entry_ms"]) / qt.HOUR_MS)
+    out["horas"] = _importe(horas[0], horas[1], tol["horas_ms"] / qt.HOUR_MS)
+    return out
 
 
 def comparar_operaciones(vivas, replay, tolerancia_ms=TOLERANCIA_OPERACION_MS):
     """Empareja operaciones del vivo con las del replay: mismo lado y entrada a menos de ``tolerancia_ms`` (la más cercana). Cada
-    operación es ``{side, entry_ms, exit_ms, net_bp, status, closed_by, exit_reason}``. De cada par: si la salida cae en la misma vela y la
-    diferencia de neto (replay − vivo) en puntos básicos; una operación todavía abierta en la copia del vivo no se juzga por su salida."""
+    operación es ``{side, entry_ms, exit_ms, net_bp, status, closed_by, exit_reason}`` más, cuando se conocen, ``notional_usd``, ``qty``,
+    ``entry_px``, ``net_usd``, ``fees_usd`` y ``funding_usd``. De cada par: si la salida cae en la misma vela, la diferencia de neto
+    (replay − vivo) en puntos básicos y, en ``importes``, el tamaño, el neto, las comisiones, el funding y las horas de cada lado con su
+    diferencia y si cae dentro de la tolerancia (``TOLERANCIAS_IMPORTES``). Una operación todavía abierta en la copia del vivo no se juzga
+    por su salida ni por lo que necesita un cierre. ``importes`` resume por campo cuántos pares se compararon y cuántos quedaron fuera;
+    ``fuera_de_tolerancia`` los lista uno por uno."""
     libres = sorted(replay, key=lambda o: o["entry_ms"])
     pares, solo_vivo = [], []
     for v in sorted(vivas, key=lambda o: o["entry_ms"]):
@@ -381,10 +441,19 @@ def comparar_operaciones(vivas, replay, tolerancia_ms=TOLERANCIA_OPERACION_MS):
         cerrada = v["status"] == "closed" and v["exit_ms"] is not None
         pares.append({"side": v["side"], "vivo": _resumen_operacion(v), "replay": _resumen_operacion(r),
                       "salida_igual": abs(r["exit_ms"] - v["exit_ms"]) <= tolerancia_ms if cerrada else None,
-                      "neto_bp_diferencia": r["net_bp"] - v["net_bp"] if cerrada else None})
+                      "neto_bp_diferencia": r["net_bp"] - v["net_bp"] if cerrada else None,
+                      "importes": _importes(v, r, cerrada)})
+    resumen = {campo: {"comparadas": sum(1 for p in pares if p["importes"][campo]["dentro"] is not None),
+                       "fuera": sum(1 for p in pares if p["importes"][campo]["dentro"] is False),
+                       "dif_max": max((abs(p["importes"][campo]["diferencia"]) for p in pares
+                                       if p["importes"][campo]["diferencia"] is not None), default=0.0)} for campo in CAMPOS_IMPORTES}
+    fuera = [{"entrada": p["vivo"]["entrada"], "side": p["side"], "campo": campo, "vivo": p["importes"][campo]["vivo"],
+              "replay": p["importes"][campo]["replay"], "diferencia": p["importes"][campo]["diferencia"]}
+             for p in pares for campo in CAMPOS_IMPORTES if p["importes"][campo]["dentro"] is False]
     return {"vivo": len(vivas), "replay": len(replay), "emparejadas": len(pares), "solo_vivo": len(solo_vivo),
             "solo_replay": len(libres), "abiertas_en_vivo": sum(1 for v in vivas if v["status"] != "closed"),
             "salidas_iguales": sum(1 for p in pares if p["salida_igual"]),
+            "tolerancias": dict(TOLERANCIAS_IMPORTES), "importes": resumen, "fuera_de_tolerancia": fuera,
             "pares": pares, "lista_solo_vivo": solo_vivo, "lista_solo_replay": [_resumen_operacion(r) for r in libres]}
 
 
@@ -397,11 +466,13 @@ def _leer_vivo(ruta, hash_config, productos):
     try:
         db = sqlite3.connect("file:{}?mode=ro".format(os.path.abspath(ruta)), uri=True)
         try:
-            activada = db.execute("SELECT MIN(activated_ms) FROM config_versions WHERE config_hash=?", (hash_config,)).fetchone()[0]
+            activada, saldo = db.execute("SELECT activated_ms, cash_usd FROM config_versions WHERE config_hash=? ORDER BY activated_ms LIMIT 1",
+                                         (hash_config,)).fetchone() or (None, None)
             filas = db.execute("SELECT t_ms, kind, action, formula_json FROM decisions WHERE config_hash=? AND product IN ({}) "
                                "ORDER BY t_ms".format(marcas), (hash_config, *productos)).fetchall()
-            trades = db.execute("SELECT side, entry_ms, exit_ms, net_bp, status, closed_by, exit_reason FROM trades WHERE config_hash=? "
-                                "AND product IN ({}) ORDER BY entry_ms".format(marcas), (hash_config, *productos)).fetchall()
+            trades = db.execute("SELECT side, entry_ms, exit_ms, net_bp, status, closed_by, exit_reason, notional_usd, qty, entry_px, "
+                                "fees_usd, funding_usd, net_usd FROM trades WHERE config_hash=? AND product IN ({}) ORDER BY entry_ms".format(marcas),
+                                (hash_config, *productos)).fetchall()
             omitidos = db.execute("SELECT t_ms, reason FROM skipped WHERE product IN ({})".format(marcas), tuple(productos)).fetchall()
         finally:
             db.close()
@@ -416,9 +487,14 @@ def _leer_vivo(ruta, hash_config, productos):
         decisiones.append({"t_ms": t_ms, "kind": kind, "action": action, "maestro": formula.get("maestro"),
                            "puntaje": float(formula.get("puntaje") or 0.0),
                            "portero": (formula.get("portero_autonomo") or {}).get("side"), "motivo": formula.get("motivo")})
-    return {"activada_ms": activada, "decisiones": decisiones, "omitidos": dict(omitidos),
+    numero = lambda texto: None if texto in (None, "") else float(texto)
+    return {"activada_ms": activada, "saldo_inicial_usd": numero(saldo), "saldo_inicial_texto": saldo,
+            "decisiones": decisiones, "omitidos": dict(omitidos),
             "operaciones": [{"side": side, "entry_ms": entrada, "exit_ms": salida, "net_bp": neto, "status": estado, "closed_by": cerrada,
-                             "exit_reason": razon} for side, entrada, salida, neto, estado, cerrada, razon in trades]}
+                             "exit_reason": razon, "notional_usd": numero(nocional), "qty": numero(qty), "entry_px": numero(precio),
+                             "fees_usd": numero(comisiones), "funding_usd": numero(funding), "net_usd": numero(neto_usd)}
+                            for side, entrada, salida, neto, estado, cerrada, razon, nocional, qty, precio, comisiones, funding, neto_usd
+                            in trades]}
 
 
 def _fecha_de(ms):
@@ -468,11 +544,17 @@ def comparar_con_vivo(desde=None, hasta=None, *, live_db, datos=None, snapshot=N
         elif evento["type"] == "trade":
             t = evento["trade"]
             operaciones_replay.append({"side": t["side"], "entry_ms": t["entry_ms"], "exit_ms": t["exit_ms"], "net_bp": t["net_bp"],
-                                       "status": "closed", "closed_by": t["closed_by"], "exit_reason": t.get("exit_reason")})
+                                       "status": "closed", "closed_by": t["closed_by"], "exit_reason": t.get("exit_reason"),
+                                       "notional_usd": float(t["notional_usd"]), "qty": float(t["qty"]), "entry_px": float(t["entry_px"]),
+                                       "fees_usd": float(t["fees_usd"]), "funding_usd": float(t["funding_usd"]), "net_usd": float(t["net_usd"])})
         elif evento["type"] == "skipped":
             omitidos_replay[evento["kind"]] = omitidos_replay.get(evento["kind"], 0) + 1
 
-    corrida = _correr(config, ventana, desde_efectivo, hasta_ms, funding_archivo, al_evento)
+    # el replay empieza con el saldo que tenía la Terminal al activarse esa config: cada posición toma su fracción del saldo del momento
+    con_saldo = bool(vivo["saldo_inicial_usd"] and vivo["saldo_inicial_usd"] > 0)
+    saldo_inicial = vivo["saldo_inicial_usd"] if con_saldo else float(CAPITAL_USD)
+    corrida = _correr(config, ventana, desde_efectivo, hasta_ms, funding_archivo, al_evento,
+                      capital_usd=vivo["saldo_inicial_texto"] if con_saldo else CAPITAL_USD)
     inicio = corrida["desde_ms"]
     vivas = [d for d in vivo["decisiones"] if inicio <= d["t_ms"] <= hasta_ms]
     operaciones_vivas = [o for o in vivo["operaciones"] if inicio <= o["entry_ms"] <= hasta_ms]
@@ -500,7 +582,7 @@ def comparar_con_vivo(desde=None, hasta=None, *, live_db, datos=None, snapshot=N
     return {
         "schema": SCHEMA_VIVO, "nota": NOTA_VIVO,
         "snapshot": {"config_hash": base["config_hash"], "origen": base.get("origen")},
-        "vivo": {"base": os.path.abspath(live_db), "activada_ms": vivo["activada_ms"],
+        "vivo": {"base": os.path.abspath(live_db), "activada_ms": vivo["activada_ms"], "saldo_inicial_usd": saldo_inicial,
                  "activada": None if vivo["activada_ms"] is None else _hora(vivo["activada_ms"]),
                  "primera_decision": _hora(primera), "ultima_decision": _hora(ultima), "decisiones_totales": len(vivo["decisiones"])},
         "ventana": {"desde": desde, "hasta": hasta, "desde_ms": desde_ms, "hasta_ms": hasta_ms, "desde_efectivo_ms": inicio,
@@ -537,15 +619,17 @@ def texto(informe):
     filas = [("Operaciones", "operaciones", lambda v: "n/d" if v is None else "{:d}".format(int(v)), lambda v: _signo(v, 0)),
              ("Neto USD", "neto_usd", lambda v: _num(v, 2), _signo),
              ("Neto bp (cuenta)", "neto_bp_cuenta", lambda v: _num(v, 1), lambda v: _signo(v, 1)),
-             ("Neto bp por operación", "neto_bp_por_operacion", lambda v: _num(v, 1), lambda v: _signo(v, 1)),
+             ("Neto bp/op (ponderado)", "neto_bp_por_operacion", lambda v: _num(v, 1), lambda v: _signo(v, 1)),
+             ("Nocional promedio USD", "nocional_promedio_usd", lambda v: _num(v, 0), lambda v: _signo(v, 0)),
              ("Acierto", "acierto", lambda v: "n/d" if v is None else "{:.0f} %".format(v * 100),
               lambda v: "n/d" if v is None else "{:+.0f} pp".format(v * 100)),
              ("Máx. drawdown USD", "max_drawdown_usd", lambda v: _num(v, 2), _signo),
              ("Máx. drawdown bp", "max_drawdown_bp", lambda v: _num(v, 0), lambda v: _signo(v, 0)),
-             ("Horas promedio", "horas_promedio", lambda v: _num(v, 1), lambda v: _signo(v, 1))]
-    lineas += ["", "{:<24}{:>14}{:>14}{:>14}".format("", "Oficial", "Variante", "Diferencia")]
+             ("Horas promedio", "horas_promedio", lambda v: _num(v, 1), lambda v: _signo(v, 1)),
+             ("Horas máximo", "horas_max", lambda v: _num(v, 1), lambda v: _signo(v, 1))]
+    lineas += ["", "{:<26}{:>14}{:>14}{:>14}".format("", "Oficial", "Variante", "Diferencia")]
     for etiqueta, clave, fmt, fmt_dif in filas:
-        lineas.append("{:<24}{:>14}{:>14}{:>14}".format(etiqueta, fmt(informe["oficial"]["metricas"][clave]),
+        lineas.append("{:<26}{:>14}{:>14}{:>14}".format(etiqueta, fmt(informe["oficial"]["metricas"][clave]),
                                                        fmt(informe["variante"]["metricas"][clave]), fmt_dif(informe["diferencia"][clave])))
     lineas += ["", "Config oficial {}".format(informe["oficial"]["config_hash"]), "Config variante {}".format(informe["variante"]["config_hash"]),
                "Salidas oficial {}; variante {}".format(informe["oficial"]["metricas"]["por_motivo"], informe["variante"]["metricas"]["por_motivo"]),
@@ -586,6 +670,24 @@ def texto_vivo(informe):
         dif = "n/d" if p["neto_bp_diferencia"] is None else "{:+.1f} bp".format(p["neto_bp_diferencia"])
         lineas.append("  {} entrada {} / {} · salida {} / {} · neto replay − vivo {}".format(
             p["side"], p["vivo"]["entrada"], p["replay"]["entrada"], p["vivo"]["salida"] or "abierta", p["replay"]["salida"], dif))
+    lineas += ["", "Tamaño e importes por operación emparejada (replay − vivo; tolerancia: nocional y cantidad {:.0f} % o {:.0f} US$, "
+               "neto {} bp, comisiones {} bp, funding {} bp del nocional vivo a igual tamaño, horas {:.0f} min); saldo inicial {:.2f} US$".format(
+                   ope["tolerancias"]["nocional_rel"] * 100, ope["tolerancias"]["nocional_abs_usd"], ope["tolerancias"]["neto_bp"],
+                   ope["tolerancias"]["comisiones_bp"], ope["tolerancias"]["funding_bp"], ope["tolerancias"]["horas_ms"] / qt.MINUTE_MS,
+                   viv["saldo_inicial_usd"])]
+    for campo in CAMPOS_IMPORTES:
+        r = ope["importes"][campo]
+        lineas.append("  {:<15} comparadas {:>2} · fuera de tolerancia {:>2} · diferencia máxima {:.4f}".format(
+            campo, r["comparadas"], r["fuera"], r["dif_max"]))
+    for x in ope["fuera_de_tolerancia"][:30]:
+        lineas.append("  ≠ {} {} {}: vivo {:.4f} / replay {:.4f} ({:+.4f})".format(x["entrada"], x["side"], x["campo"], x["vivo"], x["replay"], x["diferencia"]))
+    for p in ope["pares"]:
+        imp = p["importes"]
+        lineas.append("  {} {} nocional {:.2f}/{:.2f} · neto US$ {} · comisiones {} · funding {} · horas {}".format(
+            p["side"], p["vivo"]["entrada"], imp["nocional_usd"]["vivo"] or 0, imp["nocional_usd"]["replay"] or 0,
+            *("n/d" if imp[c]["diferencia"] is None else "{:+.4f}".format(imp[c]["diferencia"])
+              for c in ("neto_usd", "comisiones_usd", "funding_usd", "horas"))))
+    lineas.append("")
     for o in ope["lista_solo_vivo"]:
         lineas.append("  solo vivo {} {}".format(o["side"], o["entrada"]))
     for o in ope["lista_solo_replay"]:

@@ -83,9 +83,12 @@ class Base(unittest.TestCase):
 
 
 class MetricasTests(unittest.TestCase):
-    def curva(self, entrada_h, salida_h, pnl, bp, motivo="tiempo"):
+    def curva(self, entrada_h, salida_h, pnl, bp, motivo="tiempo", nocional=None, razon=None):
+        """``nocional`` por defecto es el coherente con ``bp``: pnl / bp (así el neto en bp de cada operación es el que dice)."""
+        if nocional is None:
+            nocional = abs(float(pnl)) / abs(bp) * 1e4 if bp else 1000
         return {"entrada_ms": entrada_h * qt.HOUR_MS, "salida_ms": salida_h * qt.HOUR_MS, "pnl_usd": str(pnl), "neto_bp": bp,
-                "motivo": motivo, "lado": 1, "producto": "PF_ETHUSD"}
+                "motivo": motivo, "razon": razon, "lado": 1, "producto": "PF_ETHUSD", "notional_usd": str(nocional)}
 
     def test_metrics_math(self):
         curvas = [self.curva(0, 10, "10", 100), self.curva(10, 12, "-30", -300, "maestro_vuelta"),
@@ -94,12 +97,33 @@ class MetricasTests(unittest.TestCase):
         self.assertEqual(m["operaciones"], 4)
         self.assertAlmostEqual(m["neto_usd"], 5.0)
         self.assertAlmostEqual(m["neto_bp_cuenta"], 50.0)               # 5 USD sobre 1000 USD de capital
-        self.assertAlmostEqual(m["neto_bp_por_operacion"], 12.5)
+        self.assertAlmostEqual(m["neto_bp_por_operacion"], 5 / 4000 * 1e4)        # ponderado por tamaño: Σ neto / Σ nocional
+        self.assertAlmostEqual(m["neto_bp_promedio_simple"], 12.5)               # el promedio de los bp de cada operación, sin ponderar
         self.assertAlmostEqual(m["acierto"], 0.75)
         self.assertAlmostEqual(m["max_drawdown_usd"], 30.0)             # saldo 1010 -> 980
         self.assertAlmostEqual(m["max_drawdown_bp"], 30 / 1010 * 1e4, places=1)
         self.assertAlmostEqual(m["horas_promedio"], (10 + 2 + 2 + 6) / 4)
+        self.assertEqual(m["horas_max"], 10.0)
         self.assertEqual(m["por_motivo"], {"tiempo": 3, "maestro_vuelta": 1})
+
+    def test_net_bp_per_trade_is_weighted_by_size_so_a_tiny_position_cannot_flip_the_sign(self):
+        """El defecto de la página: tres posiciones de 500 US$ ganan 1 % y una de 10 US$ pierde 30 %. Sin ponderar daba −7,5 bp pese a
+        +14,7 US$ de neto; ponderado por el tamaño es lo que de verdad ganó cada dólar puesto."""
+        curvas = [self.curva(0, 5, "5", 100, nocional=500), self.curva(5, 10, "5", 100, nocional=500),
+                  self.curva(10, 15, "5", 100, nocional=500), self.curva(15, 20, "-3", -3000, nocional=10)]
+        m = bt.metricas(curvas, "1000")
+        self.assertAlmostEqual(m["neto_usd"], 12.0)
+        self.assertAlmostEqual(m["neto_bp_promedio_simple"], -675.0)
+        self.assertAlmostEqual(m["neto_bp_por_operacion"], 12 / 1510 * 1e4)
+        self.assertGreater(m["neto_bp_por_operacion"], 0)                        # mismo signo que el neto en US$
+        self.assertEqual((m["nocional_min_usd"], m["nocional_max_usd"]), (10.0, 500.0))
+        self.assertAlmostEqual(m["nocional_promedio_usd"], 1510 / 4)
+
+    def test_exit_reasons_use_the_exit_reason_when_there_is_one_and_the_closer_otherwise(self):
+        curvas = [self.curva(0, 5, "5", 100, motivo="formula", razon="maestro_vuelta"),
+                  self.curva(5, 10, "5", 100, motivo="formula", razon="maestro_agotado"),
+                  self.curva(10, 15, "5", 100, motivo="tiempo"), self.curva(15, 20, "5", 100, motivo="formula", razon="maestro_vuelta")]
+        self.assertEqual(bt.metricas(curvas, "1000")["por_motivo"], {"maestro_vuelta": 2, "maestro_agotado": 1, "tiempo": 1})
 
     def test_drawdown_follows_the_realized_balance_in_exit_order(self):
         curvas = [self.curva(0, 30, "-10", -100), self.curva(1, 5, "20", 200), self.curva(6, 8, "-5", -50)]
@@ -109,8 +133,9 @@ class MetricasTests(unittest.TestCase):
     def test_no_trades_gives_zero_and_unknowns(self):
         m = bt.metricas([], "1000")
         self.assertEqual((m["operaciones"], m["neto_usd"], m["max_drawdown_usd"]), (0, 0.0, 0.0))
-        self.assertIsNone(m["acierto"])
-        self.assertIsNone(m["horas_promedio"])
+        for clave in ("acierto", "horas_promedio", "horas_max", "neto_bp_por_operacion", "neto_bp_promedio_simple", "nocional_promedio_usd",
+                      "nocional_min_usd", "nocional_max_usd"):
+            self.assertIsNone(m[clave], clave)
 
     def test_difference_is_variant_minus_official_and_unknown_when_one_side_is_unknown(self):
         ofi = bt.metricas([self.curva(0, 10, "10", 100)], "1000")
@@ -119,6 +144,7 @@ class MetricasTests(unittest.TestCase):
         self.assertEqual(dif["operaciones"], 1)
         self.assertAlmostEqual(dif["neto_usd"], 10.0)
         self.assertAlmostEqual(dif["horas_promedio"], 3 - 10)
+        self.assertAlmostEqual(dif["horas_max"], 5 - 10)
         self.assertIsNone(bt.diferencia(bt.metricas([], "1000"), var)["acierto"])
 
 
@@ -129,6 +155,26 @@ class ComparacionTests(Base):
         self.assertGreater(informe["oficial"]["metricas"]["operaciones"], 0)
         self.assertEqual(informe["oficial"]["metricas"], informe["variante"]["metricas"])
         self.assertTrue(all(v in (0, 0.0) for v in informe["diferencia"].values()), informe["diferencia"])
+
+    def test_each_listed_trade_carries_its_size_and_exit_reason_and_the_metrics_use_them(self):
+        informe = self.comparar({"guardrails": {"max_hold_min": 1440}})
+        ops = informe["oficial"]["operaciones"]
+        self.assertGreater(len(ops), 0)
+        for o in ops:
+            self.assertGreater(o["nocional_usd"], 0)
+            self.assertIn("razon", o)
+        m = informe["oficial"]["metricas"]
+        self.assertAlmostEqual(m["neto_bp_por_operacion"], sum(o["neto_usd"] for o in ops) / sum(o["nocional_usd"] for o in ops) * 1e4)
+        self.assertEqual((m["nocional_min_usd"], m["nocional_max_usd"]), (min(o["nocional_usd"] for o in ops), max(o["nocional_usd"] for o in ops)))
+        incompletas = informe["oficial"]["funding_operaciones_incompletas"]
+        self.assertIsInstance(incompletas, int)
+        self.assertLessEqual(incompletas, 1)         # solo la que se cierra al final de la ventana: ahí el funding no se lee (sin look-ahead)
+        self.assertEqual(informe["oficial"]["funding_completo"], incompletas == 0)
+
+    def test_the_30h_style_cap_is_respected_by_every_trade_of_the_variant(self):
+        informe = self.comparar({"guardrails": {"max_hold_min": 1440}}, hasta="2026-01-14")
+        self.assertLessEqual(informe["variante"]["metricas"]["horas_max"], 24.0 + 1e-9)
+        self.assertGreater(informe["oficial"]["metricas"]["horas_max"], 24.0)            # el oficial (36 h) sí deja pasar de 24 h
 
     def test_a_shorter_max_hold_closes_earlier_and_the_report_shows_it(self):
         informe = self.comparar({"guardrails": {"max_hold_min": 1440}}, hasta="2026-01-14")
@@ -229,6 +275,45 @@ class ComparacionTests(Base):
             self.assertEqual(bt.main(["--estrategia", "x", "--json"]), 0)
         self.assertEqual(visto, {"desde": "2026-02-01", "hasta": "2026-04-19"})
         self.assertEqual(json.loads(salida.getvalue()), {"schema": bt.SCHEMA})
+
+
+class PerillasLleganAlReplayTests(Base):
+    """Auditoría: una variante cuyo hash cambia pero cuya conducta no cambia sería una prueba vacía. Cada perilla permitida tiene que
+    llegar al ``Trader`` del replay y cambiar lo que hace (no solo el hash de la config). Aquí la decisión está simulada, así que no se
+    prueban ``exhaust_hold_min`` ni ``rebotes.*`` (viven dentro de la decisión de la fórmula); esos se verificaron con datos reales:
+    ``odd/tasks/estrategias-laboratorio-auditoria.md``."""
+
+    def firma(self, cambios):
+        ofi = self.snapshot["config"] if cambios is None else est.config_desde_overlay(
+            {"id": "v", "nombre": "v", "descripcion": "v", "base_config_hash": self.snapshot["config_hash"], "cambios": cambios}, "v",
+            self.snapshot)
+        miradas = []
+
+        def contar(trader, t_ms, reasons):
+            miradas.append(t_ms)
+            return abre_si_esta_plana(trader, t_ms, reasons)
+        datos = sintetico("2026-01-08", "2026-01-16")
+        with mock.patch.object(qt.Trader, "_decide", contar):
+            r = bt.exam.replay_formula(bt._Ventana(datos, qt.date_ms("2026-01-16")), ofi, qt.date_ms("2026-01-16"),
+                                       desde_ms=qt.date_ms("2026-01-08"))
+        return {"miradas": len(miradas), "operaciones": [(c["entrada_ms"], c["salida_ms"], c["notional_usd"]) for c in r["curvas"]["formula"]]}
+
+    def test_each_allowed_knob_changes_what_the_replay_does(self):
+        base = self.firma(None)
+        self.assertGreater(len(base["operaciones"]), 0)
+        for clave, cambios in {"guardrails.max_hold_min": {"guardrails": {"max_hold_min": 720, "exhaust_hold_min": 600}},
+                               "guardrails.cooldown_min": {"guardrails": {"cooldown_min": 600}},
+                               "guardrails.stop_sigma_24h": {"guardrails": {"stop_sigma_24h": 0.2}},
+                               "wake.flat_every_min": {"wake": {"flat_every_min": 60}},
+                               "wake.position_every_min": {"wake": {"position_every_min": 120}}}.items():
+            with self.subTest(clave=clave):
+                self.assertNotEqual(self.firma(cambios), base)
+
+    def test_the_variant_invests_exactly_like_the_official_one(self):
+        """Las reglas de inversión no son perillas: el primer cupo de las dos toma el 33 % del saldo de 1000 US$ (sin analista en este snapshot)."""
+        ofi = self.firma(None)["operaciones"]
+        var = self.firma({"guardrails": {"max_hold_min": 1440}})["operaciones"]
+        self.assertEqual((ofi[0][2], var[0][2]), ("330.00", "330.00"))
 
 
 class CliTests(Base):

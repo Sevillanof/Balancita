@@ -99,8 +99,7 @@ class ListarTests(Servidor):
         self.assertEqual(por_clave["wake.flat_every_min"]["paso"], 5)
         self.assertIsNone(por_clave["guardrails.stop_sigma_24h"]["valor_actual"])
         self.assertTrue(por_clave["guardrails.stop_sigma_24h"]["admite_null"])
-        self.assertEqual(por_clave["analista.modo"]["tipo"], "opcion")
-        self.assertEqual(por_clave["analista.modo"]["opciones"], ["apagado", "suave", "fuerte"])
+        self.assertFalse([clave for clave in por_clave if clave.startswith(("posiciones.", "analista."))])   # el tamaño es fijo, como la Terminal
         self.assertNotIn("incluir_reserva", json.dumps(out))
 
     def test_lists_the_overlay_files_with_their_knob_changes(self):
@@ -192,8 +191,8 @@ class CrearTests(Servidor):
 
     def test_invalid_values_are_refused_and_nothing_is_written(self):
         for cambios in ({"guardrails": {"max_hold_min": 5}}, {"guardrails": {"max_hold_min": "36"}}, {"guardrails": {"max_hold_min": True}},
-                        {"guardrails": {"exhaust_hold_min": 3000}}, {"wake": {"flat_every_min": 7}}, {"analista": {"modo": "brutal"}},
-                        {"posiciones": {"max": 9}}, {}, [], "x"):
+                        {"guardrails": {"exhaust_hold_min": 3000}}, {"wake": {"flat_every_min": 7}}, {"rebotes": {"caida_pct": 150}},
+                        {"posiciones": {"max": 2}}, {"posiciones": {"fraccion": 0.5}}, {"analista": {"modo": "suave"}}, {}, [], "x"):
             status, out = self.crear(cambios=cambios)
             self.assertEqual(status, 400, cambios)
             self.assertEqual(out["error"], "estrategia_invalida")

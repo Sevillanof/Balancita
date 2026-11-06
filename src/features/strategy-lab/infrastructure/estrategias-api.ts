@@ -43,11 +43,19 @@ export type Metricas = {
   operaciones: number
   neto_usd: number
   neto_bp_cuenta: number
+  /** Size-weighted: Σ net US$ / Σ notional US$ × 10 000 (what each dollar put at work earned). */
   neto_bp_por_operacion: number | null
+  /** The plain mean of each trade's bp, only for reference. */
+  neto_bp_promedio_simple?: number | null
+  nocional_promedio_usd?: number | null
+  nocional_min_usd?: number | null
+  nocional_max_usd?: number | null
   acierto: number | null
   max_drawdown_usd: number
   max_drawdown_bp: number
   horas_promedio: number | null
+  /** The longest a trade stayed open (a cap such as 30 h shows here). */
+  horas_max?: number | null
   por_motivo: Record<string, number>
 }
 
@@ -63,7 +71,7 @@ export type Diferencia = {
       | 'max_drawdown_bp'
       | 'horas_promedio'
   ]: number | null
-}
+} & { horas_max?: number | null; nocional_promedio_usd?: number | null }
 
 /** One closed trade of a run (`futures_estrategias_backtest._operaciones`). */
 export type Operacion = {
@@ -73,6 +81,9 @@ export type Operacion = {
   neto_usd: number
   neto_bp: number
   motivo: string
+  /** Exit reason (`maestro_vuelta`, `maestro_agotado`…) and the position size, when the server sends them. */
+  razon?: string | null
+  nocional_usd?: number
 }
 
 export type Corrida = {
@@ -80,6 +91,8 @@ export type Corrida = {
   metricas: Metricas
   operaciones: Operacion[]
   funding_completo?: boolean
+  /** Trades that touched an hour without a funding rate (the boolean above turns off with a single hour). */
+  funding_operaciones_incompletas?: number
 }
 
 export type Informe = {
