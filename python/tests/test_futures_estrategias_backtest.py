@@ -130,6 +130,38 @@ class MetricasTests(unittest.TestCase):
         m = bt.metricas(curvas, "1000")                                  # por salida: +20, -5, -10 -> pico 1020, piso 1005
         self.assertAlmostEqual(m["max_drawdown_usd"], 15.0)
 
+    def test_trades_force_closed_at_the_end_of_the_window_count_in_no_metric_and_are_reported_apart(self):
+        """L13: el cierre forzado de fin de ventana (motivo ``fin_examen``) no es una decisión de la estrategia: no entra en operaciones,
+        acierto, neto, drawdown, horas, nocional ni por_motivo; se informa aparte con su cantidad y su neto."""
+        normales = [self.curva(0, 10, "10", 100), self.curva(10, 12, "-30", -300, "maestro_vuelta"), self.curva(12, 14, "5", 50)]
+        fin = [self.curva(14, 90, "-200", -2000, "fin_examen"), self.curva(20, 100, "7", 70, "fin_examen", nocional=5000)]
+        m = bt.metricas(normales + fin, "1000")
+        solo = bt.metricas(normales, "1000")
+        self.assertEqual({k: v for k, v in m.items() if k != "cerradas_fin_ventana"},
+                         {k: v for k, v in solo.items() if k != "cerradas_fin_ventana"})
+        self.assertEqual(m["operaciones"], 3)
+        self.assertAlmostEqual(m["neto_usd"], -15.0)
+        self.assertAlmostEqual(m["acierto"], 2 / 3)
+        self.assertAlmostEqual(m["max_drawdown_usd"], 30.0)
+        self.assertEqual(m["horas_max"], 10.0)
+        self.assertEqual(m["por_motivo"], {"tiempo": 2, "maestro_vuelta": 1})
+        self.assertEqual(m["cerradas_fin_ventana"], {"operaciones": 2, "neto_usd": -193.0})
+
+    def test_a_config_with_no_force_closed_trade_reports_zero_and_one_with_only_those_has_no_trades(self):
+        self.assertEqual(bt.metricas([self.curva(0, 10, "10", 100)], "1000")["cerradas_fin_ventana"], {"operaciones": 0, "neto_usd": 0.0})
+        self.assertEqual(bt.metricas([], "1000")["cerradas_fin_ventana"], {"operaciones": 0, "neto_usd": 0.0})
+        solo_fin = bt.metricas([self.curva(0, 10, "-4", -40, "fin_examen")], "1000")
+        self.assertEqual((solo_fin["operaciones"], solo_fin["neto_usd"], solo_fin["acierto"], solo_fin["por_motivo"]), (0, 0.0, None, {}))
+        self.assertEqual(solo_fin["cerradas_fin_ventana"], {"operaciones": 1, "neto_usd": -4.0})
+
+    def test_difference_ignores_the_force_closed_trades(self):
+        ofi = bt.metricas([self.curva(0, 10, "10", 100), self.curva(10, 50, "99", 990, "fin_examen")], "1000")
+        var = bt.metricas([self.curva(0, 5, "30", 300)], "1000")
+        dif = bt.diferencia(ofi, var)
+        self.assertAlmostEqual(dif["neto_usd"], 20.0)
+        self.assertEqual(dif["operaciones"], 0)
+        self.assertNotIn("cerradas_fin_ventana", dif)
+
     def test_no_trades_gives_zero_and_unknowns(self):
         m = bt.metricas([], "1000")
         self.assertEqual((m["operaciones"], m["neto_usd"], m["max_drawdown_usd"]), (0, 0.0, 0.0))
@@ -158,11 +190,12 @@ class ComparacionTests(Base):
 
     def test_each_listed_trade_carries_its_size_and_exit_reason_and_the_metrics_use_them(self):
         informe = self.comparar({"guardrails": {"max_hold_min": 1440}})
-        ops = informe["oficial"]["operaciones"]
-        self.assertGreater(len(ops), 0)
-        for o in ops:
+        todas = informe["oficial"]["operaciones"]
+        self.assertGreater(len(todas), 0)
+        for o in todas:
             self.assertGreater(o["nocional_usd"], 0)
             self.assertIn("razon", o)
+        ops = [o for o in todas if o["motivo"] != "fin_examen"]          # la cerrada al final de la ventana se lista pero no entra en las métricas
         m = informe["oficial"]["metricas"]
         self.assertAlmostEqual(m["neto_bp_por_operacion"], sum(o["neto_usd"] for o in ops) / sum(o["nocional_usd"] for o in ops) * 1e4)
         self.assertEqual((m["nocional_min_usd"], m["nocional_max_usd"]), (min(o["nocional_usd"] for o in ops), max(o["nocional_usd"] for o in ops)))
@@ -170,6 +203,21 @@ class ComparacionTests(Base):
         self.assertIsInstance(incompletas, int)
         self.assertLessEqual(incompletas, 1)         # solo la que se cierra al final de la ventana: ahí el funding no se lee (sin look-ahead)
         self.assertEqual(informe["oficial"]["funding_completo"], incompletas == 0)
+
+    def test_the_report_lists_the_force_closed_trade_but_the_metrics_leave_it_out_and_report_it_apart(self):
+        informe = self.comparar({"guardrails": {"max_hold_min": 1440}})
+        for quien in ("oficial", "variante"):
+            todas = informe[quien]["operaciones"]
+            fin = [o for o in todas if o["motivo"] == "fin_examen"]
+            m = informe[quien]["metricas"]
+            self.assertGreaterEqual(len(fin), 1, quien)                          # el replay deja una abierta al final de la ventana
+            self.assertEqual(m["operaciones"], len(todas) - len(fin))
+            self.assertNotIn("fin_examen", m["por_motivo"])
+            self.assertEqual(sum(m["por_motivo"].values()), m["operaciones"])
+            self.assertEqual(m["cerradas_fin_ventana"]["operaciones"], len(fin))
+            self.assertAlmostEqual(m["cerradas_fin_ventana"]["neto_usd"], sum(o["neto_usd"] for o in fin))
+            self.assertAlmostEqual(m["neto_usd"], sum(o["neto_usd"] for o in todas if o["motivo"] != "fin_examen"))
+        self.assertEqual(set(informe["diferencia"]), set(bt.NUMERICAS))
 
     def test_the_30h_style_cap_is_respected_by_every_trade_of_the_variant(self):
         informe = self.comparar({"guardrails": {"max_hold_min": 1440}}, hasta="2026-01-14")
@@ -337,7 +385,7 @@ class CliTests(Base):
         self.assertEqual(code, 0)
         self.assertEqual((visto["id"], visto["desde"], visto["hasta"], visto["incluir_reserva"]), ("variante", "2026-01-08", "2026-01-13", True))
         texto = out.getvalue()
-        for pedazo in ("variante", informe["snapshot"]["config_hash"][:12], "Oficial", "Variante", "Diferencia", "Operaciones"):
+        for pedazo in ("variante", informe["snapshot"]["config_hash"][:12], "Oficial", "Variante", "Diferencia", "Operaciones", "Cerradas al final de la ventana"):
             self.assertIn(pedazo, texto)
 
 

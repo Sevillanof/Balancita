@@ -97,7 +97,9 @@ export class VelasOperacionesPrimitive implements ISeriesPrimitive<Time> {
       .map(
         (i) =>
           `${i.par.id},${i.x.toFixed(1)},${i.y.toFixed(1)},${i.tramos
-            .map((t) => `${t.quien}${t.x2.toFixed(1)}`)
+            .map(
+              (t) => `${t.quien}${t.x2.toFixed(1)}${t.finVentana ? 'f' : ''}`,
+            )
             .join(',')}`,
       )
       .join(';')}`

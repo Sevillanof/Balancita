@@ -228,6 +228,68 @@ describe('Estrategias: the Terminal laboratory', () => {
     ])
   })
 
+  it('shows a chip per configuration with the trades closed at the end of the window, only when there are some', async () => {
+    const conCierres: Informe = {
+      ...INFORME,
+      oficial: {
+        ...INFORME.oficial,
+        metricas: {
+          ...INFORME.oficial.metricas,
+          cerradas_fin_ventana: { operaciones: 2, neto_usd: -3.2 },
+        },
+      },
+      variante: {
+        ...INFORME.variante,
+        metricas: {
+          ...INFORME.variante.metricas,
+          cerradas_fin_ventana: { operaciones: 1, neto_usd: 0.9 },
+        },
+      },
+    }
+    renderPage(
+      fakeApi([EJEMPLO], {
+        [EJEMPLO.id]: trabajoListo({ informe: conCierres }),
+      }),
+    )
+    const condiciones = await screen.findByRole('list', {
+      name: 'Condiciones de la prueba',
+    })
+    expect(
+      within(condiciones).getByText(
+        '2 cerradas al final de la ventana · −3,20 US$',
+      ),
+    ).toBeVisible()
+    expect(
+      within(condiciones).getByText(
+        '1 cerrada al final de la ventana · +0,90 US$',
+      ),
+    ).toBeVisible()
+    expect(condiciones).toHaveTextContent('Oficial')
+    expect(condiciones).toHaveTextContent('Variante')
+  })
+
+  it('shows no such chip when nothing was closed at the end of the window, nor for an informe from before', async () => {
+    const ninguna: Informe = {
+      ...INFORME,
+      oficial: {
+        ...INFORME.oficial,
+        metricas: {
+          ...INFORME.oficial.metricas,
+          cerradas_fin_ventana: { operaciones: 0, neto_usd: 0 },
+        },
+      },
+    }
+    renderPage(
+      fakeApi([EJEMPLO], {
+        [EJEMPLO.id]: trabajoListo({ informe: ninguna }),
+      }),
+    )
+    const condiciones = await screen.findByRole('list', {
+      name: 'Condiciones de la prueba',
+    })
+    expect(condiciones).not.toHaveTextContent(/cerrada/)
+  })
+
   it('lists the operations of the backtest, the variant first, and closes with Escape', async () => {
     const user = userEvent.setup()
     renderPage(fakeApi([EJEMPLO], { [EJEMPLO.id]: trabajoListo() }))

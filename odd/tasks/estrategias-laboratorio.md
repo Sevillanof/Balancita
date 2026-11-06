@@ -163,13 +163,14 @@ Orden sugerido: 1 → 2 → 5 → 3 → 4a → 6 → 4b. El 5 va antes que la co
 
 ## Tasks
 
-| ID  | Specs  | Ruta                                                                    | Estado         | Commit |
-| --- | ------ | ----------------------------------------------------------------------- | -------------- | ------ |
-| T1  | S1, S2 | snapshot de la config activa + overlays + validación                    | pendiente      | —      |
-| T2  | S3     | `replay_formula` con config explícita + comparación oficial vs variante | pendiente      | —      |
-| T3  | S4     | chequeo replay vs vivo                                                  | pendiente      | —      |
-| T4  | S5     | página Estrategias nueva; retirar lo viejo                              | pendiente      | —      |
-| T5  | S6     | sombra y promoción                                                      | fase siguiente | —      |
+| ID  | Specs  | Ruta                                                                          | Estado         | Commit |
+| --- | ------ | ----------------------------------------------------------------------------- | -------------- | ------ |
+| T1  | S1, S2 | snapshot de la config activa + overlays + validación                          | pendiente      | —      |
+| T2  | S3     | `replay_formula` con config explícita + comparación oficial vs variante       | pendiente      | —      |
+| T3  | S4     | chequeo replay vs vivo                                                        | pendiente      | —      |
+| T4  | S5     | página Estrategias nueva; retirar lo viejo                                    | pendiente      | —      |
+| T5  | S6     | sombra y promoción                                                            | fase siguiente | —      |
+| T8  | S3     | excluir de las métricas las cerradas a la fuerza al final de la ventana (L13) | hecha          | —      |
 
 ## Log
 
@@ -186,3 +187,4 @@ Orden sugerido: 1 → 2 → 5 → 3 → 4a → 6 → 4b. El 5 va antes que la co
 - **L11** (usuario): «Sisi, corregilo y analiza si hay mas errores de esos en estrategias»
 - **L12** (usuario): «El backtest debe invertir igual que terminal, esas reglas no cambian» → el tamaño (33 % del saldo, hasta 3 posiciones, rebotes) es fijo: el backtest dimensiona igual que la Terminal y las variantes no pueden cambiar perillas de tamaño (`posiciones.*`).
 - **L13** (usuario): «2. si, excluila» → las operaciones cerradas a la fuerza al final de la ventana (`fin_examen`) no cuentan en operaciones, acierto, horas ni neto; se informan aparte.
+- **L14** (evidencia T8, `--estrategia ejemplo-salida-30h`, ventana 2026-02-01 → 2026-04-19, caché local): antes, oficial 180 ops / +87,81 US$ / acierto 60,0 % / horas 14,30; variante 182 ops / +59,19 US$ / acierto 59,9 % / horas 14,34 / diferencia de neto −28,62. Después (sin `fin_examen`): oficial 178 ops / +86,81 US$ / acierto 59,6 % / horas 14,41, cerradas al final 2 / +1,00 US$; variante 180 ops / +58,22 US$ / acierto 59,4 % / horas 14,45, cerradas al final 2 / +0,97 US$; diferencia de neto −28,59. `cerradas_fin_ventana` vive dentro de `metricas`; el gráfico las dibuja punteadas con cierre hueco y las fichas del pie las muestran.

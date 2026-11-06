@@ -86,8 +86,8 @@ export default function VelasConOperaciones({ api, informe }: Props) {
           Variante
         </label>
         <span className="ml-auto text-ink-2">
-          ▲▼ entrada · ● cierre · ✕ cortada por el tope de horas · arrastrá para
-          ver más velas
+          ▲▼ entrada · ● cierre · ✕ cortada por el tope de horas · ○ cerrada al
+          final de la ventana · arrastrá para ver más velas
         </span>
       </figcaption>
       {error && (

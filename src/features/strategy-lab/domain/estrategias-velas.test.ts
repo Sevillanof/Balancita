@@ -141,6 +141,79 @@ describe('pairing the trades of the official and the variant', () => {
   })
 })
 
+describe('trades force-closed at the end of the tested window', () => {
+  const pares = emparejar(
+    informe(
+      [op(0, 20, 'LONG', 3, 'fin_examen'), op(50, 5, 'SHORT', 1)],
+      [op(0, 20, 'LONG', -2, 'fin_examen'), op(50, 5, 'SHORT', 1)],
+    ),
+  )
+  const mapa: MapaProyeccion = {
+    ancho: 5000,
+    alto: 400,
+    tiempo: (ms) => (ms - T0) / 1000 / 60,
+    precio: (p) => 400 - p,
+  }
+  const velas: Vela[] = Array.from({ length: 80 }, (_, i) => ({
+    t: T0 + i * H,
+    o: 100,
+    h: 110,
+    l: 90,
+    c: 105,
+    v: 1,
+  }))
+
+  it('flags the side of each configuration that was closed by the end of the window, and only that one', () => {
+    const [fin, normal] = pares
+    expect(fin!.oficial!.finVentana).toBe(true)
+    expect(fin!.variante!.finVentana).toBe(true)
+    expect(normal!.oficial!.finVentana).toBeFalsy()
+    expect(normal!.variante!.finVentana).toBeFalsy()
+    const [mixto] = emparejar(
+      informe(
+        [op(0, 20, 'LONG', 3, 'fin_examen')],
+        [op(0, 5, 'LONG', 1, 'maestro_vuelta')],
+      ),
+    )
+    expect(mixto!.oficial!.finVentana).toBe(true)
+    expect(mixto!.variante!.finVentana).toBeFalsy()
+  })
+
+  it('carries the flag to what is drawn, still drawing the trade', () => {
+    const [primera] = marcas(pares, VISIBLES)
+    expect(primera!.tramos).toEqual([
+      {
+        quien: 'oficial',
+        salidaMs: T0 + 20 * H,
+        cortada: false,
+        finVentana: true,
+      },
+      {
+        quien: 'variante',
+        salidaMs: T0 + 20 * H,
+        cortada: false,
+        finVentana: true,
+      },
+    ])
+    const items = proyectar(marcas(pares, VISIBLES), velas, H, mapa)
+    expect(items).toHaveLength(2)
+    expect(items[0]!.tramos.map((t) => t.finVentana)).toEqual([true, true])
+    expect(items[1]!.tramos.map((t) => !!t.finVentana)).toEqual([false, false])
+  })
+
+  it('says in the tooltip which configuration was closed at the end of the tested window', () => {
+    const [fin, normal] = pares
+    expect(contenidoTooltip(fin!, VISIBLES).avisosFin).toEqual([
+      'Oficial: cerrada al final de la ventana probada',
+      'Variante: cerrada al final de la ventana probada',
+    ])
+    expect(
+      contenidoTooltip(fin!, { oficial: false, variante: true }).avisosFin,
+    ).toEqual(['Variante: cerrada al final de la ventana probada'])
+    expect(contenidoTooltip(normal!, VISIBLES).avisosFin).toBeUndefined()
+  })
+})
+
 describe('what is drawn for the checkboxes', () => {
   const pares = emparejar(
     informe(

@@ -51,7 +51,7 @@ type Mira = { par: ParOperacion; x: number; y: number }
 
 /**
  * ETH candles like the Terminal's (lightweight-charts) with the trades of the official Terminal (blue) and of the variant (amber)
- * painted over them: ▲/▼ at the entry, a horizontal line to the exit, ● at each exit, ✕ where the variant cut the trade.
+ * painted over them: ▲/▼ at the entry, a horizontal line to the exit, ● at each exit, ✕ where the variant cut the trade, a dashed line with a hollow ○ for a trade the end of the tested window closed.
  */
 export default function VelasChart({
   velas,
@@ -255,8 +255,19 @@ export default function VelasChart({
                     stroke={tono}
                     strokeWidth={2}
                     strokeOpacity={0.85}
+                    strokeDasharray={tramo.finVentana ? '5 4' : undefined}
                   />
-                  {tramo.cortada ? (
+                  {tramo.finVentana ? (
+                    <circle
+                      data-testid="cierre-fin-ventana"
+                      cx={tramo.x2}
+                      cy={tramo.y}
+                      r={4}
+                      fill="none"
+                      stroke={tono}
+                      strokeWidth={2}
+                    />
+                  ) : tramo.cortada ? (
                     <path
                       data-testid="corte-variante"
                       d={`M${tramo.x2 - 4} ${tramo.y - 4} l8 8 M${tramo.x2 + 4} ${tramo.y - 4} l-8 8`}
@@ -320,6 +331,11 @@ export default function VelasChart({
           {tooltip.aviso && (
             <span className="mt-1 text-warn">{tooltip.aviso}</span>
           )}
+          {tooltip.avisosFin?.map((aviso) => (
+            <span key={aviso} className="mt-1 text-ink-2">
+              {aviso}
+            </span>
+          ))}
         </div>
       )}
     </div>

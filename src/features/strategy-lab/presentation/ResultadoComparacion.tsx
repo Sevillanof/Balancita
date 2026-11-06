@@ -5,6 +5,7 @@ import { diaCorto, firmado, numero, usd } from '../domain/estrategias-format.ts'
 import type {
   EstrategiasApi,
   Informe,
+  Metricas,
 } from '../infrastructure/estrategias-api.ts'
 import { BOTON, EYEBROW, TEXTO_TONO } from './estrategias-styles.ts'
 import OperacionesModal from './OperacionesModal.tsx'
@@ -172,6 +173,28 @@ const CONDICIONES = [
 const CHIP =
   'inline-flex h-6.5 items-center gap-1.5 rounded-full px-2.5 text-hint'
 
+function CerradasAlFinal({
+  quien,
+  cerradas,
+}: {
+  quien: string
+  cerradas: Metricas['cerradas_fin_ventana']
+}) {
+  if (!cerradas || cerradas.operaciones <= 0) return null
+  const { operaciones, neto_usd: neto } = cerradas
+  return (
+    <li
+      className={`${CHIP} bg-surface-2 text-ink-2`}
+      title={`${quien}: lo que seguía abierto al terminar la ventana probada se cerró a la fuerza; no cuenta en las operaciones, el acierto, el neto ni las horas`}
+    >
+      <span className="sr-only">{quien}: </span>
+      <span className="font-mono">
+        {`${operaciones} ${operaciones === 1 ? 'cerrada' : 'cerradas'} al final de la ventana · ${usd(neto)}`}
+      </span>
+    </li>
+  )
+}
+
 function Condiciones({ informe }: { informe: Informe }) {
   const { ventana, limites } = informe
   const intacta = !ventana.reserva.incluida
@@ -213,6 +236,14 @@ function Condiciones({ informe }: { informe: Informe }) {
           </li>
         )
       })}
+      <CerradasAlFinal
+        quien="Oficial"
+        cerradas={informe.oficial.metricas.cerradas_fin_ventana}
+      />
+      <CerradasAlFinal
+        quien="Variante"
+        cerradas={informe.variante.metricas.cerradas_fin_ventana}
+      />
     </ul>
   )
 }
