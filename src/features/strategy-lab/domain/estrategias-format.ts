@@ -325,3 +325,17 @@ export function instanteCorto(ms: number): string {
   const mm = String(fecha.getUTCMinutes()).padStart(2, '0')
   return `${fecha.getUTCDate()} ${MESES[fecha.getUTCMonth()]} ${hh}:${mm}`
 }
+
+/** «16 abr» (UTC). */
+export function diaDeInstante(ms: number): string {
+  const fecha = new Date(ms)
+  return `${fecha.getUTCDate()} ${MESES[fecha.getUTCMonth()]}`
+}
+
+/** «12:00» (UTC). */
+export function horaDeInstante(ms: number): string {
+  const fecha = new Date(ms)
+  const hh = String(fecha.getUTCHours()).padStart(2, '0')
+  const mm = String(fecha.getUTCMinutes()).padStart(2, '0')
+  return `${hh}:${mm}`
+}

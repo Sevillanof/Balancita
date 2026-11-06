@@ -1,6 +1,6 @@
 import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { describe, expect, it, vi } from 'vitest'
+import { describe, expect, it } from 'vitest'
 import EstrategiasPage from './EstrategiasPage.tsx'
 import StrategyLab from './StrategyLab.tsx'
 import {
@@ -19,11 +19,6 @@ import {
   trabajo,
   trabajoListo,
 } from '../testing/estrategias-fixture.ts'
-
-vi.mock(
-  'lightweight-charts',
-  async () => (await import('../testing/lightweight-charts-mock.ts')).modulo,
-)
 
 const OLD_UI = /C2[5-9]|C3[0-3]|VectorBT|ranking|exigencia|editor de reglas/i
 
@@ -133,9 +128,10 @@ describe('Estrategias: the Terminal laboratory', () => {
     expect(duelo).toHaveTextContent('+53,63 US$')
 
     expect(
-      within(detalle).getByRole('img', { name: /Velas de ETH/ }),
+      await within(detalle).findByRole('img', { name: /Velas de ETH/ }),
     ).toBeVisible()
-    expect(within(detalle).getByText('ETH / USD')).toBeVisible()
+    expect(within(detalle).getByText(/^Operación \d+ de \d+$/)).toBeVisible()
+    expect(within(detalle).getByRole('group', { name: 'Zoom' })).toBeVisible()
 
     const neto = within(detalle).getByRole('group', {
       name: 'Neto por operación (ponderado por tamaño)',
@@ -228,7 +224,7 @@ describe('Estrategias: the Terminal laboratory', () => {
     ])
   })
 
-  it('shows a chip per configuration with the trades closed at the end of the window, only when there are some', async () => {
+  it('shows a single «Fin de ventana» chip for both configurations, only when there are some', async () => {
     const conCierres: Informe = {
       ...INFORME,
       oficial: {
@@ -254,18 +250,38 @@ describe('Estrategias: the Terminal laboratory', () => {
     const condiciones = await screen.findByRole('list', {
       name: 'Condiciones de la prueba',
     })
-    expect(
-      within(condiciones).getByText(
-        '2 cerradas al final de la ventana · −3,20 US$',
-      ),
-    ).toBeVisible()
-    expect(
-      within(condiciones).getByText(
-        '1 cerrada al final de la ventana · +0,90 US$',
-      ),
-    ).toBeVisible()
-    expect(condiciones).toHaveTextContent('Oficial')
-    expect(condiciones).toHaveTextContent('Variante')
+    const chip = within(condiciones).getByText('Fin de ventana').closest('li')!
+    expect(chip.textContent).toMatch(/^○\s*Fin de ventana\s*2 · 1$/)
+    expect(chip).toHaveAttribute(
+      'title',
+      'Cerradas a la fuerza al final de la ventana (no cuentan en las métricas): oficial 2 · −3,20 US$; variante 1 · +0,90 US$',
+    )
+    expect(condiciones).not.toHaveTextContent(/cerrada al final/)
+    expect(within(condiciones).getAllByText(/Fin de ventana/)).toHaveLength(1)
+  })
+
+  it('shows 0 for the configuration that closed none at the end of the window', async () => {
+    const soloOficial: Informe = {
+      ...INFORME,
+      oficial: {
+        ...INFORME.oficial,
+        metricas: {
+          ...INFORME.oficial.metricas,
+          cerradas_fin_ventana: { operaciones: 2, neto_usd: 1 },
+        },
+      },
+    }
+    renderPage(
+      fakeApi([EJEMPLO], {
+        [EJEMPLO.id]: trabajoListo({ informe: soloOficial }),
+      }),
+    )
+    const condiciones = await screen.findByRole('list', {
+      name: 'Condiciones de la prueba',
+    })
+    const chip = within(condiciones).getByText('Fin de ventana').closest('li')!
+    expect(chip).toHaveTextContent('2 · 0')
+    expect(chip).toHaveAttribute('title', expect.stringContaining('variante 0'))
   })
 
   it('shows no such chip when nothing was closed at the end of the window, nor for an informe from before', async () => {
@@ -287,7 +303,7 @@ describe('Estrategias: the Terminal laboratory', () => {
     const condiciones = await screen.findByRole('list', {
       name: 'Condiciones de la prueba',
     })
-    expect(condiciones).not.toHaveTextContent(/cerrada/)
+    expect(condiciones).not.toHaveTextContent(/Fin de ventana/)
   })
 
   it('lists the operations of the backtest, the variant first, and closes with Escape', async () => {

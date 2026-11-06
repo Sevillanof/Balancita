@@ -1,110 +1,98 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
   PRODUCTO_VELAS,
-  velasIniciales,
-  velasPorPagina,
+  consultaDeRango,
+  segundosDe,
   type IntervaloVelas,
+  type RangoMs,
   type Vela,
 } from '../domain/estrategias-velas.ts'
 import type { EstrategiasApi } from '../infrastructure/estrategias-api.ts'
 
 type Estado = {
   velas: Vela[]
-  /** There are older candles inside the tested window than the oldest one held. */
-  hayMas: boolean
   cargando: boolean
   error: string | null
 }
 
-const VACIO: Estado = { velas: [], hayMas: false, cargando: true, error: null }
+const CARGANDO: Estado = { velas: [], cargando: true, error: null }
+const NADA: Estado = { velas: [], cargando: false, error: null }
 
 const mensaje = (error: unknown) =>
   error instanceof Error ? error.message : String(error)
 
 /**
- * Candles of the tested window `[desdeMs, hastaMs)` at one interval: the newest ten days first, older pages on demand.
- * Nothing outside the window is ever kept, even if a server answered with it; a change of interval or window starts over
- * and the answer of the old one is dropped.
+ * Candles of one stretch (`rango`) of the tested window `ventana = [desdeMs, hastaMs)` at one interval, in a single request.
+ * Nothing outside the window is ever kept, even if a server answered with it; a change of interval, window or stretch starts
+ * over, reads as «loading» meanwhile, and the answer of the old one is dropped. `rango: null` asks for nothing.
  */
 export function useVelas(
   api: EstrategiasApi,
-  ventana: { desdeMs: number; hastaMs: number },
+  ventana: RangoMs,
   intervalo: IntervaloVelas,
+  rango: RangoMs | null,
 ) {
   const { desdeMs, hastaMs } = ventana
-  const clave = `${intervalo}|${desdeMs}|${hastaMs}`
-  const [guardado, setGuardado] = useState<Estado & { clave: string }>({
-    ...VACIO,
+  const clave = rango
+    ? `${intervalo}|${desdeMs}|${hastaMs}|${rango.desdeMs}|${rango.hastaMs}`
+    : null
+  const [guardado, setGuardado] = useState<Estado & { clave: string | null }>({
+    ...CARGANDO,
     clave,
   })
-  // What was kept for another interval or window is not this one's: it reads as «loading» until its own answer arrives.
-  const estado: Estado =
-    guardado.clave === clave ? guardado : { ...VACIO, clave }
-  const actual = useRef(estado)
   const vuelta = useRef(0)
-
-  useEffect(() => {
-    actual.current = estado
-  })
-
-  const pedir = useCallback(
-    (antesMs: number, limite: number, previas: Vela[]) => {
-      const mia = vuelta.current
-      void api
-        .velas({
-          producto: PRODUCTO_VELAS,
-          intervalo,
-          desdeMs,
-          hastaMs,
-          antesMs,
-          limite,
-        })
-        .then(
-          (respuesta) => {
-            if (mia !== vuelta.current) return
-            const porInstante = new Map<number, Vela>()
-            for (const vela of [...respuesta.velas, ...previas])
-              if (vela.t >= desdeMs && vela.t < hastaMs)
-                porInstante.set(vela.t, vela)
-            const velas = [...porInstante.values()].sort((a, b) => a.t - b.t)
-            setGuardado({
-              clave,
-              velas,
-              hayMas: respuesta.hay_mas && velas.length > 0,
-              cargando: false,
-              error: null,
-            })
-          },
-          (error: unknown) => {
-            if (mia !== vuelta.current) return
-            setGuardado({
-              clave,
-              velas: previas,
-              hayMas: false,
-              cargando: false,
-              error: mensaje(error),
-            })
-          },
-        )
-    },
-    [api, intervalo, desdeMs, hastaMs, clave],
-  )
+  const rangoDesde = rango?.desdeMs
+  const rangoHasta = rango?.hastaMs
 
   useEffect(() => {
     vuelta.current += 1
-    pedir(hastaMs, velasIniciales(intervalo), [])
+    if (clave === null || rangoDesde === undefined || rangoHasta === undefined)
+      return
+    const mia = vuelta.current
+    const { antesMs, limite } = consultaDeRango(
+      { desdeMs: rangoDesde, hastaMs: rangoHasta },
+      { desdeMs, hastaMs },
+      segundosDe(intervalo) * 1000,
+    )
+    void api
+      .velas({
+        producto: PRODUCTO_VELAS,
+        intervalo,
+        desdeMs,
+        hastaMs,
+        antesMs,
+        limite,
+      })
+      .then(
+        (respuesta) => {
+          if (mia !== vuelta.current) return
+          const porInstante = new Map<number, Vela>()
+          for (const vela of respuesta.velas)
+            if (vela.t >= desdeMs && vela.t < hastaMs)
+              porInstante.set(vela.t, vela)
+          setGuardado({
+            clave,
+            velas: [...porInstante.values()].sort((a, b) => a.t - b.t),
+            cargando: false,
+            error: null,
+          })
+        },
+        (error: unknown) => {
+          if (mia !== vuelta.current) return
+          setGuardado({
+            clave,
+            velas: [],
+            cargando: false,
+            error: mensaje(error),
+          })
+        },
+      )
     return () => {
       vuelta.current += 1
     }
-  }, [pedir, hastaMs, intervalo])
+  }, [api, intervalo, desdeMs, hastaMs, clave, rangoDesde, rangoHasta])
 
-  const cargarAnteriores = useCallback(() => {
-    const { velas, hayMas, cargando } = actual.current
-    if (cargando || !hayMas || velas.length === 0) return
-    actual.current = { ...actual.current, cargando: true }
-    setGuardado({ ...actual.current, clave })
-    pedir(velas[0]!.t, velasPorPagina(intervalo), velas)
-  }, [pedir, clave, intervalo])
-
-  return { ...estado, cargarAnteriores }
+  // What was kept for another interval, window or stretch is not this one's.
+  if (clave === null) return NADA
+  return guardado.clave === clave ? guardado : CARGANDO
 }
