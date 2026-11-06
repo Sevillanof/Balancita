@@ -1,0 +1,20 @@
+docs/archivo-parquet.md
+  h_92dd6654ceb221 38-62,131-137
+odd/tasks/datos-utiles.md
+  h_92dd6654ceb221 36-37
+python/archivo_parquet/config.py
+  h_92dd6654ceb221 330-338
+python/tests/test_archivo_parquet_fase2.py
+  h_92dd6654ceb221 256-276
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "ecae7fc56bf32a931a70f223342a3bb746e13898",
+  "prompts": {},
+  "humans": {
+    "h_92dd6654ceb221": {
+      "author": "Franco Sevillano <79455847+Sevillanof@users.noreply.github.com>"
+    }
+  }
+}
