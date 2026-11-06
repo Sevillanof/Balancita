@@ -124,6 +124,12 @@ function sha256(text: string): string {
   return createHash('sha256').update(text, 'utf8').digest('hex')
 }
 
+/** Products whose trades and order book the capture may store (every pinned product gets REST tickers). */
+const TRADE_BOOK_PRODUCTS: ReadonlySet<string> = new Set([
+  FUTURES_PRODUCT,
+  'PF_ETHUSD',
+])
+
 function time(value: unknown, name: string): number {
   if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0)
     throw new TypeError(`${name} must be a non-negative safe integer.`)
@@ -1910,10 +1916,10 @@ export class FuturesMarketStore {
     if (feed !== 'trade' && feed !== 'book' && feed !== 'ticker')
       throw new TypeError('Unknown futures market feed.')
     const product = event.productId
-    // Trades and books are captured for the BTC perpetual only; REST-polled
+    // Trades and books are captured for the BTC and ETH perpetuals only; REST-polled
     // tickers cover every pinned product.
     if (
-      product !== 'PF_XBTUSD' &&
+      !(typeof product === 'string' && TRADE_BOOK_PRODUCTS.has(product)) &&
       !(
         feed === 'ticker' &&
         typeof product === 'string' &&

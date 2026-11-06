@@ -25,6 +25,7 @@ import { createWakeDetector } from '../platform/wake-detector.ts'
 import { existsSync } from 'node:fs'
 import { createLoopMonitor } from '../features/live-gateway/loop-monitor.ts'
 import { createLiveCapture } from '../features/live-gateway/live-capture.ts'
+import { wireEthMinuteSummary } from '../features/market-summary/eth-summary-wiring.ts'
 import type { FuturesSocket } from '../features/kraken-futures/futures-market.ts'
 import { resolveFuturesProducts } from '../features/kraken-futures/futures-products.ts'
 import { CHART_CANDLE_INTERVALS } from '../features/kraken-futures/official-candles.ts'
@@ -98,6 +99,10 @@ async function main(): Promise<void> {
           ),
       }),
     products,
+    // ETH over its own WebSocket: every trade stored, the book as a trimmed snapshot every 30 s
+    // (never the deltas), both read by the per-minute summary (docs/resumen-minuto-eth.md).
+    // BTC keeps its trades-and-ticker socket exactly as before.
+    extraMarketFeed: { productId: 'PF_ETHUSD' },
     // Quote, sizes and funding of the other pinned products (paper execution trades them).
     tickerPollMs: 1_000,
     // Terminal chart: 15m/1h/4h/1d candles and Kraken's public analytics (ETH and BTC).
@@ -252,6 +257,13 @@ async function main(): Promise<void> {
   hooks.onMalformed = (line) => dbHealth.reportMalformed(line)
   dbHealth.start()
   setTimeout(() => void dbHealth.integrityNow(), 2 * 60_000).unref()
+  // One row per closed minute of PF_ETHUSD (datos-utiles S4), derived from the events above. Started
+  // after the capture; it waits while a backup runs or the database is known damaged, and its failures only log.
+  const ethSummary = wireEthMinuteSummary({
+    dbPath: config.futuresMarketDbPath,
+    canRun: () => dbHealth.writesAllowed() && !dbHealth.backupBusy(),
+    log,
+  })
   // Worst timer delay per minute: tells a blocked or sleeping process from a network problem.
   const loopMonitor = createLoopMonitor({
     file: join(diagnosticsDir, 'eventloop.jsonl'),
@@ -278,6 +290,7 @@ async function main(): Promise<void> {
     dbHealth.stop()
     wakeDetector.stop()
     loopMonitor.stop()
+    ethSummary.stop()
     void capture
       .stop()
       .then(() => store.close())
@@ -289,6 +302,7 @@ async function main(): Promise<void> {
   process.once('SIGINT', () => shutdown('SIGINT'))
   process.once('SIGTERM', () => shutdown('SIGTERM'))
   await capture.start()
+  ethSummary.start()
   setTimeout(trim, 30_000).unref()
   log(
     `capturing into ${config.futuresMarketDbPath}; official candles for ${products

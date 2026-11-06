@@ -149,12 +149,13 @@ export function decodeProviderJson(
 
 export function marketSubscriptions(
   feeds: readonly MarketFeed[] = ['trade', 'book', 'ticker'],
+  productId: string = FUTURES_PRODUCT,
 ): string[] {
   return feeds.map((feed) =>
     JSON.stringify({
       event: 'subscribe',
       feed,
-      product_ids: [FUTURES_PRODUCT],
+      product_ids: [productId],
     }),
   )
 }
@@ -238,13 +239,15 @@ export function validateInstrumentCatalog(
 }
 
 export interface FeedContext {
+  /** Product the message must belong to (default PF_XBTUSD). */
+  readonly productId?: string
   readonly receivedAt: number
   readonly persistedAt?: number
   readonly epoch: number
 }
 
 interface MarketEnvelope {
-  readonly productId: typeof FUTURES_PRODUCT
+  readonly productId: string
   readonly seq: number
   readonly eventTime: number
   readonly receivedAt: number
@@ -313,8 +316,11 @@ export interface TickerEvent extends MarketEnvelope {
   readonly sequenceSource?: 'provider' | 'collector_arrival'
 }
 
-function checkProduct(item: JsonRecord): void {
-  if (item.product_id !== FUTURES_PRODUCT)
+function checkProduct(
+  item: JsonRecord,
+  expected: string = FUTURES_PRODUCT,
+): void {
+  if (item.product_id !== expected)
     throw new TypeError('Unexpected futures product_id.')
 }
 function makeEnvelope(
@@ -326,7 +332,7 @@ function makeEnvelope(
   const receivedAt = integer(context.receivedAt, 'receivedAt')
   const epoch = integer(context.epoch, 'epoch')
   return {
-    productId: FUTURES_PRODUCT,
+    productId: context.productId ?? FUTURES_PRODUCT,
     seq: integer(seq, 'seq'),
     eventTime: integer(time, 'event time'),
     receivedAt,
@@ -348,7 +354,7 @@ export function parseTradeMessage(
     throw new TypeError(
       'Expected a trade delta, not a snapshot/control message.',
     )
-  checkProduct(item)
+  checkProduct(item, context.productId)
   if (
     typeof item.uid !== 'string' ||
     item.uid.length < 1 ||
@@ -380,7 +386,7 @@ export function parseTradeSnapshot(
   const snapshot = record(value, 'trade snapshot')
   if (
     snapshot.feed !== 'trade_snapshot' ||
-    snapshot.product_id !== FUTURES_PRODUCT ||
+    snapshot.product_id !== (context.productId ?? FUTURES_PRODUCT) ||
     !Array.isArray(snapshot.trades) ||
     snapshot.trades.length > 10_000
   )
@@ -440,7 +446,7 @@ export function parseBookMessage(
   context: FeedContext,
 ): BookEvent {
   const item = record(value, 'book')
-  checkProduct(item)
+  checkProduct(item, context.productId)
   if (item.feed === 'book_snapshot') {
     if (
       !Array.isArray(item.bids) ||
@@ -506,7 +512,7 @@ export function parseTickerMessage(
   const item = record(value, 'ticker')
   if (item.feed !== 'ticker')
     throw new TypeError('Expected ticker feed message.')
-  checkProduct(item)
+  checkProduct(item, context.productId)
   if (typeof item.suspended !== 'boolean')
     throw new TypeError('Ticker suspended status is required.')
   const optional = (name: string): string | undefined =>
@@ -552,6 +558,12 @@ export interface FuturesSocket {
 }
 
 export interface FuturesCollectorOptions {
+  /**
+   * Perpetual this collector follows (trade, book and ticker WebSocket feeds).
+   * Default PF_XBTUSD. Another product runs its own collector on its own
+   * socket; the funding callbacks below are only meaningful for PF_XBTUSD.
+   */
+  readonly productId?: string
   readonly url?: string
   readonly clock: () => number
   readonly random: () => number
@@ -687,6 +699,10 @@ export class KrakenFuturesMarketCollector {
       this.limits.watchdog < 1
     )
       throw new RangeError('Invalid futures collector timing bounds.')
+  }
+
+  private get productId(): string {
+    return this.options.productId ?? FUTURES_PRODUCT
   }
 
   private get bookEnabled(): boolean {
@@ -944,6 +960,7 @@ export class KrakenFuturesMarketCollector {
         this.setState('syncing')
         for (const message of marketSubscriptions(
           this.bookEnabled ? undefined : ['trade', 'ticker'],
+          this.productId,
         ))
           socket.send(message)
       }
@@ -1033,7 +1050,12 @@ export class KrakenFuturesMarketCollector {
     )
       return
     const receivedAt = integer(this.options.clock(), 'receivedAt')
-    const context = { receivedAt, persistedAt: receivedAt, epoch: this.epoch }
+    const context = {
+      productId: this.productId,
+      receivedAt,
+      persistedAt: receivedAt,
+      epoch: this.epoch,
+    }
     if (item.feed === 'trade_snapshot') {
       for (const trade of parseTradeSnapshot(value, context)) {
         const outcome = this.persistRaw(trade, text)
@@ -1091,7 +1113,7 @@ export class KrakenFuturesMarketCollector {
         this.gapCount += 1
         this.options.persistGap({
           feed: 'book',
-          productId: FUTURES_PRODUCT,
+          productId: this.productId,
           epoch: this.epoch,
           ...(expectedSeq === undefined ? {} : { expectedSeq }),
           actualSeq: event.seq,
@@ -1110,7 +1132,7 @@ export class KrakenFuturesMarketCollector {
         this.gapCount += 1
         this.options.persistGap({
           feed: 'book',
-          productId: FUTURES_PRODUCT,
+          productId: this.productId,
           epoch: this.epoch,
           expectedSeq,
           actualSeq: event.seq,
@@ -1155,7 +1177,7 @@ export class KrakenFuturesMarketCollector {
         this.gapCount += 1
         this.options.persistGap({
           feed: 'book',
-          productId: FUTURES_PRODUCT,
+          productId: this.productId,
           epoch: this.epoch,
           expectedSeq: expectedSeq!,
           actualSeq: event.seq,
@@ -1175,7 +1197,7 @@ export class KrakenFuturesMarketCollector {
         this.gapCount += 1
         this.options.persistGap({
           feed: 'book',
-          productId: FUTURES_PRODUCT,
+          productId: this.productId,
           epoch: this.epoch,
           expectedSeq: expectedSeq!,
           actualSeq: event.seq,
@@ -1274,7 +1296,7 @@ export class KrakenFuturesMarketCollector {
     if (!persistFundingObservation || connectedAt === null) return
     try {
       const observation = fundingObservationFromTicker(item, {
-        productId: FUTURES_PRODUCT,
+        productId: this.productId,
         receivedAt,
         connectedAt,
         firstAfterConnect: this.fundingKey === null,
@@ -1291,7 +1313,7 @@ export class KrakenFuturesMarketCollector {
           receivedAt - this.fundingAliveAt >= FUNDING_WS_ALIVE_MARK_INTERVAL_MS)
       ) {
         persistFundingMark({
-          productId: FUTURES_PRODUCT,
+          productId: this.productId,
           at: receivedAt,
           connectedAt,
           kind: 'alive',
@@ -1315,7 +1337,7 @@ export class KrakenFuturesMarketCollector {
     if (connectedAt === null || !this.options.persistFundingMark) return
     try {
       this.options.persistFundingMark({
-        productId: FUTURES_PRODUCT,
+        productId: this.productId,
         at: this.options.clock(),
         connectedAt,
         kind: 'closed',
@@ -1349,14 +1371,14 @@ export class KrakenFuturesMarketCollector {
       JSON.stringify({
         event: 'unsubscribe',
         feed: 'book',
-        product_ids: [FUTURES_PRODUCT],
+        product_ids: [this.productId],
       }),
     )
     this.socket.send(
       JSON.stringify({
         event: 'subscribe',
         feed: 'book',
-        product_ids: [FUTURES_PRODUCT],
+        product_ids: [this.productId],
       }),
     )
   }

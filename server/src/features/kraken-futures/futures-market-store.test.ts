@@ -11,6 +11,7 @@ import {
   TICKER_TRADE_EVENTS_AFTER_SQL,
 } from './futures-market-store.ts'
 import { parseHistoricalFundingResponse } from './historical-funding.ts'
+import { retentionFromEnv } from './capture-savings.ts'
 
 const dirs: string[] = []
 function dbPath(): string {
@@ -1342,5 +1343,176 @@ describe('funding evidence dedupe', () => {
     store.appendFundingResponse(response(base, T0 + 2 * HOUR + 301_000))
     expect(counts(path)).toEqual({ responses: 2, periods: 4 })
     store.close()
+  })
+})
+
+describe('FuturesMarketStore: which products may store trades and books', () => {
+  const ethTrade = {
+    ...event,
+    productId: 'PF_ETHUSD',
+    uid: 'eth-trade-1',
+    quantityBtc: '1.5',
+    priceUsd: '2500.5',
+    raw: { price: '2500.5', qty: '1.5' },
+  }
+  const ethBook = {
+    type: 'book',
+    productId: 'PF_ETHUSD',
+    snapshot: true,
+    seq: 7,
+    epoch: 1,
+    eventTime: 1000,
+    receivedAt: 1010,
+    persistedAt: 1020,
+    bids: [{ price: '2500', quantity: '3' }],
+    asks: [{ price: '2500.1', quantity: '2' }],
+    rawJson: '{"feed":"book_sample"}',
+  }
+
+  it('accepts PF_ETHUSD trades and book snapshots (with the book snapshot row)', () => {
+    const path = dbPath()
+    const store = new FuturesMarketStore(path)
+    expect(store.append(ethTrade)).toBe('inserted')
+    expect(store.append(ethBook)).toBe('inserted')
+    // Same uid / same content: still deduplicated for ETH.
+    expect(store.append({ ...ethTrade, seq: 99, epoch: 2 })).toBe('duplicate')
+    store.close()
+    const db = new DatabaseSync(path, { readOnly: true })
+    expect(
+      db
+        .prepare(
+          'SELECT feed, product_id FROM paper_futures_market_events ORDER BY rowid',
+        )
+        .all()
+        .map((row) => `${row.feed}:${row.product_id}`),
+    ).toEqual(['trade:PF_ETHUSD', 'book:PF_ETHUSD'])
+    expect(
+      Number(
+        (
+          db
+            .prepare('SELECT COUNT(*) AS n FROM paper_futures_book_snapshots')
+            .get() as { n: number }
+        ).n,
+      ),
+    ).toBe(1)
+    db.close()
+  })
+
+  it('still stores PF_XBTUSD trades and tickers, and rejects trades/books of every other product', () => {
+    const store = new FuturesMarketStore(dbPath())
+    expect(store.append(event)).toBe('inserted')
+    for (const productId of ['PF_SOLUSD', 'PF_XRPUSD'])
+      for (const feed of ['trade', 'book'])
+        expect(() =>
+          store.append({
+            ...ethTrade,
+            type: feed,
+            productId,
+            uid: `${productId}-${feed}`,
+          }),
+        ).toThrow('Unexpected futures product.')
+    expect(() =>
+      store.append({ ...event, productId: 'PF_ETHUSD_X', uid: 'x' }),
+    ).toThrow('Unexpected futures product.')
+    // REST tickers keep covering every pinned perpetual.
+    expect(
+      store.append({
+        type: 'ticker',
+        productId: 'PF_SOLUSD',
+        seq: 1,
+        epoch: 1,
+        eventTime: 1,
+        receivedAt: 2,
+        persistedAt: 3,
+        raw: {},
+      }),
+    ).toBe('inserted')
+    expect(store.eventCount()).toBe(2)
+    store.close()
+  })
+})
+
+describe('retention applies to PF_ETHUSD trades, books and tickers like to BTC', () => {
+  const DAY = 86_400_000
+  const NOW = 100 * DAY
+  const base = (receivedAt: number, seq: number) => ({
+    productId: 'PF_ETHUSD',
+    seq,
+    epoch: 1,
+    eventTime: receivedAt - 5,
+    receivedAt,
+    persistedAt: receivedAt + 5,
+  })
+  const trade = (uid: string, receivedAt: number, seq: number) => ({
+    ...base(receivedAt, seq),
+    type: 'trade',
+    uid,
+    side: 'sell',
+    tradeType: 'fill',
+    quantityBtc: '1',
+    priceUsd: '2500',
+    rawJson: `{"uid":"${uid}"}`,
+  })
+  const book = (receivedAt: number, seq: number) => ({
+    ...base(receivedAt, seq),
+    type: 'book',
+    snapshot: true,
+    bids: [{ price: '2499.9', quantity: '3' }],
+    asks: [{ price: '2500.1', quantity: '2' }],
+    rawJson: '{"feed":"book_sample"}',
+  })
+  const ticker = (receivedAt: number, seq: number) => ({
+    ...base(receivedAt, seq),
+    type: 'ticker',
+    bid: '2499.9',
+    ask: '2500.1',
+    suspended: false,
+    funding: { status: 'unknown' },
+    raw: { feed: 'ticker' },
+  })
+
+  it('deletes ETH tickers after 48 h and trades/books after 7 days (book snapshot rows too), and slims the raw copy at 48 h', () => {
+    const path = dbPath()
+    const store = new FuturesMarketStore(path)
+    // Chronological, as the capture writes them.
+    store.append(trade('t-8d', NOW - 8 * DAY, 1))
+    store.append(book(NOW - 8 * DAY + 1, 2))
+    store.append(ticker(NOW - 3 * DAY, 3))
+    store.append(trade('t-3d', NOW - 3 * DAY + 1, 4))
+    store.append(book(NOW - 3 * DAY + 2, 5))
+    store.append(ticker(NOW - DAY, 6))
+    store.append(trade('t-new', NOW - 1_000, 7))
+    const result = store.trimRawEvents({ now: NOW, ...retentionFromEnv({}) })
+    expect(result).toMatchObject({ done: true })
+    store.close()
+    const db = new DatabaseSync(path, { readOnly: true })
+    const rows = db
+      .prepare(
+        'SELECT feed, uid, normalized_json FROM paper_futures_market_events ORDER BY rowid',
+      )
+      .all() as Array<{
+      feed: string
+      uid: string | null
+      normalized_json: string
+    }>
+    expect(rows.map((row) => `${row.feed}:${row.uid ?? '-'}`)).toEqual([
+      'trade:t-3d',
+      'book:-',
+      'ticker:-',
+      'trade:t-new',
+    ])
+    // The 3-day-old trade keeps its row but no longer the duplicate provider copy; the new one still has it.
+    expect(JSON.parse(rows[0]!.normalized_json)).not.toHaveProperty('rawJson')
+    expect(JSON.parse(rows[3]!.normalized_json)).toHaveProperty('rawJson')
+    expect(
+      Number(
+        (
+          db
+            .prepare('SELECT COUNT(*) AS n FROM paper_futures_book_snapshots')
+            .get() as { n: number }
+        ).n,
+      ),
+    ).toBe(1)
+    db.close()
   })
 })
