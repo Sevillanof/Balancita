@@ -1,0 +1,36 @@
+docs/resumen-minuto-eth.md
+  h_92dd6654ceb221 1-58
+server/src/app/capture-main.ts
+  h_92dd6654ceb221 28,102-105,260-266,293,305
+server/src/features/kraken-futures/futures-market-store.test.ts
+  h_92dd6654ceb221 14,1348-1518
+server/src/features/kraken-futures/futures-market-store.ts
+  h_92dd6654ceb221 127-132,1919,1922
+server/src/features/kraken-futures/futures-market.test.ts
+  h_92dd6654ceb221 737-893
+server/src/features/kraken-futures/futures-market.ts
+  h_92dd6654ceb221 152,158,242-243,250,319-323,335,357,389,449,515,561-566,704-707,963,1053-1058,1116,1135,1180,1200,1299,1316,1340,1374,1381
+server/src/features/live-gateway/live-capture.test.ts
+  h_92dd6654ceb221 2086-2485
+server/src/features/live-gateway/live-capture.ts
+  h_92dd6654ceb221 37,155-181,215-220,326-327,757-888,1053,1150-1151,1158,1178-1181
+server/src/features/market-summary/eth-minute-summary.test.ts
+  h_92dd6654ceb221 1-415
+server/src/features/market-summary/eth-minute-summary.ts
+  h_92dd6654ceb221 1-337
+server/src/features/market-summary/eth-summary-wiring.test.ts
+  h_92dd6654ceb221 1-346
+server/src/features/market-summary/eth-summary-wiring.ts
+  h_92dd6654ceb221 1-69
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "b7eff1b59fa5276058f7195280b2078b356a2fe0",
+  "prompts": {},
+  "humans": {
+    "h_92dd6654ceb221": {
+      "author": "Franco Sevillano <79455847+Sevillanof@users.noreply.github.com>"
+    }
+  }
+}
