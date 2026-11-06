@@ -213,6 +213,13 @@ export interface LiveCaptureOptions {
    */
   readonly products?: readonly FuturesProduct[]
   /**
+   * Products whose market events (tickers, trades, books) are stored; the capture-main list is
+   * `MARKET_EVENT_PRODUCTS`. A pinned product that is not listed keeps its official candles,
+   * funding and analytics but gets no REST ticker; without PF_XBTUSD in the list its WebSocket
+   * (trades, ticker, observed candles) is not opened. Default: every pinned product (no filter).
+   */
+  readonly eventProducts?: readonly string[]
+  /**
    * Also follow this perpetual over a second WebSocket (trades stored, book
    * sampled). Off by default: without it the capture opens one socket for
    * PF_XBTUSD exactly as before.
@@ -727,9 +734,14 @@ export function createLiveCapture(options: LiveCaptureOptions) {
     }, delay)
   }
 
+  const capturesEvents = (productId: string): boolean =>
+    options.eventProducts === undefined ||
+    options.eventProducts.includes(productId)
+  // BTC's ticker comes from its WebSocket; the rest of the captured products are polled.
   const tickerProducts = products
     .map(({ productId }) => productId)
     .filter((productId) => productId !== FUTURES_PRODUCT)
+    .filter(capturesEvents)
   const tickerPeriodMs = options.tickerPollMs ?? 0
   let lastTickerError: string | undefined
   const pollTickers = async (): Promise<void> => {
@@ -759,6 +771,12 @@ export function createLiveCapture(options: LiveCaptureOptions) {
     if (!products.some((item) => item.productId === productId)) {
       log(
         `extra market feed ${productId} skipped: not pinned in the products list`,
+      )
+      return
+    }
+    if (!capturesEvents(productId)) {
+      log(
+        `extra market feed ${productId} skipped: not a captured product (eventProducts)`,
       )
       return
     }
@@ -1008,48 +1026,50 @@ export function createLiveCapture(options: LiveCaptureOptions) {
       }, delay)
     }
     fundingPoll = pollFunding('startup', clock()).then(scheduleFundingPoll)
-    collector = new KrakenFuturesMarketCollector({
-      clock,
-      random: Math.random,
-      makeSocket: options.makeSocket,
-      setTimeout,
-      clearTimeout,
-      // Nothing downstream consumes the order book (execution fills from the
-      // ticker, verdicts from official candles): do not subscribe to it.
-      bookFeed: false,
-      staleAfterMs: options.staleAfterMs,
-      reconnectMinMs: options.reconnectMinMs,
-      reconnectMaxMs: options.reconnectMaxMs,
-      silenceMs: options.silenceMs,
-      dataSilenceMs: options.dataSilenceMs,
-      connectTimeoutMs: options.connectTimeoutMs,
-      watchdogIntervalMs: options.watchdogIntervalMs,
-      onResilience: (event) =>
-        note({
-          component: 'websocket',
-          product: FUTURES_PRODUCT,
-          ...event,
-        }),
-      // Every event is its own committed transaction: never batched or dropped.
-      persist: (event) => {
-        const inserted = store.append(event)
-        // The event is already committed. A candle revision failure must
-        // never fail the market event, or the collector would stop capturing.
-        if (inserted === 'inserted' && event.type === 'trade') {
-          try {
-            candles.addTrade(event, event.receivedAt)
-          } catch (error) {
-            logCandleError('candle revision failed', error)
+    if (capturesEvents(FUTURES_PRODUCT))
+      collector = new KrakenFuturesMarketCollector({
+        clock,
+        random: Math.random,
+        makeSocket: options.makeSocket,
+        setTimeout,
+        clearTimeout,
+        // Nothing downstream consumes the order book (execution fills from the
+        // ticker, verdicts from official candles): do not subscribe to it.
+        bookFeed: false,
+        staleAfterMs: options.staleAfterMs,
+        reconnectMinMs: options.reconnectMinMs,
+        reconnectMaxMs: options.reconnectMaxMs,
+        silenceMs: options.silenceMs,
+        dataSilenceMs: options.dataSilenceMs,
+        connectTimeoutMs: options.connectTimeoutMs,
+        watchdogIntervalMs: options.watchdogIntervalMs,
+        onResilience: (event) =>
+          note({
+            component: 'websocket',
+            product: FUTURES_PRODUCT,
+            ...event,
+          }),
+        // Every event is its own committed transaction: never batched or dropped.
+        persist: (event) => {
+          const inserted = store.append(event)
+          // The event is already committed. A candle revision failure must
+          // never fail the market event, or the collector would stop capturing.
+          if (inserted === 'inserted' && event.type === 'trade') {
+            try {
+              candles.addTrade(event, event.receivedAt)
+            } catch (error) {
+              logCandleError('candle revision failed', error)
+            }
           }
-        }
-        return inserted
-      },
-      persistGap: (gap) => store.appendGap(gap),
-      persistFundingObservation: (o) => store.appendFundingWsObservation(o),
-      persistFundingMark: (m) => store.appendFundingWsMark(m),
-      onState: (state, reason) => log(`${state}${reason ? ` ${reason}` : ''}`),
-    })
-    collector.start()
+          return inserted
+        },
+        persistGap: (gap) => store.appendGap(gap),
+        persistFundingObservation: (o) => store.appendFundingWsObservation(o),
+        persistFundingMark: (m) => store.appendFundingWsMark(m),
+        onState: (state, reason) =>
+          log(`${state}${reason ? ` ${reason}` : ''}`),
+      })
+    collector?.start()
     if (options.extraMarketFeed) startExtraFeed(options.extraMarketFeed)
     officialClient = createOfficialCandlesClient({
       fetch: options.officialCandlesFetch,
