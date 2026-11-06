@@ -1,0 +1,24 @@
+docs/estrategias-laboratorio.md
+  h_92dd6654ceb221 106-119
+python/balancita_engine/futures_estrategias.py
+  h_92dd6654ceb221 175-180
+python/balancita_engine/futures_estrategias_api.py
+  h_92dd6654ceb221 1-257
+python/balancita_engine/futures_estrategias_backtest.py
+  h_92dd6654ceb221 146-159
+python/balancita_engine/futures_strategy_registry.py
+  h_92dd6654ceb221 54,655,657,1083-1089,1092-1094,1104-1105,1143,1170-1171
+python/tests/test_futures_estrategias_api.py
+  h_92dd6654ceb221 1-336
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "e42fe8deb9aec2d89be9accf6214d23c2c887cfa",
+  "prompts": {},
+  "humans": {
+    "h_92dd6654ceb221": {
+      "author": "Franco Sevillano <79455847+Sevillanof@users.noreply.github.com>"
+    }
+  }
+}
