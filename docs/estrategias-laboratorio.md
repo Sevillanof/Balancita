@@ -73,19 +73,19 @@ completa (sin variables de entorno), sobre **la misma ventana y los mismos datos
 
 ### Cómo leer el informe
 
-| Campo                                  | Qué es                                                                                                                              |
-| -------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
-| `oficial` / `variante` → `metricas`    | Después de costos y funding, una por config                                                                                         |
-| `operaciones`                          | Cantidad de operaciones cerradas (la última se cierra a la fuerza al final de la ventana: motivo `fin_examen`)                      |
-| `neto_usd`, `neto_bp_cuenta`           | Suma del neto de las operaciones, en USD y en puntos básicos del capital inicial (1000 USD)                                         |
-| `neto_bp_por_operacion`                | Promedio del neto de cada operación, en bp de lo que arriesgó                                                                       |
-| `acierto`                              | Parte de las operaciones con neto > 0                                                                                               |
-| `max_drawdown_usd`, `max_drawdown_bp`  | Mayor caída del saldo realizado desde su máximo (el saldo cambia al cerrar cada operación); bp sobre ese máximo                    |
-| `horas_promedio`, `por_motivo`         | Tiempo abierta por operación y cuántas cerraron por tiempo, por vuelta del maestro, stop, rebote, etc.                              |
-| `diferencia`                           | **variante − oficial** de cada métrica numérica (`null` si una de las dos no tiene operaciones). Menos horas = negativo             |
-| `estrategia`                           | id, `overlay_sha256` (de los bytes del archivo), `cambios`                                                                          |
-| `snapshot.config_hash`, `*.config_hash` | Hash del snapshot y de cada config comparada (la oficial siempre es la del snapshot)                                               |
-| `ventana`, `datos`, `limites`          | Fechas pedidas y efectivas, fuente de datos, y lo que el replay no puede medir                                                      |
+| Campo                                   | Qué es                                                                                                                  |
+| --------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| `oficial` / `variante` → `metricas`     | Después de costos y funding, una por config                                                                             |
+| `operaciones`                           | Cantidad de operaciones cerradas (la última se cierra a la fuerza al final de la ventana: motivo `fin_examen`)          |
+| `neto_usd`, `neto_bp_cuenta`            | Suma del neto de las operaciones, en USD y en puntos básicos del capital inicial (1000 USD)                             |
+| `neto_bp_por_operacion`                 | Promedio del neto de cada operación, en bp de lo que arriesgó                                                           |
+| `acierto`                               | Parte de las operaciones con neto > 0                                                                                   |
+| `max_drawdown_usd`, `max_drawdown_bp`   | Mayor caída del saldo realizado desde su máximo (el saldo cambia al cerrar cada operación); bp sobre ese máximo         |
+| `horas_promedio`, `por_motivo`          | Tiempo abierta por operación y cuántas cerraron por tiempo, por vuelta del maestro, stop, rebote, etc.                  |
+| `diferencia`                            | **variante − oficial** de cada métrica numérica (`null` si una de las dos no tiene operaciones). Menos horas = negativo |
+| `estrategia`                            | id, `overlay_sha256` (de los bytes del archivo), `cambios`                                                              |
+| `snapshot.config_hash`, `*.config_hash` | Hash del snapshot y de cada config comparada (la oficial siempre es la del snapshot)                                    |
+| `ventana`, `datos`, `limites`           | Fechas pedidas y efectivas, fuente de datos, y lo que el replay no puede medir                                          |
 
 Dos configuraciones iguales dan diferencia cero. Límites del replay (siempre en `limites`): sin noticias, sin libro de órdenes
 (costos del modelo, no fills reales), sin posicionamiento; las perillas que dependen de eso solo se miden en sombra.
