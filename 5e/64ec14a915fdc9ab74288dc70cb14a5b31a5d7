@@ -1,0 +1,24 @@
+docs/estrategias-laboratorio.md
+  h_92dd6654ceb221 93-102,105-136
+odd/tasks/estrategias-laboratorio.md
+  h_92dd6654ceb221 1-181
+python/balancita_engine/futures_estrategias_backtest.py
+  h_92dd6654ceb221 13-19,23,26-27,32,149-168,174,178,223,233-501,542-582,585-587,590,592-595,597-600,602-607,611-614
+python/balancita_engine/futures_qwen_trader_exam.py
+  h_92dd6654ceb221 923-936,938,991,998-999,1002-1006,1048,1054-1056,1065
+python/tests/test_futures_estrategias_vivo.py
+  h_92dd6654ceb221 1-354
+python/tests/test_futures_qwen_trader_exam_replay_config.py
+  h_92dd6654ceb221 8,85-116
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "5e64ec14a915fdc9ab74288dc70cb14a5b31a5d7",
+  "prompts": {},
+  "humans": {
+    "h_92dd6654ceb221": {
+      "author": "Franco Sevillano <79455847+Sevillanof@users.noreply.github.com>"
+    }
+  }
+}
