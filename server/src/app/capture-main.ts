@@ -26,7 +26,10 @@ import { existsSync } from 'node:fs'
 import { createLoopMonitor } from '../features/live-gateway/loop-monitor.ts'
 import { createLiveCapture } from '../features/live-gateway/live-capture.ts'
 import { wireEthMinuteSummary } from '../features/market-summary/eth-summary-wiring.ts'
-import type { FuturesSocket } from '../features/kraken-futures/futures-market.ts'
+import {
+  MARKET_EVENT_PRODUCTS,
+  type FuturesSocket,
+} from '../features/kraken-futures/futures-market.ts'
 import { resolveFuturesProducts } from '../features/kraken-futures/futures-products.ts'
 import { CHART_CANDLE_INTERVALS } from '../features/kraken-futures/official-candles.ts'
 import {
@@ -99,11 +102,15 @@ async function main(): Promise<void> {
           ),
       }),
     products,
+    // Raw market events (tickers, trades, books) only for the products in MARKET_EVENT_PRODUCTS (datos-utiles S5):
+    // PF_ETHUSD (operated) and PF_XBTUSD (default terminal product, observed candles). The other pinned products
+    // keep official candles, funding and analytics below.
+    eventProducts: MARKET_EVENT_PRODUCTS,
     // ETH over its own WebSocket: every trade stored, the book as a trimmed snapshot every 30 s
     // (never the deltas), both read by the per-minute summary (docs/resumen-minuto-eth.md).
     // BTC keeps its trades-and-ticker socket exactly as before.
     extraMarketFeed: { productId: 'PF_ETHUSD' },
-    // Quote, sizes and funding of the other pinned products (paper execution trades them).
+    // Quote, sizes and funding by REST of the captured products other than BTC (today: ETH).
     tickerPollMs: 1_000,
     // Terminal chart: 15m/1h/4h/1d candles and Kraken's public analytics (ETH and BTC).
     chartCandleIntervals: CHART_CANDLE_INTERVALS,

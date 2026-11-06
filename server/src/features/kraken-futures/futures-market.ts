@@ -8,6 +8,19 @@ import {
 } from './funding-ws.ts'
 
 export const FUTURES_PRODUCT = 'PF_XBTUSD'
+/**
+ * Products whose market events (tickers, trades, books: `paper_futures_market_events`) the capture stores
+ * (datos-utiles S5). The other pinned products keep their official candles, funding, analytics and
+ * instrument metadata, but no longer have raw events. PF_ETHUSD is the product that is operated;
+ * PF_XBTUSD stays because its trade WebSocket is the only source of the observed 60 s candles
+ * (the BTC "tramo vivo"), of the BTC funding observations and of the gateway's default product
+ * (`gateway.ts` PRODUCT_ID). Dropping it is removing it from this list; nothing else changes.
+ * Readers of that table (observability health, the terminal follower) read this list too.
+ */
+export const MARKET_EVENT_PRODUCTS: readonly string[] = Object.freeze([
+  FUTURES_PRODUCT,
+  'PF_ETHUSD',
+])
 export const FUTURES_INSTRUMENT_ID = 'kraken-futures:PF_XBTUSD'
 export const FUTURES_WS_URL = 'wss://futures.kraken.com/ws/v1'
 export const MARKET_POLICY_VERSION = 'kraken-futures-ordering-unproven-v2'
