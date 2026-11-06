@@ -90,5 +90,47 @@ completa (sin variables de entorno), sobre **la misma ventana y los mismos datos
 Dos configuraciones iguales dan diferencia cero. Límites del replay (siempre en `limites`): sin noticias, sin libro de órdenes
 (costos del modelo, no fills reales), sin posicionamiento; las perillas que dependen de eso solo se miden en sombra.
 
+- **Libro de órdenes**: la config de la Terminal declara `execution.model` (fills contra el libro público). El replay no tiene libro
+  y lo descarta (entra al cierre de la vela con el modelo de costos); si la config declara una salida maker en `execution.exit`, se
+  conserva. Antes de este arreglo la declaración hacía que **cada entrada** se omitiera con `libro_no_disponible` y el comparador
+  daba 0 operaciones en las dos configs.
+- **Posicionamiento y prima**: el informe dice si importa. Los expertos activos (maestro y portero autónomo) solo leen velas, así que
+  no importa. Si un maestro/portero de ETH usara prima, sesgo long/short o funding (`strength_btc`, `premium_bp`, `long_bias`,
+  `top_long_bias`, `funding_bp`), el replay los alimentaría con 0 y sus decisiones no serían las del vivo: el informe lo marca como
+  límite. El historial existe (`positioning.sqlite`: posicionamiento horario desde 2024-01, prima desde 2022-03), pero el replay
+  todavía no lo lee.
+
 Cada variante probada es un intento más sobre la misma historia (el resultado es optimista): el comparador no lo registra
 todavía; anotá los intentos a mano hasta la fase de sombra.
+
+## Replay contra el vivo (S4)
+
+```
+PYTHONPATH=python python3 -m balancita_engine.futures_estrategias_backtest --vs-vivo --live-db RUTA/qwen-live__live-<sello>.sqlite [--desde AAAA-MM-DD] [--hasta AAAA-MM-DD] [--json]
+```
+
+Repite la **Terminal oficial** (el snapshot) con el mismo replay sobre el período en que corrió el trader en vivo y lista dónde
+coinciden o difieren sus decisiones y operaciones con las de la copia de `live.sqlite` (tablas `decisions`, `trades`, `skipped`,
+`config_versions`, abiertas en solo lectura). Es un **chequeo de equivalencia de código, no una evaluación de estrategia**: el
+período vivo es posterior a la reserva, no se registran intentos y el resultado no sirve para elegir ni promover nada.
+
+- **Datos**: las velas del vivo en la misma carpeta que la base (`qwen-live_cache__candles-<producto>-<sello>.sqlite`; `--cache-dir`
+  para otra carpeta, o `candles-<producto>.sqlite` de la caché del vivo) y, con funding absoluto, `futures-market-<sello>.sqlite` de
+  esa carpeta (`--funding-archivo` para otro). Si faltan velas de un producto, el error nombra el archivo esperado (brecha de datos).
+  `datos.cobertura` dice, por producto, desde cuándo hay velas y si alcanzan para el calentamiento; si no, `datos.avisos` lo marca.
+- **Ventana**: sin `--desde`/`--hasta`, del día en que se activó esa config al día siguiente de su última decisión. El replay empieza
+  en la primera vela posterior a la activación (el vivo empieza plano) y no compara nada anterior.
+- **Decisiones** (una por mirada de 15 min, por hora de la mirada): `coinciden`, `difieren` (con acción y motivo de los dos lados),
+  `solo_vivo` y `solo_replay` (con su explicación si el vivo omitió esa mirada, p. ej. `proceso_detenido`, o por el enfriamiento
+  contado desde la hora real del fill). `senal_coincide` cuenta las miradas donde el maestro y el portero dicen lo mismo sin importar
+  las posiciones (una diferencia de posición arrastra las acciones siguientes) y `puntaje_dif_max` es la mayor diferencia del puntaje.
+- **Operaciones**: se emparejan por lado y vela de entrada; de cada par, si la salida cae en la misma vela y el neto replay − vivo en
+  bp. Una operación todavía abierta en la copia del vivo no se juzga por su salida.
+- **Límites** (en el informe): el vivo llena contra el libro y el replay al cierre de la vela (unos bp de neto); noticias no
+  reproducibles; esperas y omisiones del vivo.
+
+### Resultado con la copia del 2026-11-05 (config `37f572…`, 2026-11-02 14:20 → 2026-11-05 03:45 UTC)
+
+213 de 213 decisiones del vivo coinciden (misma acción, mismo maestro y portero, puntaje idéntico); las 33 miradas que solo tiene el
+replay se explican (30 con el proceso del vivo detenido, 3 por el enfriamiento desde la hora real del fill); 9 de 9 operaciones
+emparejadas (6 cerradas con la salida en la misma vela y neto dentro de ±2 bp; 3 siguen abiertas en el vivo).

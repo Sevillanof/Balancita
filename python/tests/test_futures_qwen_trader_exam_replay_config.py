@@ -5,6 +5,7 @@ import tempfile
 import unittest
 from unittest import mock
 
+from balancita_engine import futures_book_execution as book_execution
 from balancita_engine import futures_maker_exit as maker_exit
 from balancita_engine import futures_qwen_analista as analista
 from balancita_engine import futures_qwen_posiciones as posiciones
@@ -80,6 +81,38 @@ class ReplayConfigTests(unittest.TestCase):
         corta = self.replay(cfg)["curvas"]["formula"]
         self.assertEqual((corta[0]["salida_ms"] - corta[0]["entrada_ms"]) // qt.MINUTE_MS, 600)
         self.assertGreater(len(corta), len(base))
+
+    def test_the_terminals_book_execution_does_not_block_every_entry_of_the_replay(self):
+        """La Terminal activa declara ``execution.model`` (libro público); el replay no tiene libro y NO puede por eso omitir
+        todas las entradas (``libro_no_disponible``): el replay entra a precio de vela, como siempre."""
+        cfg = config()
+        cfg["execution"] = {"model": book_execution.MODEL}
+        antes = qt.config_hash(cfg)
+        sin_libro = self.replay()["curvas"]["formula"]
+        con_libro = self.replay(cfg)["curvas"]["formula"]
+        self.assertTrue(sin_libro)
+        self.assertEqual(con_libro, sin_libro)
+        self.assertEqual(qt.config_hash(cfg), antes)
+        self.assertEqual(cfg["execution"], {"model": book_execution.MODEL})
+
+    def test_a_maker_exit_declared_inside_execution_still_applies_without_the_book(self):
+        cfg = config()
+        cfg["execution"] = {"model": book_execution.MODEL, "exit": maker_exit.default_settings("sigue")}
+        corrida = self.replay(cfg)
+        self.assertTrue(corrida["curvas"]["formula"])
+        salida = corrida["salida"]
+        self.assertEqual((salida["modo"], salida["ttl_min"], salida["tope_pb"]), ("sigue", maker_exit.DEFAULT_TTL_MIN, maker_exit.DEFAULT_TOPE_BP))
+        self.assertEqual(self.replay()["salida"]["modo"], "mercado")
+
+    def test_on_event_sees_every_event_of_the_window_and_changes_nothing(self):
+        visto = []
+        solo = self.replay()
+        con = self.replay(on_event=visto.append)
+        self.assertEqual(con, solo)
+        trades = [e for e in visto if e["type"] == "trade"]
+        self.assertEqual([e["trade"]["exit_ms"] for e in trades], [c["salida_ms"] for c in solo["curvas"]["formula"]])
+        self.assertTrue(trades)
+        self.assertEqual({e["type"] for e in visto} - {"trade", "decision", "skipped", "guardrail", "rebote"}, set())
 
 
 class EnvPathTests(unittest.TestCase):
