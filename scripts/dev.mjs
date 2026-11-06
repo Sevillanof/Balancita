@@ -16,6 +16,7 @@ import {
   devChildSpecs,
   engineDNotice,
   findQwenModel,
+  forwardNotice,
   llamaPort,
   loadDevEnv,
   planChildExit,
@@ -137,6 +138,8 @@ else
   )
 // Engine D (verdict, scores, q) is retired by default: one line, and how to bring it back.
 if (engineDNotice(env)) process.stdout.write(`${engineDNotice(env)}\n`)
+// The forward paper books (C25-C31, Kronos) are retired by default too.
+if (forwardNotice(env)) process.stdout.write(`${forwardNotice(env)}\n`)
 // One search, one line.
 let llmModelPath
 if (llmModel) {

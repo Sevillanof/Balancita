@@ -7,6 +7,8 @@ import {
   devChildSpecs,
   engineDEnabled,
   engineDNotice,
+  forwardEnabled,
+  forwardNotice,
   onlyChildSpecs,
   qwenExitSwitch,
   readQwenNewsOnly,
@@ -103,12 +105,14 @@ describe('devChildSpecs', () => {
 
   const specs = devChildSpecs({
     root,
-    // The old engine D is retired by default; these cases describe it re-enabled (ENGINE_D_ENABLED=1).
+    // Engine D and the forward are retired by default; these cases describe them re-enabled
+    // (ENGINE_D_ENABLED=1, FORWARD_ENABLED=1).
     env: {
       FUTURES_MODE: 'paper_live',
       PORT: '9999',
       KEEP: 'yes',
       ENGINE_D_ENABLED: '1',
+      FORWARD_ENABLED: '1',
     },
     allowedFlags: noFlags,
   })
@@ -1673,7 +1677,6 @@ describe('engine D switch (datos-utiles S7): verdict, scores and q', () => {
       'capture',
       'positioning',
       'live',
-      'forward',
       'carry',
       'strategies',
       'news',
@@ -1691,7 +1694,6 @@ describe('engine D switch (datos-utiles S7): verdict, scores and q', () => {
       'capture',
       'positioning',
       'live',
-      'forward',
       'carry',
       'strategies',
       'news',
@@ -1711,7 +1713,6 @@ describe('engine D switch (datos-utiles S7): verdict, scores and q', () => {
       'live',
       'verdict',
       'scores',
-      'forward',
       'carry',
       'strategies',
       'news',
@@ -1787,5 +1788,162 @@ describe('engine D switch (datos-utiles S7): verdict, scores and q', () => {
     assert.match(engineDNotice({}), /verdict/)
     assert.match(engineDNotice({}), /ENGINE_D_ENABLED=1/)
     assert.equal(engineDNotice({ ENGINE_D_ENABLED: '1' }), '')
+  })
+})
+
+describe('forward switch: forward paper books of C25-C31 and Kronos', () => {
+  const base = {
+    root,
+    allowedFlags: noFlags,
+    python: { command: 'python3', prefixArgs: [] },
+    exists: () => false,
+  }
+  const llm = { command: 'llama-server' }
+  const local = { LLAMA_MODEL_PATH: '/models/q.gguf' }
+  const names = (specs) => specs.map((s) => s.name)
+  const byName = (specs) => Object.fromEntries(specs.map((s) => [s.name, s]))
+
+  it('forwardEnabled is true only for FORWARD_ENABLED=1 (blank, 0 or junk keep it retired)', () => {
+    assert.equal(forwardEnabled({}), false)
+    assert.equal(forwardEnabled(), false)
+    assert.equal(forwardEnabled({ FORWARD_ENABLED: '' }), false)
+    assert.equal(forwardEnabled({ FORWARD_ENABLED: '0' }), false)
+    assert.equal(forwardEnabled({ FORWARD_ENABLED: 'yes' }), false)
+    assert.equal(forwardEnabled({ FORWARD_ENABLED: ' 1 ' }), true)
+  })
+
+  it('by default does not start the forward child, nor anything that runs futures_forward', () => {
+    for (const env of [{}, local, { FORWARD_ENABLED: '0' }]) {
+      const specs = devChildSpecs({ ...base, env, llm })
+      assert.ok(!names(specs).includes('forward'))
+      assert.ok(
+        !specs.some((s) =>
+          s.args.some((a) => /futures_forward/.test(String(a))),
+        ),
+      )
+    }
+  })
+
+  it('keeps the rest of the stack: capture, gateway, carry, registry, news, llm and the live trader', () => {
+    assert.deepEqual(names(devChildSpecs({ ...base, env: local, llm })), [
+      'vite',
+      'capture',
+      'positioning',
+      'live',
+      'carry',
+      'strategies',
+      'news',
+      'llm',
+      'qwenlive',
+    ])
+  })
+
+  it('FORWARD_ENABLED=1 brings it back where it was, with the same arguments', () => {
+    const specs = devChildSpecs({
+      ...base,
+      env: { ...local, FORWARD_ENABLED: '1' },
+      llm,
+    })
+    assert.deepEqual(names(specs), [
+      'vite',
+      'capture',
+      'positioning',
+      'live',
+      'forward',
+      'carry',
+      'strategies',
+      'news',
+      'llm',
+      'qwenlive',
+    ])
+    assert.deepEqual(byName(specs).forward.args, [
+      '-m',
+      'balancita_engine.futures_forward',
+      '--market-db',
+      './data/dev-live/futures-market.sqlite',
+      '--out',
+      './data/dev-live/forward',
+      '--strategies-db',
+      './data/dev-live/futures-strategies.sqlite',
+      '--loop-seconds',
+      '3600',
+      '--registry-poll-seconds',
+      '60',
+    ])
+  })
+
+  it('is independent of engine D: each switch moves only its own children', () => {
+    const both = names(
+      devChildSpecs({
+        ...base,
+        env: { ...local, FORWARD_ENABLED: '1', ENGINE_D_ENABLED: '1' },
+        llm,
+      }),
+    )
+    assert.ok(
+      ['verdict', 'scores', 'forward', 'q'].every((n) => both.includes(n)),
+    )
+    const onlyD = names(
+      devChildSpecs({ ...base, env: { ...local, ENGINE_D_ENABLED: '1' }, llm }),
+    )
+    assert.ok(onlyD.includes('verdict') && !onlyD.includes('forward'))
+  })
+
+  it('tells the gateway the forward is retired, and overrides an inherited value', () => {
+    const live = (env) =>
+      byName(devChildSpecs({ ...base, env })).live.env.FUTURES_FORWARD_RETIRED
+    assert.equal(live({}), '1')
+    assert.equal(live({ FUTURES_FORWARD_RETIRED: '0' }), '1')
+    assert.equal(live({ FORWARD_ENABLED: '1' }), '0')
+    assert.equal(
+      live({ FORWARD_ENABLED: '1', FUTURES_FORWARD_RETIRED: '1' }),
+      '0',
+    )
+  })
+
+  it('keeps the gateway and the registry reading the existing forward books as history', () => {
+    const { live, strategies } = byName(
+      devChildSpecs({ ...base, env: local, llm }),
+    )
+    assert.equal(
+      live.env.FUTURES_FORWARD_DB_PATH,
+      './data/dev-live/forward/forward.sqlite',
+    )
+    assert.equal(
+      live.env.FUTURES_FORWARD_REGISTRATION_PATH,
+      '/repo/config/forward-strategies.json',
+    )
+    assert.equal(
+      strategies.args[strategies.args.indexOf('--forward-db') + 1],
+      './data/dev-live/forward/forward.sqlite',
+    )
+    assert.equal(
+      strategies.env.STRATEGY_FORWARD_PATH,
+      './data/dev-live/forward/forward-reliability.json',
+    )
+  })
+
+  it('DEV_ONLY naming forward does not bring a retired forward back', () => {
+    const all = devChildSpecs({ ...base, env: local, llm })
+    const only = onlyChildSpecs(all, {
+      DEV_ONLY: 'vite,capture,live,forward,strategies',
+    })
+    assert.deepEqual(names(only), [
+      'vite',
+      'capture',
+      'live',
+      'strategies',
+      'news',
+      'llm',
+      'qwenlive',
+    ])
+  })
+
+  it('forwardNotice says what is off and how to turn it back on', () => {
+    assert.match(forwardNotice({}), /forward retirado/i)
+    assert.match(forwardNotice({}), /C25-C31/)
+    assert.match(forwardNotice({}), /Kronos/)
+    assert.match(forwardNotice({}), /FORWARD_ENABLED=1/)
+    assert.equal(forwardNotice({ FORWARD_ENABLED: '1' }), '')
   })
 })

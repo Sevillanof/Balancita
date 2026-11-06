@@ -43,7 +43,7 @@ _FUERA_DE_LO_UTIL = "fuera de lo util para mejorar al maestro y al portero; qued
 # nombre despues de ``__``, a veces con fecha); el resto es el nombre exacto. Cualquier otra base con copia y fuera de BASES es un hueco.
 BASES_EXCLUIDAS = {
     "qwen-live_cache__": "cache de velas que se reconstruye sola",
-    "forward__": "base chica de la vigilancia forward (casi sin filas); queda en SQLite y en las copias diarias",
+    "forward__": "base chica del forward, retirado el 2026-11-06 (ya no recibe filas); queda en SQLite y en las copias diarias",
     "maker-costs__": "base chica de un estudio de costos maker de un dia; queda en SQLite y en las copias diarias",
     "futures-strategies": "base chica del registro de estrategias (versiones y eventos); queda en SQLite y en las copias diarias",
 }
