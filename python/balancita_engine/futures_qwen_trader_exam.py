@@ -920,12 +920,14 @@ def _honesty(cfg, op):
     return walkforward.meter(trades, medicion=medicion, trial_count=walkforward.trials())
 
 
-def _replay_config(cfg):
+def _replay_config(cfg, desde_ms=None):
     cfg = dict(cfg, decide_by="formula", opinion_enabled=False)
     products = cfg["exam"]["products"]
     if cfg.get("cuenta") == "entera" and len(products) != 1:
         raise qt.TraderError("La prueba de cuenta entera necesita un único producto, como la Terminal actual.")
     start = exam_start_ms(cfg)
+    if desde_ms is not None:
+        start = max(start, desde_ms)            # una ventana pedida nunca empieza antes que lo que la config permite
     if noticias.priority_enabled(cfg):
         if cfg.get("exigencia"):
             if any(value != 5 for value in cfg["exigencia"].values()):
@@ -1023,9 +1025,14 @@ def parallel_summary(cfg, curves):
                 por_origen={name: sum(1 for c in curves if c["origen"] == name) for name in ("maestro", "rebotes")})
 
 
-def replay_formula(history, cfg, holdout_ms):
-    """Actual paper engine; the historical result never fabricates contemporary news."""
-    cfg, start = _replay_config(cfg)
+def replay_formula(history, cfg, holdout_ms, desde_ms=None):
+    """Actual paper engine; the historical result never fabricates contemporary news.
+
+    ``cfg`` is the COMPLETE configuration (a ``futures_estrategias`` snapshot or strategy): every knob comes from it and nothing
+    is read from the environment; ``run_formula`` is the one that merges the ``QWEN_*`` variables before calling. ``cfg`` is not
+    modified. Nothing at or after ``holdout_ms`` is read; ``desde_ms`` (optional) moves the start of the window later, never
+    before what the config allows (``exam.from``, ``practice.from`` and, with ``priority_v2``, the fit cut of the experts)."""
+    cfg, start = _replay_config(cfg, desde_ms)
     products = cfg["exam"]["products"]
     curves, market, snapshots, all_items = [], {}, 0, []
     exits = []

@@ -11,6 +11,7 @@ analista reutiliza ``futures_qwen_posiciones`` y ``futures_qwen_analista``. No l
 """
 
 import copy
+import hashlib
 import json
 import math
 import os
@@ -144,11 +145,26 @@ def _validar_config(cfg, id):
         raise EstrategiaError("Estrategia '{}': {}.".format(id, str(error).rstrip("."))) from error
 
 
-def cargar_estrategia(id, carpeta=None, snapshot=None):
-    """La config COMPLETA de la estrategia ``id``: el snapshot con ``cambios`` aplicados. Su identidad es ``hash_config(config)``."""
+def ruta_overlay(id, carpeta=None):
+    """El archivo de la estrategia ``id`` (valida el id; no comprueba que exista)."""
     if not isinstance(id, str) or not ID_RE.match(id):
         raise EstrategiaError("Estrategia: id inválido {!r} (minúsculas, números y guiones).".format(id))
-    ruta = os.path.join(carpeta or ESTRATEGIAS_DIR, id + ".json")
+    return os.path.join(carpeta or ESTRATEGIAS_DIR, id + ".json")
+
+
+def sha256_overlay(id, carpeta=None):
+    """sha256 de los bytes del archivo del overlay: la huella que viaja con cada informe de backtest."""
+    ruta = ruta_overlay(id, carpeta)
+    try:
+        with open(ruta, "rb") as handle:
+            return hashlib.sha256(handle.read()).hexdigest()
+    except OSError as error:
+        raise EstrategiaError("Estrategia '{}': archivo ilegible ({}).".format(id, error)) from error
+
+
+def cargar_estrategia(id, carpeta=None, snapshot=None):
+    """La config COMPLETA de la estrategia ``id``: el snapshot con ``cambios`` aplicados. Su identidad es ``hash_config(config)``."""
+    ruta = ruta_overlay(id, carpeta)
     try:
         with open(ruta, encoding="utf-8") as handle:
             overlay = json.load(handle)

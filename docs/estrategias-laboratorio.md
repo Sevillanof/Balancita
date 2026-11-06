@@ -53,4 +53,42 @@ de los expertos (no en la config); con expertos autónomos la `exigencia` no se 
 2. Dejá `base_config_hash` y cambiá `nombre`, `descripcion` y `cambios`.
 3. Comprobá: `PYTHONPATH=python python3 -c "from balancita_engine import futures_estrategias as e; c=e.cargar_estrategia('<id>'); print(e.hash_config(c))"`.
 
-Cada variante es un intento más sobre la misma historia: registralo cuando haya backtest (T2).
+## Comparar una estrategia con la oficial (backtest)
+
+```
+PYTHONPATH=python python3 -m balancita_engine.futures_estrategias_backtest --estrategia <id> [--desde AAAA-MM-DD] [--hasta AAAA-MM-DD] [--json]
+```
+
+Corre la Terminal oficial (el snapshot) y la variante con el `Trader` real del paper (`replay_formula`), cada una con su config
+completa (sin variables de entorno), sobre **la misma ventana y los mismos datos**: velas 5 m y funding de la caché local
+(`data/qwen-trader/cache`, sin red; `--cache-dir` para otra) y, con funding absoluto, el archivo de funding en solo lectura
+(`--funding-archivo`, por defecto el de dev-live). No escribe nada: ni bases, ni el registro de intentos, ni archivos. Con
+`--json` imprime el informe completo.
+
+- **Ventana**: `[desde, hasta)`. Por defecto la honesta, **2026-02-01 → 2026-04-19** (del corte de ajuste de los expertos fríos
+  a la reserva). Si la config no deja empezar tan pronto, el informe dice desde cuándo midió (`desde_efectivo`).
+- **Reserva**: una ventana que pase de 2026-04-19 se rechaza (salida 2) salvo `--incluir-reserva`; con la bandera corre y el
+  informe la marca (`ventana.reserva.incluida`, con aviso): ese resultado no sirve para elegir.
+- Nada de `hasta` en adelante se lee, así que no hay look-ahead.
+
+### Cómo leer el informe
+
+| Campo                                  | Qué es                                                                                                                              |
+| -------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| `oficial` / `variante` → `metricas`    | Después de costos y funding, una por config                                                                                         |
+| `operaciones`                          | Cantidad de operaciones cerradas (la última se cierra a la fuerza al final de la ventana: motivo `fin_examen`)                      |
+| `neto_usd`, `neto_bp_cuenta`           | Suma del neto de las operaciones, en USD y en puntos básicos del capital inicial (1000 USD)                                         |
+| `neto_bp_por_operacion`                | Promedio del neto de cada operación, en bp de lo que arriesgó                                                                       |
+| `acierto`                              | Parte de las operaciones con neto > 0                                                                                               |
+| `max_drawdown_usd`, `max_drawdown_bp`  | Mayor caída del saldo realizado desde su máximo (el saldo cambia al cerrar cada operación); bp sobre ese máximo                    |
+| `horas_promedio`, `por_motivo`         | Tiempo abierta por operación y cuántas cerraron por tiempo, por vuelta del maestro, stop, rebote, etc.                              |
+| `diferencia`                           | **variante − oficial** de cada métrica numérica (`null` si una de las dos no tiene operaciones). Menos horas = negativo             |
+| `estrategia`                           | id, `overlay_sha256` (de los bytes del archivo), `cambios`                                                                          |
+| `snapshot.config_hash`, `*.config_hash` | Hash del snapshot y de cada config comparada (la oficial siempre es la del snapshot)                                               |
+| `ventana`, `datos`, `limites`          | Fechas pedidas y efectivas, fuente de datos, y lo que el replay no puede medir                                                      |
+
+Dos configuraciones iguales dan diferencia cero. Límites del replay (siempre en `limites`): sin noticias, sin libro de órdenes
+(costos del modelo, no fills reales), sin posicionamiento; las perillas que dependen de eso solo se miden en sombra.
+
+Cada variante probada es un intento más sobre la misma historia (el resultado es optimista): el comparador no lo registra
+todavía; anotá los intentos a mano hasta la fase de sombra.
