@@ -1,0 +1,14 @@
+e2e/integracion-gateway.pw.ts
+  h_92dd6654ceb221 218-219,221-224
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "cd79c0c7f5561810500682ed2325071419275ec5",
+  "prompts": {},
+  "humans": {
+    "h_92dd6654ceb221": {
+      "author": "Franco Sevillano <79455847+Sevillanof@users.noreply.github.com>"
+    }
+  }
+}
