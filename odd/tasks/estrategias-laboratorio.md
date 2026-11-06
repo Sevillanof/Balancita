@@ -185,3 +185,4 @@ Orden sugerido: 1 → 2 → 5 → 3 → 4a → 6 → 4b. El 5 va antes que la co
 - **L10** (evidencia): «Neto pb por operación» −0,6 con neto +97,70 US$: el promedio de pb no pondera por tamaño, y el backtest dimensiona entre 9 y 617 US$ (el vivo ~349 US$, 33 % del saldo). La prueba S4 comparó decisiones, velas y pb, no el tamaño.
 - **L11** (usuario): «Sisi, corregilo y analiza si hay mas errores de esos en estrategias»
 - **L12** (usuario): «El backtest debe invertir igual que terminal, esas reglas no cambian» → el tamaño (33 % del saldo, hasta 3 posiciones, rebotes) es fijo: el backtest dimensiona igual que la Terminal y las variantes no pueden cambiar perillas de tamaño (`posiciones.*`).
+- **L13** (usuario): «2. si, excluila» → las operaciones cerradas a la fuerza al final de la ventana (`fin_examen`) no cuentan en operaciones, acierto, horas ni neto; se informan aparte.

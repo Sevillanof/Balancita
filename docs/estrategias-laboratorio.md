@@ -43,7 +43,7 @@ versión activa nueva es un snapshot nuevo (y las estrategias se vuelven a basar
 
 **Las reglas de inversión no son perillas** (usuario, 2026-11-06: «El backtest debe invertir igual que la Terminal, esas reglas no
 cambian»): el tamaño de cada posición (`posiciones.fraccion`, 33 % del saldo del momento), los cupos (`posiciones.max`, 3),
-`posiciones.espera_entre_entradas_min`, el tamaño por volatilidad (`analista.modo`: ×1,5 / ×0,5), la cuenta, el nocional y el
+`posiciones.espera_entre_entradas_min`, el tamaño por volatilidad (`analista.modo`: ×0,5 en calma; ×1,5 con movimiento queda **topado en un lugar**, 33 %), la cuenta, el nocional y el
 apalancamiento son los de la Terminal activa y ninguna variante los cambia (`futures_estrategias.REGLAS_DE_INVERSION_FIJAS`). Un
 archivo que los nombre se rechaza como cualquier clave no permitida, y el formulario «Nueva variante» no los ofrece.
 
@@ -77,23 +77,23 @@ completa (sin variables de entorno), sobre **la misma ventana y los mismos datos
 
 ### Cómo leer el informe
 
-| Campo                                     | Qué es                                                                                                                       |
-| ----------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
-| `oficial` / `variante` → `metricas`       | Después de costos y funding, una por config                                                                                  |
-| `operaciones`                             | Cantidad de operaciones cerradas (la última se cierra a la fuerza al final de la ventana: motivo `fin_examen`)               |
-| `neto_usd`, `neto_bp_cuenta`              | Suma del neto de las operaciones, en USD y en puntos básicos del capital inicial (1000 USD)                                  |
-| `neto_bp_por_operacion`                   | **Ponderado por tamaño**: Σ neto USD / Σ nocional USD × 10000 (lo que ganó cada dólar puesto). Mismo signo que el neto       |
-| `neto_bp_promedio_simple`                 | Promedio sin ponderar del bp de cada operación; solo referencia (un resto de 10 US$ pesa como una de 500 US$)                |
-| `nocional_promedio_usd`, `_min_`, `_max_` | Tamaño de las posiciones: 33 % del saldo del momento, ×1,5 / ×0,5 por volatilidad, tope por saldo libre (3.er cupo ≈ 10 US$) |
-| `acierto`                                 | Parte de las operaciones con neto > 0 (cada una cuenta igual, sea de 10 o de 500 US$)                                        |
-| `max_drawdown_usd`, `max_drawdown_bp`     | Mayor caída del saldo realizado desde su máximo (el saldo cambia al cerrar cada operación); bp sobre ese máximo              |
-| `horas_promedio`, `horas_max`             | Tiempo abierta por operación; el máximo muestra que un tope (p. ej. 30 h) se cumple                                          |
-| `por_motivo`                              | Cuántas cerraron por cada razón: `maestro_vuelta`, `maestro_agotado`, `tiempo`, stop, `fin_examen`…                          |
-| `funding_operaciones_incompletas`         | Operaciones que tocaron una hora sin funding en el archivo (el booleano `funding_completo` se apaga con una sola hora)       |
-| `diferencia`                              | **variante − oficial** de cada métrica numérica (`null` si una de las dos no tiene operaciones). Menos horas = negativo      |
-| `estrategia`                              | id, `overlay_sha256` (de los bytes del archivo), `cambios`                                                                   |
-| `snapshot.config_hash`, `*.config_hash`   | Hash del snapshot y de cada config comparada (la oficial siempre es la del snapshot)                                         |
-| `ventana`, `datos`, `limites`             | Fechas pedidas y efectivas, fuente de datos, y lo que el replay no puede medir                                               |
+| Campo                                     | Qué es                                                                                                                                            |
+| ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `oficial` / `variante` → `metricas`       | Después de costos y funding, una por config                                                                                                       |
+| `operaciones`                             | Cantidad de operaciones cerradas (la última se cierra a la fuerza al final de la ventana: motivo `fin_examen`)                                    |
+| `neto_usd`, `neto_bp_cuenta`              | Suma del neto de las operaciones, en USD y en puntos básicos del capital inicial (1000 USD)                                                       |
+| `neto_bp_por_operacion`                   | **Ponderado por tamaño**: Σ neto USD / Σ nocional USD × 10000 (lo que ganó cada dólar puesto). Mismo signo que el neto                            |
+| `neto_bp_promedio_simple`                 | Promedio sin ponderar del bp de cada operación; solo referencia (un resto de 10 US$ pesa como una de 500 US$)                                     |
+| `nocional_promedio_usd`, `_min_`, `_max_` | Tamaño de las posiciones: 33 % del saldo del momento (un lugar; con movimiento ×1,5 topado en 33 %, en calma ×0,5 = 16,5 %), tope por saldo libre |
+| `acierto`                                 | Parte de las operaciones con neto > 0 (cada una cuenta igual, sea de 10 o de 500 US$)                                                             |
+| `max_drawdown_usd`, `max_drawdown_bp`     | Mayor caída del saldo realizado desde su máximo (el saldo cambia al cerrar cada operación); bp sobre ese máximo                                   |
+| `horas_promedio`, `horas_max`             | Tiempo abierta por operación; el máximo muestra que un tope (p. ej. 30 h) se cumple                                                               |
+| `por_motivo`                              | Cuántas cerraron por cada razón: `maestro_vuelta`, `maestro_agotado`, `tiempo`, stop, `fin_examen`…                                               |
+| `funding_operaciones_incompletas`         | Operaciones que tocaron una hora sin funding en el archivo (el booleano `funding_completo` se apaga con una sola hora)                            |
+| `diferencia`                              | **variante − oficial** de cada métrica numérica (`null` si una de las dos no tiene operaciones). Menos horas = negativo                           |
+| `estrategia`                              | id, `overlay_sha256` (de los bytes del archivo), `cambios`                                                                                        |
+| `snapshot.config_hash`, `*.config_hash`   | Hash del snapshot y de cada config comparada (la oficial siempre es la del snapshot)                                                              |
+| `ventana`, `datos`, `limites`             | Fechas pedidas y efectivas, fuente de datos, y lo que el replay no puede medir                                                                    |
 
 Dos configuraciones iguales dan diferencia cero. Límites del replay (siempre en `limites`): sin noticias, sin libro de órdenes
 (costos del modelo, no fills reales), sin posicionamiento; las perillas que dependen de eso solo se miden en sombra.
@@ -210,6 +210,12 @@ período vivo es posterior a la reserva, no se registran intentos y el resultado
   horas, una vela (5 min). Lo que queda fuera se lista con ambos valores. Las operaciones abiertas en el vivo solo comparan tamaño.
 - **Límites** (en el informe): el vivo llena contra el libro y el replay al cierre de la vela (unos bp de neto); noticias no
   reproducibles; esperas y omisiones del vivo.
+
+**Tope por lugar** (`odd/tasks/tope-por-lugar.md`, 2026-11-06): con varios cupos (`posiciones.max` > 1) el analista solo puede achicar una
+posición: nocional = saldo × `posiciones.fraccion` × multiplicador, con tope en saldo × `posiciones.fraccion` (`Trader._open`,
+`futures_qwen_trader.py`). Con la config activa (33 %): fuerte 33 %, normal 33 %, flojo 16,5 %, y los tres cupos siempre entran (ya no hay
+un tercer cupo de ~10 US$). Rige para las entradas nuevas, igual en la Terminal y en este backtest; las abiertas no se tocan. Lo de abajo
+es la copia del 2026-11-05, anterior al tope: sus operaciones con «fuerte» son de 49,5 %, así que `--vs-vivo` contra ella marca el tamaño.
 
 ### Resultado con la copia del 2026-11-05 (config `37f572…`, 2026-11-02 14:20 → 2026-11-05 03:45 UTC)
 

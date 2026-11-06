@@ -6,6 +6,7 @@ import sqlite3
 import tempfile
 import unittest
 from decimal import Decimal
+from types import SimpleNamespace
 from unittest import mock
 
 from balancita_engine import futures_qwen_corta as corta
@@ -177,6 +178,69 @@ class MaestroPlacesTests(unittest.TestCase):
         self.assertEqual(len(a.trader.positions), 1)
         self.assertEqual([e.get("action") for e in decisions(a.events)], [e.get("action") for e in decisions(b.events)])
         self.assertEqual(a.trader.position.notional_usd, Decimal("1000") / (1 + qt.fee_rate("taker")))   # the whole balance, fee reserved
+
+
+class SlotCapTests(unittest.TestCase):
+    """tope-por-lugar S1-S3: el analista nunca agranda una posición por encima de UN lugar (saldo x ``fraccion``)."""
+
+    def market(self, places=3, movement=True, rebotes=False, balance=None):
+        m = Market(config(places, rebotes=rebotes))
+        m.trader.movement = SimpleNamespace(active=lambda _: movement)         # the analista's reading: moving / calm / no data
+        if balance is not None:
+            m.trader.notional = Decimal(balance)
+        return m
+
+    def test_strong_normal_and_calm_sizes_with_the_active_fraction(self):
+        self.assertEqual(config(3)["posiciones"]["fraccion"], 0.33)
+        self.assertEqual(config(3)["analista"], {"modo": "fuerte"})
+        for movement, expected in ((True, "330"), (None, "330"), (False, "165")):       # fuerte / normal / flojo
+            with self.subTest(movement=movement):
+                m = self.market(movement=movement)
+                m.looks(1, verdict=2)
+                self.assertEqual(m.trader.position.notional_usd, Decimal(expected))
+
+    def test_three_strong_places_all_take_a_full_place_and_the_third_is_not_a_remainder(self):
+        m = self.market(movement=True)
+        m.looks(1, verdict=2)
+        for _ in range(2):
+            m.looks(1, verdict=0)
+            m.looks(1, verdict=2)
+        self.assertEqual([p.notional_usd for p in m.trader.positions], [Decimal("330")] * 3)
+        self.assertLessEqual(sum(p.notional_usd for p in m.trader.positions) * (1 + qt.fee_rate("taker")), m.trader.notional)
+
+    def test_a_rebound_goes_through_the_same_cap(self):
+        m = Market(config(3, rebotes=True))
+        m.trader.movement = SimpleNamespace(active=lambda _: True)
+        for _ in range(12):
+            m.step(close=100.0)
+        m.step(close=94.0)
+        self.assertEqual((m.trader.position.entry_reason, m.trader.position.notional_usd), ("rebote", Decimal("330")))
+
+    def test_the_free_balance_still_limits_a_new_entry(self):
+        m = self.market(movement=True)
+        m.looks(1, verdict=2)
+        m.looks(1, verdict=0)
+        m.looks(1, verdict=2)
+        self.assertEqual(len(m.trader.positions), 2)
+        m.trader.notional = Decimal("700")                                      # 660 committed: only 40 free
+        m.looks(1, verdict=0)
+        m.looks(1, verdict=2)
+        third = m.trader.positions[-1]
+        self.assertEqual(len(m.trader.positions), 3)
+        self.assertLessEqual(third.notional_usd * (1 + qt.fee_rate("taker")), Decimal("40"))
+        self.assertGreater(third.notional_usd, Decimal("39"))
+
+    def test_the_open_positions_are_not_resized_when_the_balance_changes(self):
+        m = self.market(movement=True)
+        m.looks(1, verdict=2)
+        before = m.trader.position.notional_usd
+        m.trader.notional = Decimal("700")
+        self.assertEqual(m.trader.position.notional_usd, before)
+
+    def test_one_place_with_a_strong_analista_is_unchanged(self):
+        m = self.market(places=1, movement=True)
+        m.looks(1, verdict=2)
+        self.assertEqual(m.trader.position.notional_usd, Decimal("1000") / (1 + qt.fee_rate("taker")))   # the free balance, as before
 
 
 class ReboundTests(unittest.TestCase):
