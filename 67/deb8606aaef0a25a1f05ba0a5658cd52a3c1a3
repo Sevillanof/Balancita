@@ -1,0 +1,14 @@
+docs/estrategias-laboratorio.md
+  h_92dd6654ceb221 76-88
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "67deb8606aaef0a25a1f05ba0a5658cd52a3c1a3",
+  "prompts": {},
+  "humans": {
+    "h_92dd6654ceb221": {
+      "author": "Franco Sevillano <79455847+Sevillanof@users.noreply.github.com>"
+    }
+  }
+}
