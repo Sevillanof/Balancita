@@ -1,0 +1,48 @@
+AGENTS.md
+  h_92dd6654ceb221 21-23
+README.md
+  h_92dd6654ceb221 22,25,64,144
+docs/adr/0001-isolated-paper-futures-accounting.md
+  h_92dd6654ceb221 237-261
+docs/forward-retirado.md
+  h_92dd6654ceb221 1-35
+docs/motor-d-retirado.md
+  h_92dd6654ceb221 19-21,39
+docs/observabilidad-actividad-api.md
+  h_92dd6654ceb221 150-151
+docs/observabilidad-salud-api.md
+  h_92dd6654ceb221 190
+python/archivo_parquet/nocturno.py
+  h_92dd6654ceb221 46
+scripts/dev-provider-env.mjs
+  h_92dd6654ceb221 588-589,619-637,651-652,792,837-838,1087-1120
+scripts/dev.mjs
+  h_92dd6654ceb221 19,141-142
+scripts/dev.node-test.mjs
+  h_92dd6654ceb221 10-11,108-109,115,1793-1949
+server/src/features/live-gateway/forward-retired.test.ts
+  h_92dd6654ceb221 1-25
+server/src/features/live-gateway/forward-retired.ts
+  h_92dd6654ceb221 1-15
+server/src/features/live-gateway/observability-activity.test.ts
+  h_92dd6654ceb221 176-237
+server/src/features/live-gateway/observability-activity.ts
+  h_92dd6654ceb221 6-9,162-166,478-492
+server/src/features/live-gateway/observability-health.test.ts
+  h_92dd6654ceb221 1042-1240
+server/src/features/live-gateway/observability-health.ts
+  h_92dd6654ceb221 10-13,97-101,175-185,190-192,950-951,997-1008,1505-1515,1561-1574,1756-1775,2005-2007
+src/features/observability/presentation/Observability.test.tsx
+  h_92dd6654ceb221 784-813
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "9d7da74d09e7be38c06a21139a5054291dbab6d4",
+  "prompts": {},
+  "humans": {
+    "h_92dd6654ceb221": {
+      "author": "Franco Sevillano <79455847+Sevillanof@users.noreply.github.com>"
+    }
+  }
+}
