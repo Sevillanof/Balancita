@@ -1,6 +1,6 @@
 import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import EstrategiasPage from './EstrategiasPage.tsx'
 import StrategyLab from './StrategyLab.tsx'
 import {
@@ -17,6 +17,11 @@ import {
   trabajo,
   trabajoListo,
 } from '../testing/estrategias-fixture.ts'
+
+vi.mock(
+  'lightweight-charts',
+  async () => (await import('../testing/lightweight-charts-mock.ts')).modulo,
+)
 
 const OLD_UI = /C2[5-9]|C3[0-3]|VectorBT|ranking|exigencia|editor de reglas/i
 
@@ -128,9 +133,9 @@ describe('Estrategias: the Terminal laboratory', () => {
     expect(duelo).toHaveTextContent('+53,63 US$')
 
     expect(
-      within(detalle).getByRole('img', { name: /Saldo acumulado/ }),
+      within(detalle).getByRole('img', { name: /Velas de ETH/ }),
     ).toBeVisible()
-    expect(within(detalle).getByText('Saldo acumulado')).toBeVisible()
+    expect(within(detalle).getByText('ETH / USD')).toBeVisible()
 
     const neto = within(detalle).getByRole('group', {
       name: 'Neto por operación',
@@ -174,16 +179,39 @@ describe('Estrategias: the Terminal laboratory', () => {
     ).toBeEnabled()
   })
 
+  it('replaces the equity curve with the ETH candles of the informe window, in the detail', async () => {
+    const api = fakeApi([EJEMPLO], { [EJEMPLO.id]: trabajoListo() })
+    renderPage(api)
+    const detalle = await screen.findByRole('region', {
+      name: /Detalle de «Salida a 30 h»/,
+    })
+    expect(
+      await within(detalle).findByRole('img', { name: /Velas de ETH/ }),
+    ).toBeVisible()
+    expect(within(detalle).queryByText('Saldo acumulado')).toBeNull()
+    expect(
+      within(detalle).getByRole('group', { name: 'Temporalidad' }),
+    ).toBeVisible()
+    await waitFor(() =>
+      expect(api.velas).toHaveBeenCalledWith(
+        expect.objectContaining({
+          desdeMs: INFORME.ventana.desde_efectivo_ms,
+          hastaMs: INFORME.ventana.hasta_ms,
+        }),
+      ),
+    )
+  })
+
   it('has no page title and no detail title: the top bar says where we are', async () => {
     renderPage(fakeApi([EJEMPLO], { [EJEMPLO.id]: trabajoListo() }))
-    await screen.findByRole('img', { name: /Saldo acumulado/ })
+    await screen.findByRole('img', { name: /Velas de ETH/ })
     expect(screen.queryAllByRole('heading')).toHaveLength(0)
   })
 
   it('shows only variants of the Terminal: no rule strategies, editor, VectorBT, ranking or gate', async () => {
     const api = fakeApi([EJEMPLO], { [EJEMPLO.id]: trabajoListo() })
     const { container } = renderPage(api)
-    await screen.findByRole('img', { name: /Saldo acumulado/ })
+    await screen.findByRole('img', { name: /Velas de ETH/ })
     expect(container.textContent ?? '').not.toMatch(OLD_UI)
     expect(
       screen.queryByRole('button', {
@@ -196,6 +224,7 @@ describe('Estrategias: the Terminal laboratory', () => {
       'listar',
       'trabajo',
       'ultimo',
+      'velas',
     ])
   })
 
@@ -243,7 +272,7 @@ describe('Estrategias: the Terminal laboratory', () => {
     expect(api.comparar).toHaveBeenCalledWith(REBOTES.id)
     expect(await screen.findByText('Probando…')).toBeVisible()
     expect(
-      await screen.findByRole('img', { name: /Saldo acumulado/ }),
+      await screen.findByRole('img', { name: /Velas de ETH/ }),
     ).toBeVisible()
     await waitFor(() =>
       expect(tarjeta('Rebotes más exigentes')).toHaveTextContent(
@@ -322,7 +351,7 @@ describe('Estrategias: the Terminal laboratory', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent(
       'Ya hay una comparación corriendo.',
     )
-    expect(screen.getByRole('img', { name: /Saldo acumulado/ })).toBeVisible()
+    expect(screen.getByRole('img', { name: /Velas de ETH/ })).toBeVisible()
   })
 
   it('says why a variant cannot be tried instead of offering the backtest', async () => {

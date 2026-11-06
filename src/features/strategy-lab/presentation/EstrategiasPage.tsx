@@ -176,6 +176,7 @@ function Laboratorio({
       ) : fila ? (
         <VarianteDetalle
           key={fila.id}
+          api={api}
           fila={fila}
           perillas={listado.perillas}
           trabajo={trabajos[fila.id]}

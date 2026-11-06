@@ -1,5 +1,6 @@
 import { vi, type Mocked } from 'vitest'
 import type {
+  ConsultaVelas,
   EstrategiaFila,
   EstrategiasApi,
   Informe,
@@ -7,6 +8,7 @@ import type {
   Metricas,
   Operacion,
   Perilla,
+  RespuestaVelas,
   Trabajo,
 } from '../infrastructure/estrategias-api.ts'
 
@@ -272,6 +274,42 @@ export const trabajoListo = (patch: Partial<Trabajo> = {}) =>
     ...patch,
   })
 
+const PASO_VELAS: Record<ConsultaVelas['intervalo'], number> = {
+  '15m': 900_000,
+  '1h': 3_600_000,
+  '4h': 14_400_000,
+  '1d': 86_400_000,
+}
+
+/** The server contract in one place: complete candles of `[desde, hasta)` before `antes`, the newest `limite` of them. */
+export function velasFalsas(consulta: ConsultaVelas): RespuestaVelas {
+  const paso = PASO_VELAS[consulta.intervalo]
+  const inicio = Math.ceil(consulta.desdeMs / paso) * paso
+  const corte =
+    Math.floor(Math.min(consulta.antesMs, consulta.hastaMs) / paso) * paso
+  const primera = Math.max(inicio, corte - consulta.limite * paso)
+  const velas = []
+  for (let t = primera; t < corte; t += paso) {
+    const base = 2000 + 80 * Math.sin(t / (paso * 40))
+    velas.push({
+      t,
+      o: base,
+      h: base + 12,
+      l: base - 12,
+      c: base + 6 * Math.cos(t / paso),
+      v: 10,
+    })
+  }
+  return {
+    producto: consulta.producto,
+    intervalo: consulta.intervalo,
+    desde_ms: inicio,
+    hasta_ms: Math.floor(consulta.hastaMs / paso) * paso,
+    velas,
+    hay_mas: velas.length > 0 && primera > inicio,
+  }
+}
+
 /** `jobs`: the latest comparison the server remembers per strategy id (missing = none). */
 export function fakeApi(
   estrategias: EstrategiaFila[] = [EJEMPLO],
@@ -286,6 +324,7 @@ export function fakeApi(
       trabajoListo({ estrategia_id: id, job_id: 'abc123' }),
     ),
     ultimo: vi.fn(async (id: string) => jobs[id] ?? null),
+    velas: vi.fn(async (consulta: ConsultaVelas) => velasFalsas(consulta)),
     ...patch,
   }
   // The mocks keep their spy methods (`mockImplementation`...) while the whole still is an `EstrategiasApi`.

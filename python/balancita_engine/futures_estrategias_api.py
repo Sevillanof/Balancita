@@ -10,6 +10,11 @@ C25-C33 siguen guardadas en el registro pero esta API no las toca.
   la vez. ``GET estrategias/<id>/comparar/<job>`` lo consulta y ``GET estrategias/<id>/comparar`` da el último de esa estrategia.
   La reserva NUNCA se usa desde acá: ``incluir_reserva`` no existe como campo y una ventana que pase de la reserva se rechaza.
 
+- ``GET estrategias/velas/<producto>/<intervalo>/<desde_ms>/<hasta_ms>/<antes_ms>/<limite>``: velas OHLC para el gráfico del detalle, agregadas
+  de las velas de 5 m de la caché que leyó el backtest (``History``, sin red, sin escribir). ``[desde_ms, hasta_ms)`` es la ventana PROBADA
+  del informe: nunca se sirve una vela fuera de ella, y un ``hasta_ms`` que pase de la reserva se rechaza (400). ``antes_ms`` es el cursor
+  de paginación hacia atrás y ``limite`` (1-5000) cuenta las velas más nuevas; solo salen velas completas (alineadas a UTC).
+
 Los trabajos viven en memoria (se pierden al reiniciar el servidor). Esta API no escribe nada más que el archivo de la estrategia nueva.
 """
 
@@ -24,11 +29,15 @@ import unicodedata
 from . import futures_estrategias as est
 from . import futures_qwen_analista as analista
 from . import futures_estrategias_backtest as bt
+from . import futures_qwen_trader as qt
 
 CAMPOS_CREAR = ("id", "nombre", "descripcion", "cambios")
 CAMPOS_COMPARAR = ("desde", "hasta")
 MAX_NOMBRE, MAX_DESCRIPCION = 80, 500
 MAX_TRABAJOS = 20
+MAX_VELAS = 5000
+INTERVALOS = {"15m": 15 * 60_000, "1h": 3_600_000, "4h": 4 * 3_600_000, "1d": 86_400_000}
+PRODUCTO_RE = re.compile(r"^PF_[A-Z0-9]{2,20}$")
 TIPOS = {"int": "entero", "int5": "entero", "float": "decimal", "float?": "decimal", "enum": "opcion"}
 
 
@@ -50,6 +59,26 @@ def _texto(cuerpo, campo, maximo):
     if len(valor.strip()) > maximo:
         raise EstrategiasApiError("campo_invalido", "{} no puede pasar de {} caracteres.".format(campo, maximo))
     return valor.strip()
+
+
+def _entero(texto, campo, codigo, detalle, minimo=0, maximo=None):
+    if not re.match(r"^[0-9]{1,16}$", str(texto)) or int(texto) < minimo or (maximo is not None and int(texto) > maximo):
+        raise EstrategiasApiError(codigo, "{} {} (recibí {!r}).".format(campo, detalle, texto))
+    return int(texto)
+
+
+def _agregar(barras, paso):
+    """Velas de ``paso`` ms desde velas de 5 m ordenadas: apertura de la primera, máximo, mínimo, cierre de la última y volumen sumado."""
+    velas = []
+    for barra in barras:
+        t = barra["bucket_start"] // paso * paso
+        alto, bajo, cierre, volumen = (float(barra[k]) for k in ("high", "low", "close", "volume_btc"))
+        if velas and velas[-1]["t"] == t:
+            vela = velas[-1]
+            vela.update(h=max(vela["h"], alto), l=min(vela["l"], bajo), c=cierre, v=vela["v"] + volumen)
+        else:
+            velas.append({"t": t, "o": float(barra["open"]), "h": alto, "l": bajo, "c": cierre, "v": volumen})
+    return velas
 
 
 def _valor_actual(config, clave):
@@ -235,6 +264,41 @@ class EstrategiasApi:
                 raise EstrategiasApiError("sin_comparacion", "'{}' todavía no se comparó desde que arrancó el servidor.".format(id), 404)
             return self._vista(propios[-1])
 
+    # ------------------------------------------------------------------ velas
+
+    def velas(self, producto, intervalo, desde, hasta, antes, limite):
+        """Velas de ``[desde, hasta)`` (la ventana probada) anteriores a ``antes``, las ``limite`` más nuevas. Solo lectura de la caché."""
+        if not PRODUCTO_RE.match(producto):
+            raise EstrategiasApiError("producto_invalido", "El producto tiene que ser un símbolo PF_… (por ejemplo PF_ETHUSD).")
+        if intervalo not in INTERVALOS:
+            raise EstrategiasApiError("intervalo_invalido", "El intervalo tiene que ser uno de {} (recibí {!r}).".format(
+                ", ".join(INTERVALOS), intervalo))
+        instante = "tiene que ser un instante en milisegundos (entero, 0 o más)"
+        desde = _entero(desde, "desde", "desde_invalido", instante)
+        hasta = _entero(hasta, "hasta", "hasta_invalido", instante)
+        antes = _entero(antes, "antes", "antes_invalido", instante)
+        limite = _entero(limite, "limite", "limite_invalido", "tiene que ser un entero entre 1 y {}".format(MAX_VELAS), 1, MAX_VELAS)
+        reserva = qt.load_holdout_ms() if self.reserva_desde_ms is None else self.reserva_desde_ms
+        if desde >= hasta:
+            raise EstrategiasApiError("ventana_invalida", "La ventana está vacía: desde ({}) tiene que ser anterior a hasta ({}).".format(desde, hasta))
+        if hasta > reserva:
+            raise EstrategiasApiError("ventana_invalida", "La ventana termina en {} y entra en la reserva (desde {}): no se sirven velas de la "
+                                      "reserva.".format(qt.stamp(hasta), qt.stamp(reserva)))
+        cache = self.cache_dir or qt.DEFAULT_CACHE
+        if not os.path.exists(os.path.join(cache, "candles-{}.sqlite".format(producto))):      # History crearía el archivo vacío
+            raise EstrategiasApiError("sin_velas", "No hay velas guardadas de {}.".format(producto), 404)
+        paso = INTERVALOS[intervalo]
+        inicio = -(-desde // paso) * paso                      # solo velas completas dentro de la ventana
+        fin = hasta // paso * paso
+        corte = min(antes, hasta) // paso * paso
+        velas = []
+        primera = max(inicio, corte - limite * paso)
+        if corte > inicio:
+            barras = qt.History(cache, reserva, offline=True).bars(producto, primera, corte)
+            velas = _agregar(barras, paso)
+        return {"producto": producto, "intervalo": intervalo, "desde_ms": inicio, "hasta_ms": fin, "velas": velas,
+                "hay_mas": bool(velas) and primera > inicio}
+
     # ------------------------------------------------------------------ rutas
 
     def route(self, method, parts, body):
@@ -245,6 +309,8 @@ class EstrategiasApi:
             return self.listar()
         if method == "POST" and len(parts) == 1:
             return self.crear(body())
+        if method == "GET" and len(parts) == 8 and parts[1] == "velas":
+            return self.velas(*parts[2:])
         if len(parts) >= 3 and parts[2] == "comparar":
             id = parts[1]
             if method == "POST" and len(parts) == 3:

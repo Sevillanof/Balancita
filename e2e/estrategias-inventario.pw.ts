@@ -10,7 +10,6 @@ import { expect, test, type Page, type Route } from '@playwright/test'
 const SHOTS =
   process.env.ESTRATEGIAS_SHOTS_DIR ?? 'playwright-artifacts/estrategias'
 const HASH = '37f572a841d35a7b7a8d01569378c508c6bcd9c8a4a6a2adb96e5d1097eade07'
-const DIA = 86_400_000
 const DESDE = Date.UTC(2026, 1, 3)
 
 const perilla = (clave: string, valor: number | string | null, extra = {}) => ({
@@ -51,15 +50,21 @@ const SIN_PROBAR = fila('dos-posiciones', 'Dos posiciones al 50 %', {
   posiciones: { max: 2, fraccion: 0.5 },
 })
 
-const operaciones = (netos: number[]) =>
-  netos.map((neto, i) => ({
-    entrada_ms: DESDE + i * 7 * DIA,
-    salida_ms: DESDE + i * 7 * DIA + 20 * 3_600_000,
-    lado: neto >= 0 ? 'LONG' : 'SHORT',
-    neto_usd: neto,
-    neto_bp: neto * 10,
-    motivo: 'tiempo',
-  }))
+const HASTA = Date.UTC(2026, 3, 19)
+const HORA = 3_600_000
+/** The trades sit in the last ten days of the window (what the chart opens on); `horas` is how long each one stays open. */
+const operaciones = (netos: number[], horas = 20) =>
+  netos.map((neto, i) => {
+    const entrada = HASTA - (netos.length - i) * 30 * HORA
+    return {
+      entrada_ms: entrada,
+      salida_ms: entrada + horas * HORA,
+      lado: neto >= 0 ? 'LONG' : 'SHORT',
+      neto_usd: neto,
+      neto_bp: neto * 10,
+      motivo: 'tiempo',
+    }
+  })
 const metricas = (patch: object) => ({
   operaciones: 180,
   neto_usd: 97.7,
@@ -106,7 +111,7 @@ const INFORME = {
       max_drawdown_usd: 38.2,
       horas_promedio: 18.9,
     }),
-    operaciones: operaciones([20, -15, 30, 18.63, -12, 12]),
+    operaciones: operaciones([20, -15, 30, 18.63, -12, 12], 14),
   },
   diferencia: {
     operaciones: 2,
@@ -132,9 +137,49 @@ const trabajo = (id: string, patch: object) => ({
   ...patch,
 })
 
+const PASO: Record<string, number> = {
+  '15m': 15 * 60_000,
+  '1h': HORA,
+  '4h': 4 * HORA,
+  '1d': 24 * HORA,
+}
+/** SYNTHETIC candles with the contract of GET /estrategias/velas: complete candles of [desde, hasta) before `antes`, the newest `limite`. */
+function velasDeEjemplo(partes: RegExpExecArray) {
+  const [, producto, intervalo, desde, hasta, antes, limite] = partes
+  const paso = PASO[intervalo]
+  const inicio = Math.ceil(Number(desde) / paso) * paso
+  const corte = Math.floor(Math.min(Number(antes), Number(hasta)) / paso) * paso
+  const primera = Math.max(inicio, corte - Number(limite) * paso)
+  const velas = []
+  for (let t = primera; t < corte; t += paso) {
+    const base = 2200 + 90 * Math.sin(t / (paso * 30)) + (t % (paso * 7)) / paso
+    const cierre = base + 14 * Math.cos(t / paso)
+    velas.push({
+      t,
+      o: base,
+      h: Math.max(base, cierre) + 9,
+      l: Math.min(base, cierre) - 9,
+      c: cierre,
+      v: 10,
+    })
+  }
+  return {
+    producto,
+    intervalo,
+    desde_ms: inicio,
+    hasta_ms: Math.floor(Number(hasta) / paso) * paso,
+    velas,
+    hay_mas: velas.length > 0 && primera > inicio,
+  }
+}
+
+/** The candle requests of the page, as paths, since the last mockRegistry. */
+let consultasVelas: string[] = []
+
 /** Mocks the whole /api-strategies surface; returns what the page posted. */
 async function mockRegistry(page: Page) {
   const publicadas: unknown[] = []
+  consultasVelas = []
   const estrategias = [PROBADA, SIN_PROBAR]
   const json = (route: Route, body: unknown, status = 200) =>
     route.fulfill({ status, json: body })
@@ -161,6 +206,14 @@ async function mockRegistry(page: Page) {
       const nueva = fila('nueva-variante', cuerpo.nombre, {})
       estrategias.push(nueva)
       return json(route, nueva)
+    }
+    const velas =
+      /^\/estrategias\/velas\/([^/]+)\/([^/]+)\/(\d+)\/(\d+)\/(\d+)\/(\d+)$/.exec(
+        ruta,
+      )
+    if (velas && request.method() === 'GET') {
+      consultasVelas.push(ruta)
+      return json(route, velasDeEjemplo(velas))
     }
     const comparar = /^\/estrategias\/([^/]+)\/comparar(?:\/[^/]+)?$/.exec(ruta)
     if (comparar && request.method() === 'POST')
@@ -214,9 +267,9 @@ test('Estrategias lists the variants and draws the comparison of the chosen one'
   const detalle = page.getByRole('region', {
     name: /Detalle de «Salida a 30 h»/,
   })
-  await expect(
-    detalle.getByRole('img', { name: /Saldo acumulado/ }),
-  ).toBeVisible()
+  const velas = detalle.getByRole('img', { name: /Velas de ETH/ })
+  await expect(velas).toBeVisible()
+  await expect(detalle.getByText('Saldo acumulado')).toHaveCount(0)
   await expect(detalle.getByTitle('180 operaciones')).toBeVisible()
   await expect(
     detalle.getByRole('group', { name: 'Peor caída' }),
@@ -231,15 +284,13 @@ test('Estrategias lists the variants and draws the comparison of the chosen one'
     0,
   )
 
-  // Both panels use the height of the window and the curve takes what is left.
+  // Both panels use the height of the window and the chart takes what is left.
   const viewport = page.viewportSize()!
   if (viewport.width >= 1000) {
     const alto = (await detalle.boundingBox())!.height
     expect(alto).toBeGreaterThan(viewport.height * 0.6)
-    const curva = (await detalle
-      .getByRole('img', { name: /Saldo acumulado/ })
-      .boundingBox())!
-    expect(curva.height).toBeGreaterThan(120)
+    const grafico = (await velas.boundingBox())!
+    expect(grafico.height).toBeGreaterThan(120)
   }
   const ancho = await page.evaluate(() => ({
     scroll: document.documentElement.scrollWidth,
@@ -254,6 +305,76 @@ test('Estrategias lists the variants and draws the comparison of the chosen one'
   ).toBeVisible()
   await page.keyboard.press('Escape')
   await expect(page.getByRole('dialog')).toHaveCount(0)
+})
+
+test('Estrategias draws the ETH candles of the tested window with the trades of both configurations', async ({
+  page,
+}) => {
+  await mockRegistry(page)
+  await page.goto('/estrategias')
+  const detalle = page.getByRole('region', {
+    name: /Detalle de «Salida a 30 h»/,
+  })
+  const velas = detalle.getByRole('img', { name: /Velas de ETH/ })
+  await expect(velas).toBeVisible()
+  await expect(velas.locator('canvas').first()).toBeVisible()
+
+  // First request: the tested window, 1 h, the last ten days (240 candles) before its end, never the reserve.
+  await expect
+    .poll(() => consultasVelas[0])
+    .toBe(`/estrategias/velas/PF_ETHUSD/1h/${DESDE}/${HASTA}/${HASTA}/240`)
+
+  // The trades of the official (blue) and the variant (amber) are drawn on top; the variant cut at the time cap shows ✕.
+  const operacionesDibujadas = detalle.getByTestId('operacion-en-velas')
+  await expect(operacionesDibujadas.first()).toBeVisible()
+  await expect
+    .poll(() => operacionesDibujadas.count())
+    .toBeGreaterThanOrEqual(5)
+  await expect(
+    detalle.locator(
+      '[data-testid="operacion-en-velas"] [data-quien="oficial"]',
+    ),
+  ).not.toHaveCount(0)
+  await expect(
+    detalle.locator(
+      '[data-testid="operacion-en-velas"] [data-quien="variante"]',
+    ),
+  ).not.toHaveCount(0)
+  await expect(detalle.getByTestId('corte-variante').first()).toBeVisible()
+
+  // The checkboxes hide a configuration.
+  await detalle.getByRole('checkbox', { name: 'Variante' }).uncheck()
+  await expect(
+    detalle.locator(
+      '[data-testid="operacion-en-velas"] [data-quien="variante"]',
+    ),
+  ).toHaveCount(0)
+  await detalle.getByRole('checkbox', { name: 'Variante' }).check()
+  await expect(detalle.getByTestId('corte-variante').first()).toBeVisible()
+
+  // The timeframe buttons ask for that interval.
+  await detalle.getByRole('button', { name: '4h', exact: true }).click()
+  await expect(
+    detalle.getByRole('button', { name: '4h', exact: true }),
+  ).toHaveAttribute('aria-pressed', 'true')
+  await expect
+    .poll(() => consultasVelas.at(-1))
+    .toBe(`/estrategias/velas/PF_ETHUSD/4h/${DESDE}/${HASTA}/${HASTA}/60`)
+
+  // Hovering a trade shows side, date, hours and net of both.
+  await detalle.getByRole('button', { name: '1h', exact: true }).click()
+  await expect(detalle.getByTestId('operacion-en-velas').first()).toBeVisible()
+  await shot(page, 'estrategias-velas')
+  const linea = detalle
+    .locator('[data-testid="operacion-en-velas"] line')
+    .first()
+  await velas.scrollIntoViewIfNeeded()
+  const caja = (await linea.boundingBox())!
+  await page.mouse.move(caja.x + caja.width / 2, caja.y + caja.height / 2)
+  await expect(page.getByRole('tooltip')).toContainText(/LONG|SHORT/)
+  await expect(page.getByRole('tooltip')).toContainText('Oficial')
+  await expect(page.getByRole('tooltip')).toContainText('Variante')
+  await shot(page, 'estrategias-velas-tooltip')
 })
 
 test('Estrategias creates a variant with only the allowed knobs and starts its backtest', async ({
