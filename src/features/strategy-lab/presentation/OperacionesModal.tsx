@@ -4,6 +4,7 @@ import {
   instanteCorto,
   motivoTexto,
 } from '../domain/estrategias-format.ts'
+import { MOTIVO_FIN_VENTANA } from '../domain/estrategias-velas.ts'
 import type { Informe } from '../infrastructure/estrategias-api.ts'
 import { BOTON, EYEBROW } from './estrategias-styles.ts'
 import ModalFrame from './ModalFrame.tsx'
@@ -22,6 +23,9 @@ export default function OperacionesModal({
   const operaciones = [...informe[quien].operaciones].sort(
     (a, b) => a.entrada_ms - b.entrada_ms,
   )
+  const cerradas = operaciones.filter(
+    (operacion) => operacion.motivo === MOTIVO_FIN_VENTANA,
+  ).length
   return (
     <ModalFrame label="Operaciones del backtest" onClose={onClose} wide>
       <div className="flex items-center justify-between gap-3">
@@ -41,8 +45,10 @@ export default function OperacionesModal({
         </div>
       </div>
       <p className={EYEBROW}>
-        {operaciones.length} operaciones · horas en UTC · neto en US$ después de
-        costos
+        {operaciones.length - cerradas} operaciones · horas en UTC · neto en US$
+        después de costos
+        {cerradas > 0 &&
+          ` · ${cerradas} ${cerradas === 1 ? 'cerrada' : 'cerradas'} al final de la ventana (fuera de las métricas)`}
       </p>
       <div className="max-h-96 overflow-auto">
         <table className="w-full border-collapse text-note">

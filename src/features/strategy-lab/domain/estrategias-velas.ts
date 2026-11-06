@@ -6,6 +6,9 @@ import { instanteCorto, numero, usd } from './estrategias-format.ts'
 
 export type { IntervaloVelas }
 
+/** `motivo` of a trade the replay closed by force when the tested window ended (not a decision of the strategy). */
+export const MOTIVO_FIN_VENTANA = 'fin_examen'
+
 /** The only product the laboratory replays today. */
 export const PRODUCTO_VELAS = 'PF_ETHUSD'
 
@@ -75,6 +78,8 @@ export type TramoOperacion = {
   horas: number
   /** The variant closed it earlier than the official one, by the time cap. */
   cortada: boolean
+  /** Closed by force at the end of the tested window; only present when true. */
+  finVentana?: true
 }
 
 /** The same entry as the official Terminal and the variant took it (either side may be missing). */
@@ -96,6 +101,7 @@ const tramo = (
   netoUsd: operacion.neto_usd,
   horas: (operacion.salida_ms - operacion.entrada_ms) / HORA_MS,
   cortada,
+  ...(operacion.motivo === MOTIVO_FIN_VENTANA && { finVentana: true as const }),
 })
 
 const claveDe = (o: OperacionInforme) => `${o.entrada_ms}|${o.lado}`
@@ -149,6 +155,7 @@ export type TramoVisible = {
   quien: Quien
   salidaMs: number
   cortada: boolean
+  finVentana?: true
 }
 
 export type MarcaOperacion = {
@@ -167,7 +174,12 @@ export function marcas(
     for (const quien of ['oficial', 'variante'] as const) {
       const lado = par[quien]
       if (visibles[quien] && lado)
-        tramos.push({ quien, salidaMs: lado.salidaMs, cortada: lado.cortada })
+        tramos.push({
+          quien,
+          salidaMs: lado.salidaMs,
+          cortada: lado.cortada,
+          ...(lado.finVentana && { finVentana: true as const }),
+        })
     }
     if (tramos.length > 0) out.push({ par, tramos })
   }
@@ -192,6 +204,7 @@ export type TramoProyectado = {
   x2: number
   y: number
   cortada: boolean
+  finVentana?: true
 }
 
 export type OperacionProyectada = {
@@ -242,6 +255,7 @@ export function proyectar(
         x2,
         y: t.quien === 'variante' ? y + DESPLAZAMIENTO_VARIANTE_PX : y,
         cortada: t.cortada,
+        ...(t.finVentana && { finVentana: true as const }),
       })
     }
     if (proyectados.length === 0) continue
@@ -296,6 +310,8 @@ export type ContenidoTooltip = {
   titulo: string
   filas: FilaTooltip[]
   aviso?: string
+  /** One per visible configuration whose trade the end of the tested window closed. */
+  avisosFin?: string[]
 }
 
 const NOMBRE: Record<Quien, string> = {
@@ -338,5 +354,9 @@ export function contenidoTooltip(
   }
   if (visibles.variante && par.variante?.cortada)
     contenido.aviso = 'La variante la cortó por el tope de horas'
+  const fin = (['oficial', 'variante'] as const)
+    .filter((quien) => visibles[quien] && par[quien]?.finVentana)
+    .map((quien) => `${NOMBRE[quien]}: cerrada al final de la ventana probada`)
+  if (fin.length > 0) contenido.avisosFin = fin
   return contenido
 }

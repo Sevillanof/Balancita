@@ -57,6 +57,11 @@ export type Metricas = {
   /** The longest a trade stayed open (a cap such as 30 h shows here). */
   horas_max?: number | null
   por_motivo: Record<string, number>
+  /**
+   * Trades the replay force-closed at the end of the tested window (`fin_examen`): they count in none of the metrics above.
+   * Missing in an informe from before this was split out.
+   */
+  cerradas_fin_ventana?: { operaciones: number; neto_usd: number }
 }
 
 export type Diferencia = {
@@ -81,7 +86,7 @@ export type Operacion = {
   neto_usd: number
   neto_bp: number
   motivo: string
-  /** Exit reason (`maestro_vuelta`, `maestro_agotado`…) and the position size, when the server sends them. */
+  /** `fin_examen` is the forced close at the end of the tested window. Exit reason (`maestro_vuelta`, `maestro_agotado`…) and the position size, when the server sends them. */
   razon?: string | null
   nocional_usd?: number
 }

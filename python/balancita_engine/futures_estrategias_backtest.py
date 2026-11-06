@@ -36,6 +36,8 @@ from . import futures_qwen_trader_exam as exam
 SCHEMA = "balancita-estrategias-comparacion.v1"
 DESDE_HONESTA, HASTA_HONESTA = "2026-02-01", "2026-04-19"
 CAPITAL_USD = "1000"
+# motivo (``closed_by``) del cierre forzado de lo que sigue abierto al terminar la ventana (``exam._collect_replay_trades``)
+MOTIVO_FIN_VENTANA = "fin_examen"
 # métricas numéricas que se restan (variante − oficial)
 NUMERICAS = ("operaciones", "neto_usd", "neto_bp_cuenta", "neto_bp_por_operacion", "acierto", "max_drawdown_usd",
              "max_drawdown_bp", "horas_promedio", "horas_max", "nocional_promedio_usd")
@@ -62,9 +64,14 @@ def metricas(curvas, capital_usd=CAPITAL_USD):
     - ``max_drawdown_usd`` / ``_bp``: la mayor caída del saldo realizado desde su máximo (el saldo cambia cuando cierra cada
       operación, en orden de salida; no marca las abiertas); ``_bp`` es esa caída sobre el máximo previo (el mayor de los cocientes).
     - ``horas_promedio`` / ``horas_max``: tiempo abierta de cada operación (el máximo muestra que un tope, p. ej. 30 h, se cumple).
-    - ``por_motivo``: cuántas cerraron por cada razón de salida (``razon`` de la operación, p. ej. maestro_vuelta; si no hay, el motivo)."""
+    - ``por_motivo``: cuántas cerraron por cada razón de salida (``razon`` de la operación, p. ej. maestro_vuelta; si no hay, el motivo).
+
+    Las operaciones que el replay cierra a la fuerza al terminar la ventana (motivo ``fin_examen``) NO son una decisión de la estrategia:
+    no cuentan en ninguna de las métricas de arriba (ni operaciones, acierto, neto, drawdown, horas, nocional ni ``por_motivo``). Se
+    informan aparte en ``cerradas_fin_ventana`` ``{operaciones, neto_usd}`` (``{0, 0.0}`` si no hay)."""
     capital = Decimal(str(capital_usd))
-    ordenadas = sorted(curvas, key=lambda c: (c["salida_ms"], c["entrada_ms"]))
+    ordenadas = sorted((c for c in curvas if c["motivo"] != MOTIVO_FIN_VENTANA), key=lambda c: (c["salida_ms"], c["entrada_ms"]))
+    cerradas = [c for c in curvas if c["motivo"] == MOTIVO_FIN_VENTANA]
     saldo = pico = capital
     caida, caida_rel = Decimal(0), Decimal(0)
     neto = nocional = Decimal(0)
@@ -100,6 +107,8 @@ def metricas(curvas, capital_usd=CAPITAL_USD):
         "horas_promedio": sum(horas) / n if n else None,
         "horas_max": max(horas) if n else None,
         "por_motivo": por_motivo,
+        "cerradas_fin_ventana": {"operaciones": len(cerradas),
+                                 "neto_usd": float(sum((Decimal(str(c["pnl_usd"])) for c in cerradas), Decimal(0)))},
     }
 
 
@@ -606,6 +615,11 @@ def _signo(valor, decimales=2):
     return "n/d" if valor is None else "{:+.{}f}".format(valor, decimales)
 
 
+def _fin_ventana(metricas_):
+    cerradas = metricas_["cerradas_fin_ventana"]
+    return "{} ({:+.2f} US$)".format(cerradas["operaciones"], cerradas["neto_usd"])
+
+
 def texto(informe):
     est_, ven, dat = informe["estrategia"], informe["ventana"], informe["datos"]
     lineas = ["Estrategia {} — {}".format(est_["id"], est_["nombre"]), "  overlay sha256 {}".format(est_["overlay_sha256"]),
@@ -633,6 +647,8 @@ def texto(informe):
                                                        fmt(informe["variante"]["metricas"][clave]), fmt_dif(informe["diferencia"][clave])))
     lineas += ["", "Config oficial {}".format(informe["oficial"]["config_hash"]), "Config variante {}".format(informe["variante"]["config_hash"]),
                "Salidas oficial {}; variante {}".format(informe["oficial"]["metricas"]["por_motivo"], informe["variante"]["metricas"]["por_motivo"]),
+               "Cerradas al final de la ventana (fuera de las métricas): oficial {}; variante {}".format(
+                   _fin_ventana(informe["oficial"]["metricas"]), _fin_ventana(informe["variante"]["metricas"])),
                "Límites: " + "; ".join(informe["limites"])]
     return "\n".join(lineas)
 

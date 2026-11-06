@@ -136,6 +136,60 @@ describe('candles with the trades', () => {
     ).toHaveLength(0)
   })
 
+  it('draws a trade closed at the end of the tested window apart: dashed line, hollow close and a tooltip that says so', async () => {
+    const conFin: Informe = {
+      ...informe,
+      oficial: {
+        ...informe.oficial,
+        operaciones: [
+          op(100, 20, 'LONG', 30.5, 'fin_examen'),
+          op(60, 36, 'SHORT', -10, 'tiempo'),
+        ],
+      },
+      variante: {
+        ...informe.variante,
+        operaciones: [
+          op(100, 18, 'LONG', 20),
+          op(60, 30, 'SHORT', -4.25, 'tiempo'),
+        ],
+      },
+    }
+    render(<VelasConOperaciones api={fakeApi()} informe={conFin} />)
+    await waitFor(() => expect(operaciones()).toHaveLength(2))
+    const [larga, corta] = operaciones()
+    const oficial = larga!.querySelector('[data-quien="oficial"]')!
+    expect(within(larga!).getAllByTestId('cierre-fin-ventana')).toHaveLength(1)
+    expect(
+      oficial.querySelector('[data-testid="cierre-fin-ventana"]'),
+    ).not.toBeNull()
+    expect(oficial.querySelector('circle')).toHaveAttribute('fill', 'none')
+    expect(oficial.querySelector('line')).toHaveAttribute(
+      'stroke-dasharray',
+      '5 4',
+    )
+    const variante = larga!.querySelector('[data-quien="variante"]')!
+    expect(variante.querySelector('line')).not.toHaveAttribute(
+      'stroke-dasharray',
+    )
+    expect(variante.querySelector('[data-testid="cierre"]')).not.toBeNull()
+    expect(within(corta!).queryAllByTestId('cierre-fin-ventana')).toHaveLength(
+      0,
+    )
+    const linea = oficial.querySelector('line')!
+    act(() =>
+      mockGrafico.moverPuntero({
+        x: Number(linea.getAttribute('x1')) + 5,
+        y: Number(linea.getAttribute('y1')),
+      }),
+    )
+    expect(await screen.findByRole('tooltip')).toHaveTextContent(
+      'Oficial: cerrada al final de la ventana probada',
+    )
+    expect(screen.getByRole('tooltip')).not.toHaveTextContent(
+      'Variante: cerrada al final',
+    )
+  })
+
   it('asks the server for the chosen timeframe and shows it pressed', async () => {
     const { api, usuario } = await mostrar()
     await usuario.click(screen.getByRole('button', { name: '4h' }))

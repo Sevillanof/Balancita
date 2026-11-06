@@ -80,7 +80,7 @@ completa (sin variables de entorno), sobre **la misma ventana y los mismos datos
 | Campo                                     | Qué es                                                                                                                                            |
 | ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `oficial` / `variante` → `metricas`       | Después de costos y funding, una por config                                                                                                       |
-| `operaciones`                             | Cantidad de operaciones cerradas (la última se cierra a la fuerza al final de la ventana: motivo `fin_examen`)                                    |
+| `operaciones`                             | Cantidad de operaciones cerradas por la estrategia (**sin** las que el replay cierra a la fuerza al final de la ventana: `fin_examen`)            |
 | `neto_usd`, `neto_bp_cuenta`              | Suma del neto de las operaciones, en USD y en puntos básicos del capital inicial (1000 USD)                                                       |
 | `neto_bp_por_operacion`                   | **Ponderado por tamaño**: Σ neto USD / Σ nocional USD × 10000 (lo que ganó cada dólar puesto). Mismo signo que el neto                            |
 | `neto_bp_promedio_simple`                 | Promedio sin ponderar del bp de cada operación; solo referencia (un resto de 10 US$ pesa como una de 500 US$)                                     |
@@ -88,12 +88,18 @@ completa (sin variables de entorno), sobre **la misma ventana y los mismos datos
 | `acierto`                                 | Parte de las operaciones con neto > 0 (cada una cuenta igual, sea de 10 o de 500 US$)                                                             |
 | `max_drawdown_usd`, `max_drawdown_bp`     | Mayor caída del saldo realizado desde su máximo (el saldo cambia al cerrar cada operación); bp sobre ese máximo                                   |
 | `horas_promedio`, `horas_max`             | Tiempo abierta por operación; el máximo muestra que un tope (p. ej. 30 h) se cumple                                                               |
-| `por_motivo`                              | Cuántas cerraron por cada razón: `maestro_vuelta`, `maestro_agotado`, `tiempo`, stop, `fin_examen`…                                               |
+| `por_motivo`                              | Cuántas cerraron por cada razón: `maestro_vuelta`, `maestro_agotado`, `tiempo`, stop… (nunca `fin_examen`)                                        |
+| `cerradas_fin_ventana`                    | `{operaciones, neto_usd}` de lo que seguía abierto al terminar la ventana y se cerró a la fuerza (motivo `fin_examen`); `{0, 0}` si no hubo       |
 | `funding_operaciones_incompletas`         | Operaciones que tocaron una hora sin funding en el archivo (el booleano `funding_completo` se apaga con una sola hora)                            |
 | `diferencia`                              | **variante − oficial** de cada métrica numérica (`null` si una de las dos no tiene operaciones). Menos horas = negativo                           |
 | `estrategia`                              | id, `overlay_sha256` (de los bytes del archivo), `cambios`                                                                                        |
 | `snapshot.config_hash`, `*.config_hash`   | Hash del snapshot y de cada config comparada (la oficial siempre es la del snapshot)                                                              |
 | `ventana`, `datos`, `limites`             | Fechas pedidas y efectivas, fuente de datos, y lo que el replay no puede medir                                                                    |
+
+**Cierre forzado de fin de ventana.** Lo que sigue abierto cuando termina la ventana no es una decisión de la estrategia (el replay lo
+cierra al último precio): no cuenta en operaciones, acierto, neto (USD y bp, ponderado y simple), drawdown, horas, nocional ni
+`por_motivo`, y se informa aparte en `cerradas_fin_ventana`. La lista `operaciones` del informe sí lo trae (con `motivo`
+`fin_examen`) para dibujarlo y listarlo. `diferencia` se calcula con las métricas ya sin ellas.
 
 Dos configuraciones iguales dan diferencia cero. Límites del replay (siempre en `limites`): sin noticias, sin libro de órdenes
 (costos del modelo, no fills reales), sin posicionamiento; las perillas que dependen de eso solo se miden en sombra.
@@ -156,7 +162,11 @@ historial. No tiene título: la barra superior dice dónde se está. Diseño: `d
   y neto de las dos y, si corresponde, «La variante la cortó por el tope de horas». Botones **15m / 1h / 4h / 1d** (1 h al
   abrir, con los últimos ~10 días de la ventana) y casillas **Oficial / Variante** para ocultar una. Arrastrar o hacer zoom hacia
   la izquierda pide velas más viejas (500 por página) hasta el inicio de la ventana probada. Una operación aparece cuando su vela
-  de entrada ya está cargada.
+  de entrada ya está cargada. Una operación que cerró el fin de la ventana probada (`fin_examen`) se dibuja aparte: **línea
+  punteada** y **○ hueco** en la salida, y el puntero agrega «Oficial/Variante: cerrada al final de la ventana probada».
+- **Fichas de la prueba** (pie del resultado): además de ventana, reserva y condiciones, una ficha por configuración con
+  «N cerradas al final de la ventana · ±X US$» cuando `cerradas_fin_ventana.operaciones > 0` (no aparece con 0 ni en un informe
+  anterior). «Ver operaciones» sigue listándolas (motivo «Fin de la ventana») y avisa cuántas no cuentan.
 - **La ventana del gráfico es la de la comparación**: del `ventana.desde_efectivo_ms` al `ventana.hasta_ms` del informe (nunca
   antes ni desde la reserva, 2026-04-19). Lo exige el servidor (abajo) y también la página, que descarta cualquier vela fuera de ella.
 
