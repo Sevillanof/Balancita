@@ -425,8 +425,9 @@ class CatalogTests(unittest.TestCase):
         sources = n.load_sources()
         ids = [s["id"] for s in sources]
         self.assertEqual(len(ids), len(set(ids)))
-        self.assertLessEqual({"thedefiant", "bankless", "eth_foundation", "theblock", "sec", "fed"}, set(ids))
+        self.assertLessEqual({"thedefiant", "eth_foundation", "theblock", "sec", "fed"}, set(ids))
         self.assertNotIn("bitcoinmagazine", ids)
+        self.assertNotIn("bankless", ids)                 # paid ads, slowest, 0 of 24 items preceded an ETH move
         self.assertNotIn("ecb", ids)
         for source in sources:
             self.assertTrue(source["url"].startswith("https://"), source["id"])
