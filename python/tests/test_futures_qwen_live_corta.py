@@ -50,6 +50,15 @@ class SheetTests(unittest.TestCase):
         self.assertIn("fuerte desde {}".format(qt.es(t["umbrales"]["fuerte"], 2)), texts[0])
         self.assertIn("conviene desde {}".format(qt.es(k["umbral"], 2)), texts[0])
 
+    def test_the_short_sheet_still_attaches_the_positioning_feed_for_the_auditor(self):
+        # live config v3 has state_corta and no state_ficha: the auditor still needs the positioning context
+        env = make(self)
+        env.op.start()
+        env.advance(15)
+        for trader in env.op.traders.values():
+            self.assertIsNotNone(trader.positioning)
+        self.assertNotIn("Funding", env.rows("SELECT state_text FROM decisions")[0]["state_text"])
+
     def test_the_mirror_turns_the_maestro_and_leaves_the_portero_and_the_volatility(self):
         env = make(self)
         env.op.start()

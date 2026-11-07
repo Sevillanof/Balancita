@@ -1117,8 +1117,7 @@ class LiveOperator:
             self.news = noticias.NewsFeed(self.news_path, since_ms=now - POSITIONING_KEEP_MS, priority_policy=policy)
             self.news_checked_ms = now
         trader.news = self.news
-        if not self.cfg.get("state_ficha"):
-            return
+        # also without state_ficha: the auditor records the positioning context of every look
         feed = positioning_data.PositioningFeed(self.positioning_path, product, since_ms=now - POSITIONING_KEEP_MS)
         self.positioning[product] = feed
         trader.positioning = feed
