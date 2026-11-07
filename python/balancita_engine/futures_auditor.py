@@ -11,7 +11,26 @@ Tablas de ``auditor.sqlite`` (``balancita-auditor.v1``)
   clasificada, lo que dijeron el maestro, el portero, las noticias y Qwen, la posición y una foto de las condiciones
   (``condiciones_json``). Más tarde ``resolve`` completa ``despues_json`` (qué hizo el precio) y los veredictos a 12 h (provisorio),
   24 h y 36 h (definitivo: ``resuelto_ms``).
-* ``meta``: ``schema`` = ``balancita-auditor.v1``.
+* ``meta``: ``schema`` = ``balancita-auditor.v1`` (no cambia: lo que se sumó es aditivo) y ``direccion`` = ``v1``.
+* ``operaciones``: una fila por operación de ``live.sqlite`` (producto + ``trade_no``) con la dirección y el MAE/MFE de la operación
+  (ver «Dirección»). ``miradas`` suma ``direccion_json`` y ``direccion_ms``.
+
+Dirección (S3 de ``odd/tasks/noticias-y-auditor.md``; aparte de los veredictos de «la operación pagó», que NO cambian)
+
+* Por mirada, ``direccion_json`` = ``{"lado": ±1|null, "4h": {...}|null, "12h": ..., "24h": ...}``; cada horizonte trae ``mov_pb`` (el
+  movimiento del precio sin signo de lado, desde el cierre de la mirada), ``a_favor_pb`` (lado x movimiento) y ``acerto`` (``true`` si el
+  precio fue en el sentido del lado, ``false`` si fue en contra, ``null`` si no se movió ni un punto básico exacto). El lado es el de
+  la mirada (``_reference_side``: posición, si no maestro, puntaje, noticias); sin lado todo queda ``null``. En un SALIR, ``acerto`` dice
+  si el precio siguió a favor de la posición cerrada (o sea, que salir costó). Sin costo y sin salida: solo el signo del precio.
+* Por operación, ``operaciones.direccion_json`` igual, medido desde la entrada (``entry_ms``) con el lado de la operación y sin
+  importar cuándo cerró; ``mfe_pb`` / ``mae_pb`` = lo mejor / lo peor que el precio hizo a favor de la operación entre la entrada y la
+  salida (o hasta ahora si sigue abierta; ``hasta_ms`` dice hasta qué cierre), sobre cierres de 5 min más el precio de salida real,
+  con ``mfe_pb >= 0 >= mae_pb``. Se calcula para CADA operación aunque una mirada nombre solo la primera de varias abiertas.
+* Un horizonte se mide solo cuando ya pasó entero (``ahora >= t_ms + horizonte``): sin mirar al futuro, aunque la caché de velas lo
+  tenga. Mientras falte alguno, la fila se vuelve a mirar; ``direccion_ms`` / ``resuelto_ms`` quedan ``NULL`` hasta que estén los tres.
+* Migración: ``_open`` agrega las dos columnas con ``ALTER TABLE ... ADD COLUMN`` y crea ``operaciones`` si faltan; las filas viejas
+  quedan intactas con ``NULL`` y ``resolve`` las completa con las velas y operaciones que el auditor ya lee (incluso las ya resueltas a
+  36 h). Se deshace con ``ALTER TABLE miradas DROP COLUMN direccion_json`` / ``direccion_ms`` y ``DROP TABLE operaciones``.
 
 Acciones (``accion``)
 
@@ -90,6 +109,7 @@ HORIZONS = (("12h", 12 * HOUR_MS), ("24h", 24 * HOUR_MS), ("36h", 36 * HOUR_MS))
 MOVES = (("30m", 30 * MINUTE_MS), ("1h", HOUR_MS), ("4h", 4 * HOUR_MS), ("12h", 12 * HOUR_MS), ("24h", 24 * HOUR_MS),
          ("36h", 36 * HOUR_MS))
 FINAL_MS = 36 * HOUR_MS
+DIRECTION_HORIZONS = (("4h", 4 * HOUR_MS), ("12h", 12 * HOUR_MS), ("24h", 24 * HOUR_MS))
 
 ENTRIES = ("ENTRAR", "ENTRAR_noticias")
 SKIPS = ("NO_ENTRAR_portero", "NO_ENTRAR_maestro", "NO_ENTRAR_regla")
@@ -115,7 +135,15 @@ CREATE TABLE IF NOT EXISTS miradas(
   version TEXT NOT NULL,
   PRIMARY KEY(product, bucket_ms));
 CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS operaciones(
+  product TEXT NOT NULL, trade_no INTEGER NOT NULL, lado INTEGER NOT NULL, entry_ms INTEGER NOT NULL, exit_ms INTEGER,
+  direccion_json TEXT, mfe_pb REAL, mae_pb REAL, hasta_ms INTEGER, resuelto_ms INTEGER,
+  version TEXT NOT NULL,
+  PRIMARY KEY(product, trade_no));
 """
+
+# Columnas que se sumaron a ``miradas`` después de la primera versión (migración aditiva: ``_migrate``). Van siempre al final.
+_ADDED_COLUMNS = (("direccion_json", "TEXT"), ("direccion_ms", "INTEGER"))
 
 _COLUMNS = ("product", "bucket_ms", "t_ms", "estado", "accion", "maestro", "puntaje", "umbral_flojo", "umbral_fuerte",
             "portero_si", "portero_p", "portero_umbral", "noticias_si", "noticias_lado", "qwen", "qwen_coincide",
@@ -138,10 +166,29 @@ def _open(live_db_path):
     db = sqlite3.connect(path, timeout=30)
     db.row_factory = sqlite3.Row
     db.executescript(_SCHEMA_SQL)
+    _migrate(db)
     if db.execute("SELECT 1 FROM meta WHERE key='schema'").fetchone() is None:
         with db:
             db.execute("INSERT OR IGNORE INTO meta VALUES('schema', ?)", (SCHEMA_NAME,))
+    if db.execute("SELECT 1 FROM meta WHERE key='direccion'").fetchone() is None:
+        with db:
+            db.execute("INSERT OR IGNORE INTO meta VALUES('direccion', 'v1')")
     return db
+
+
+def _migrate(db):
+    """Suma a ``miradas`` las columnas de ``_ADDED_COLUMNS`` que falten. Solo agrega: no toca filas ni columnas existentes, así que una
+    base vieja sigue siendo legible por el código y el servidor anteriores."""
+    have = {row[1] for row in db.execute("PRAGMA table_info(miradas)")}
+    for name, kind in _ADDED_COLUMNS:
+        if name in have:
+            continue
+        try:
+            with db:
+                db.execute("ALTER TABLE miradas ADD COLUMN {} {}".format(name, kind))
+        except sqlite3.OperationalError as error:
+            if "duplicate column" not in str(error).lower():          # otro proceso (el vivo y la línea de comandos) la sumó antes
+                raise
 
 
 def _live_readonly(live_db_path):
@@ -736,8 +783,19 @@ def _judged(hit, cost, rule, text, value):
 def resolve(live_db_path, product, closes, cfg, now_ms, cost_bp):
     """Completa lo que ya se puede saber de cada mirada sin resolver: ``despues_json`` (movimientos, MFE/MAE, operaciones
     simuladas) y los veredictos a 12, 24 y 36 h cuando el horizonte ya pasó (12 h = provisorio; 36 h = definitivo, escribe
-    ``resuelto_ms``). ``closes``: ``{t_ms del cierre: cierre}`` de velas de 5 min. Solo lee ``live.sqlite``. Devuelve
-    ``{"miradas", "actualizadas", "veredictos", "pendientes"}``."""
+    ``resuelto_ms``). Después, la dirección a 4, 12 y 24 h de cada mirada y la dirección y el MAE/MFE de cada operación (aparte, sin
+    tocar nada de lo anterior). ``closes``: ``{t_ms del cierre: cierre}`` de velas de 5 min. Solo lee ``live.sqlite``. Devuelve
+    ``{"miradas", "actualizadas", "veredictos", "pendientes", "direcciones", "operaciones"}``."""
+    result = _resolve_verdicts(live_db_path, product, closes, cfg, now_ms, cost_bp)
+    prices = _Prices(closes)
+    with contextlib.closing(_open(live_db_path)) as db:
+        result["direcciones"] = _resolve_look_directions(db, product, prices, now_ms)
+        result["operaciones"] = _resolve_operations(live_db_path, db, product, prices, now_ms)
+    return result
+
+
+def _resolve_verdicts(live_db_path, product, closes, cfg, now_ms, cost_bp):
+    """Los veredictos y el ``despues_json`` de cada mirada sin resolver (lo de siempre, ver ``resolve``)."""
     prices = _Prices(closes)
     with contextlib.closing(_open(live_db_path)) as db:
         pending = [r for r in db.execute("SELECT * FROM miradas WHERE product=? AND resuelto_ms IS NULL AND t_ms<? ORDER BY t_ms",
@@ -774,6 +832,107 @@ def resolve(live_db_path, product, closes, cfg, now_ms, cost_bp):
         result["pendientes"] = db.execute("SELECT COUNT(*) FROM miradas WHERE product=? AND resuelto_ms IS NULL",
                                           (product,)).fetchone()[0]
     return result
+
+
+# --------------------------------------------------------------------------- direction and excursions (S3)
+
+
+def _direction_at(prices, side, p0, t0, now_ms, span):
+    """La dirección a ``span`` ms de ``t0`` o ``None`` si todavía no se puede dar: sin lado, sin precio, o antes de que el horizonte
+    haya pasado entero (``now_ms``): jamás se usa un cierre posterior al horizonte ni se mira al futuro. ``acerto`` es el signo del
+    movimiento contra el lado (``None`` si el precio no se movió)."""
+    if not side or p0 is None or now_ms < t0 + span:
+        return None
+    price = prices.at(t0 + span)
+    if price is None:
+        return None
+    move = _pb(price, p0)
+    favor = side * move
+    return {"mov_pb": move, "a_favor_pb": favor, "acerto": None if favor == 0 else favor > 0}
+
+
+def _direction(prices, side, p0, t0, now_ms):
+    """``(dict de la dirección, completa)``: completa cuando no queda horizonte por esperar (o no hay lado que juzgar)."""
+    out = {"lado": side or None}
+    for name, span in DIRECTION_HORIZONS:
+        out[name] = _direction_at(prices, side, p0, t0, now_ms, span)
+    return out, not side or all(out[name] is not None for name, _ in DIRECTION_HORIZONS)
+
+
+def _resolve_look_directions(db, product, prices, now_ms):
+    """``direccion_json`` de cada mirada con al menos 4 h cumplidas y la dirección sin completar (incluidas las ya resueltas a 36 h
+    antes de este cambio). Devuelve cuántas filas escribió."""
+    rows = db.execute("SELECT bucket_ms, t_ms, maestro, puntaje, noticias_lado, lado_posicion, direccion_json FROM miradas "
+                      "WHERE product=? AND direccion_ms IS NULL AND t_ms<=? ORDER BY t_ms",
+                      (product, now_ms - DIRECTION_HORIZONS[0][1])).fetchall()
+    written = 0
+    with db:
+        for row in rows:
+            p0 = prices.at(row["t_ms"])
+            if p0 is None:
+                continue
+            done, complete = _direction(prices, _reference_side(row), p0, row["t_ms"], now_ms)
+            text = _dumps(done)
+            if text == row["direccion_json"] and not complete:
+                continue
+            db.execute("UPDATE miradas SET direccion_json=?, direccion_ms=? WHERE product=? AND bucket_ms=?",
+                       (text, now_ms if complete else None, product, row["bucket_ms"]))
+            written += 1
+    return written
+
+
+def _excursions(trade, prices, side, p0, now_ms):
+    """``(mfe_pb, mae_pb, hasta_ms)`` de la operación entre su entrada y su salida (o ``now_ms`` si sigue abierta): lo mejor y lo peor a
+    favor del lado sobre los cierres de 5 min y el precio de salida real. ``mfe >= 0 >= mae``; ``None`` sin ningún dato posterior."""
+    entry = int(trade["entry_ms"])
+    exit_ms = trade.get("exit_ms")
+    closed = trade.get("status") == "closed" and exit_ms is not None and exit_ms <= now_ms
+    end = min(int(exit_ms), now_ms) if closed else now_ms
+    seen = prices.between(entry, end)
+    run = [side * _pb(close, p0) for _, close in seen]
+    if closed:
+        price = _num(trade.get("exit_px"))
+        if price is not None and price > 0:
+            run.append(side * _pb(price, p0))
+    if not run:
+        return None, None, None
+    return max(0.0, max(run)), min(0.0, min(run)), (seen[-1][0] if seen else None)
+
+
+def _resolve_operations(live_db_path, db, product, prices, now_ms):
+    """Una fila de ``operaciones`` por operación de ``live.sqlite`` (todas las del producto, también las que ninguna mirada nombra):
+    dirección a 4, 12 y 24 h desde la entrada y MAE/MFE. Las ya resueltas (cerradas y con los tres horizontes) no se tocan. Una
+    operación sin precio en su entrada no deja fila hasta que haya velas. Devuelve cuántas filas escribió."""
+    try:
+        with contextlib.closing(_live_readonly(live_db_path)) as live:
+            trades = [dict(r) for r in live.execute("SELECT {} FROM trades WHERE product=? AND entry_ms IS NOT NULL ORDER BY trade_no".format(
+                _TRADE_COLUMNS), (product,))]
+    except sqlite3.Error:
+        return 0
+    done = {r[0] for r in db.execute("SELECT trade_no FROM operaciones WHERE product=? AND resuelto_ms IS NOT NULL", (product,))}
+    written = 0
+    with db:
+        for trade in trades:
+            side = _side_of(trade.get("side"))
+            if trade["trade_no"] in done or not side or trade["entry_ms"] > now_ms:
+                continue
+            entry = int(trade["entry_ms"])
+            p0 = prices.at(entry)
+            if p0 is None:
+                continue
+            direction, complete = _direction(prices, side, p0, entry, now_ms)
+            mfe, mae, until = _excursions(trade, prices, side, p0, now_ms)
+            finished = complete and trade.get("status") == "closed" and trade.get("exit_ms") is not None and trade["exit_ms"] <= now_ms
+            before = db.execute("SELECT direccion_json, mfe_pb, mae_pb, hasta_ms, exit_ms FROM operaciones WHERE product=? AND trade_no=?",
+                                (product, trade["trade_no"])).fetchone()
+            values = (side, entry, trade.get("exit_ms"), _dumps(direction), mfe, mae, until)
+            if before is not None and tuple(before) == (values[3], mfe, mae, until, trade.get("exit_ms")) and not finished:
+                continue
+            db.execute("INSERT OR REPLACE INTO operaciones(product, trade_no, lado, entry_ms, exit_ms, direccion_json, mfe_pb, mae_pb, "
+                       "hasta_ms, resuelto_ms, version) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                       (product, trade["trade_no"]) + values + (now_ms if finished else None, VERSION))
+            written += 1
+    return written
 
 
 # --------------------------------------------------------------------------- the summary

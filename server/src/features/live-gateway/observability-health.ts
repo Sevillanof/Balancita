@@ -445,7 +445,15 @@ function damagedMessage(file: string, why: string): string {
 }
 
 const BACKUP_STALE_FACTOR = 2
+/** Without `integrity_every_ms` (older capture) the check ran every 15 min and was stale after 45. */
 const INTEGRITY_STALE_MS = 45 * MINUTE
+const INTEGRITY_STALE_FACTOR = 1.5
+
+function everyText(ms: number): string {
+  return ms >= 3_600_000 && ms % 3_600_000 === 0
+    ? `${ms / 3_600_000} h`
+    : `${Math.round(ms / MINUTE)} min`
+}
 
 /** Integrity and backup rows of «Datos», from the capture's `db-health-state.json`. */
 function databaseChecks(
@@ -461,6 +469,12 @@ function databaseChecks(
   const file = typeof integrity.file === 'string' ? integrity.file : marketFile
   const checkedAt = num(integrity.checked_at)
   const detail = typeof integrity.detail === 'string' ? integrity.detail : ''
+  const integrityEvery = num(state?.integrity_every_ms)
+  const every = everyText(integrityEvery ?? 15 * MINUTE)
+  const staleAfter =
+    integrityEvery !== null
+      ? integrityEvery * INTEGRITY_STALE_FACTOR
+      : INTEGRITY_STALE_MS
   const stateDamaged = typeof state?.damaged === 'string'
   const readDamaged =
     market.state === 'unreadable' && isMalformedError(market.detail)
@@ -476,14 +490,14 @@ function databaseChecks(
     )
   } else if (integrity.ok === true && checkedAt !== null) {
     const age = now - checkedAt
-    status = age <= INTEGRITY_STALE_MS ? 'ok' : 'warning'
+    status = age <= staleAfter ? 'ok' : 'warning'
     text =
       status === 'ok'
         ? `${file}: quick_check correcto hace ${Math.round(age / MINUTE)} min.`
-        : `El último chequeo de ${file} fue hace ${Math.round(age / MINUTE)} min (se hace cada 15 min).`
+        : `El último chequeo de ${file} fue hace ${Math.round(age / MINUTE)} min (se hace cada ${every}).`
   } else if (integrity.timed_out === true) {
     status = 'warning'
-    text = `El chequeo de ${file} tardó demasiado y se detuvo; se repite cada 15 min.`
+    text = `El chequeo de ${file} tardó demasiado y se detuvo; se repite cada ${every}.`
   } else {
     status = 'unknown'
     text = state
@@ -499,7 +513,7 @@ function databaseChecks(
       required: false,
       status,
       value: checkedAt === null ? null : now - checkedAt,
-      rule: 'quick_check cada 15 min (y tras despertar la Mac); error si la base está dañada o una escritura devolvió «malformed»',
+      rule: `quick_check cada ${every} (y tras despertar la Mac); error si la base está dañada o una escritura devolvió «malformed»`,
       detail:
         text +
         (wakeAt !== null

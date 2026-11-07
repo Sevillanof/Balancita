@@ -1,281 +1,470 @@
-import { execFileSync, spawn, type ChildProcess } from 'node:child_process'
-import {
-  cpSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  writeFileSync,
-} from 'node:fs'
-import { tmpdir } from 'node:os'
+import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
-import { expect, test, type Page } from '@playwright/test'
+import { expect, test, type Page, type Route } from '@playwright/test'
 
 /*
- * Integration with the REAL strategy registry S, no route mocks (temp
- * strategies DB, read-only COPY of the repo's config/ folder). Vite proxies
- * /api-strategies to it; the gateway is covered by integracion-gateway.pw.ts
- * (its /api-live calls fail here and are not judged). The registry states come from seeding
- * the temp DB, not from the Mac's real registry: captures say so.
- * Fixed ports (8790, 5174): run under `flock /tmp/balancita-e2e.lock`.
+ * Estrategias = the laboratory of the Terminal. Every /api-strategies answer is a route mock with SYNTHETIC
+ * numbers (DATOS DE EJEMPLO): no registry, gateway or database runs, and nothing here is a Kraken record or
+ * a real backtest. The file keeps its old name; it no longer covers the retired rule-strategy inventory.
  */
-const REGISTRY_PORT = 8790
-const LIVE_PORT = 8789
 const SHOTS =
-  process.env.INVENTORY_SHOTS_DIR ?? 'playwright-artifacts/inventario'
-const SANDBOX_NOTE =
-  'DATOS DE EJEMPLO · SANDBOX · config/ real copiada (solo lectura) + base temporal del registro · estados de registro sembrados, no los de la Mac'
+  process.env.ESTRATEGIAS_SHOTS_DIR ?? 'playwright-artifacts/estrategias'
+const HASH = '37f572a841d35a7b7a8d01569378c508c6bcd9c8a4a6a2adb96e5d1097eade07'
+const DESDE = Date.UTC(2026, 1, 3)
 
-let registry: ChildProcess | null = null
-let gateway: ChildProcess | null = null
-let configCopy = ''
-let forwardSummary = ''
-const C30 = 'c30-momentum-12h-perp-v1'
+const perilla = (clave: string, valor: number | string | null, extra = {}) => ({
+  clave,
+  tipo: 'entero',
+  valor_actual: valor,
+  admite_null: false,
+  minimo: 0,
+  maximo: 10_000,
+  minimo_exclusivo: false,
+  paso: null,
+  ...extra,
+})
+const PERILLAS = [
+  perilla('guardrails.max_hold_min', 2160),
+  perilla('guardrails.cooldown_min', 15),
+  perilla('posiciones.max', 3),
+  perilla('posiciones.fraccion', 0.33, { tipo: 'decimal' }),
+  perilla('analista.modo', 'fuerte', {
+    tipo: 'opcion',
+    opciones: ['apagado', 'suave', 'fuerte'],
+  }),
+]
 
-test.describe.configure({ mode: 'serial' })
+const fila = (id: string, nombre: string, cambios: object) => ({
+  id,
+  nombre,
+  descripcion: nombre,
+  cambios,
+  base_config_hash: HASH,
+  overlay_sha256: 'a'.repeat(64),
+  error: null,
+})
+const PROBADA = fila('salida-30h', 'Salida a 30 h', {
+  guardrails: { max_hold_min: 1800 },
+})
+const SIN_PROBAR = fila('dos-posiciones', 'Dos posiciones al 50 %', {
+  posiciones: { max: 2, fraccion: 0.5 },
+})
 
-async function waitFor(url: string, child: ChildProcess, what: string) {
-  let stderr = ''
-  child.stderr?.on('data', (chunk) => (stderr += String(chunk)))
-  const deadline = Date.now() + 25_000
-  for (;;) {
-    try {
-      if ((await fetch(url)).ok) return
-    } catch {
-      // not listening yet
+const HASTA = Date.UTC(2026, 3, 19)
+const HORA = 3_600_000
+/** The trades sit in the last ten days of the window (what the chart opens on); `horas` is how long each one stays open. */
+const operaciones = (netos: number[], horas = 20) =>
+  netos.map((neto, i) => {
+    const entrada = HASTA - (netos.length - i) * 30 * HORA
+    return {
+      entrada_ms: entrada,
+      salida_ms: entrada + horas * HORA,
+      lado: neto >= 0 ? 'LONG' : 'SHORT',
+      neto_usd: neto,
+      neto_bp: neto * 10,
+      motivo: 'tiempo',
+      nocional_usd: 300,
     }
-    if (Date.now() > deadline)
-      throw new Error(`${what} did not start: ${stderr.slice(-800)}`)
-    await new Promise((resolve) => setTimeout(resolve, 250))
+  })
+const metricas = (patch: object) => ({
+  operaciones: 180,
+  neto_usd: 97.7,
+  neto_bp_cuenta: 977,
+  neto_bp_por_operacion: 5.4,
+  acierto: 0.54,
+  max_drawdown_usd: 31.4,
+  max_drawdown_bp: 314,
+  horas_promedio: 21.4,
+  por_motivo: {},
+  ...patch,
+})
+const INFORME = {
+  estrategia: {
+    id: PROBADA.id,
+    nombre: PROBADA.nombre,
+    cambios: PROBADA.cambios,
+  },
+  snapshot: { config_hash: HASH },
+  ventana: {
+    desde: '2026-02-01',
+    hasta: '2026-04-19',
+    desde_efectivo: '2026-02-03',
+    desde_ms: Date.UTC(2026, 1, 1),
+    hasta_ms: Date.UTC(2026, 3, 19),
+    desde_efectivo_ms: DESDE,
+    dias: 75,
+    reserva: { incluida: false, desde: '2026-04-19' },
+  },
+  datos: { fuente: 'datos de ejemplo' },
+  limites: ['sin noticias', 'sin libro de órdenes', 'sin posicionamiento'],
+  oficial: {
+    config_hash: HASH,
+    metricas: metricas({}),
+    operaciones: operaciones([30, -10, 50, 27.7, -8, 12]),
+  },
+  variante: {
+    config_hash: 'e'.repeat(64),
+    metricas: metricas({
+      operaciones: 182,
+      neto_usd: 53.63,
+      neto_bp_por_operacion: 2.9,
+      acierto: 0.52,
+      max_drawdown_usd: 38.2,
+      horas_promedio: 18.9,
+    }),
+    operaciones: operaciones([20, -15, 30, 18.63, -12, 12], 14),
+  },
+  diferencia: {
+    operaciones: 2,
+    neto_usd: -44.07,
+    neto_bp_cuenta: -440.7,
+    neto_bp_por_operacion: -2.5,
+    acierto: -0.02,
+    max_drawdown_usd: 6.8,
+    max_drawdown_bp: 68,
+    horas_promedio: -2.5,
+  },
+}
+const trabajo = (id: string, patch: object) => ({
+  job_id: 'job1',
+  estrategia_id: id,
+  estado: 'listo',
+  desde: '2026-02-01',
+  hasta: '2026-04-19',
+  iniciado_ms: 1_000,
+  terminado_ms: 23_000,
+  informe: INFORME,
+  error: null,
+  ...patch,
+})
+
+const PASO: Record<string, number> = {
+  '15m': 15 * 60_000,
+  '1h': HORA,
+  '4h': 4 * HORA,
+  '1d': 24 * HORA,
+}
+/** SYNTHETIC candles with the contract of GET /estrategias/velas: complete candles of [desde, hasta) before `antes`, the newest `limite`. */
+function velasDeEjemplo(partes: RegExpExecArray) {
+  const [, producto, intervalo, desde, hasta, antes, limite] = partes
+  const paso = PASO[intervalo]
+  const inicio = Math.ceil(Number(desde) / paso) * paso
+  const corte = Math.floor(Math.min(Number(antes), Number(hasta)) / paso) * paso
+  const primera = Math.max(inicio, corte - Number(limite) * paso)
+  const velas = []
+  for (let t = primera; t < corte; t += paso) {
+    const base = 2200 + 90 * Math.sin(t / (paso * 30)) + (t % (paso * 7)) / paso
+    const cierre = base + 14 * Math.cos(t / paso)
+    velas.push({
+      t,
+      o: base,
+      h: Math.max(base, cierre) + 9,
+      l: Math.min(base, cierre) - 9,
+      c: cierre,
+      v: 10,
+    })
+  }
+  return {
+    producto,
+    intervalo,
+    desde_ms: inicio,
+    hasta_ms: Math.floor(Number(hasta) / paso) * paso,
+    velas,
+    hay_mas: velas.length > 0 && primera > inicio,
   }
 }
 
-// Playwright needs the destructured first argument even when it is empty.
-// eslint-disable-next-line no-empty-pattern
-test.beforeAll(async ({}, info) => {
-  test.skip(
-    info.project.name !== 'desktop-1440x900',
-    'one project only: the servers own fixed ports',
+/** The candle requests of the page, as paths, since the last mockRegistry. */
+let consultasVelas: string[] = []
+
+/** Mocks the whole /api-strategies surface; returns what the page posted. */
+async function mockRegistry(page: Page) {
+  const publicadas: unknown[] = []
+  consultasVelas = []
+  const estrategias = [PROBADA, SIN_PROBAR]
+  const json = (route: Route, body: unknown, status = 200) =>
+    route.fulfill({ status, json: body })
+  await page.route('**/api-live/**', (route) =>
+    route.fulfill({ status: 503, json: {} }),
   )
-  const box = mkdtempSync(join(tmpdir(), 'balancita-inventory-'))
-  configCopy = join(box, 'config')
-  cpSync('config', configCopy, { recursive: true })
-  writeFileSync(
-    join(box, 'LEEME.txt'),
-    'Sandbox de prueba: copia de solo lectura de config/ y una base temporal del registro.\n',
-  )
-  forwardSummary = join(box, 'forward-reliability.json')
-  registry = spawn(
-    'python3',
-    [
-      '-m',
-      'balancita_engine.futures_strategy_registry',
-      '--strategies-db',
-      join(box, 'strategies.sqlite'),
-      '--config-dir',
-      configCopy,
-      '--forward-summary',
-      forwardSummary,
-      '--port',
-      String(REGISTRY_PORT),
-    ],
-    {
-      env: {
-        ...process.env,
-        PYTHONPATH: 'python',
-        CARRY_DIR: join(box, 'carry'),
-      },
-      stdio: ['ignore', 'ignore', 'pipe'],
-    },
-  )
-  await waitFor(
-    `http://127.0.0.1:${REGISTRY_PORT}/api-strategies/health`,
-    registry,
-    'the registry',
-  )
-  // Hand-written forward summary (DATOS DE EJEMPLO, not a Kraken record): only
-  // C30 is measured, with 7 live and 2 recovered closed trades, 15 required.
-  // Written after the registry is up because it needs C30's real spec hash.
-  const inventory = (await (
-    await fetch(`http://127.0.0.1:${REGISTRY_PORT}/api-strategies/inventory`)
-  ).json()) as { strategies: { id: string; spec_hash: string }[] }
-  const now = Date.now()
-  const side = (trades: number, pnl: number) => ({
-    trades,
-    pnl_usd: pnl,
-    mean_net_bp: trades ? 12.5 : null,
-    hit_rate: trades ? 0.5 : null,
-    funding_incomplete_trades: 0,
-    net_is_definitive: true,
-  })
-  writeFileSync(
-    forwardSummary,
-    JSON.stringify({
-      schema: 'futures-strategy-forward.v1',
-      updated_ms: now - 10 * 60_000,
-      min_forward_trades: 15,
-      strategies: {
-        [C30]: {
-          spec_hash: inventory.strategies.find((row) => row.id === C30)!
-            .spec_hash,
-          start_ms: now - 30 * 86_400_000,
-          open_positions: 0,
-          summary_without_recovered: side(7, 31.5),
-          summary_recovered: side(2, -4),
-          funding_state: {},
-          missing_candles_1m: 0,
-          max_candle_lag_ms: 1000,
+  await page.route('**/api-strategies/**', async (route) => {
+    const request = route.request()
+    const ruta = new URL(request.url()).pathname.replace('/api-strategies', '')
+    if (ruta === '/health') return json(route, { status: 'ok' })
+    if (ruta === '/estrategias' && request.method() === 'GET')
+      return json(route, {
+        snapshot: {
+          config_hash: HASH,
+          origen: { version_id: 3, activada_utc: '2026-11-02T14:15:54.811Z' },
         },
-      },
-    }),
-  )
-  // The real gateway (synthetic sandbox DBs) answers B2 for the detail view.
-  const seeded = JSON.parse(
-    execFileSync('node', ['e2e/support/seed-gateway-sandbox.ts'], {
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'ignore'],
-    }).trim(),
-  ) as Record<string, string>
-  delete seeded.dir
-  gateway = spawn('node', ['server/src/app/gateway-main.ts'], {
-    env: {
-      ...process.env,
-      ...seeded,
-      HOST: '127.0.0.1',
-      PORT: String(LIVE_PORT),
-    },
-    stdio: ['ignore', 'ignore', 'pipe'],
+        ventana_honesta: { desde: '2026-02-01', hasta: '2026-04-19' },
+        perillas: PERILLAS,
+        estrategias,
+      })
+    if (ruta === '/estrategias' && request.method() === 'POST') {
+      const cuerpo = request.postDataJSON() as { nombre: string }
+      publicadas.push(cuerpo)
+      const nueva = fila('nueva-variante', cuerpo.nombre, {})
+      estrategias.push(nueva)
+      return json(route, nueva)
+    }
+    const velas =
+      /^\/estrategias\/velas\/([^/]+)\/([^/]+)\/(\d+)\/(\d+)\/(\d+)\/(\d+)$/.exec(
+        ruta,
+      )
+    if (velas && request.method() === 'GET') {
+      consultasVelas.push(ruta)
+      return json(route, velasDeEjemplo(velas))
+    }
+    const comparar = /^\/estrategias\/([^/]+)\/comparar(?:\/[^/]+)?$/.exec(ruta)
+    if (comparar && request.method() === 'POST')
+      return json(
+        route,
+        trabajo(comparar[1], {
+          estado: 'corriendo',
+          informe: null,
+          terminado_ms: null,
+        }),
+      )
+    if (comparar && comparar[1] === PROBADA.id)
+      return json(route, trabajo(PROBADA.id, {}))
+    return json(route, { error: 'sin_comparacion', detail: 'x' }, 404)
   })
-  await waitFor(
-    `http://127.0.0.1:${LIVE_PORT}/api/observability/health`,
-    gateway,
-    'the gateway',
-  )
-})
+  return publicadas
+}
 
-test.afterAll(() => {
-  registry?.kill('SIGTERM')
-  gateway?.kill('SIGTERM')
-})
-
-async function shot(page: Page, name: string, dir = SHOTS, fullPage = true) {
-  mkdirSync(dir, { recursive: true })
-  await page.evaluate((note) => {
+async function shot(page: Page, name: string) {
+  mkdirSync(SHOTS, { recursive: true })
+  await page.evaluate(() => {
     document.getElementById('sandbox-note')?.remove()
     const bar = document.createElement('div')
     bar.id = 'sandbox-note'
-    bar.textContent = note
+    bar.textContent =
+      'DATOS DE EJEMPLO · respuestas simuladas, no es un backtest real'
     bar.style.cssText =
       'padding:4px 8px;font:11px monospace;color:#f59e0b;background:#0a0d14;border-bottom:1px solid #f59e0b;text-align:center'
     document.body.prepend(bar)
-  }, SANDBOX_NOTE)
-  await page.screenshot({ path: join(dir, `${name}.png`), fullPage })
+  })
+  await page.screenshot({ path: join(SHOTS, `${name}.png`), fullPage: true })
 }
 
-test('GET /api-strategies/inventory answers through the Vite proxy with the real config', async ({
-  request,
-}) => {
-  const response = await request.get('/api-strategies/inventory')
-  expect(response.status()).toBe(200)
-  const inventory = await response.json()
-  expect(inventory.schema).toBe('futures-strategy-inventory.v1')
-  const closed = JSON.parse(
-    readFileSync(join(configCopy, 'strategy-closed.json'), 'utf8'),
-  ) as { ids: string[] }
-  const reliability = JSON.parse(
-    readFileSync(join(configCopy, 'strategy-reliability.json'), 'utf8'),
-  ) as { strategies: Record<string, { verdict: string }> }
-  const byId = new Map<
-    string,
-    { operational: { state: string }; research: { state: string } }
-  >(inventory.strategies.map((row: { id: string }) => [row.id, row]))
-  for (const id of closed.ids)
-    expect(byId.get(id).operational.state).toBe('closed')
-  for (const [id, entry] of Object.entries(reliability.strategies))
-    expect(byId.get(id).research.state).toBe(entry.verdict)
-  // Nothing is written. Only C30 is in the hand-written forward summary: it
-  // alone has a result; every other row says why it has none, never a number.
-  for (const row of inventory.strategies as {
-    id: string
-    forward: { trades: { live: { closed: number } } | null; missing: string }
-  }[]) {
-    if (row.id === C30) expect(row.forward.trades?.live.closed).toBe(7)
-    else {
-      expect(row.forward.trades).toBeNull()
-      expect(row.forward.missing).toBeTruthy()
-    }
-  }
-  expect(
-    (await request.post('/api-strategies/inventory', { data: {} })).status(),
-  ).toBe(404)
-})
-
-test('Estrategias is only the list of names and the last test of the chosen one', async ({
+test('Estrategias lists the variants and draws the comparison of the chosen one', async ({
   page,
 }) => {
-  const log: { method: string; url: string; status: number }[] = []
-  page.on('response', (response) => {
-    const url = new URL(response.url())
-    if (url.pathname.startsWith('/api-'))
-      log.push({
-        method: response.request().method(),
-        url: url.pathname + url.search,
-        status: response.status(),
-      })
-  })
-
+  await mockRegistry(page)
   await page.goto('/estrategias')
-  const list = page.getByRole('navigation', { name: 'Lista de estrategias' })
-  // Only what exists: the strategies retired from the old engine are not listed.
-  await expect(list.getByRole('button', { name: /^C30/ })).toBeVisible()
-  await expect(list.getByRole('button', { name: /^C27/ })).toHaveCount(0)
-  await expect(page.getByRole('tablist')).toHaveCount(0)
 
-  // The chosen strategy shows its last test: stage bar and the four figures.
-  await list.getByRole('button', { name: /^C29/ }).click()
-  const view = page.getByTestId('run-view')
-  await expect(view).toBeVisible()
+  const lista = page.getByRole('list', { name: 'Lista de variantes' })
   await expect(
-    view.getByRole('list', { name: 'Etapa de la estrategia' }),
-  ).toBeVisible()
-  await expect(view.getByTestId('run-kpis')).toBeVisible()
-  await list.getByRole('button', { name: /^C30/ }).click()
-  await expect(page.getByTestId('run-view')).toHaveAccessibleName(/C30/)
-  await shot(page, '1-estrategias')
+    lista.getByRole('button', { name: /Salida a 30 h/ }),
+  ).toContainText('Peor que la oficial')
+  await expect(
+    lista.getByRole('button', { name: /Dos posiciones/ }),
+  ).toContainText('Sin probar')
+  await expect(
+    page.getByRole('region', { name: 'Terminal activa' }),
+  ).toContainText('Versión 3')
 
-  // Each name has its menu: detalles opens a modal on this same screen.
-  await list.getByRole('button', { name: /^Opciones de C29/ }).click()
-  await expect(page.getByRole('menuitem')).toContainText([
-    'Detalles',
-    'Modificar',
-    'Activar en paper',
-    'Borrar',
-  ])
-  await page.getByRole('menuitem', { name: 'Detalles' }).click()
+  const detalle = page.getByRole('region', {
+    name: /Detalle de «Salida a 30 h»/,
+  })
+  const velas = detalle.getByRole('img', { name: /Velas de ETH/ })
+  await expect(velas).toBeVisible()
+  await expect(detalle.getByText('Saldo acumulado')).toHaveCount(0)
+  await expect(detalle.getByTitle('180 operaciones')).toBeVisible()
   await expect(
-    page.getByRole('dialog', { name: /^Detalles de C29/ }),
+    detalle.getByRole('group', { name: 'Peor caída' }),
+  ).toContainText('+6,80 US$ peor')
+  await expect(
+    detalle.getByRole('list', { name: 'Condiciones de la prueba' }),
+  ).toContainText('Reserva intacta')
+
+  // No page or detail title, and nothing from the retired rule strategies.
+  await expect(page.getByRole('heading')).toHaveCount(0)
+  await expect(page.getByText(/C2[5-9]|C3[0-3]|VectorBT|ranking/i)).toHaveCount(
+    0,
+  )
+
+  // Both panels use the height of the window and the chart takes what is left.
+  const viewport = page.viewportSize()!
+  if (viewport.width >= 1000) {
+    const alto = (await detalle.boundingBox())!.height
+    expect(alto).toBeGreaterThan(viewport.height * 0.6)
+    const grafico = (await velas.boundingBox())!
+    expect(grafico.height).toBeGreaterThan(120)
+  }
+  const ancho = await page.evaluate(() => ({
+    scroll: document.documentElement.scrollWidth,
+    client: document.documentElement.clientWidth,
+  }))
+  expect(ancho.scroll).toBeLessThanOrEqual(ancho.client)
+  await shot(page, 'estrategias-detalle')
+
+  await detalle.getByRole('button', { name: 'Ver operaciones' }).click()
+  await expect(
+    page.getByRole('dialog', { name: 'Operaciones del backtest' }),
   ).toBeVisible()
   await page.keyboard.press('Escape')
   await expect(page.getByRole('dialog')).toHaveCount(0)
-  // Crear opens its modal here too, not another screen.
-  await page.getByRole('button', { name: 'Crear' }).click()
+})
+
+test('Estrategias draws one trade at a time on the ETH candles of the tested window, with the exits of the official, the variant and the ideal', async ({
+  page,
+}) => {
+  await mockRegistry(page)
+  await page.goto('/estrategias')
+  const detalle = page.getByRole('region', {
+    name: /Detalle de «Salida a 30 h»/,
+  })
+  const una = detalle.getByRole('img', { name: /Velas de ETH alrededor/ })
+  await expect(una).toBeVisible()
+  await expect(detalle.getByTestId('velas')).toBeVisible()
+
+  // The chart asks once for the stretch around the chosen trade (the 4th of 6), inside the tested window, never the reserve.
+  await expect
+    .poll(() => consultasVelas[0])
+    .toBe(
+      `/estrategias/velas/PF_ETHUSD/1h/${DESDE}/${HASTA}/${HASTA - 30 * HORA}/121`,
+    )
+
+  // Header: ‹ ›, «Operación N de M», side, date, mode toggle and a one-line legend.
+  await expect(detalle.getByText('Operación 4 de 6')).toBeVisible()
+  await expect(detalle.getByText('▲ LONG')).toBeVisible()
   await expect(
-    page.getByRole('dialog', { name: 'Crear estrategia' }),
-  ).toBeVisible()
-  await page.keyboard.press('Escape')
+    detalle.getByRole('button', { name: 'Una operación' }),
+  ).toHaveAttribute('aria-pressed', 'true')
+  const leyenda = detalle.getByLabel('Leyenda')
+  await expect(leyenda).toHaveText('OficialVarianteIdeal')
+  const cajaLeyenda = (await leyenda.boundingBox())!
+  expect(cajaLeyenda.height).toBeLessThan(24)
 
-  // Nothing else is on the screen.
-  await expect(page.getByText('Nueva estrategia')).toHaveCount(0)
-  await expect(page.getByText('Ver detalles')).toHaveCount(0)
-  await expect(page.getByText(/Módulo \d\d/i)).toHaveCount(0)
-
-  mkdirSync(SHOTS, { recursive: true })
-  writeFileSync(join(SHOTS, 'solicitudes.json'), JSON.stringify(log, null, 2))
-  const bad = log.filter(
-    (entry) =>
-      entry.url.startsWith('/api-strategies/') &&
-      // This sandbox registry runs without a gate database.
-      !entry.url.includes('/gate/') &&
-      (entry.status === 404 || entry.status >= 500),
+  // Entry line, entry pill and one pill with the net per exit, none over another; the side panel has the three exits.
+  await expect(detalle.getByTestId('pildora-entrada')).toContainText('entrada')
+  for (const quien of ['oficial', 'variante', 'ideal'])
+    await expect(detalle.getByTestId(`pildora-${quien}`)).toBeVisible()
+  const cajas = await Promise.all(
+    ['entrada', 'oficial', 'variante', 'ideal'].map(
+      async (q) => (await detalle.getByTestId(`pildora-${q}`).boundingBox())!,
+    ),
   )
-  expect(bad, JSON.stringify(bad, null, 2)).toEqual([])
+  for (let a = 0; a < cajas.length; a++)
+    for (let b = a + 1; b < cajas.length; b++) {
+      const p = cajas[a]!
+      const q = cajas[b]!
+      expect(
+        p.x < q.x + q.width &&
+          q.x < p.x + p.width &&
+          p.y < q.y + q.height &&
+          q.y < p.y + p.height,
+      ).toBe(false)
+    }
+  const panel = detalle.getByRole('list', { name: 'Resultado de cada salida' })
+  await expect(panel).toContainText('+27,7 US$')
+  await expect(panel).toContainText('tope 30 h')
+  await expect(panel).toContainText('mejor precio posible')
+  await expect(panel).toContainText('Le faltó a la oficial')
+
+  // Inside its panel, nothing sticks out, and no TradingView logo.
+  const figura = (await detalle.locator('figure').boundingBox())!
+  const seccion = (await detalle.boundingBox())!
+  const svg = (await una.boundingBox())!
+  expect(svg.y + svg.height).toBeLessThanOrEqual(figura.y + figura.height)
+  expect(svg.x + svg.width).toBeLessThanOrEqual(figura.x + figura.width)
+  expect(figura.y + figura.height).toBeLessThanOrEqual(
+    seccion.y + seccion.height,
+  )
+  const volver = (await detalle
+    .getByRole('button', { name: 'Volver a correr' })
+    .boundingBox())!
+  expect(volver.y + volver.height).toBeLessThanOrEqual(
+    seccion.y + seccion.height,
+  )
+  await expect(page.locator('a[href*="tradingview"]')).toHaveCount(0)
+  await expect(page.getByText(/tradingview/i)).toHaveCount(0)
+  await shot(page, 'estrategias-una-operacion')
+
+  // ‹ › move between trades.
+  await detalle.getByRole('button', { name: 'Operación siguiente' }).click()
+  await expect(detalle.getByText('Operación 5 de 6')).toBeVisible()
+  await detalle.getByRole('button', { name: 'Operación anterior' }).click()
+  await detalle.getByRole('button', { name: 'Operación anterior' }).click()
+  await expect(detalle.getByText('Operación 3 de 6')).toBeVisible()
+  await expect(detalle.getByText('▲ LONG')).toBeVisible()
+
+  // «Varias»: one bar per trade under the candles; clicking one zooms into it.
+  await detalle.getByRole('button', { name: 'Varias' }).click()
+  await expect(
+    detalle.getByRole('group', { name: /Velas de ETH de unos cinco días/ }),
+  ).toBeVisible()
+  const barras = detalle.getByTestId('barra-operacion')
+  await expect.poll(() => barras.count()).toBeGreaterThanOrEqual(3)
+  // a vertical line has no width: it is in the DOM, drawn amber where the variant left at another moment
+  await expect(detalle.getByTestId('corte-variante')).not.toHaveCount(0)
+  await shot(page, 'estrategias-varias')
+  await barras.nth(1).locator('rect').click()
+  await expect(
+    detalle.getByRole('button', { name: 'Una operación' }),
+  ).toHaveAttribute('aria-pressed', 'true')
+  await expect(
+    detalle.getByRole('img', { name: /Velas de ETH alrededor/ }),
+  ).toBeVisible()
+  await expect(detalle.getByText(/^Operación \d de 6$/)).toBeVisible()
+
+  // The timeframe buttons ask for that interval, always inside the tested window.
+  await detalle.getByRole('button', { name: '4h', exact: true }).click()
+  await expect(
+    detalle.getByRole('button', { name: '4h', exact: true }),
+  ).toHaveAttribute('aria-pressed', 'true')
+  await expect
+    .poll(() => consultasVelas.at(-1))
+    .toMatch(
+      new RegExp(
+        `^/estrategias/velas/PF_ETHUSD/4h/${DESDE}/${HASTA}/\\d+/\\d+$`,
+      ),
+    )
+  for (const ruta of consultasVelas)
+    expect(Number(ruta.split('/')[7])).toBeLessThanOrEqual(HASTA)
+})
+
+test('Estrategias creates a variant with only the allowed knobs and starts its backtest', async ({
+  page,
+}) => {
+  const publicadas = await mockRegistry(page)
+  await page.goto('/estrategias')
+  await page.getByRole('button', { name: '+ Nueva variante' }).click()
+  const form = page.getByRole('form', { name: 'Nueva variante' })
+  await expect(form.getByLabel('Tope de horas')).toHaveValue('36')
+  await expect(form.getByText('hoy 36 h')).toBeVisible()
+  await expect(form).toContainText('maestro y portero no se tocan')
+  await shot(page, 'estrategias-nueva')
+
+  await form.getByLabel('Nombre').fill('Salida a 24 h')
+  await form.getByLabel('Tope de horas').fill('24')
+  await form.getByRole('button', { name: 'Crear y probar' }).click()
+  await expect(form).toHaveCount(0)
+  expect(publicadas).toEqual([
+    {
+      nombre: 'Salida a 24 h',
+      descripcion: 'Tope de horas 36 h → 24 h',
+      cambios: { guardrails: { max_hold_min: 1440 } },
+    },
+  ])
+})
+
+test('Estrategias without the registry shows the error and no example data', async ({
+  page,
+}) => {
+  await page.route('**/api-strategies/**', (route) =>
+    route.fulfill({ status: 503, json: {} }),
+  )
+  await page.route('**/api-live/**', (route) =>
+    route.fulfill({ status: 503, json: {} }),
+  )
+  await page.goto('/estrategias')
+  await expect(page.getByRole('alert').first()).toContainText(
+    'No se muestran datos de ejemplo',
+  )
+  await expect(
+    page.getByRole('list', { name: 'Lista de variantes' }),
+  ).toHaveCount(0)
 })

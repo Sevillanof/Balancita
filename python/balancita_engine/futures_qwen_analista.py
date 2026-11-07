@@ -9,7 +9,8 @@ Solo se consolidan horas completas; la carga inicial y las actualizaciones vela 
 - ``suave``: tamaño 1,25 con movimiento y 0,75 en calma.
 - ``fuerte``: tamaño 1,5 con movimiento y 0,5 en calma.
 
-Los multiplicadores son reglas de tamaño, no pruebas de rentabilidad. Con cuenta entera el operador limita además
+Los multiplicadores son reglas de tamaño, no pruebas de rentabilidad. Con varias posiciones (``posiciones.max`` > 1) el multiplicador
+solo achica: nunca pasa de UN lugar (saldo × ``posiciones.fraccion``), ver ``Trader._open``. Con cuenta entera el operador limita además
 la entrada al saldo disponible y reserva su comisión. Sin historia suficiente entra con tamaño 1 («sin dato»).
 """
 

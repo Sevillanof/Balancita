@@ -26,9 +26,12 @@ DEFAULT_PATH = os.path.normpath(
     os.path.join(os.path.dirname(__file__), "..", "..", "server", "data", "dev-live", "futures-news.sqlite")
 )
 
+# A price ("$3,000") makes a recap; an amount ("$6.3 billion", "$40M") does not. Verbs match whole words only,
+# so "Stops" is not "tops".
 _PRICE_RECAP_RE = re.compile(
-    r"(\$\d|\b\d{2,3}k\b|slides|drops|falls|plunges|surges|rallies|jumps|soars|"
-    r"holds above|circles|rebounds|dips|tops|hits|climbs|sinks|tumbles|price|live updates)",
+    r"(\$\d[\d,]*(?:\.\d+)?(?![\d.,]|\s*(?:million|billion|trillion|bn|[mb])\b)|\b\d{2,3}k\b|"
+    r"\b(?:slides|drops|falls|plunges|surges|rallies|jumps|soars|holds above|circles|rebounds|dips|tops|hits|"
+    r"climbs|sinks|tumbles|price|live updates)\b)",
     re.IGNORECASE,
 )
 _BTC_ONLY_RE = re.compile(

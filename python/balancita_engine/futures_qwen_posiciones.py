@@ -3,7 +3,8 @@
 
 Hasta ``max`` (3) posiciones abiertas a la vez en ETH. Cada una usa ``fraccion`` (33 %) del saldo de la cuenta en el momento de abrir,
 limitada por el saldo libre (saldo menos lo ya comprometido por las abiertas, con la comisión de entrada reservada): la exposición total
-nunca supera el saldo, nunca se apuesta el doble y no hay apalancamiento. Los cupos los COMPARTEN dos orígenes:
+nunca supera el saldo, nunca se apuesta el doble y no hay apalancamiento. El analista de movimiento solo puede ACHICAR una posición (flojo ×0,5): el «fuerte»
+×1,5 queda topado en UN lugar (saldo × ``fraccion``), así ``max`` × ``fraccion`` ≤ 1 alcanza siempre (tope-por-lugar, ``Trader._open``). Los cupos los COMPARTEN dos orígenes:
 
 * el MAESTRO (maestro fuerte + portero sí, o noticia habilitada: igual que siempre). Sin posiciones del maestro abiertas entra como hoy;
   con alguna abierta, solo abre otra en un EPISODIO NUEVO de la señal (la mirada anterior no tenía señal de entrada de ese lado), nunca

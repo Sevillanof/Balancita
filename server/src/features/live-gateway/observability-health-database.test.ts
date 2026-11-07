@@ -158,6 +158,29 @@ describe('system health: database integrity and backups', () => {
     )
   })
 
+  it('judges the age of the integrity check by the interval the capture publishes', () => {
+    const { write, data } = setup()
+    const sixHours = 6 * 3_600_000
+    write({
+      integrity: { ...integrityOk, checked_at: NOW - 5 * 3_600_000 },
+      integrity_every_ms: sixHours,
+      damaged: null,
+      backups: {},
+    })
+    const fresh = data().checks.find((c) => c.id === 'database_integrity')!
+    expect(fresh.status).toBe('ok')
+    expect(fresh.rule).toContain('cada 6 h')
+    write({
+      integrity: { ...integrityOk, checked_at: NOW - 10 * 3_600_000 },
+      integrity_every_ms: sixHours,
+      damaged: null,
+      backups: {},
+    })
+    const stale = data().checks.find((c) => c.id === 'database_integrity')!
+    expect(stale.status).toBe('warning')
+    expect(stale.detail).toContain('se hace cada 6 h')
+  })
+
   it('without the state file the rows are «Sin datos» and do not change the component', () => {
     const { data } = setup()
     const component = data()

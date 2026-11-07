@@ -51,6 +51,7 @@ from .futures_strategy_gate_api import GateApi, GateApiError
 from .analyzer_events_api import read_events as read_analyzer_events
 from .futures_strategy_vectorbt_api import VectorbtApi
 from . import strategy_purge
+from .futures_estrategias_api import EstrategiasApi, EstrategiasApiError
 from .futures_strategy_lifecycle import Lifecycle, LifecycleError
 from .futures_strategy_backtest import MIN_TRADES, load_verdict_rows, run_backtest
 from .futures_strategy_translate import TranslationError, default_provider, translate
@@ -651,8 +652,9 @@ class StrategyService:
                  decisions_db_path=None, gate_data_dir=None, purge_dir=None, specs_dir=None,
                  forward_registration_path=None, freeze_path=None, qwen_exit_config=None, qwen_practice_dir=None,
                  kronos_dir=None, qwen_exit_dir=None, qwen_live_dir=None, account_db_path=None, vectorbt_dir=None, vectorbt_python=None,
-                 vectorbt_spawn=None):
+                 vectorbt_spawn=None, estrategias=None):
         self.config_dir = config_dir
+        self.estrategias = estrategias or EstrategiasApi()      # variantes de la Terminal: lo único que muestra la página
         self.forward_db_path = forward_db_path
         self.forward_summary_path = forward_summary_path or os.environ.get("STRATEGY_FORWARD_PATH")
         self.decisions_db_path = decisions_db_path
@@ -1078,9 +1080,19 @@ def make_handler(service):
                 return quick.launch(parts[1], body.get("variant"), body.get("exigencia"))
             return None
 
+        def _estrategias(self, method):
+            """Variantes de la Terminal (la página Estrategias); ``None`` cuando la ruta no es de ellas."""
+            parts = [p for p in urlparse(self.path).path.split("/") if p]
+            if parts[:1] == ["api-strategies"]:
+                parts = parts[1:]
+            api = getattr(service, "estrategias", None)
+            return api.route(method, parts, self._body) if api is not None else None
+
         def _handle(self, method):
             try:
-                out = self._gate(method)
+                out = self._estrategias(method)
+                if out is None:
+                    out = self._gate(method)
                 if out is None:
                     out = self._quick(method)
                 if out is True:
@@ -1090,6 +1102,8 @@ def make_handler(service):
                 self._send(200, out if out is not None else self._dispatch(method))
             except (GateApiError, LifecycleError) as error:
                 self._send(error.status, {"error": error.code, "detail": error.detail})
+            except EstrategiasApiError as error:
+                self._send(error.status, dict({"error": error.code, "detail": error.detail}, **error.extra))
             except RegistryError as error:
                 self._send(error.status, dict({"error": error.code, "detail": error.detail}, **error.extra))
             except (ValueError, KeyError, TypeError) as error:
@@ -1127,6 +1141,7 @@ def main(argv=None):
     parser.add_argument("--qwen-exit-dir", help="folder with qwen-exit.sqlite (the gate judges Qwen by its saved trades)")
     parser.add_argument("--qwen-practice-dir", help="folder with the offline Qwen practice files "
                                                     "(default: data/qwen-practice)")
+    parser.add_argument("--estrategias-dir", help="folder with the Terminal variants (config/estrategias/<id>.json; default: the repo's)")
     parser.add_argument("--port", type=int, default=int(os.environ.get("STRATEGIES_PORT", DEFAULT_PORT)))
     args = parser.parse_args(argv)
     registry = StrategyRegistry(args.strategies_db)
@@ -1153,7 +1168,8 @@ def main(argv=None):
                               qwen_practice_dir=args.qwen_practice_dir or os.path.join(
                                   os.path.dirname(config_root), "data", "qwen-practice"),
                               kronos_dir=args.kronos_dir, qwen_exit_dir=args.qwen_exit_dir, qwen_live_dir=args.qwen_live_dir,
-                              account_db_path=args.account_db, vectorbt_dir=args.vectorbt_dir)
+                              account_db_path=args.account_db, vectorbt_dir=args.vectorbt_dir,
+                              estrategias=EstrategiasApi(carpeta=args.estrategias_dir))
     server = ThreadingHTTPServer(("127.0.0.1", args.port), make_handler(service))
     print("[strategies] registry {} on http://127.0.0.1:{}".format(args.strategies_db, args.port), flush=True)
     try:

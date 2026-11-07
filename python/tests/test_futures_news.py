@@ -425,8 +425,9 @@ class CatalogTests(unittest.TestCase):
         sources = n.load_sources()
         ids = [s["id"] for s in sources]
         self.assertEqual(len(ids), len(set(ids)))
-        self.assertLessEqual({"thedefiant", "bankless", "eth_foundation", "theblock", "sec", "fed"}, set(ids))
+        self.assertLessEqual({"thedefiant", "eth_foundation", "theblock", "sec", "fed"}, set(ids))
         self.assertNotIn("bitcoinmagazine", ids)
+        self.assertNotIn("bankless", ids)                 # paid ads, slowest, 0 of 24 items preceded an ETH move
         self.assertNotIn("ecb", ids)
         for source in sources:
             self.assertTrue(source["url"].startswith("https://"), source["id"])
@@ -755,6 +756,32 @@ class AnalysisTests(ServiceBase):
         self.assertEqual(json.loads(row["timings_json"])["prompt_n"], 120)
         self.assertTrue(json.loads(row["top_logprobs_json"]))
 
+    def test_news_requests_are_item_by_item_with_the_item_text_first_so_the_server_reuses_its_prompt_cache(self):
+        # Measured on llama-server (analisis/qwen-cache-prompt): the two questions of one item run back to back
+        # and share ``system + STATE`` byte for byte, so the second one only processes its question block
+        # (prompt_n 84 against 136-206). Putting the question first would reuse that block but process the item
+        # text twice (-17 % tokens) and change the probabilities (up to 1.0 on one option), so it is NOT done.
+        server = FakeLlama()
+        self.addCleanup(server.stop)
+        server.pick = llama_reply
+        provider = q.LlamaCppProvider(server.url, model_ref="qwen-test", timeout=5, health_timeout=2)
+        self.service(provider=provider).poll()
+        bodies = server.completions()
+        self.assertEqual(len(bodies), 4)
+        for body in bodies:
+            self.assertIs(body["cache_prompt"], True)
+            self.assertNotIn("id_slot", body)
+        self.assertEqual(len({b["messages"][0]["content"] for b in bodies}), 1)
+        states = [b["messages"][-1]["content"].split("\nQUESTION:")[0] for b in bodies]
+        self.assertTrue(all(state.startswith("STATE: headline:") for state in states))
+        self.assertEqual(states[0], states[1])
+        self.assertEqual(states[2], states[3])
+        self.assertNotEqual(states[0], states[2])
+        asked = [b["grammar"] for b in bodies]
+        self.assertEqual(asked[0], asked[2])
+        self.assertEqual(asked[1], asked[3])
+        self.assertNotEqual(asked[0], asked[1])
+
     def test_a_model_that_is_down_leaves_the_items_stored_and_pending(self):
         provider = self.provider(healthy=False)
         service = self.service(provider=provider)
@@ -912,6 +939,19 @@ class AnalysisTests(ServiceBase):
         self.assertEqual(result["skipped_stale"], 4)
         self.assertEqual(provider.calls, 2)
 
+
+    def test_amounts_and_words_containing_a_verb_do_not_make_a_headline_a_price_recap(self):
+        self.fetcher.bodies[SRC_A["url"]] = rss([
+            fresh_item(1, title="Binance hacked: attackers drain $6.3 billion from hot wallet", desc="crypto exchange"),
+            fresh_item(2, title="Mercado Bitcoin halts withdrawals after $40 million drained", desc="crypto exchange"),
+            fresh_item(3, title="Binance-Controlled Korean Exchange GOPAX Stops Trading", desc="crypto exchange"),
+            fresh_item(4, title="ETH surges above $3,000 as price rallies"),
+        ])
+        provider = self.provider()
+        result = self.service(provider=provider).poll()
+        self.assertEqual(result["ingested"], 4)
+        self.assertEqual(result["analyzed"], 6)                  # 3 items x (relevance, direction)
+        self.assertEqual(result["skipped_stale"], 2)             # the real price recap, both questions
 
 # ---------------------------------------------------------------- features for C
 
@@ -1124,6 +1164,61 @@ class CliTests(TempDirTest):
             "SELECT status,text FROM paper_futures_news_briefings ORDER BY briefing_id DESC LIMIT 1"
         ).fetchone(), ("ok", text))
         db.close()
+
+    def slow_briefing_server(self, delay):
+        """llama-server whose classification answers at once and whose briefing chat takes `delay` seconds."""
+        server = FakeLlama()
+        self.addCleanup(server.stop)
+        text = "Ethereum centra las novedades del protocolo y la regulación, sin una señal de operación."
+
+        def response(body):
+            if body.get("response_format"):
+                time.sleep(delay)
+                return {"model": "qwen.gguf", "choices": [{
+                    "finish_reason": "stop", "message": {"content": json.dumps({"summary": text})},
+                }]}
+            return llama_reply(body)
+
+        server.pick = response
+        return server
+
+    def last_briefing(self):
+        db = sqlite3.connect(self.path)
+        try:
+            return db.execute("SELECT status,reason,error_message FROM paper_futures_news_briefings "
+                              "ORDER BY briefing_id DESC LIMIT 1").fetchone()
+        finally:
+            db.close()
+
+    def test_briefing_chat_is_not_cut_by_the_short_classification_timeout(self):
+        # VPS 2026-11-02..06: 480 of 608 briefing attempts died at the 30 s per-call timeout that suits a one-token
+        # classification, while the model was up (it answered, slowly: 1.5-3 tokens/s).
+        self.server.body = rss([fresh_item(1, now=int(time.time() * 1000), minutes_ago=1,
+                                          title="Ethereum protocol update")])
+        server = self.slow_briefing_server(delay=1.2)
+        code, out = self.run_main("--once", "--analyze", "--news-db", self.path, "--sources-file", self.sources,
+                                  "--llama-url", server.url, "--timeout-seconds", "0.5")
+        self.assertEqual(code, 0)
+        self.assertIn("analyzed 2", out)
+        self.assertEqual(self.last_briefing(), ("ok", None, None))
+
+    def test_an_explicit_briefing_timeout_still_records_a_timeout_as_model_unavailable(self):
+        self.server.body = rss([fresh_item(1, now=int(time.time() * 1000), minutes_ago=1,
+                                          title="Ethereum protocol update")])
+        server = self.slow_briefing_server(delay=1.2)
+        code, out = self.run_main("--once", "--analyze", "--news-db", self.path, "--sources-file", self.sources,
+                                  "--llama-url", server.url, "--timeout-seconds", "0.5",
+                                  "--briefing-timeout-seconds", "0.5")
+        self.assertEqual(code, 0)
+        status, reason, message = self.last_briefing()
+        self.assertEqual((status, reason), ("error", "model_unavailable"))
+        self.assertIn("timed out", message)
+
+    def test_the_default_briefing_timeout_is_longer_than_a_classification_call(self):
+        args = n._build_news_parser().parse_args([])
+        self.assertIsNone(args.briefing_timeout_seconds)
+        self.assertEqual(args.timeout_seconds, 30.0)
+        self.assertGreater(n.DEFAULT_BRIEFING_TIMEOUT, args.timeout_seconds)
 
     def test_no_briefing_preserves_news_classification_without_synthesis(self):
         self.server.body = rss([fresh_item(1, now=int(time.time() * 1000), minutes_ago=1,

@@ -3,7 +3,6 @@
   "note": "Public news feeds polled by the news process N (python/balancita_engine/futures_news.py), focused on Ethereum, DeFi/L2, regulation and macro catalysts. https only (plain http is accepted for loopback test servers). Extra feeds can be appended with NEWS_EXTRA_RSS_FEEDS (sourceId|label|https url|unknown or licensed, comma separated, the legacy format). The text of an item is stored, sanitized and capped, and is only ever sent to the local model.",
   "sources": [
     { "id": "thedefiant", "name": "The Defiant", "url": "https://thedefiant.io/feed", "category": "ethereum" },
-    { "id": "bankless", "name": "Bankless", "url": "https://www.bankless.com/rss/feed", "category": "ethereum" },
     { "id": "eth_foundation", "name": "Ethereum Foundation", "url": "https://blog.ethereum.org/en/feed.xml", "category": "ethereum" },
     { "id": "theblock", "name": "The Block", "url": "https://www.theblock.co/rss.xml", "category": "crypto" },
     { "id": "coindesk", "name": "CoinDesk", "url": "https://www.coindesk.com/arc/outboundfeeds/rss/", "category": "crypto" },

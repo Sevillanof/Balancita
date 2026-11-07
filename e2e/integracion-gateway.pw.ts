@@ -203,19 +203,25 @@ test('Terminal on the real gateway: every interaction answers without 404', asyn
   // Terminal <-> Estrategias (registry S is up in this run).
   await page.getByRole('link', { name: 'Estrategias' }).click()
   await expect(page).toHaveURL(/estrategias/)
-  // Estrategias opens on the cards (read from the real registry S).
+  // Estrategias opens on the Terminal variants (read from the real registry S).
   await expect(
-    page.getByRole('navigation', { name: 'Lista de estrategias' }),
+    page.getByRole('region', { name: 'Terminal activa' }),
   ).toBeVisible()
-  await expect(page.getByTestId('run-view')).toBeVisible()
+  await expect(
+    page.getByRole('list', { name: 'Lista de variantes' }),
+  ).toBeVisible()
   await page.getByRole('link', { name: 'Terminal', exact: true }).click()
   await expect(page.getByTestId('activity-panel')).toBeVisible()
 
   saveLog('solicitudes-terminal.json', log)
   // With every service up, nothing may answer 4xx/5xx and nothing may touch MOCK
-  // (the sandbox registry has no gate database: its gate reads are not judged).
+  // (the sandbox registry has no gate database: its gate reads are not judged;
+  // a variant never compared answers 404 sin_comparacion on purpose).
   const failed = log.filter(
-    (entry) => entry.status >= 400 && !entry.url.includes('/gate/'),
+    (entry) =>
+      entry.status >= 400 &&
+      !entry.url.includes('/gate/') &&
+      !entry.url.endsWith('/comparar'),
   )
   expect(failed, JSON.stringify(failed, null, 2)).toEqual([])
   expect(log.filter((entry) => entry.url.startsWith('/api-mock'))).toEqual([])
@@ -226,18 +232,22 @@ test('Terminal on the real gateway: every interaction answers without 404', asyn
   expect(log.some((e) => e.url.includes('/observability/activity'))).toBe(true)
 })
 
-test('Estrategias on the real registry S: list of names and last test', async ({
+test('Estrategias on the real registry S: Terminal variants and their detail', async ({
   page,
 }) => {
   const log = recordApi(page)
   await page.goto('/estrategias')
-  const list = page.getByRole('navigation', { name: 'Lista de estrategias' })
+  await expect(
+    page.getByRole('region', { name: 'Terminal activa' }),
+  ).toBeVisible()
+  const list = page.getByRole('list', { name: 'Lista de variantes' })
   await expect(list.getByRole('button').first()).toBeVisible()
   await list.getByRole('button').first().click()
-  await expect(page.getByTestId('run-view')).toBeVisible()
+  await expect(page.getByRole('region', { name: /Detalle de «/ })).toBeVisible()
   saveLog('solicitudes-estrategias.json', log)
+  // A variant that was never compared answers 404 sin_comparacion on purpose.
   const failed = log.filter(
-    (entry) => entry.status >= 400 && !entry.url.includes('/gate/'),
+    (entry) => entry.status >= 400 && !entry.url.includes('/comparar'),
   )
   expect(failed, JSON.stringify(failed, null, 2)).toEqual([])
   expect(log.filter((entry) => entry.url.startsWith('/api-mock'))).toEqual([])
@@ -254,17 +264,15 @@ test('Estrategias with the registry stopped: honest state, no Carry spam', async
 
   await page.goto('/estrategias')
   // The page says it and offers no way into the laboratory.
-  await expect(page.getByText('No se pudo leer el inventario')).toBeVisible()
-  await expect(page.getByText(/servicio sin iniciar/).first()).toBeVisible()
   await expect(page.getByRole('alert').first()).toContainText(
-    'servicio sin iniciar',
+    'No se muestran datos de ejemplo',
   )
   await expect(
-    page.getByRole('button', { name: 'Nueva estrategia' }),
+    page.getByRole('button', { name: /Nueva variante/ }),
   ).toHaveCount(0)
-  // Nothing is presented as valid: no Carry panel, no ranking.
-  await expect(page.getByLabel('Carry de funding')).toHaveCount(0)
-  await expect(page.getByText('Momentum logarítmico lento')).toHaveCount(0)
+  await expect(
+    page.getByRole('list', { name: 'Lista de variantes' }),
+  ).toHaveCount(0)
   await page.waitForTimeout(1500)
 
   saveLog('solicitudes-registro-apagado.json', log)

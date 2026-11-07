@@ -920,12 +920,28 @@ def _honesty(cfg, op):
     return walkforward.meter(trades, medicion=medicion, trial_count=walkforward.trials())
 
 
-def _replay_config(cfg):
-    cfg = dict(cfg, decide_by="formula", opinion_enabled=False)
+def _without_book(cfg):
+    """The replay has no order book (it only has candles). A config that declares ``execution.model`` (the Terminal's public-book
+    fills) makes ``Trader._open`` skip EVERY entry with ``libro_no_disponible``, so the replay would measure nothing. The book model
+    is dropped here (entries at candle prices and the modelled costs, as the replay always did); ``execution.exit`` (the maker
+    exit) is kept as ``salida_maker``, which is what the candle machine reads. The caller's config is not touched."""
+    if not cfg.get("execution"):
+        return cfg
+    out = {key: value for key, value in cfg.items() if key != "execution"}
+    wanted = cfg["execution"].get("exit")
+    if wanted is not None and "salida_maker" not in out:
+        out["salida_maker"] = wanted
+    return out
+
+
+def _replay_config(cfg, desde_ms=None):
+    cfg = _without_book(dict(cfg, decide_by="formula", opinion_enabled=False))
     products = cfg["exam"]["products"]
     if cfg.get("cuenta") == "entera" and len(products) != 1:
         raise qt.TraderError("La prueba de cuenta entera necesita un único producto, como la Terminal actual.")
     start = exam_start_ms(cfg)
+    if desde_ms is not None:
+        start = max(start, desde_ms)            # una ventana pedida nunca empieza antes que lo que la config permite
     if noticias.priority_enabled(cfg):
         if cfg.get("exigencia"):
             if any(value != 5 for value in cfg["exigencia"].values()):
@@ -945,7 +961,20 @@ def _replay_context(history, cfg, product, warm_from, holdout_ms):
     return context
 
 
-def _setup_replay(history, cfg, product, start, holdout_ms):
+def _capital(capital_usd):
+    """El saldo con el que EMPIEZA el replay (``DEFAULT_CAPITAL_USD`` sin pedirlo). El tamaño de cada operación sale del saldo de
+    cada momento (``Trader._open``, el mismo código del paper vivo): solo se elige el de partida, p. ej. el de la Terminal el día que
+    se activó la config."""
+    try:
+        capital = qt.D(str(capital_usd))
+    except (ArithmeticError, ValueError):
+        raise qt.TraderError("capital_usd: {!r} no es un número.".format(capital_usd)) from None
+    if not capital.is_finite() or capital <= 0:
+        raise qt.TraderError("capital_usd: tiene que ser mayor que 0 (llegó {!r}).".format(capital_usd))
+    return capital
+
+
+def _setup_replay(history, cfg, product, start, holdout_ms, capital):
     if cfg.get("funding_model") == qt.exact_funding.EXACT_MODEL:
         funding = qt.exact_funding.from_archive(
             cfg.get("funding_archive") or os.path.join(qt.ROOT, "server", "data", "dev-live", "futures-market.sqlite"),
@@ -954,7 +983,7 @@ def _setup_replay(history, cfg, product, start, holdout_ms):
         funding = history.funding(product)
     trader = qt.Trader(cfg, product, None, funding, key="paper-replay", entry_threshold=cfg["entry_threshold"])
     if cfg.get("cuenta") == "entera":
-        trader.notional = qt.D(1000)
+        trader.notional = capital
     warm_from = start - cfg["practice"]["warmup_days"] * DAY_MS
     raw = history.bars(product, warm_from - analista.extra_days(cfg) * DAY_MS, holdout_ms, fill=False)
     bars = qt.fill_gaps(raw, BAR_MS, annotate=True)
@@ -972,16 +1001,22 @@ def _replay_market(bars, start, holdout_ms):
             and (bar["bucket_start"] + BAR_MS) % qt.HOUR_MS == 0]
 
 
-def _collect_replay_trades(trader, bars, start, holdout_ms):
+def _collect_replay_trades(trader, bars, start, holdout_ms, on_event=None):
     trades, snapshots = [], 0
     for bar in bars:
         end = bar["bucket_start"] + BAR_MS
         if end > holdout_ms:
             continue
         events = trader.feed(bar, trade=end >= start)
+        for event in events if on_event is not None else ():
+            on_event(event)
         snapshots += sum(event["type"] == "decision" for event in events)
         trades.extend(event["trade"] for event in events if event["type"] == "trade")
-    trades.extend(event["trade"] for event in trader.force_close("fin_examen") if event["type"] == "trade")
+    for event in trader.force_close("fin_examen"):
+        if on_event is not None:
+            on_event(event)
+        if event["type"] == "trade":
+            trades.append(event["trade"])
     return trades, snapshots
 
 
@@ -1023,17 +1058,29 @@ def parallel_summary(cfg, curves):
                 por_origen={name: sum(1 for c in curves if c["origen"] == name) for name in ("maestro", "rebotes")})
 
 
-def replay_formula(history, cfg, holdout_ms):
-    """Actual paper engine; the historical result never fabricates contemporary news."""
-    cfg, start = _replay_config(cfg)
+DEFAULT_CAPITAL_USD = "1000"
+
+
+def replay_formula(history, cfg, holdout_ms, desde_ms=None, on_event=None, capital_usd=DEFAULT_CAPITAL_USD):
+    """Actual paper engine; the historical result never fabricates contemporary news.
+
+    ``cfg`` is the COMPLETE configuration (a ``futures_estrategias`` snapshot or strategy): every knob comes from it and nothing
+    is read from the environment; ``run_formula`` is the one that merges the ``QWEN_*`` variables before calling. ``cfg`` is not
+    modified. Nothing at or after ``holdout_ms`` is read; ``desde_ms`` (optional) moves the start of the window later, never
+    before what the config allows (``exam.from``, ``practice.from`` and, with ``priority_v2``, the fit cut of the experts).
+    ``on_event`` (optional) is called with every event the trader emits (``decision``, ``skipped``, ``guardrail``, ``rebote``,
+    ``trade``), in order, as a read-only tap: it changes nothing of the result. ``capital_usd``: the balance the replay starts with
+    (1000 by default); every position is sized from the balance of its moment exactly as the live Terminal does."""
+    capital = _capital(capital_usd)
+    cfg, start = _replay_config(cfg, desde_ms)
     products = cfg["exam"]["products"]
     curves, market, snapshots, all_items = [], {}, 0, []
     exits = []
-    final = qt.D(1000)
+    final = capital
     for product in products:
-        trader, bars = _setup_replay(history, cfg, product, start, holdout_ms)
+        trader, bars = _setup_replay(history, cfg, product, start, holdout_ms, capital)
         market[product] = _replay_market(bars, start, holdout_ms)
-        trades, looks = _collect_replay_trades(trader, bars, start, holdout_ms)
+        trades, looks = _collect_replay_trades(trader, bars, start, holdout_ms, on_event)
         snapshots += looks
         for trade in trades:
             all_items.append(_replay_stat_item(trade))
@@ -1047,7 +1094,7 @@ def replay_formula(history, cfg, holdout_ms):
     stats = _per_week(stats, [{"t_ms": start}, {"t_ms": holdout_ms}])
     return {
         "execution": "terminal.v2", "news_evaluated": False, "cuenta": cfg.get("cuenta", "fija"),
-        "capital_inicial_usd": "1000", "saldo_final_usd": str(final),
+        "capital_inicial_usd": str(capital), "saldo_final_usd": str(final),
         "funding_complete": all(trade["funding_status"] == "complete" for trade in curves) if curves else None,
         "entrada": cfg.get("entrada", "formula"), "fotos": snapshots, "desde_ms": start, "hasta_ms": holdout_ms,
         "max_horas": cfg["guardrails"]["max_hold_min"] / 60, "nocional_usd": float(cfg["notional_usd"]),
