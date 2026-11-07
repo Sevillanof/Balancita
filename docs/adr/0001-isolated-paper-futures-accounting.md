@@ -280,3 +280,25 @@ Requested directly by the user (Fran) on 2026-11-07 («Hace la enmienda y arranc
 ### Unchanged
 
 Paper only without keys; exact Decimal accounting, canonical hashing and append-only storage; real per-product costs and observed Kraken funding; the strategy laboratory and promotion rules (Amendment 2026-11-06).
+
+## Amendment 2026-11-07 (b): Claude Haiku for news analysis
+
+Requested directly by the user (Fran) on 2026-11-07 («Ademas modifica el ADR para usar haiku»). Where it conflicts with the text above, including «paper only without keys» and the local-only language model of the news process, this amendment prevails for news analysis only. Everything remains a simulation: paper only, no real orders, no money at risk.
+
+### What is allowed
+
+- **Claude Haiku through the Anthropic API** (the user's organization credits) may analyse news: a card per item (event type, scope, direction, strength), grouping items into events, and a short summary of the market picture. The model id and the prompt version are stored with every answer.
+- **What is sent:** only the public news text the process already fetches (title, summary, source, time) and public market figures (ETH/BTC moves). Never account data, keys, balances or anything private.
+- **Role:** information and measurement first. News answers do not open or close positions until the strategy laboratory shows they add value; that switch is a separate decision of the user.
+
+### Rules
+
+- **The key is a secret:** it lives only in `/etc/balancita/*.env` on the VPS or `~/.config/balancita/anthropic.env` on the Mac (mode 600), never in the repository, logs, reports or prompts.
+- **A failure is no signal:** if the API fails, times out or the credits run out, the item is stored as unanswered; there is no silent fallback to another model in the same table.
+- **Spending is bounded:** a monthly budget is set in the Anthropic console and the process counts tokens per answer.
+- **Point in time:** an answer only uses news received up to that moment; replays store inputs and outputs so they can be audited.
+- **Qwen:** it may stay for other uses or be retired; that is decided separately.
+
+### Unchanged
+
+Kraken stays the venue of record; no keys or private endpoints on any trading venue; exact Decimal accounting and append-only storage; the reserve (from 2026-04-19) is untouched; the third-party market data rules (Amendment 2026-11-07).
