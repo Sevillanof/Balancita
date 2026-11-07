@@ -73,6 +73,76 @@ def is_irrelevant_headline(title, summary=""):
     return is_price_recap(title) or is_btc_only(title, summary)
 
 
+# --------------------------------------------------------------------------- news card rules (S7)
+# Fixed rules on top of Qwen's one-letter answers about an item (event type, strength 0-3, direction, ...).
+# They read only the item text and the card, so they are replayable and never call a model.
+
+HACK_MIN_USD = 100_000_000
+HACK_STRENGTH = 2
+_UNIT = {"k": 1e3, "thousand": 1e3, "m": 1e6, "mn": 1e6, "million": 1e6, "b": 1e9, "bn": 1e9, "billion": 1e9,
+         "t": 1e12, "trillion": 1e12}
+_UNITS = "thousand|million|billion|trillion|mn|bn|[kmbt]"
+# "$6.3 billion", "US$ 40M", "$3,000" ...
+_AMOUNT_SYMBOL = re.compile(
+    r"(?:US)?\$\s?(\d[\d,]*(?:\.\d+)?)(?:\s?(%s)\b)?" % _UNITS, re.IGNORECASE)
+# "133 million dollars", "2 billion USD", "1.4 billion US dollars"
+_AMOUNT_WORDS = re.compile(
+    r"\b(\d[\d,]*(?:\.\d+)?)\s?(thousand|million|billion|trillion)\s(?:us\s)?(?:dollars?|usd)\b", re.IGNORECASE)
+_HACK_RE = re.compile(
+    r"\b(?:hack(?:s|ed|ers?)?|exploit(?:s|ed)?|drain(?:s|ed)?|stolen|steal|steals|stole|theft|breach(?:ed)?)\b",
+    re.IGNORECASE)
+
+
+def _amounts(text):
+    found = []
+    for match in _AMOUNT_SYMBOL.finditer(text):
+        number, unit = match.groups()
+        found.append(float(number.replace(",", "")) * (_UNIT[unit.lower()] if unit else 1))
+    for match in _AMOUNT_WORDS.finditer(text):
+        found.append(float(match.group(1).replace(",", "")) * _UNIT[match.group(2).lower()])
+    return found
+
+
+def parse_amount_usd(title, summary=""):
+    """The main US-dollar amount of an item, in dollars: the largest one in the title, else in the summary.
+
+    Reads ``$6.3 billion``, ``$40M``, ``US$ 300 million``, ``133 million dollars`` and plain ``$3,000``
+    (a price is an amount too; the rules only act on big ones). Amounts without a dollar mark are ignored.
+    """
+    for text in (title, summary):
+        found = _amounts(str(text or ""))
+        if found:
+            return max(found)
+    return None
+
+
+def apply_card_rules(card, title, summary=""):
+    """The final card: ``card`` is what Qwen answered (``event_type``, ``strength`` 0-3, ``direction``,
+    ``already_happened``, ...). Returns a copy with ``strength_model`` (Qwen's own strength), ``amount_usd`` and
+    ``rules`` (the names of the rules that changed something), in this order:
+
+    * ``recap``: a price recap (Qwen says ``price_recap`` or the headline is one, ``is_price_recap``) gets strength 0
+      and direction ``neutral``;
+    * ``hack_100m``: a hack or exploit that already happened (Qwen says ``hack`` or the headline says so) with an
+      amount of at least 100 M US$ gets strength of at least 2. It runs after ``recap``, so a big hack whose
+      headline also quotes a price move keeps its weight.
+    """
+    out = dict(card)
+    out["strength_model"] = card["strength"]
+    out["amount_usd"] = parse_amount_usd(title, summary)
+    out["rules"] = []
+    if card["event_type"] == "price_recap" or is_price_recap(title):
+        out["strength"], out["direction"] = 0, "neutral"
+        out["rules"].append("recap")
+    amount = out["amount_usd"]
+    is_hack = card["event_type"] == "hack" or bool(_HACK_RE.search(str(title or "")))
+    if (is_hack and card.get("already_happened") and amount is not None and amount >= HACK_MIN_USD
+            and out["strength"] < HACK_STRENGTH):
+        out["strength"] = HACK_STRENGTH
+        out["rules"].append("hack_100m")
+    return out
+
+
 def _connect(db_path):
     return sqlite3.connect("file:{}?mode=ro".format(db_path), uri=True)
 
