@@ -33,6 +33,11 @@ Design rules
 * ``news_features(db, t)`` is pure over the stored rows and has no lookahead: an item
   counts at decision time ``t`` only if it was received at or before ``t`` and both of
   its answers were stored at or before ``t``.
+* The optional news card (``--cards``) is the S7 data: event type, strength 0-3, direction, scope and
+  "already happened" from four one-letter questions (``news_card`` scope), asked as a cascade (a price recap stops
+  after the first question) and finished by fixed rules. Its answers go to the same analysis table; the finished
+  card goes to its own append-only table ``paper_futures_news_cards`` (one row per item and ``CARD_VERSION``). It is
+  added to the two classifier questions, never replaces them, and stays off unless asked for.
 * The optional news briefing is a separate, append-only, view-only Qwen synthesis.
   Its bounded background chat never writes classifier rows or enters ``news_features``.
 * Stdlib only, Python 3.9+.
@@ -109,6 +114,15 @@ NEWS_CONFIG = {
     "max_items_per_feed": 100,
 }
 CONFIG_MISMATCH = "news DB was written with a different config; use a new DB"
+
+# The news card (S7): four one-letter questions of the ``news_card`` scope asked in this order (the item text is
+# first in every prompt, so the server reuses it), plus the fixed rules of ``futures_qwen_noticias.apply_card_rules``.
+# ``CARD_VERSION`` identifies that question set together with the rules: a new set or a new rule is a new version
+# and a new row per item, never an edit of an old one.
+CARD_VERSION = 1
+CARD_ORDER = ("news_card_type", "news_card_strength", "news_card_direction", "news_card_scope_status")
+CARD_TYPE, CARD_STRENGTH, CARD_DIRECTION, CARD_SCOPE = CARD_ORDER
+CARD_RECAP_TYPE = "price_recap"
 
 RELEVANCE_QUESTION = ("news_relevance_btc", 2)
 DIRECTION_QUESTION = ("news_direction", 2)
@@ -433,6 +447,24 @@ class UrlFetcher:
 _ANALYSIS_STATUSES = ("done", "skipped_stale", "failed")
 
 
+CARDS_SCHEMA = """
+CREATE TABLE IF NOT EXISTS paper_futures_news_cards(
+  card_id INTEGER PRIMARY KEY, item_hash TEXT NOT NULL, card_version INTEGER NOT NULL,
+  status TEXT NOT NULL CHECK(status IN ('done','skipped_stale','failed')),
+  written_at INTEGER NOT NULL,
+  event_type TEXT, scope TEXT, direction TEXT,
+  strength INTEGER CHECK(strength IS NULL OR strength BETWEEN 0 AND 3),
+  strength_model INTEGER CHECK(strength_model IS NULL OR strength_model BETWEEN 0 AND 3),
+  strength_value REAL, already_happened INTEGER CHECK(already_happened IS NULL OR already_happened IN (0,1)),
+  amount_usd REAL, rules_json TEXT, questions_json TEXT,
+  UNIQUE(item_hash, card_version),
+  CHECK(status != 'done' OR (event_type IS NOT NULL AND direction IS NOT NULL AND strength IS NOT NULL
+    AND strength_model IS NOT NULL AND rules_json IS NOT NULL AND questions_json IS NOT NULL))
+) STRICT;
+CREATE INDEX IF NOT EXISTS paper_futures_news_cards_time ON paper_futures_news_cards(written_at);
+"""
+
+
 class NewsStore:
     """Single writer of the news DB: append-only items, analyses and errors."""
 
@@ -515,6 +547,11 @@ class NewsStore:
                   BEFORE DELETE ON paper_futures_news_{t} BEGIN SELECT RAISE(ABORT, 'news is immutable'); END;
                 """.format(t=table)
             )
+        self.db.executescript(CARDS_SCHEMA)
+        for suffix in ("update", "delete"):
+            self.db.executescript(
+                "CREATE TRIGGER IF NOT EXISTS paper_futures_news_cards_no_{s} BEFORE {S} ON paper_futures_news_cards "
+                "BEGIN SELECT RAISE(ABORT, 'news is immutable'); END;".format(s=suffix, S=suffix.upper()))
         create_briefing_table(self.db)
 
     def register_sources(self, sources, now, interval_ms, retry_window_ms, max_published_age_ms, max_analyses_per_poll):
@@ -570,6 +607,41 @@ class NewsStore:
                 (row["item_hash"], row["question_id"], row["question_version"], row["kind"],
                  str(row["message"])[:500], row["model_ref"], int(time.time() * 1000)),
             )
+
+    def append_card(self, row):
+        """One finished card per item and version; ``row`` has the table's columns (``rules`` and ``questions`` are lists)."""
+        dump = lambda value: None if value is None else json.dumps(value, sort_keys=True, separators=(",", ":"))
+        happened = row.get("already_happened")
+        with self.db:
+            self.db.execute(
+                "INSERT INTO paper_futures_news_cards(item_hash, card_version, status, written_at, event_type, scope, "
+                "direction, strength, strength_model, strength_value, already_happened, amount_usd, rules_json, "
+                "questions_json) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (row["item_hash"], row["card_version"], row["status"], row["written_at"], row.get("event_type"),
+                 row.get("scope"), row.get("direction"), row.get("strength"), row.get("strength_model"),
+                 row.get("strength_value"), None if happened is None else int(bool(happened)), row.get("amount_usd"),
+                 dump(row.get("rules")), dump(row.get("questions"))),
+            )
+
+    def unresolved_cards(self, version, limit=UNRESOLVED_BATCH):
+        """Items with no card row (any status) of one card version, newest stored first."""
+        return self.db.execute(
+            "SELECT i.item_id, i.item_hash, i.title, i.summary, i.published_at, i.received_at "
+            "FROM paper_futures_news_items i WHERE NOT EXISTS (SELECT 1 FROM paper_futures_news_cards c "
+            "WHERE c.item_hash=i.item_hash AND c.card_version=?) ORDER BY i.item_id DESC LIMIT ?",
+            (version, limit),
+        ).fetchall()
+
+    def card_answers(self, item_hash_, questions):
+        """The stored analysis row of each card question (``{id: {status, chosen, value}}``) already answered for an item."""
+        out = {}
+        for question in questions:
+            row = self.db.execute(
+                "SELECT status, chosen, value FROM paper_futures_news_analysis WHERE item_hash=? AND question_id=? "
+                "AND question_version=?", (item_hash_, question["id"], question["version"])).fetchone()
+            if row is not None:
+                out[question["id"]] = {"status": row[0], "chosen": row[1], "value": row[2]}
+        return out
 
     def error_count(self, item_hash_, question_id, version):
         return self.db.execute(
@@ -678,6 +750,8 @@ class NewsService:
         max_published_age_ms = options.get("max_published_age_ms", DEFAULT_MAX_PUBLISHED_AGE_MS)
         max_analyses_per_poll = options.get("max_analyses_per_poll", DEFAULT_MAX_ANALYSES_PER_POLL)
         max_attempts = options.get("max_attempts", DEFAULT_MAX_ATTEMPTS)
+        cards = options.get("cards", False)
+        card_questions = options.get("card_questions")
         if interval_ms < MIN_INTERVAL_MS:
             raise ValueError("the polling interval must be at least {} s".format(MIN_INTERVAL_MS // 1000))
         self.store = store
@@ -686,6 +760,14 @@ class NewsService:
         self.provider = provider
         self.questions = dict(questions) if questions is not None else load_questions(scope="news")
         self.calibration = calibration if calibration is not None else load_calibration()
+        self.cards = bool(cards)
+        self.card_questions = {}
+        if self.cards:
+            loaded = dict(card_questions) if card_questions is not None else load_questions(scope="news_card")
+            missing = [name for name in CARD_ORDER if name not in loaded]
+            if missing:
+                raise ValueError("card questions missing from the catalog: " + ", ".join(missing))
+            self.card_questions = {name: loaded[name] for name in CARD_ORDER}
         defaults = load_prompt_config()
         self.template = template or defaults["templates"][defaults["default_version"]]
         self.probability_source = probability_source or defaults["probability_source"]
@@ -772,15 +854,17 @@ class NewsService:
         }) is not None
 
     # -- analysis
+    def _is_expired(self, row, now):
+        _, _, _, _, published_at, received_at = row
+        if now - received_at > self.retry_window_ms:
+            return True
+        return published_at is not None and now - published_at > self.max_published_age_ms
+
     def _is_stale(self, row, now):
         from . import futures_qwen_noticias as noticias
 
-        _, _, title, summary, published_at, received_at = row
-        if now - received_at > self.retry_window_ms:
-            return True
-        if published_at is not None and now - published_at > self.max_published_age_ms:
-            return True
-        return noticias.is_irrelevant_headline(title, summary)
+        _, _, title, summary, _, _ = row
+        return self._is_expired(row, now) or noticias.is_irrelevant_headline(title, summary)
 
     def _model_down(self, reason):
         if self._model_up is not False:
@@ -803,7 +887,9 @@ class NewsService:
                                     pair[1]["id"], pair[1]["version"]))
         return work
 
-    def _analyze_one_item(self, row, question, ref, result):
+    def _ask_question(self, row, question, ref):
+        """Asks one question about one item and stores the answer (or the error). Returns ``"done"``, ``"error"``
+        (stored; ``"failed"`` once it hit ``max_attempts``) or ``"down"`` (the model is unavailable: nothing stored)."""
         _, hash_, title, summary, _, _ = row
         base = {"item_hash": hash_, "question_id": question["id"], "question_version": question["version"]}
         prompt = build_prompt(news_state({"title": title, "summary": summary}), question, self.template)
@@ -813,14 +899,14 @@ class NewsService:
                              self.template, self.probability_source)
         except ModelUnavailable as error:
             self._model_down(str(error))
-            return False
+            return "down"
         except ModelResponseError as error:
             self.store.append_error(dict(base, kind=error.kind, message=error, model_ref=ref))
             self.log("error {} {}: {}".format(hash_[:12], question["id"], error.kind))
             if self.store.error_count(hash_, question["id"], question["version"]) >= self.max_attempts:
                 self.store.append_analysis(dict(base, status="failed", analyzed_at=self.clock()))
-                result["pending"] -= 1
-            return True
+                return "failed"
+            return "error"
         outcome, output = done["result"], done["output"]
         self.store.append_analysis(dict(
             base, status="done", analyzed_at=self.clock(), question_type=question["type"], model_ref=ref,
@@ -831,8 +917,17 @@ class NewsService:
             confidence=outcome["confidence"], latency_ms=output.get("latency_ms", 0),
             timings=output.get("timings", {}),
         ))
-        result["analyzed"] += 1
-        result["pending"] -= 1
+        return "done"
+
+    def _analyze_one_item(self, row, question, ref, result):
+        status = self._ask_question(row, question, ref)
+        if status == "down":
+            return False
+        if status == "failed":
+            result["pending"] -= 1
+        elif status == "done":
+            result["analyzed"] += 1
+            result["pending"] -= 1
         return True
 
     def _analyze(self, now, result):
@@ -855,14 +950,117 @@ class NewsService:
             if not self._analyze_one_item(row, question, ref, result):
                 break
 
+    # -- cards (S7)
+    def _card_row(self, item_hash_, status, now, card=None, strength_value=None, questions=()):
+        row = {"item_hash": item_hash_, "card_version": CARD_VERSION, "status": status, "written_at": now}
+        if card is not None:
+            row.update({key: card[key] for key in ("event_type", "scope", "direction", "strength", "strength_model",
+                                                   "already_happened", "amount_usd", "rules")})
+            row.update(strength_value=strength_value, questions=list(questions))
+        return row
+
+    def _finish_card(self, row, answers, now):
+        """Writes the finished card of one item from its stored answers and the fixed rules."""
+        from . import futures_qwen_noticias as noticias
+
+        _, hash_, title, summary, _, _ = row
+        event_type = answers[CARD_TYPE]["chosen"]
+        card = {"event_type": event_type, "scope": None, "direction": "neutral", "strength": 0,
+                "already_happened": None}
+        value = None
+        if event_type != CARD_RECAP_TYPE:
+            strength = answers[CARD_STRENGTH]
+            options = [option["id"] for option in self.card_questions[CARD_STRENGTH]["options"]]
+            scope, _, happened = answers[CARD_SCOPE]["chosen"].partition("_")
+            card.update(strength=options.index(strength["chosen"]), direction=answers[CARD_DIRECTION]["chosen"],
+                        scope=scope, already_happened=happened == "happened")
+            value = strength["value"]
+        final = noticias.apply_card_rules(card, title, summary)
+        asked = ["{}@{}".format(name, self.card_questions[name]["version"]) for name in CARD_ORDER if name in answers]
+        self.store.append_card(self._card_row(hash_, "done", now, final, value, asked))
+
+    def _run_card(self, row, ref, budget):
+        """Asks the missing questions of one item (at most ``budget``). Returns ``(asked, state)`` with ``state`` one of
+        ``written`` (card stored), ``failed`` (a question hit ``max_attempts``: failed card stored), ``wait`` (stopped
+        by the budget or by a retryable error) or ``down``."""
+        hash_ = row[1]
+        questions = [self.card_questions[name] for name in CARD_ORDER]
+        answers, asked = self.store.card_answers(hash_, questions), 0
+        for name in CARD_ORDER:
+            if name not in answers:
+                if asked >= budget:
+                    return asked, "wait"
+                status = self._ask_question(row, self.card_questions[name], ref)
+                if status == "down":
+                    return asked, "down"
+                asked += 1
+                answers = self.store.card_answers(hash_, questions)
+                if name not in answers:
+                    return asked, "wait"
+            if answers[name]["status"] != "done":
+                self.store.append_card(self._card_row(hash_, "failed", self.clock()))
+                return asked, "failed"
+            if name == CARD_TYPE and answers[name]["chosen"] == CARD_RECAP_TYPE:
+                break
+        self._finish_card(row, answers, self.clock())
+        return asked, "written"
+
+    def _resolve_cards_without_model(self, now, result):
+        """Stale and Bitcoin-only items are marked; a price-recap headline gets its card from the rules alone."""
+        from . import futures_qwen_noticias as noticias
+
+        pending = []
+        for row in self.store.unresolved_cards(CARD_VERSION):
+            _, hash_, title, summary, _, _ = row
+            if self._is_expired(row, now) or (noticias.is_btc_only(title, summary) and not noticias.is_price_recap(title)):
+                self.store.append_card(self._card_row(hash_, "skipped_stale", now))
+            elif noticias.is_price_recap(title):
+                card = {"event_type": CARD_RECAP_TYPE, "scope": None, "direction": "neutral", "strength": 0,
+                        "already_happened": None}
+                self.store.append_card(self._card_row(hash_, "done", now, noticias.apply_card_rules(card, title, summary)))
+                result["cards"] += 1
+            else:
+                pending.append(row)
+        pending.sort(key=lambda r: (-(min(r[4], r[5]) if r[4] else r[5]), -r[0]))
+        return pending
+
+    def _analyze_cards(self, now, result):
+        if not self.cards or self.provider is None:
+            return
+        pending = self._resolve_cards_without_model(now, result)
+        if not pending:
+            return
+        if not self.provider.health():
+            self._model_down("health check failed")
+            return
+        if self._model_up is False:
+            self.log("model available again")
+        self._model_up = True
+        if self._identity is None:
+            self._identity = self.provider.identity()
+        ref = self._identity.get("model_ref") or "unknown"
+        budget = self.max_analyses_per_poll
+        for row in pending:
+            if budget <= 0:
+                break
+            asked, state = self._run_card(row, ref, budget)
+            budget -= asked
+            if state == "written":
+                result["cards"] += 1
+            elif state == "down":
+                break
+
     def poll(self):
         """Ingests the due feeds and analyzes the pending items; returns counts and never raises."""
         result = {"ingested": 0, "duplicates": 0, "failed_sources": [], "analyzed": 0, "skipped_stale": 0,
                   "pending": 0}
+        if self.cards:
+            result["cards"] = 0
         try:
             now = self.clock()
             self._ingest(now, result)
             self._analyze(self.clock(), result)
+            self._analyze_cards(self.clock(), result)
         except sqlite3.Error as error:
             self._problem_once("db", "database error: {}".format(error))
         except Exception as error:  # a service must outlive any single failure
@@ -882,6 +1080,8 @@ class NewsService:
 
 def _summary(result):
     line = "news: ingested {ingested} duplicates {duplicates} analyzed {analyzed} skipped_stale {skipped_stale} pending {pending}".format(**result)
+    if "cards" in result:
+        line += " cards {}".format(result["cards"])
     if result["failed_sources"]:
         line += " failed " + ",".join(result["failed_sources"])
     return line
@@ -900,6 +1100,9 @@ def _build_news_parser():
     parser.add_argument("--once", action="store_true", help="poll every source once, analyze, and exit")
     parser.add_argument("--analyze", action="store_true",
                         help="ask the local llama-server the news questions (also NEWS_ANALYSIS=1); ingest never needs it")
+    parser.add_argument("--cards", action="store_true",
+                        help="also ask the four news-card questions (event type, strength 0-3, direction, scope and "
+                             "already happened) with the fixed rules on top (also NEWS_CARDS=1); needs --analyze")
     parser.add_argument("--no-briefing", action="store_true",
                         help="disable the view-only news synthesis (otherwise enabled with analysis)")
     parser.add_argument("--features-at", type=int, metavar="MS",
@@ -959,7 +1162,7 @@ def _run_service_loop(service, store, args, sources, interval, provider, log):
         "on ({})".format(", ".join(sorted(service.questions))) if provider is not None else "off"))
     while True:
         outcome = service.poll()
-        if outcome["ingested"] or outcome["analyzed"] or outcome["skipped_stale"]:
+        if outcome["ingested"] or outcome["analyzed"] or outcome["skipped_stale"] or outcome.get("cards"):
             log(_summary(outcome))
         time.sleep(args.poll_seconds)
 
@@ -981,6 +1184,8 @@ def main(argv=None, provider=None, fetcher=None):
     try:
         sources = configured_sources(args.sources_file, env)
         provider, questions, calibration, template, mode = _resolve_analysis_options(args, env, provider)
+        cards = provider is not None and (args.cards or _env_flag(env.get("NEWS_CARDS")))
+        card_questions = load_questions(args.questions_file, scope="news_card") if cards else None
         interval = args.interval_seconds if args.interval_seconds is not None else float(env.get("NEWS_POLL_SECONDS") or 300)
         if fetcher is None:
             fetcher = UrlFetcher(timeout=args.fetch_timeout_seconds,
@@ -993,7 +1198,7 @@ def main(argv=None, provider=None, fetcher=None):
             template=template, probability_source=mode, log=log, interval_ms=int(interval * 1000),
             retry_window_ms=int(args.retry_window_minutes * MINUTE_MS),
             max_published_age_ms=int(args.max_published_age_hours * HOUR_MS),
-            max_analyses_per_poll=args.max_analyses_per_poll,
+            max_analyses_per_poll=args.max_analyses_per_poll, cards=cards, card_questions=card_questions,
             briefing_enabled=provider is not None and not args.no_briefing,
             briefing_provider=_briefing_provider(provider, briefing_timeout))
     except (OSError, ValueError) as error:

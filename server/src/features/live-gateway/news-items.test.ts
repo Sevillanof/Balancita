@@ -147,6 +147,110 @@ describe('createNewsItems', () => {
     })
   })
 
+  const CARDS_TABLE = `
+    CREATE TABLE paper_futures_news_cards(
+      card_id INTEGER PRIMARY KEY, item_hash TEXT NOT NULL, card_version INTEGER NOT NULL,
+      status TEXT NOT NULL, written_at INTEGER NOT NULL, event_type TEXT, scope TEXT, direction TEXT,
+      strength INTEGER, strength_model INTEGER, strength_value REAL, already_happened INTEGER,
+      amount_usd REAL, rules_json TEXT, questions_json TEXT
+    );`
+
+  it('exposes the news card of each item additively and keeps the rest of the item unchanged', () => {
+    const path = seedNewsDb()
+    const db = new DatabaseSync(path)
+    db.exec(CARDS_TABLE)
+    db.exec(`INSERT INTO paper_futures_news_cards VALUES
+      (1, 'h1', 1, 'done', 1300, 'hack', 'crypto', 'bearish', 2, 1, 1.4, 1, 6300000000.0, '["hack_100m"]', '["news_card_type@1"]'),
+      (2, 'h2', 1, 'done', 2300, 'price_recap', NULL, 'neutral', 0, 1, NULL, NULL, NULL, '["recap"]', '["news_card_type@1"]'),
+      (3, 'h3', 1, 'skipped_stale', 3300, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL)`)
+    db.close()
+    const result = createNewsItems({ newsDbPath: path }).list(10)
+    expect(result).toMatchObject({
+      status: 'ok',
+      items: [
+        { id: 'h3', card: null, analysis_status: 'stale' },
+        {
+          id: 'h2',
+          relevance: 'medium',
+          direction: 'neutral',
+          card: {
+            version: 1,
+            event_type: 'price_recap',
+            scope: null,
+            direction: 'neutral',
+            strength: 0,
+            strength_model: 1,
+            strength_value: null,
+            already_happened: null,
+            amount_usd: null,
+            rules: ['recap'],
+            known_at_ms: 2300,
+          },
+        },
+        {
+          id: 'h1',
+          relevance: 'high',
+          direction: 'bullish',
+          card: {
+            version: 1,
+            event_type: 'hack',
+            scope: 'crypto',
+            direction: 'bearish',
+            strength: 2,
+            strength_model: 1,
+            strength_value: 1.4,
+            already_happened: true,
+            amount_usd: 6300000000,
+            rules: ['hack_100m'],
+            known_at_ms: 1300,
+          },
+        },
+      ],
+    })
+  })
+
+  it('gives every item a null card when the database has no card table or an invalid card', () => {
+    const path = seedNewsDb()
+    const before = createNewsItems({ newsDbPath: path }).list(10)
+    expect(before).toMatchObject({
+      status: 'ok',
+      items: [{ card: null }, { card: null }, { card: null }],
+    })
+    const db = new DatabaseSync(path)
+    db.exec(CARDS_TABLE)
+    db.exec(`INSERT INTO paper_futures_news_cards VALUES
+      (1, 'h1', 1, 'done', 1300, 'astrology', 'crypto', 'bearish', 2, 1, 1.4, 1, NULL, '[]', '[]'),
+      (2, 'h2', 1, 'done', 2300, 'hack', 'crypto', 'bearish', 7, 1, NULL, 1, NULL, '[]', '[]')`)
+    db.close()
+    const after = createNewsItems({ newsDbPath: path }).list(10)
+    expect(after).toMatchObject({
+      status: 'ok',
+      items: [{ card: null }, { card: null }, { card: null }],
+    })
+    if (before.status === 'ok' && after.status === 'ok')
+      expect(after.items.map((i) => ({ ...i, card: null }))).toEqual(
+        before.items.map((i) => ({ ...i, card: null })),
+      )
+  })
+
+  it('uses the latest card version of an item', () => {
+    const path = seedNewsDb()
+    const db = new DatabaseSync(path)
+    db.exec(CARDS_TABLE)
+    db.exec(`INSERT INTO paper_futures_news_cards VALUES
+      (1, 'h1', 1, 'done', 1300, 'other', 'crypto', 'neutral', 1, 1, NULL, 1, NULL, '[]', '[]'),
+      (2, 'h1', 2, 'done', 1400, 'hack', 'crypto', 'bearish', 3, 3, NULL, 1, NULL, '[]', '[]')`)
+    db.close()
+    expect(createNewsItems({ newsDbPath: path }).list(10)).toMatchObject({
+      status: 'ok',
+      items: [
+        { id: 'h3' },
+        { id: 'h2' },
+        { id: 'h1', card: { version: 2, strength: 3 } },
+      ],
+    })
+  })
+
   it('reports fetch failures separately from a successfully readable cache', () => {
     const path = seedNewsDb()
     const db = new DatabaseSync(path)
