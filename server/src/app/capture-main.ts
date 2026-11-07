@@ -1,10 +1,11 @@
 import { FuturesMarketStore } from '../features/kraken-futures/futures-market-store.ts'
 import { appendFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
+import { createDbHealth } from '../features/kraken-futures/db-health.ts'
 import {
-  createDbHealth,
-  type BackupTarget,
-} from '../features/kraken-futures/db-health.ts'
+  backupTargetsFromEnv,
+  integrityFromEnv,
+} from '../features/kraken-futures/db-health-env.ts'
 import {
   createRetentionRunner,
   RETENTION_CYCLE_BUDGET_MS,
@@ -22,7 +23,6 @@ import {
   isMalformedError,
 } from '../platform/sqlite-safety.ts'
 import { createWakeDetector } from '../platform/wake-detector.ts'
-import { existsSync } from 'node:fs'
 import { createLoopMonitor } from '../features/live-gateway/loop-monitor.ts'
 import { createLiveCapture } from '../features/live-gateway/live-capture.ts'
 import { wireEthMinuteSummary } from '../features/market-summary/eth-summary-wiring.ts'
@@ -209,51 +209,21 @@ async function main(): Promise<void> {
     legacyRetention ? 120_000 : RETENTION_INTERVAL_MS,
   )
   trimTimer.unref()
-  // WAL folded back every 5 min, integrity check every 15 min (own process), one backup a day of
-  // the capture database and of the paper's databases (FUTURES_DB_BACKUP_DAYS, _KEEP, _DIR).
+  // WAL folded back every 5 min, integrity check every 6 h (own process, FUTURES_DB_INTEGRITY_MINUTES and
+  // _TIMEOUT_MINUTES), one backup a day of the paper's small databases (FUTURES_DB_BACKUP_DAYS, _KEEP, _DIR).
+  // futures-market is NOT copied here unless FUTURES_DB_BACKUP_MARKET=1: ops/vps copies it every night.
   const backupDays = envNumber('FUTURES_DB_BACKUP_DAYS', 1)
-  const dataDir = dirname(config.futuresMarketDbPath)
-  const backupTargets: BackupTarget[] = (
-    [
-      ['futures-market', config.futuresMarketDbPath],
-      [
-        'qwen-live',
-        process.env.QWEN_LIVE_DB_PATH ??
-          join(dataDir, 'qwen-live', 'live.sqlite'),
-      ],
-      [
-        'futures-verdicts',
-        process.env.FUTURES_VERDICTS_DB_PATH ??
-          join(dataDir, 'futures-verdicts.sqlite'),
-      ],
-      [
-        'positioning',
-        process.env.POSITIONING_DB_PATH ?? join(dataDir, 'positioning.sqlite'),
-      ],
-      [
-        'futures-news',
-        process.env.FUTURES_NEWS_DB_PATH ??
-          join(dataDir, 'futures-news.sqlite'),
-      ],
-      [
-        'futures-forecast-scores',
-        join(dataDir, 'futures-forecast-scores.sqlite'),
-      ],
-      [
-        'futures-llm-decisions',
-        process.env.FUTURES_DECISIONS_DB_PATH ??
-          join(dataDir, 'futures-llm-decisions.sqlite'),
-      ],
-    ] as const
-  )
-    .filter(([name, path]) => name === 'futures-market' || existsSync(path))
-    .map(([name, dbPath]) => ({ name, dbPath }))
+  const backupTargets = backupTargetsFromEnv({
+    env: process.env,
+    marketDbPath: config.futuresMarketDbPath,
+  })
   const dbHealth = createDbHealth({
     store,
     dbPath: config.futuresMarketDbPath,
     log,
     record: (entry) => appendJson('health.jsonl', entry),
     statePath: join(diagnosticsDir, 'db-health-state.json'),
+    ...integrityFromEnv(process.env),
     backupTargets,
     backupMs: backupDays * 24 * HOUR,
     backupDir:
