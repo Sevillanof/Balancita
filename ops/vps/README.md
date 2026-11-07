@@ -8,8 +8,8 @@ Copia versionada de lo que corre en el VPS (antes vivía solo allá). Si se camb
 | `balancita-respaldo.service` / `.timer`    | `/etc/systemd/system/`                     | Programa el respaldo; lee `/etc/balancita/alert.env`                                                                                                                                                                                                                 |
 | `balancita-healthcheck.sh`                 | `/usr/local/bin/`                          | Cada 5 min: servicio, última vela, llama-server, disco y RAM → `HC_PING_URL`                                                                                                                                                                                         |
 | `balancita-healthcheck.service` / `.timer` | `/etc/systemd/system/`                     | Programa el chequeo                                                                                                                                                                                                                                                  |
-| `systemd/balancita.service.d/llama.conf`   | `/etc/systemd/system/balancita.service.d/` | **Preparado, sin aplicar.** Drop-in de llama-server: 5 hilos (`LLAMA_THREADS`), `mlock` (`LLAMA_ARG_MLOCK`) y `LimitMEMLOCK=infinity`                                                                                                                                |
-| `swap-2g.sh`                               | `/usr/local/bin/`                          | **Preparado, sin aplicar.** Swap de 2 GB en `/swapfile` y `vm.swappiness=10`; se puede correr más de una vez                                                                                                                                                         |
+| `systemd/balancita.service.d/llama.conf`   | `/etc/systemd/system/balancita.service.d/` | **Aplicado el 2026-11-07.** Drop-in de llama-server: 5 hilos (`LLAMA_THREADS`), `mlock` (`LLAMA_ARG_LOAD_MODE=mmap+mlock`) y `LimitMEMLOCK=infinity`                                                                                                                 |
+| `swap-2g.sh`                               | `/usr/local/bin/`                          | **Aplicado el 2026-11-07.** Swap de 2 GB en `/swapfile` y `vm.swappiness=10`; se puede correr más de una vez                                                                                                                                                         |
 
 ## Alerta del respaldo
 
@@ -55,7 +55,7 @@ systemctl daemon-reload
 systemctl restart balancita        # reinicia TODO el stack, ver «Cuándo reiniciar»
 ```
 
-`llama.conf` pone `LLAMA_THREADS=5` (el lanzador, `scripts/dev-provider-env.mjs`, lo pasa como `-t 5`), `LLAMA_ARG_MLOCK=1` (llama-server lo lee solo; el lanzador le pasa el entorno entero, no hace falta otra bandera) y `LimitMEMLOCK=infinity`. Un solo reinicio aplica los dos.
+`llama.conf` pone `LLAMA_THREADS=5` (el lanzador, `scripts/dev-provider-env.mjs`, lo pasa como `-t 5`), `LLAMA_ARG_LOAD_MODE=mmap+mlock` (este llama-server no tiene `--mlock` sino `--load-mode`; `LLAMA_ARG_MLOCK` no existe y se ignora; el lanzador le pasa el entorno entero) y `LimitMEMLOCK=infinity`. Un solo reinicio aplica los dos.
 
 **Cuándo reiniciar:** entre los minutos :16 y :28 de cada hora, para no cruzar una mirada de :00/:15/:30/:45; si se cruza queda una fila `proceso_detenido`.
 
