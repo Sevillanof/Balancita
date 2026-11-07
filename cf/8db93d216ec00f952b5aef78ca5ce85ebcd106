@@ -1,0 +1,32 @@
+config/decision-questions.json
+  h_92dd6654ceb221 3,174-301
+docs/medir-noticias.md
+  h_92dd6654ceb221 43-71
+odd/tasks/noticias-y-auditor.md
+  h_92dd6654ceb221 36,55
+python/balancita_engine/futures_llm_decisions.py
+  h_92dd6654ceb221 144-148,186
+python/balancita_engine/futures_news.py
+  h_92dd6654ceb221 36-40,118-126,450-467,550-554,611-645,753-754,763-770,857-862,866-867,890-892,902,908-909,920-930,953-1052,1057-1058,1063,1083-1084,1103-1105,1165,1187-1188,1201
+python/balancita_engine/futures_qwen_noticias.py
+  h_92dd6654ceb221 76-145
+python/tests/test_futures_news.py
+  h_92dd6654ceb221 392-394
+python/tests/test_futures_news_card.py
+  h_92dd6654ceb221 1-496
+server/src/features/live-gateway/news-items.test.ts
+  h_92dd6654ceb221 150-253
+server/src/features/live-gateway/news-items.ts
+  h_92dd6654ceb221 9-20,35-64,86-87,152-228,612-613,635-645,741
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "cf8db93d216ec00f952b5aef78ca5ce85ebcd106",
+  "prompts": {},
+  "humans": {
+    "h_92dd6654ceb221": {
+      "author": "Franco Sevillano <79455847+Sevillanof@users.noreply.github.com>"
+    }
+  }
+}
