@@ -1,0 +1,26 @@
+odd/tasks/noticias-y-auditor.md
+  h_92dd6654ceb221 1-24
+python/balancita_engine/futures_auditor.py
+  h_92dd6654ceb221 14-33,112,138-142,145-147,169,173-175,179-193,786-798,837-937
+python/balancita_engine/futures_qwen_live.py
+  h_92dd6654ceb221 1120
+python/tests/test_futures_auditor_direccion.py
+  h_92dd6654ceb221 1-351
+python/tests/test_futures_qwen_live_corta.py
+  h_92dd6654ceb221 53-61
+server/src/features/live-gateway/auditor-verdicts.test.ts
+  h_92dd6654ceb221 94-95,100-156,264-325
+server/src/features/live-gateway/auditor-verdicts.ts
+  h_92dd6654ceb221 2,41-62,70-71,125-161,183,185-186,203,243-260,275-277,282,287-298,304,316,320-325,347-359
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "8bfa4dcdf580c8ff6076d54e4e8ceb62fca250a4",
+  "prompts": {},
+  "humans": {
+    "h_92dd6654ceb221": {
+      "author": "Franco Sevillano <79455847+Sevillanof@users.noreply.github.com>"
+    }
+  }
+}
