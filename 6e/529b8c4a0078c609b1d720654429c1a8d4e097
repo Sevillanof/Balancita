@@ -1,0 +1,18 @@
+odd/tasks/noticias-y-auditor.md
+  h_92dd6654ceb221 22-24,32-33
+python/balancita_engine/futures_qwen_noticias.py
+  h_92dd6654ceb221 29-30,32-34
+python/tests/test_futures_news.py
+  h_92dd6654ceb221 917-929
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "6e529b8c4a0078c609b1d720654429c1a8d4e097",
+  "prompts": {},
+  "humans": {
+    "h_92dd6654ceb221": {
+      "author": "Franco Sevillano <79455847+Sevillanof@users.noreply.github.com>"
+    }
+  }
+}
