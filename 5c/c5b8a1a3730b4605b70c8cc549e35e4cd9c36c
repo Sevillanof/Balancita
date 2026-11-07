@@ -1,0 +1,36 @@
+docs/observabilidad-salud-api.md
+  h_92dd6654ceb221 95-113
+docs/operacion-base-de-datos.md
+  h_92dd6654ceb221 20-22,32
+ops/vps/README.md
+  h_92dd6654ceb221 5-14,36-79
+ops/vps/swap-2g.sh
+  h_92dd6654ceb221 1-54
+ops/vps/systemd/balancita.service.d/llama.conf
+  h_92dd6654ceb221 1-13
+server/src/app/capture-main.ts
+  h_92dd6654ceb221 4,6-8,212-214,216-219,226
+server/src/features/kraken-futures/db-health-env.test.ts
+  h_92dd6654ceb221 1-85
+server/src/features/kraken-futures/db-health-env.ts
+  h_92dd6654ceb221 1-92
+server/src/features/kraken-futures/db-health.test.ts
+  h_92dd6654ceb221 8,134,138-140,142,147-165,308-353
+server/src/features/kraken-futures/db-health.ts
+  h_92dd6654ceb221 2-9,55-56,92,113,120-154,161-165,212,225,238,262,276-280,473
+server/src/features/live-gateway/observability-health-database.test.ts
+  h_92dd6654ceb221 161-183
+server/src/features/live-gateway/observability-health.ts
+  h_92dd6654ceb221 448,450-456,472-477,493,497,500,516
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "5cc5b8a1a3730b4605b70c8cc549e35e4cd9c36c",
+  "prompts": {},
+  "humans": {
+    "h_92dd6654ceb221": {
+      "author": "Franco Sevillano <79455847+Sevillanof@users.noreply.github.com>"
+    }
+  }
+}
