@@ -23,6 +23,10 @@ engine is the Terminal trader (maestro, portero, lifecycle); the forward books o
 C25-C31/Kronos and engine D are retired by default (data kept as history). The ADR is immutable and read-only:
 consult it, never edit it, unless the user directly requests an amendment.
 
+Amendment 2026-11-07 (requested by the user): public keyless third-party market
+data (Binance Vision, Deribit DVOL) is allowed for research and backtests; live
+use needs a separate user decision. Everything stays a paper simulation.
+
 Amendment 2026-10-19 (requested by the user): a user-initiated delete of a strategy
 removes everything about it, paper trades included; append-only still holds in
 normal operation. The new `odd/tasks/strategy-lifecycle.md` has the details.
