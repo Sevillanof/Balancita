@@ -92,6 +92,9 @@ DEFAULT_MAX_ANALYSES_PER_POLL = 20
 DEFAULT_MAX_ATTEMPTS = 3
 MAX_FEED_BYTES = 2_000_000
 DEFAULT_FETCH_TIMEOUT = 15.0
+# The briefing writes ~40 tokens from a few hundred prompt tokens; on the slow VPS llama-server (1.5-3 tokens/s)
+# that takes 15-30 s, so it must not share the timeout of a one-token classification call.
+DEFAULT_BRIEFING_TIMEOUT = 120.0
 DEFAULT_USER_AGENT = "Balancita-news/1.0 (+local research; polite RSS polling)"
 UNRESOLVED_BATCH = 2000
 MAX_BACKOFF_FACTOR = 8
@@ -704,7 +707,7 @@ class NewsService:
             self.sources, self.clock(), self.interval_ms, self.retry_window_ms,
             self.max_published_age_ms, self.max_analyses_per_poll)
         self.briefing = BriefingService(
-            self.store, self.provider, enabled=options.get("briefing_enabled", False),
+            self.store, options.get("briefing_provider") or self.provider, enabled=options.get("briefing_enabled", False),
             clock=self.clock, log=self.log)
 
     def _problem_once(self, key, message):
@@ -906,7 +909,10 @@ def _build_news_parser():
                         help="per source poll interval (default: NEWS_POLL_SECONDS or 300; minimum 60)")
     parser.add_argument("--poll-seconds", type=float, default=5.0, help="loop tick")
     parser.add_argument("--fetch-timeout-seconds", type=float, default=DEFAULT_FETCH_TIMEOUT)
-    parser.add_argument("--timeout-seconds", type=float, default=30.0, help="per model call")
+    parser.add_argument("--timeout-seconds", type=float, default=30.0, help="per classification model call")
+    parser.add_argument("--briefing-timeout-seconds", type=float,
+                        help="per briefing model call (default: {} or --timeout-seconds if larger)".format(
+                            int(DEFAULT_BRIEFING_TIMEOUT)))
     parser.add_argument("--retry-window-minutes", type=float, default=DEFAULT_RETRY_WINDOW_MS / MINUTE_MS)
     parser.add_argument("--max-published-age-hours", type=float, default=DEFAULT_MAX_PUBLISHED_AGE_MS / HOUR_MS)
     parser.add_argument("--max-analyses-per-poll", type=int, default=DEFAULT_MAX_ANALYSES_PER_POLL)
@@ -933,6 +939,13 @@ def _resolve_analysis_options(args, env, provider):
     if provider is None:
         provider = LlamaCppProvider(args.llama_url or llama_url(env), model_ref(env), timeout=args.timeout_seconds)
     return provider, questions, calibration, template, mode
+
+
+def _briefing_provider(provider, timeout):
+    """The same llama-server with the briefing's own call timeout (a scripted provider is used as is)."""
+    if isinstance(provider, LlamaCppProvider) and timeout != provider.timeout:
+        return LlamaCppProvider(provider.base_url, provider.model_ref, timeout=timeout)
+    return provider
 
 
 def _run_service_loop(service, store, args, sources, interval, provider, log):
@@ -973,13 +986,16 @@ def main(argv=None, provider=None, fetcher=None):
             fetcher = UrlFetcher(timeout=args.fetch_timeout_seconds,
                                  user_agent=(env.get("NEWS_USER_AGENT") or "").strip() or DEFAULT_USER_AGENT)
         store = NewsStore(args.news_db, NEWS_CONFIG)
+        briefing_timeout = (args.briefing_timeout_seconds if args.briefing_timeout_seconds is not None
+                            else max(DEFAULT_BRIEFING_TIMEOUT, args.timeout_seconds))
         service = NewsService(
             store, sources, fetcher, provider=provider, questions=questions, calibration=calibration,
             template=template, probability_source=mode, log=log, interval_ms=int(interval * 1000),
             retry_window_ms=int(args.retry_window_minutes * MINUTE_MS),
             max_published_age_ms=int(args.max_published_age_hours * HOUR_MS),
             max_analyses_per_poll=args.max_analyses_per_poll,
-            briefing_enabled=provider is not None and not args.no_briefing)
+            briefing_enabled=provider is not None and not args.no_briefing,
+            briefing_provider=_briefing_provider(provider, briefing_timeout))
     except (OSError, ValueError) as error:
         if store is not None:
             store.close()

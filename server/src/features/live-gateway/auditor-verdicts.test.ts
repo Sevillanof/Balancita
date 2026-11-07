@@ -91,8 +91,67 @@ describe('decision auditor verdicts', () => {
       veredicto_24h: null,
       veredicto_36h: null,
       despues: null,
+      // An auditor file written before the direction existed has no such column: null, not «no auditor».
+      direccion: null,
     })
     expect(unseen!.auditoria).toBeNull()
+  })
+
+  it('attaches the direction at 4, 12 and 24 h of each look when the auditor wrote it', () => {
+    const { dir, path } = seedLive()
+    const db = new DatabaseSync(join(dir, 'auditor.sqlite'))
+    db.exec(`${MIRADAS.slice(0, -1)}, direccion_json TEXT)`)
+    const insert = db.prepare('INSERT INTO miradas VALUES(?,?,?,?,?,?,?,?)')
+    const direction = JSON.stringify({
+      lado: -1,
+      '4h': { mov_pb: 100, a_favor_pb: -100, acerto: false },
+      '12h': { mov_pb: -40, a_favor_pb: 40, acerto: true },
+      '24h': null,
+    })
+    insert.run(
+      'PF_XBTUSD',
+      0,
+      'NO_ENTRAR_maestro',
+      null,
+      null,
+      null,
+      null,
+      direction,
+    )
+    insert.run('PF_XBTUSD', MIN15, 'ENTRAR', null, null, null, null, 'not json')
+    insert.run(
+      'PF_XBTUSD',
+      2 * MIN15,
+      'ENTRAR',
+      null,
+      null,
+      null,
+      null,
+      JSON.stringify({ lado: null, '4h': { mov_pb: 'x', acerto: 'si' } }),
+    )
+    db.close()
+
+    const [odd, damaged, resolved] = reportOf(path)
+    expect(resolved!.auditoria!.direccion).toEqual({
+      lado: -1,
+      '4h': { mov_pb: 100, a_favor_pb: -100, acerto: false },
+      '12h': { mov_pb: -40, a_favor_pb: 40, acerto: true },
+      '24h': null,
+    })
+    // The verdicts stay as they were.
+    expect(resolved!.auditoria).toMatchObject({
+      accion: 'NO_ENTRAR_maestro',
+      veredicto_12h: null,
+      despues: null,
+    })
+    expect(damaged!.auditoria!.direccion).toBeNull()
+    // Wrong types read as null fields, never as invented numbers.
+    expect(odd!.auditoria!.direccion).toEqual({
+      lado: null,
+      '4h': { mov_pb: null, a_favor_pb: null, acerto: null },
+      '12h': null,
+      '24h': null,
+    })
   })
 
   it('gives null auditoria without breaking the answer when there is no file', () => {
@@ -202,6 +261,68 @@ describe('decision auditor verdicts per operation', () => {
       salida_accion: null,
       mantener: { aciertos: 0, total: 0 },
       miradas: 2,
+      // This auditor file has no `operaciones` table: no measure, nothing else changes.
+      operacion: null,
+    })
+  })
+
+  it('attaches the direction and MAE/MFE of each operation, even one no look names', () => {
+    const path = seedAudit()
+    const db = new DatabaseSync(join(dirname(path), 'auditor.sqlite'))
+    db.exec(`CREATE TABLE operaciones(product TEXT, trade_no INTEGER, lado INTEGER, direccion_json TEXT,
+      mfe_pb REAL, mae_pb REAL, hasta_ms INTEGER, resuelto_ms INTEGER)`)
+    const insert = db.prepare('INSERT INTO operaciones VALUES(?,?,?,?,?,?,?,?)')
+    insert.run(
+      'PF_XBTUSD',
+      7,
+      -1,
+      JSON.stringify({
+        lado: -1,
+        '4h': { mov_pb: 23, a_favor_pb: -23, acerto: false },
+        '12h': null,
+        '24h': null,
+      }),
+      152.3,
+      -37.5,
+      5_000,
+      null,
+    )
+    // Operation 12: measured, but the auditor saw no look naming it.
+    insert.run('PF_XBTUSD', 12, 1, null, 0, -329.5, 9_000, 77)
+    // The same operation number of another product must not leak in.
+    insert.run('PF_ETHUSD', 8, 1, null, 1, -1, 1, 1)
+    db.close()
+
+    const audits = readAuditorTrades(path, 'PF_XBTUSD', [7, 8, 12])!
+    expect([...audits.keys()].sort((a, b) => a - b)).toEqual([7, 8, 12])
+    expect(audits.get(7)).toMatchObject({
+      entrada_horizonte: '36h',
+      miradas: 5,
+      operacion: {
+        lado: -1,
+        direccion: {
+          lado: -1,
+          '4h': { mov_pb: 23, a_favor_pb: -23, acerto: false },
+          '12h': null,
+        },
+        mfe_pb: 152.3,
+        mae_pb: -37.5,
+        hasta_ms: 5_000,
+        resuelta: false,
+      },
+    })
+    expect(audits.get(8)!.operacion).toBeNull()
+    expect(audits.get(12)).toMatchObject({
+      entrada: null,
+      salida: null,
+      miradas: 0,
+      operacion: {
+        lado: 1,
+        direccion: null,
+        mfe_pb: 0,
+        mae_pb: -329.5,
+        resuelta: true,
+      },
     })
   })
 

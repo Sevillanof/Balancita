@@ -1,4 +1,5 @@
 import { dirname, join } from 'node:path'
+import type { DatabaseSync } from 'node:sqlite'
 import { withDb, num, rowOf } from './observability-health.ts'
 
 /**
@@ -37,6 +38,28 @@ export interface QwenAfter {
   readonly queda_hasta_36h_pb: number | null
 }
 
+/**
+ * Whether the price went the way of the side one horizon after the look (or
+ * after the entry of an operation), from the closes of the 5 minute candles.
+ * Null while the horizon has not fully elapsed. No cost, no exit: only the sign.
+ */
+export interface QwenDirectionHorizon {
+  /** Price move since the look, in basis points, WITHOUT the sign of the side (positive = went up). */
+  readonly mov_pb: number | null
+  /** The same move times the side: positive = it went the way of the side. */
+  readonly a_favor_pb: number | null
+  /** True = it went with the side, false = against it, null = no move at all. */
+  readonly acerto: boolean | null
+}
+
+export interface QwenDirection {
+  /** +1 long / -1 short: the side the direction is judged against; null when the look has none. */
+  readonly lado: 1 | -1 | null
+  readonly '4h': QwenDirectionHorizon | null
+  readonly '12h': QwenDirectionHorizon | null
+  readonly '24h': QwenDirectionHorizon | null
+}
+
 export interface QwenAuditoria {
   /** What the auditor saw the look do (ENTRAR, NO_ENTRAR_portero, MANTENER, SALIR_vuelta, ...). */
   readonly accion: string
@@ -44,6 +67,8 @@ export interface QwenAuditoria {
   readonly veredicto_24h: QwenVerdict | null
   readonly veredicto_36h: QwenVerdict | null
   readonly despues: QwenAfter | null
+  /** Direction at 4, 12 and 24 h; null when the auditor has not written it yet (old rows, or too early). */
+  readonly direccion: QwenDirection | null
 }
 
 const AFTER_FIELDS = [
@@ -97,6 +122,43 @@ function afterOf(value: unknown): QwenAfter | null {
   ) as unknown as QwenAfter
 }
 
+function directionHorizonOf(value: unknown): QwenDirectionHorizon | null {
+  if (typeof value !== 'object' || value === null || Array.isArray(value))
+    return null
+  const body = value as Record<string, unknown>
+  return {
+    mov_pb: num(body.mov_pb),
+    a_favor_pb: num(body.a_favor_pb),
+    acerto: typeof body.acerto === 'boolean' ? body.acerto : null,
+  }
+}
+
+function directionOf(value: unknown): QwenDirection | null {
+  const body = jsonObject(value)
+  if (!body) return null
+  return {
+    lado: body.lado === 1 || body.lado === -1 ? body.lado : null,
+    '4h': directionHorizonOf(body['4h']),
+    '12h': directionHorizonOf(body['12h']),
+    '24h': directionHorizonOf(body['24h']),
+  }
+}
+
+function hasColumn(db: DatabaseSync, table: string, column: string): boolean {
+  return db
+    .prepare(`PRAGMA table_info(${table})`)
+    .all()
+    .some((row) => rowOf(row).name === column)
+}
+
+function hasTable(db: DatabaseSync, table: string): boolean {
+  return (
+    db
+      .prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?")
+      .get(table) !== undefined
+  )
+}
+
 /** The auditor database that sits next to the operator's; undefined when the operator has no path. */
 export function auditorDbPath(
   liveDbPath: string | undefined,
@@ -118,8 +180,10 @@ export function readAuditorVerdicts(
   const opened = withDb(auditorDbPath(liveDbPath), (db) =>
     db
       .prepare(
+        // A file the auditor has not migrated yet has no direction column: it reads as null, not as «no auditor».
         `SELECT bucket_ms, accion, veredicto_12h_json, veredicto_24h_json,
-                veredicto_36h_json, despues_json
+                veredicto_36h_json, despues_json,
+                ${hasColumn(db, 'miradas', 'direccion_json') ? 'direccion_json' : 'NULL AS direccion_json'}
            FROM miradas WHERE product=? AND bucket_ms BETWEEN ? AND ?`,
       )
       .all(product, fromBucketMs, toBucketMs)
@@ -136,6 +200,7 @@ export function readAuditorVerdicts(
       veredicto_24h: verdictOf(row.veredicto_24h_json),
       veredicto_36h: verdictOf(row.veredicto_36h_json),
       despues: afterOf(row.despues_json),
+      direccion: directionOf(row.direccion_json),
     })
   }
   return out
@@ -175,6 +240,24 @@ export interface QwenTradeAudit {
   readonly mantener: { readonly aciertos: number; readonly total: number }
   /** All the looks the auditor saw of this operation. */
   readonly miradas: number
+  /** The operation measured by itself (direction from its entry, MAE/MFE); null while the auditor has not written it or has no such table. */
+  readonly operacion: QwenTradeOperation | null
+}
+
+/** One operation measured from its entry, on the closes of the 5 minute candles. */
+export interface QwenTradeOperation {
+  /** +1 long / -1 short. */
+  readonly lado: 1 | -1 | null
+  /** Direction at 4, 12 and 24 h after the entry, whatever the exit; each horizon null until it has fully elapsed. */
+  readonly direccion: QwenDirection | null
+  /** Best the price did for the operation until its exit (or until `hasta_ms` while open), in basis points, >= 0. */
+  readonly mfe_pb: number | null
+  /** Worst the price did against it over the same stretch, in basis points, <= 0. */
+  readonly mae_pb: number | null
+  /** Close up to which MAE/MFE were measured; null when no candle after the entry. */
+  readonly hasta_ms: number | null
+  /** True once the operation is closed and its three horizons are known: the numbers no longer change. */
+  readonly resuelta: boolean
 }
 
 /**
@@ -189,26 +272,36 @@ export function readAuditorTrades(
   tradeNos: readonly number[],
 ): ReadonlyMap<number, QwenTradeAudit> | null {
   if (tradeNos.length === 0) return new Map()
-  const opened = withDb(auditorDbPath(liveDbPath), (db) =>
-    db
+  const marks = tradeNos.map(() => '?').join(',')
+  const opened = withDb(auditorDbPath(liveDbPath), (db) => ({
+    looks: db
       .prepare(
         `SELECT trade_no, accion, t_ms, veredicto_12h_json, veredicto_24h_json,
                 veredicto_36h_json
            FROM miradas
-          WHERE product=? AND trade_no IN (${tradeNos.map(() => '?').join(',')})
+          WHERE product=? AND trade_no IN (${marks})
           ORDER BY t_ms`,
       )
       .all(product, ...tradeNos)
       .map((row) => rowOf(row)),
-  )
+    // Written by a newer auditor: without the table the operations just carry no measure.
+    operations: hasTable(db, 'operaciones')
+      ? db
+          .prepare(
+            `SELECT trade_no, lado, direccion_json, mfe_pb, mae_pb, hasta_ms, resuelto_ms
+               FROM operaciones
+              WHERE product=? AND trade_no IN (${marks})`,
+          )
+          .all(product, ...tradeNos)
+          .map((row) => rowOf(row))
+      : [],
+  }))
   if (opened.state !== 'read') return null
   type Draft = {
     -readonly [K in keyof QwenTradeAudit]: QwenTradeAudit[K]
   } & { mantener: { aciertos: number; total: number } }
   const out = new Map<number, Draft>()
-  for (const row of opened.value) {
-    const tradeNo = num(row.trade_no)
-    if (tradeNo === null || typeof row.accion !== 'string') continue
+  const draftOf = (tradeNo: number): Draft => {
     let audit = out.get(tradeNo)
     if (!audit) {
       audit = {
@@ -220,9 +313,16 @@ export function readAuditorTrades(
         salida_accion: null,
         mantener: { aciertos: 0, total: 0 },
         miradas: 0,
+        operacion: null,
       }
       out.set(tradeNo, audit)
     }
+    return audit
+  }
+  for (const row of opened.value.looks) {
+    const tradeNo = num(row.trade_no)
+    if (tradeNo === null || typeof row.accion !== 'string') continue
+    const audit = draftOf(tradeNo)
     audit.miradas += 1
     const best = bestVerdict(row)
     if (row.accion.startsWith('ENTRAR')) {
@@ -242,6 +342,19 @@ export function readAuditorTrades(
     ) {
       audit.mantener.total += 1
       if (best.verdict.acerto) audit.mantener.aciertos += 1
+    }
+  }
+  // An operation can have a measure without any look naming it (the first look of several open at once, or a look lost while down).
+  for (const row of opened.value.operations) {
+    const tradeNo = num(row.trade_no)
+    if (tradeNo === null) continue
+    draftOf(tradeNo).operacion = {
+      lado: row.lado === 1 || row.lado === -1 ? row.lado : null,
+      direccion: directionOf(row.direccion_json),
+      mfe_pb: num(row.mfe_pb),
+      mae_pb: num(row.mae_pb),
+      hasta_ms: num(row.hasta_ms),
+      resuelta: num(row.resuelto_ms) !== null,
     }
   }
   return out
