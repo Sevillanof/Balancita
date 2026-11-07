@@ -145,10 +145,11 @@ class BriefingTests(unittest.TestCase):
         self.analysis(self.item(title="Ethereum staking and network security update"))
         inputs = briefing.select_inputs(self.store.db, NOW)
         body = briefing.request_body(inputs)
-        self.assertEqual(briefing.PROMPT_VERSION, 3)
+        self.assertEqual(briefing.PROMPT_VERSION, 4)
         self.assertEqual(len(body["messages"]), 3)
         self.assertEqual(body["temperature"], 0)
-        self.assertEqual(json.loads(body["messages"][1]["content"])["news"], inputs)
+        self.assertEqual(json.loads(body["messages"][1]["content"])["news"], briefing.prompt_news(inputs))
+        self.assertEqual(briefing.prompt_news(inputs)[0]["title"], inputs[0]["title"])
         final = body["messages"][-1]
         self.assertEqual(final["role"], "user")
         self.assertIn("exclusivamente en español", final["content"])
@@ -157,6 +158,96 @@ class BriefingTests(unittest.TestCase):
         self.assertIn("ningún número ni dígito", final["content"])
         self.assertIn("no interpretes tendencias del mercado", final["content"])
         self.assertIn("instrucciones de inversión", final["content"])
+
+    def test_prompt_carries_only_what_the_summary_needs_and_stays_small(self):
+        # VPS 2026-11-02..06: a full 12-story prompt was ~3,100 tokens (ids, urls, 13-digit timestamps, 1,500-char
+        # summaries); at the degraded llama-server speed that alone outlasted the call timeout.
+        for index in range(12):
+            id_ = self.item(
+                str(index), title="Ethereum actualización técnica número {} de la red".format(index),
+                summary="Detalle técnico del protocolo. " * 50,
+                url="https://a.example/section/{}/".format(index) + "x" * 80,
+                published_at=NOW - (index + 1) * 1000, received_at=NOW - 500,
+            )
+            self.analysis(id_, known=NOW - 100)
+        job = self.job()
+        inputs = briefing.select_inputs(self.store.db, NOW)
+        self.assertEqual(len(inputs), 12)
+        payload = briefing.request_body(inputs)["messages"][1]["content"]
+        news_entries = json.loads(payload)["news"]
+        self.assertEqual(len(news_entries), 12)
+        for entry in news_entries:
+            self.assertEqual(set(entry), {"source", "title", "summary"})
+            self.assertLessEqual(len(entry["summary"]), briefing.PROMPT_SUMMARY_CHARS)
+        self.assertLess(len(payload), 6000)
+        self.assertNotIn("https://", payload)
+        self.assertNotIn("published_at_ms", payload)
+        row = self.generate(job)
+        self.assertEqual(row["status"], "ok")
+        self.assertEqual(json.loads(row["inputs_json"]), inputs)  # the audit row keeps the full inputs
+
+    def retry_after(self, bad, marker):
+        """First answer is `bad`; the scripted model only behaves when the retry message contains `marker`."""
+        self.analysis(self.item())
+        bodies = []
+
+        def script(body):
+            bodies.append(body)
+            return completion(TEXT if marker in body["messages"][-1]["content"] else bad)
+
+        self.provider.chat_script = script
+        job = self.job()
+        first = self.generate(job)
+        self.clock.now += briefing.COOLDOWN_MS
+        return first, self.generate(job), bodies
+
+    def test_retry_names_the_offending_number_so_the_model_can_avoid_it(self):
+        # VPS: 26 of the 30 input sets with a rejected summary never produced one; the retry only named the rule,
+        # so the model repeated "2800 ETH" (29 distinct texts in 71 rejections).
+        first, second, bodies = self.retry_after(
+            "Un incidente en Mercado Bitcoin movió 2800 ETH mientras Binance recupera activos.", "«2800»")
+        self.assertEqual((first["status"], first["reason"]), ("error", "invalid_summary"))
+        self.assertIn("(digits)", first["error_message"])
+        self.assertIn("«2800»", first["error_message"])
+        self.assertEqual((second["status"], second["text"]), ("ok", TEXT))
+        self.assertEqual(len(bodies), 2)
+
+    def test_culprit_number_is_named_without_trailing_punctuation(self):
+        for text, culprit in [("Hong Kong exigirá reportes desde 2027, según el regulador.", "2027"),
+                              ("El banco central subió su tasa a 4.85% por la inflación.", "4.85%"),
+                              ("El regulador fijó un tope de $ para los emisores.", "$")]:
+            with self.assertRaises(llm.ModelResponseError) as raised:
+                briefing.validate_completion(completion(text))
+            self.assertIn("(digits) «{}»".format(culprit), str(raised.exception))
+
+    def test_retry_names_the_offending_word_so_the_model_can_avoid_it(self):
+        first, second, bodies = self.retry_after(
+            "Bitmine reduce compras de ether mientras Binance recupera activos tras el hack.", "«compras»")
+        self.assertEqual((first["status"], first["reason"]), ("error", "invalid_summary"))
+        self.assertIn("(forbidden_words)", first["error_message"])
+        self.assertIn("«compras»", first["error_message"])
+        self.assertEqual((second["status"], second["text"]), ("ok", TEXT))
+
+    def test_retry_after_a_too_long_summary_says_how_many_words_it_had(self):
+        bad = " ".join(["La"] * 29)
+        first, second, bodies = self.retry_after(bad, "29 palabras")
+        self.assertIn("(too_long)", first["error_message"])
+        self.assertEqual((second["status"], second["text"]), ("ok", TEXT))
+
+    def test_rows_stored_before_the_fragment_existed_still_give_the_rule_hint(self):
+        self.analysis(self.item())
+        bodies = []
+        self.provider.chat_script = lambda body: (bodies.append(body), completion())[1]
+        job = self.job()
+        inputs = briefing.select_inputs(self.store.db, NOW)
+        base = dict(job._base(inputs, NOW), model_ref=self.provider.model_ref)
+        job._append(dict(base, status="pending", reason="generation_in_progress"))
+        job._append(dict(base, status="error", reason="invalid_summary",
+                         error_message="summary is not bounded Spanish news-only plain text (digits)",
+                         response_json=briefing._json(completion(RECORDED_ENGLISH))))
+        self.clock.now += briefing.COOLDOWN_MS
+        self.assertEqual(self.generate(job)["status"], "ok")
+        self.assertIn("cifras", bodies[0]["messages"][-1]["content"])
 
     def test_prompt_upgrade_ignores_old_failure_budget_but_preserves_global_cooldown_and_history(self):
         self.analysis(self.item())
@@ -339,6 +430,29 @@ class BriefingTests(unittest.TestCase):
         self.assertEqual((row["status"], row["text"], row["reason"]),
                          ("error", None, "inputs_expired_before_commit"))
         self.assertIsNotNone(row["response_json"])
+
+    def test_briefing_uses_its_own_provider_when_given_and_the_classifier_provider_otherwise(self):
+        for given in (False, True):
+            with self.subTest(briefing_provider=given):
+                folder = tempfile.mkdtemp(prefix=".news-briefing-provider-", dir=".")
+                self.addCleanup(shutil.rmtree, folder)
+                store = news.NewsStore(os.path.join(folder, "news.sqlite"), news.NEWS_CONFIG)
+                self.addCleanup(store.close)
+                classifier = llm.FakeProvider(entries=scripted, model_ref="Qwen-local.gguf")
+                classifier.chat_script = lambda body: completion()
+                writer = llm.FakeProvider(entries=scripted, model_ref="Qwen-local.gguf")
+                writer.chat_script = lambda body: completion()
+                fetcher = FakeFetcher({SRC_A["url"]: rss([fresh_item(1, now=NOW, title="Ethereum protocol update")])})
+                options = {"briefing_provider": writer} if given else {}
+                service = news.NewsService(store, [SRC_A], fetcher, provider=classifier, clock=self.clock,
+                                           log=self.logs.append, briefing_enabled=True, **options)
+                self.addCleanup(service.close)
+                self.assertEqual(service.poll()["analyzed"], 2)
+                service.briefing.drain()
+                self.assertEqual(store.db.execute(
+                    "SELECT status FROM paper_futures_news_briefings ORDER BY briefing_id DESC LIMIT 1").fetchone(),
+                    ("ok",))
+                self.assertEqual((classifier.calls, writer.calls), ((2, 1) if given else (3, 0)))
 
     def test_briefing_chat_does_not_block_next_ingestion_or_classification(self):
         started, release = threading.Event(), threading.Event()

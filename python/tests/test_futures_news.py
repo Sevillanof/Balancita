@@ -1125,6 +1125,61 @@ class CliTests(TempDirTest):
         ).fetchone(), ("ok", text))
         db.close()
 
+    def slow_briefing_server(self, delay):
+        """llama-server whose classification answers at once and whose briefing chat takes `delay` seconds."""
+        server = FakeLlama()
+        self.addCleanup(server.stop)
+        text = "Ethereum centra las novedades del protocolo y la regulación, sin una señal de operación."
+
+        def response(body):
+            if body.get("response_format"):
+                time.sleep(delay)
+                return {"model": "qwen.gguf", "choices": [{
+                    "finish_reason": "stop", "message": {"content": json.dumps({"summary": text})},
+                }]}
+            return llama_reply(body)
+
+        server.pick = response
+        return server
+
+    def last_briefing(self):
+        db = sqlite3.connect(self.path)
+        try:
+            return db.execute("SELECT status,reason,error_message FROM paper_futures_news_briefings "
+                              "ORDER BY briefing_id DESC LIMIT 1").fetchone()
+        finally:
+            db.close()
+
+    def test_briefing_chat_is_not_cut_by_the_short_classification_timeout(self):
+        # VPS 2026-11-02..06: 480 of 608 briefing attempts died at the 30 s per-call timeout that suits a one-token
+        # classification, while the model was up (it answered, slowly: 1.5-3 tokens/s).
+        self.server.body = rss([fresh_item(1, now=int(time.time() * 1000), minutes_ago=1,
+                                          title="Ethereum protocol update")])
+        server = self.slow_briefing_server(delay=1.2)
+        code, out = self.run_main("--once", "--analyze", "--news-db", self.path, "--sources-file", self.sources,
+                                  "--llama-url", server.url, "--timeout-seconds", "0.5")
+        self.assertEqual(code, 0)
+        self.assertIn("analyzed 2", out)
+        self.assertEqual(self.last_briefing(), ("ok", None, None))
+
+    def test_an_explicit_briefing_timeout_still_records_a_timeout_as_model_unavailable(self):
+        self.server.body = rss([fresh_item(1, now=int(time.time() * 1000), minutes_ago=1,
+                                          title="Ethereum protocol update")])
+        server = self.slow_briefing_server(delay=1.2)
+        code, out = self.run_main("--once", "--analyze", "--news-db", self.path, "--sources-file", self.sources,
+                                  "--llama-url", server.url, "--timeout-seconds", "0.5",
+                                  "--briefing-timeout-seconds", "0.5")
+        self.assertEqual(code, 0)
+        status, reason, message = self.last_briefing()
+        self.assertEqual((status, reason), ("error", "model_unavailable"))
+        self.assertIn("timed out", message)
+
+    def test_the_default_briefing_timeout_is_longer_than_a_classification_call(self):
+        args = n._build_news_parser().parse_args([])
+        self.assertIsNone(args.briefing_timeout_seconds)
+        self.assertEqual(args.timeout_seconds, 30.0)
+        self.assertGreater(n.DEFAULT_BRIEFING_TIMEOUT, args.timeout_seconds)
+
     def test_no_briefing_preserves_news_classification_without_synthesis(self):
         self.server.body = rss([fresh_item(1, now=int(time.time() * 1000), minutes_ago=1,
                                           title="Ethereum protocol update")])
