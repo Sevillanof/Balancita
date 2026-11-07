@@ -1,6 +1,12 @@
 import { spawn } from 'node:child_process'
-import { readFileSync, renameSync, statSync, writeFileSync } from 'node:fs'
-import { basename } from 'node:path'
+import {
+  existsSync,
+  readFileSync,
+  renameSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs'
+import { basename, delimiter, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { latestBackupMs } from '../../platform/sqlite-safety.ts'
 import type { WakeEvent } from '../../platform/wake-detector.ts'
@@ -46,6 +52,8 @@ export interface DbHealthState {
   }
   /** Base name of the damaged database file, null when none is known to be damaged. */
   readonly damaged: string | null
+  /** How often the integrity check runs (the panel judges a «late» check against this). */
+  readonly integrity_every_ms: number
   readonly backup_every_ms: number
   readonly backups: Readonly<
     Record<
@@ -81,7 +89,7 @@ export interface DbHealthOptions {
   readonly walBytes?: () => number
   /** WAL folded back into the file this often (default 5 min). */
   readonly checkpointMs?: number
-  /** Integrity check of the capture database (default every 15 min). */
+  /** Integrity check of the capture database (default every 6 h; see `DEFAULT_INTEGRITY_MS`). */
   readonly integrityMs?: number
   /** Databases copied daily (empty: no backups). */
   readonly backupTargets?: readonly BackupTarget[]
@@ -102,11 +110,47 @@ export interface DbHealthOptions {
   readonly walWarnBytes?: number
   /** After a wake-up no backup starts for this long (default 10 min). */
   readonly wakePauseMs?: number
+  /** The integrity check is stopped, with no verdict, after this long (default 45 min). */
   readonly integrityTimeoutMs?: number
   readonly backupTimeoutMs?: number
 }
 
 const CHILD = fileURLToPath(new URL('./db-health-child.ts', import.meta.url))
+
+const MINUTE = 60_000
+/** Integrity check every 6 h: a 10 GB `quick_check` every 15 min kept the disk busy (analisis/vps-qwen-lento). */
+export const DEFAULT_INTEGRITY_MS = 360 * MINUTE
+/** Margin for that check on a busy disk; past it the check is stopped without a verdict. */
+export const DEFAULT_INTEGRITY_TIMEOUT_MS = 45 * MINUTE
+
+/**
+ * The command that runs a health child. On Linux, with `nice` and `ionice` on the PATH, the child gets the
+ * lowest CPU and idle IO priority (`nice -n 19 ionice -c3 node ...`) so the capture and llama-server win any
+ * disk collision; anywhere else (or if either binary is missing) it is the plain `node ...`.
+ */
+export function lowPriorityCommand(input: {
+  execPath: string
+  args: readonly string[]
+  platform?: NodeJS.Platform
+  pathEnv?: string
+  exists?: (file: string) => boolean
+}): { command: string; args: string[] } {
+  const plain = { command: input.execPath, args: [...input.args] }
+  if ((input.platform ?? process.platform) !== 'linux') return plain
+  const exists = input.exists ?? existsSync
+  const dirs = (input.pathEnv ?? process.env.PATH ?? '')
+    .split(delimiter)
+    .filter(Boolean)
+  const find = (name: string): string | undefined =>
+    dirs.map((dir) => join(dir, name)).find((file) => exists(file))
+  const nice = find('nice')
+  const ionice = find('ionice')
+  if (!nice || !ionice) return plain
+  return {
+    command: nice,
+    args: ['-n', '19', ionice, '-c3', input.execPath, ...input.args],
+  }
+}
 
 /** Default task runner: `node db-health-child.ts <json>`, one JSON line back. */
 export function spawnTask(
@@ -114,11 +158,11 @@ export function spawnTask(
   timeoutMs = 3_600_000,
 ): Promise<HealthTaskResult> {
   return new Promise((resolve) => {
-    const child = spawn(
-      process.execPath,
-      ['--experimental-strip-types', CHILD, JSON.stringify(task)],
-      { stdio: ['ignore', 'pipe', 'pipe'] },
-    )
+    const { command, args } = lowPriorityCommand({
+      execPath: process.execPath,
+      args: ['--experimental-strip-types', CHILD, JSON.stringify(task)],
+    })
+    const child = spawn(command, args, { stdio: ['ignore', 'pipe', 'pipe'] })
     let out = ''
     let err = ''
     let timedOut = false
@@ -165,7 +209,7 @@ const HOUR = 3_600_000
 /**
  * Keeps the market database healthy while the capture runs:
  * - folds the WAL back every few minutes (a WAL that never shrinks slows every reader);
- * - checks integrity every 15 min in its own process (`quick_check`, stopped if it runs too long);
+ * - checks integrity every 6 h by default in its own process (`quick_check`, stopped after 45 min), at low priority on Linux;
  * - copies the databases once a day through SQLite's backup API (one at a time, never
  *   while the retention cleanup works, never right after a wake-up) and keeps the last good copies;
  * - after the machine wakes up: truncates the WAL and checks integrity before heavy writes resume.
@@ -178,7 +222,7 @@ export function createDbHealth(options: DbHealthOptions) {
     options.runTask ?? ((task) => spawnTask(task, taskTimeout(task)))
   const taskTimeout = (task: HealthTask): number =>
     task.kind === 'integrity'
-      ? (options.integrityTimeoutMs ?? 10 * 60_000)
+      ? (options.integrityTimeoutMs ?? DEFAULT_INTEGRITY_TIMEOUT_MS)
       : (options.backupTimeoutMs ?? 90 * 60_000)
   const walBytes =
     options.walBytes ??
@@ -191,6 +235,7 @@ export function createDbHealth(options: DbHealthOptions) {
     })
   const walWarn = options.walWarnBytes ?? 2 * 1024 ** 3
   const backupEvery = options.backupMs ?? 24 * HOUR
+  const integrityEvery = options.integrityMs ?? DEFAULT_INTEGRITY_MS
   const backupRetry = options.backupRetryMs ?? HOUR
   const wakePause = options.wakePauseMs ?? 10 * 60_000
   const dbFile = basename(options.dbPath)
@@ -214,6 +259,7 @@ export function createDbHealth(options: DbHealthOptions) {
       timed_out: false,
     },
     damaged: null,
+    integrity_every_ms: integrityEvery,
     backup_every_ms: backupEvery,
     backups: {},
     wake: null,
@@ -227,7 +273,11 @@ export function createDbHealth(options: DbHealthOptions) {
       ) as DbHealthState
       if (raw.schema !== 'db-health.v1') return undefined
       // A damaged flag from a previous run stays until a check says otherwise.
-      return { ...raw, backup_every_ms: backupEvery }
+      return {
+        ...raw,
+        integrity_every_ms: integrityEvery,
+        backup_every_ms: backupEvery,
+      }
     } catch {
       return undefined
     }
@@ -420,7 +470,7 @@ export function createDbHealth(options: DbHealthOptions) {
         timers.push(timer)
       }
       every(options.checkpointMs ?? 300_000, checkpointNow)
-      every(options.integrityMs ?? 15 * 60_000, integrityNow)
+      every(integrityEvery, integrityNow)
       if (options.backupDir && (options.backupTargets?.length ?? 0) > 0) {
         every(options.backupCheckMs ?? 10 * 60_000, () => backupsNow())
         const first = setTimeout(() => void backupsNow(), 3 * 60_000)

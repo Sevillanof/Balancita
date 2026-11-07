@@ -756,6 +756,32 @@ class AnalysisTests(ServiceBase):
         self.assertEqual(json.loads(row["timings_json"])["prompt_n"], 120)
         self.assertTrue(json.loads(row["top_logprobs_json"]))
 
+    def test_news_requests_are_item_by_item_with_the_item_text_first_so_the_server_reuses_its_prompt_cache(self):
+        # Measured on llama-server (analisis/qwen-cache-prompt): the two questions of one item run back to back
+        # and share ``system + STATE`` byte for byte, so the second one only processes its question block
+        # (prompt_n 84 against 136-206). Putting the question first would reuse that block but process the item
+        # text twice (-17 % tokens) and change the probabilities (up to 1.0 on one option), so it is NOT done.
+        server = FakeLlama()
+        self.addCleanup(server.stop)
+        server.pick = llama_reply
+        provider = q.LlamaCppProvider(server.url, model_ref="qwen-test", timeout=5, health_timeout=2)
+        self.service(provider=provider).poll()
+        bodies = server.completions()
+        self.assertEqual(len(bodies), 4)
+        for body in bodies:
+            self.assertIs(body["cache_prompt"], True)
+            self.assertNotIn("id_slot", body)
+        self.assertEqual(len({b["messages"][0]["content"] for b in bodies}), 1)
+        states = [b["messages"][-1]["content"].split("\nQUESTION:")[0] for b in bodies]
+        self.assertTrue(all(state.startswith("STATE: headline:") for state in states))
+        self.assertEqual(states[0], states[1])
+        self.assertEqual(states[2], states[3])
+        self.assertNotEqual(states[0], states[2])
+        asked = [b["grammar"] for b in bodies]
+        self.assertEqual(asked[0], asked[2])
+        self.assertEqual(asked[1], asked[3])
+        self.assertNotEqual(asked[0], asked[1])
+
     def test_a_model_that_is_down_leaves_the_items_stored_and_pending(self):
         provider = self.provider(healthy=False)
         service = self.service(provider=provider)

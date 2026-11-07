@@ -5,6 +5,7 @@ import { DatabaseSync } from 'node:sqlite'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   createDbHealth,
+  lowPriorityCommand,
   spawnTask,
   type DbHealthState,
   type HealthTask,
@@ -130,15 +131,36 @@ describe('database health', () => {
     expect(slow.records).toHaveLength(1)
   })
 
-  it('checks the integrity every 15 minutes by default', async () => {
+  it('checks the integrity every 6 hours by default, not every 15 minutes', async () => {
     vi.useFakeTimers()
     const { health, tasks } = fixture()
     health.start()
-    await vi.advanceTimersByTimeAsync(15 * 60_000 + 10)
+    await vi.advanceTimersByTimeAsync(5 * 3_600_000)
+    expect(tasks.filter((t) => t.kind === 'integrity')).toHaveLength(0)
+    await vi.advanceTimersByTimeAsync(3_600_000 + 10)
     expect(tasks.filter((t) => t.kind === 'integrity')).toHaveLength(1)
-    await vi.advanceTimersByTimeAsync(15 * 60_000)
+    await vi.advanceTimersByTimeAsync(6 * 3_600_000)
     expect(tasks.filter((t) => t.kind === 'integrity')).toHaveLength(2)
     health.stop()
+  })
+
+  it('honours integrityMs when given, and still folds the WAL every 5 minutes', async () => {
+    vi.useFakeTimers()
+    const { health, tasks, records } = fixture({ integrityMs: 15 * 60_000 })
+    health.start()
+    await vi.advanceTimersByTimeAsync(15 * 60_000 + 10)
+    expect(tasks.filter((t) => t.kind === 'integrity')).toHaveLength(1)
+    expect(records.filter((r) => r.check === 'checkpoint')).toHaveLength(3)
+    health.stop()
+  })
+
+  it('publishes how often the integrity check runs, next to the daily backup period', () => {
+    const dir = tmp()
+    const statePath = join(dir, 'state.json')
+    const { health } = fixture({ statePath, integrityMs: 90 * 60_000 })
+    expect(health.state().integrity_every_ms).toBe(90 * 60_000)
+    expect(health.state().backup_every_ms).toBe(24 * 3_600_000)
+    expect(health.state().schema).toBe('db-health.v1')
   })
 
   it('after waking up it truncates the WAL first and checks the integrity before heavy writes resume', async () => {
@@ -282,4 +304,50 @@ describe('database health', () => {
     })
     expect(bad.ok).toBe(false)
   }, 30_000)
+})
+
+describe('low priority for the health children', () => {
+  const found =
+    (...names: string[]) =>
+    (file: string) =>
+      names.some((name) => file === `/usr/bin/${name}`)
+  const base = {
+    execPath: '/usr/bin/node',
+    args: ['--experimental-strip-types', 'child.ts', '{}'],
+    pathEnv: '/usr/local/bin:/usr/bin',
+  }
+
+  it('on Linux with nice and ionice installed runs the child as `nice -n 19 ionice -c3 node ...`', () => {
+    expect(
+      lowPriorityCommand({
+        ...base,
+        platform: 'linux',
+        exists: found('nice', 'ionice'),
+      }),
+    ).toEqual({
+      command: '/usr/bin/nice',
+      args: [
+        '-n',
+        '19',
+        '/usr/bin/ionice',
+        '-c3',
+        '/usr/bin/node',
+        '--experimental-strip-types',
+        'child.ts',
+        '{}',
+      ],
+    })
+  })
+
+  it.each([
+    ['not on Linux', 'darwin', found('nice', 'ionice')],
+    ['without ionice', 'linux', found('nice')],
+    ['without nice', 'linux', found('ionice')],
+    ['without either', 'linux', found()],
+  ] as const)('falls back to a plain spawn %s', (_name, platform, exists) => {
+    expect(lowPriorityCommand({ ...base, platform, exists })).toEqual({
+      command: '/usr/bin/node',
+      args: base.args,
+    })
+  })
 })
