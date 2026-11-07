@@ -1,0 +1,18 @@
+docs/medir-noticias.md
+  h_92dd6654ceb221 41-42
+odd/tasks/noticias-y-auditor.md
+  h_92dd6654ceb221 27-28,40
+python/tests/test_futures_news.py
+  h_92dd6654ceb221 759-784
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "22adee056d49953a0177337480476ad23ab85866",
+  "prompts": {},
+  "humans": {
+    "h_92dd6654ceb221": {
+      "author": "Franco Sevillano <79455847+Sevillanof@users.noreply.github.com>"
+    }
+  }
+}
