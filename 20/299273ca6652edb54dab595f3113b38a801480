@@ -1,0 +1,14 @@
+odd/tasks/noticias-y-auditor.md
+  h_92dd6654ceb221 14-15,18-28,38-39
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "20299273ca6652edb54dab595f3113b38a801480",
+  "prompts": {},
+  "humans": {
+    "h_92dd6654ceb221": {
+      "author": "Franco Sevillano <79455847+Sevillanof@users.noreply.github.com>"
+    }
+  }
+}
