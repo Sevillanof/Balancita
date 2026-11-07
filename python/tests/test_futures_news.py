@@ -425,8 +425,9 @@ class CatalogTests(unittest.TestCase):
         sources = n.load_sources()
         ids = [s["id"] for s in sources]
         self.assertEqual(len(ids), len(set(ids)))
-        self.assertLessEqual({"thedefiant", "bankless", "eth_foundation", "theblock", "sec", "fed"}, set(ids))
+        self.assertLessEqual({"thedefiant", "eth_foundation", "theblock", "sec", "fed"}, set(ids))
         self.assertNotIn("bitcoinmagazine", ids)
+        self.assertNotIn("bankless", ids)                 # paid ads, slowest, 0 of 24 items preceded an ETH move
         self.assertNotIn("ecb", ids)
         for source in sources:
             self.assertTrue(source["url"].startswith("https://"), source["id"])
@@ -912,6 +913,19 @@ class AnalysisTests(ServiceBase):
         self.assertEqual(result["skipped_stale"], 4)
         self.assertEqual(provider.calls, 2)
 
+
+    def test_amounts_and_words_containing_a_verb_do_not_make_a_headline_a_price_recap(self):
+        self.fetcher.bodies[SRC_A["url"]] = rss([
+            fresh_item(1, title="Binance hacked: attackers drain $6.3 billion from hot wallet", desc="crypto exchange"),
+            fresh_item(2, title="Mercado Bitcoin halts withdrawals after $40 million drained", desc="crypto exchange"),
+            fresh_item(3, title="Binance-Controlled Korean Exchange GOPAX Stops Trading", desc="crypto exchange"),
+            fresh_item(4, title="ETH surges above $3,000 as price rallies"),
+        ])
+        provider = self.provider()
+        result = self.service(provider=provider).poll()
+        self.assertEqual(result["ingested"], 4)
+        self.assertEqual(result["analyzed"], 6)                  # 3 items x (relevance, direction)
+        self.assertEqual(result["skipped_stale"], 2)             # the real price recap, both questions
 
 # ---------------------------------------------------------------- features for C
 
