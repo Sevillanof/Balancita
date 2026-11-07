@@ -1,0 +1,18 @@
+AGENTS.md
+  h_92dd6654ceb221 26-29
+docs/adr/0001-isolated-paper-futures-accounting.md
+  h_92dd6654ceb221 283-304
+odd/tasks/noticias-y-auditor.md
+  h_92dd6654ceb221 16-17,20-33,46-49
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "1cb584b8cbaaac99e4f8e333d03af1b279c89b8e",
+  "prompts": {},
+  "humans": {
+    "h_92dd6654ceb221": {
+      "author": "Franco Sevillano <79455847+Sevillanof@users.noreply.github.com>"
+    }
+  }
+}
