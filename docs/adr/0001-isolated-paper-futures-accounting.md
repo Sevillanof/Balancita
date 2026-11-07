@@ -259,3 +259,24 @@ Market events are captured only for PF_ETHUSD and PF_XBTUSD; funding responses k
 ### Unchanged
 
 Paper only without keys; exact Decimal accounting, canonical hashing and append-only storage; real per-product costs and observed funding; declaring a winner (Amendment 2026-10-23).
+
+## Amendment 2026-11-07: public third-party market data for research
+
+Requested directly by the user (Fran) on 2026-11-07 («Hace la enmienda y arranca con Binance. Tene en cuenta que todo es simulacion, no estamos operando con dinero real»). Where it conflicts with the text above, including «Only public Kraken Futures data is used» (Amendment 2026-10-06), this amendment prevails. Everything remains a simulation: paper only, no real orders, no money at risk.
+
+### What is allowed
+
+- **Public, keyless third-party market data** may be downloaded and used as research features: Binance Vision public archives (klines with taker volume, futures metrics, funding and premium) and the Deribit public volatility index (DVOL). Other public keyless sources need the same check before use: license, quota, cost and publication delay.
+- **Use:** offline research, model fitting and backtests of the strategy laboratory. Using a third-party feature in the live paper Terminal is a separate decision of the user, taken only after the laboratory shows it adds value, and after checking that the source's license allows it.
+
+### Rules
+
+- **No accounts, keys or private endpoints** on any venue; nothing is sent, only public files and endpoints are read.
+- **Kraken stays the venue of record:** prices, fills, fees and funding of the paper accounts come only from Kraken. Third-party data is never a substitute for Kraken costs or funding.
+- **Point in time:** a feature is used only from the moment it was published (closed candles, end of the bucket); downloaded files are stored with their hash.
+- **The reserve is untouched:** nothing from 2026-04-19 onward is downloaded or read for research; April 2026 is cut with daily files at 2026-04-18.
+- **Attribution and license:** Binance Vision data is used under its terms (CC BY-NC-SA 4.0: research and backtesting, non-commercial), with attribution in the research reports.
+
+### Unchanged
+
+Paper only without keys; exact Decimal accounting, canonical hashing and append-only storage; real per-product costs and observed Kraken funding; the strategy laboratory and promotion rules (Amendment 2026-11-06).
