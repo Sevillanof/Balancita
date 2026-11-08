@@ -1,0 +1,40 @@
+docs/medir-noticias.md
+  h_92dd6654ceb221 3,18,47,72-103
+odd/tasks/noticias-y-auditor.md
+  h_92dd6654ceb221 37,58
+ops/vps/README.md
+  h_92dd6654ceb221 5-13,79-128
+ops/vps/systemd/balancita.service.d/noticias.conf
+  h_92dd6654ceb221 1-12
+python/archivo_parquet/config.py
+  h_92dd6654ceb221 260-267
+python/balancita_engine/futures_news.py
+  h_92dd6654ceb221 40-43,129,759-760,768-775,779,782,986-989,991-992,1000,1002,1107-1111,1124-1128,1185-1186,1213-1214,1228
+python/balancita_engine/futures_news_briefing.py
+  h_92dd6654ceb221 80-113,116,118,120,130-135,137,151,157-160
+python/balancita_engine/futures_news_effect.py
+  h_92dd6654ceb221 3-6,83,92-100,104-112,193
+python/balancita_engine/futures_qwen_noticias.py
+  h_92dd6654ceb221 119-128,138-142,153-155,158
+python/tests/test_futures_news_briefing_cards.py
+  h_92dd6654ceb221 1-138
+python/tests/test_futures_news_card_only.py
+  h_92dd6654ceb221 1-319
+python/tests/test_futures_news_effect_cards.py
+  h_92dd6654ceb221 1-89
+server/src/features/live-gateway/news-items.test.ts
+  h_92dd6654ceb221 254-405
+server/src/features/live-gateway/news-items.ts
+  h_92dd6654ceb221 77-81,206-219,222,243-246,710-724,726-731,760-776,778-783,798
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "76f285c7ccb99bfa8757ec94ee77dcc7db78dbda",
+  "prompts": {},
+  "humans": {
+    "h_92dd6654ceb221": {
+      "author": "Franco Sevillano <79455847+Sevillanof@users.noreply.github.com>"
+    }
+  }
+}
