@@ -37,7 +37,10 @@ Design rules
   "already happened" from four one-letter questions (``news_card`` scope), asked as a cascade (a price recap stops
   after the first question) and finished by fixed rules. Its answers go to the same analysis table; the finished
   card goes to its own append-only table ``paper_futures_news_cards`` (one row per item and ``CARD_VERSION``). It is
-  added to the two classifier questions, never replaces them, and stays off unless asked for.
+  added to the two classifier questions and stays off unless asked for. Card-only configuration (T14): with the card
+  on, ``NEWS_LEGACY_QUESTIONS=0`` stops asking the two classifier questions and ``NEWS_CARD_SCOPE=0`` the scope
+  question (the card then has no scope or "already happened"); both default to on, so nothing changes unset. Readers
+  of the old answers are listed in ``docs/medir-noticias.md``.
 * The optional news briefing is a separate, append-only, view-only Qwen synthesis.
   Its bounded background chat never writes classifier rows or enters ``news_features``.
 * Stdlib only, Python 3.9+.
@@ -123,6 +126,7 @@ CARD_VERSION = 1
 CARD_ORDER = ("news_card_type", "news_card_strength", "news_card_direction", "news_card_scope_status")
 CARD_TYPE, CARD_STRENGTH, CARD_DIRECTION, CARD_SCOPE = CARD_ORDER
 CARD_RECAP_TYPE = "price_recap"
+CARD_ORDER_NO_SCOPE = CARD_ORDER[:3]
 
 RELEVANCE_QUESTION = ("news_relevance_btc", 2)
 DIRECTION_QUESTION = ("news_direction", 2)
@@ -752,22 +756,30 @@ class NewsService:
         max_attempts = options.get("max_attempts", DEFAULT_MAX_ATTEMPTS)
         cards = options.get("cards", False)
         card_questions = options.get("card_questions")
+        legacy_questions = options.get("legacy_questions", True)
+        card_scope = options.get("card_scope", True)
         if interval_ms < MIN_INTERVAL_MS:
             raise ValueError("the polling interval must be at least {} s".format(MIN_INTERVAL_MS // 1000))
         self.store = store
         self.sources = validate_sources(list(sources))
         self.fetcher = fetcher
         self.provider = provider
-        self.questions = dict(questions) if questions is not None else load_questions(scope="news")
-        self.calibration = calibration if calibration is not None else load_calibration()
         self.cards = bool(cards)
+        self.legacy_questions = bool(legacy_questions)
+        self.card_scope = bool(card_scope)
+        if not self.legacy_questions and provider is not None and not self.cards:
+            raise ValueError("NEWS_LEGACY_QUESTIONS=0 needs the cards (NEWS_CARDS=1): nothing would be asked")
+        self.questions = ({} if not self.legacy_questions else
+                          dict(questions) if questions is not None else load_questions(scope="news"))
+        self.calibration = calibration if calibration is not None else load_calibration()
+        self.card_order = CARD_ORDER if self.card_scope else CARD_ORDER_NO_SCOPE
         self.card_questions = {}
         if self.cards:
             loaded = dict(card_questions) if card_questions is not None else load_questions(scope="news_card")
-            missing = [name for name in CARD_ORDER if name not in loaded]
+            missing = [name for name in self.card_order if name not in loaded]
             if missing:
                 raise ValueError("card questions missing from the catalog: " + ", ".join(missing))
-            self.card_questions = {name: loaded[name] for name in CARD_ORDER}
+            self.card_questions = {name: loaded[name] for name in self.card_order}
         defaults = load_prompt_config()
         self.template = template or defaults["templates"][defaults["default_version"]]
         self.probability_source = probability_source or defaults["probability_source"]
@@ -971,12 +983,13 @@ class NewsService:
         if event_type != CARD_RECAP_TYPE:
             strength = answers[CARD_STRENGTH]
             options = [option["id"] for option in self.card_questions[CARD_STRENGTH]["options"]]
-            scope, _, happened = answers[CARD_SCOPE]["chosen"].partition("_")
-            card.update(strength=options.index(strength["chosen"]), direction=answers[CARD_DIRECTION]["chosen"],
-                        scope=scope, already_happened=happened == "happened")
+            card.update(strength=options.index(strength["chosen"]), direction=answers[CARD_DIRECTION]["chosen"])
+            if self.card_scope:
+                scope, _, happened = answers[CARD_SCOPE]["chosen"].partition("_")
+                card.update(scope=scope, already_happened=happened == "happened")
             value = strength["value"]
-        final = noticias.apply_card_rules(card, title, summary)
-        asked = ["{}@{}".format(name, self.card_questions[name]["version"]) for name in CARD_ORDER if name in answers]
+        final = noticias.apply_card_rules(card, title, summary, scope_known=self.card_scope)
+        asked = ["{}@{}".format(name, self.card_questions[name]["version"]) for name in self.card_order if name in answers]
         self.store.append_card(self._card_row(hash_, "done", now, final, value, asked))
 
     def _run_card(self, row, ref, budget):
@@ -984,9 +997,9 @@ class NewsService:
         ``written`` (card stored), ``failed`` (a question hit ``max_attempts``: failed card stored), ``wait`` (stopped
         by the budget or by a retryable error) or ``down``."""
         hash_ = row[1]
-        questions = [self.card_questions[name] for name in CARD_ORDER]
+        questions = [self.card_questions[name] for name in self.card_order]
         answers, asked = self.store.card_answers(hash_, questions), 0
-        for name in CARD_ORDER:
+        for name in self.card_order:
             if name not in answers:
                 if asked >= budget:
                     return asked, "wait"
@@ -1091,6 +1104,11 @@ def _env_flag(value):
     return str(value or "").strip().lower() in ("1", "true", "yes", "on")
 
 
+def _env_default_on(value):
+    """An option that is on unless it is explicitly switched off (``0``, ``false``, ``no``, ``off``)."""
+    return str(value or "").strip().lower() not in ("0", "false", "no", "off")
+
+
 def _build_news_parser():
     import argparse
 
@@ -1103,6 +1121,11 @@ def _build_news_parser():
     parser.add_argument("--cards", action="store_true",
                         help="also ask the four news-card questions (event type, strength 0-3, direction, scope and "
                              "already happened) with the fixed rules on top (also NEWS_CARDS=1); needs --analyze")
+    parser.add_argument("--no-legacy-questions", action="store_true",
+                        help="with --cards, do not ask the two classifier questions (news_relevance_btc, news_direction); "
+                             "the card is then the only analysis (also NEWS_LEGACY_QUESTIONS=0)")
+    parser.add_argument("--no-card-scope", action="store_true",
+                        help="with --cards, do not ask the scope / already-happened question (also NEWS_CARD_SCOPE=0)")
     parser.add_argument("--no-briefing", action="store_true",
                         help="disable the view-only news synthesis (otherwise enabled with analysis)")
     parser.add_argument("--features-at", type=int, metavar="MS",
@@ -1159,7 +1182,8 @@ def _run_service_loop(service, store, args, sources, interval, provider, log):
         return 0
     log("news writing to {} (config {}); {} source(s), every {} s; analysis {}".format(
         args.news_db, store.config_hash[:12], len(sources), int(interval),
-        "on ({})".format(", ".join(sorted(service.questions))) if provider is not None else "off"))
+        "on ({})".format(", ".join(sorted(service.questions) + (
+            ["card:" + ",".join(service.card_order)] if service.cards else []))) if provider is not None else "off"))
     while True:
         outcome = service.poll()
         if outcome["ingested"] or outcome["analyzed"] or outcome["skipped_stale"] or outcome.get("cards"):
@@ -1186,6 +1210,8 @@ def main(argv=None, provider=None, fetcher=None):
         provider, questions, calibration, template, mode = _resolve_analysis_options(args, env, provider)
         cards = provider is not None and (args.cards or _env_flag(env.get("NEWS_CARDS")))
         card_questions = load_questions(args.questions_file, scope="news_card") if cards else None
+        legacy_questions = not args.no_legacy_questions and _env_default_on(env.get("NEWS_LEGACY_QUESTIONS"))
+        card_scope = not args.no_card_scope and _env_default_on(env.get("NEWS_CARD_SCOPE"))
         interval = args.interval_seconds if args.interval_seconds is not None else float(env.get("NEWS_POLL_SECONDS") or 300)
         if fetcher is None:
             fetcher = UrlFetcher(timeout=args.fetch_timeout_seconds,
@@ -1199,6 +1225,7 @@ def main(argv=None, provider=None, fetcher=None):
             retry_window_ms=int(args.retry_window_minutes * MINUTE_MS),
             max_published_age_ms=int(args.max_published_age_hours * HOUR_MS),
             max_analyses_per_poll=args.max_analyses_per_poll, cards=cards, card_questions=card_questions,
+            legacy_questions=legacy_questions, card_scope=card_scope,
             briefing_enabled=provider is not None and not args.no_briefing,
             briefing_provider=_briefing_provider(provider, briefing_timeout))
     except (OSError, ValueError) as error:

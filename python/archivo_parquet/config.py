@@ -257,6 +257,14 @@ TABLAS = {
                        dicc=("question_id", "status", "question_type", "model_ref", "probability_source", "chosen"),
                        sin_stats=("model_info_json", "top_logprobs_json", "probabilities_json", "timings_json")),
         producto=None, filtro_tipico="status", filas_por_grupo=GRUPO_PESADO),
+    # Ficha de Qwen por noticia (odd/tasks/noticias-y-auditor.md T13-T14). Tiempo = written_at (cuando se grabo).
+    "news_cards": TablaConfig(
+        nombre="news_cards", sqlite="paper_futures_news_cards", tiempo="written_at", clave=("written_at", "card_id"), granularidad="mes",
+        columnas=_cols("card_id:int item_hash:text card_version:int status:text written_at:int event_type:text? scope:text? "
+                       "direction:text? strength:int? strength_model:int? strength_value:real? already_happened:int? "
+                       "amount_usd:real? rules_json:text? questions_json:text?",
+                       dicc=("status", "event_type", "scope", "direction"), sin_stats=("rules_json", "questions_json")),
+        producto=None, filtro_tipico="status", filas_por_grupo=GRUPO_PESADO),
 }
 
 # ---- datos-utiles (odd/tasks/datos-utiles.md). Regla de TIEMPO: cada periodo se cierra con una columna que ya no puede recibir filas nuevas
