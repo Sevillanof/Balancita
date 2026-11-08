@@ -1,0 +1,16 @@
+odd/tasks/estrategias-laboratorio.md
+  h_92dd6654ceb221 166-181,211-219
+odd/tasks/noticias-y-auditor.md
+  h_92dd6654ceb221 37,57
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "4f20c9e232308cd2782f32191bb5de059bba642a",
+  "prompts": {},
+  "humans": {
+    "h_92dd6654ceb221": {
+      "author": "Franco Sevillano <79455847+Sevillanof@users.noreply.github.com>"
+    }
+  }
+}
