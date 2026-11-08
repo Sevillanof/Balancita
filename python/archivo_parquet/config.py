@@ -333,10 +333,60 @@ TABLAS.update({
         columnas=_cols("product:text bucket_ms:int t_ms:int estado:text accion:text maestro:int? puntaje:real? umbral_flojo:real? umbral_fuerte:real? "
                        "portero_si:int? portero_p:real? portero_umbral:real? noticias_si:int? noticias_lado:int? qwen:text? qwen_coincide:int? "
                        "lado_posicion:int horas_en_posicion:real? neto_ahora_pb:real? trade_no:int? condiciones_json:text despues_json:text? "
-                       "veredicto_12h_json:text? veredicto_24h_json:text? veredicto_36h_json:text? resuelto_ms:int? version:text",
+                       "veredicto_12h_json:text? veredicto_24h_json:text? veredicto_36h_json:text? resuelto_ms:int? version:text "
+                       "direccion_json:text? direccion_ms:int?",
                        dicc=("product", "estado", "accion", "qwen", "version"),
-                       sin_stats=("condiciones_json", "despues_json", "veredicto_12h_json", "veredicto_24h_json", "veredicto_36h_json")),
+                       sin_stats=("condiciones_json", "despues_json", "veredicto_12h_json", "veredicto_24h_json", "veredicto_36h_json",
+                                  "direccion_json")),
         filtro_tipico="accion", grupo_por=("product",), nivel_zstd=9, inmutable_sql='"resuelto_ms" IS NOT NULL'),
+    # ---- auditor para entrenar (odd/tasks/noticias-y-auditor.md S8, T15). Tablas SOLO-AGREGAR salvo las que el auditor completa despues (``resuelto_ms`` /
+    # ``resultado_ms`` quedan puestos y ya no las toca): un dia se exporta solo cuando todas sus filas estan resueltas. ----
+    # operaciones (T2, antes sin cubrir): una fila por operacion; tiempo = entry_ms (no cambia). Se completa hasta tener los 3 horizontes de direccion.
+    "auditor_operaciones": TablaConfig(
+        nombre="auditor_operaciones", sqlite="operaciones", tiempo="entry_ms", clave=("product", "entry_ms", "trade_no"), producto="product",
+        columnas=_cols("product:text trade_no:int lado:int entry_ms:int exit_ms:int? direccion_json:text? mfe_pb:real? mae_pb:real? hasta_ms:int? "
+                       "resuelto_ms:int? version:text", dicc=("product", "version"), sin_stats=("direccion_json",)),
+        grupo_por=("product",), inmutable_sql='"resuelto_ms" IS NOT NULL'),
+    # hechos_mirada (G1 + G4): los hechos aplanados del maestro, lo del portero y la identidad del proponente, una fila por mirada. INSERT OR IGNORE.
+    # Los hashes de identidad (maestro, portero, config) tienen pocos valores distintos por archivo: van en diccionario.
+    "auditor_hechos": TablaConfig(
+        nombre="auditor_hechos", sqlite="hechos_mirada", tiempo="t_ms", clave=("product", "t_ms", "bucket_ms"), producto="product",
+        columnas=_cols("product:text bucket_ms:int t_ms:int hechos_json:text puntaje:real? veredicto:int? portero_json:text? maestro_hash:text? "
+                       "portero_hash:text? config_hash:text? config_version:int? costos_id:text? version:text",
+                       dicc=("product", "maestro_hash", "portero_hash", "config_hash", "costos_id", "version"),
+                       sin_stats=("hechos_json", "portero_json")),
+        grupo_por=("product",), nivel_zstd=9),
+    # propuestas (G2): cada senal de entrada, abierta o bloqueada, con el motivo. La etiqueta contrafactual la completa ``resolve`` (resuelto_ms).
+    "auditor_propuestas": TablaConfig(
+        nombre="auditor_propuestas", sqlite="propuestas", tiempo="t_ms", clave=("product", "t_ms", "bucket_ms"), producto="product",
+        columnas=_cols("product:text bucket_ms:int t_ms:int lado:int inicio_episodio:int estado:text motivo_bloqueo:text? detalle_bloqueo:text? "
+                       "trade_no:int? maestro:int? puntaje:real? portero_p:real? precio:real? contrafactual_json:text? neto_pb:real? "
+                       "motivo_salida:text? horas:real? salida_ms:int? resuelto_ms:int? version:text",
+                       dicc=("product", "estado", "motivo_bloqueo", "detalle_bloqueo", "motivo_salida", "version"), sin_stats=("contrafactual_json",)),
+        filtro_tipico="estado", grupo_por=("product",), inmutable_sql='"resuelto_ms" IS NOT NULL'),
+    # mirada_operaciones (G3): una fila por posicion abierta y mirada. INSERT OR IGNORE, no cambia.
+    "auditor_mirada_operaciones": TablaConfig(
+        nombre="auditor_mirada_operaciones", sqlite="mirada_operaciones", tiempo="t_ms", clave=("product", "t_ms", "bucket_ms", "trade_no"),
+        producto="product",
+        columnas=_cols("product:text bucket_ms:int trade_no:int t_ms:int lado:int evento:text origen:text? entry_ms:int? entry_px:real? horas:real? "
+                       "neto_ahora_pb:real? puntaje:real? maestro:int? puntaje_lado:real? maestro_lado:int? salida_dice:text? salida_motivo:text? "
+                       "version:text", dicc=("product", "evento", "origen", "salida_dice", "salida_motivo", "version")),
+        filtro_tipico="evento", grupo_por=("product",)),
+    # resultados_operacion (G5): el resultado real de cada operacion CERRADA (neto de los recibos, motivos, precios, MFE/MAE con extremos). Tiempo = exit_ms.
+    # Final (resultado_ms) cuando el funding esta completo y hay velas.
+    "auditor_resultados": TablaConfig(
+        nombre="auditor_resultados", sqlite="resultados_operacion", tiempo="exit_ms", clave=("product", "exit_ms", "trade_no"), producto="product",
+        columnas=_cols("product:text trade_no:int lado:int entry_ms:int exit_ms:int neto_pb:real? neto_usd:real? notional_usd:real? "
+                       "motivo_entrada:text? motivo_cierre:text? motivo_salida:text? entry_px:real? exit_px:real? mfe_hl_pb:real? mae_hl_pb:real? "
+                       "hl_hasta_ms:int? resultado_ms:int? version:text",
+                       dicc=("product", "motivo_entrada", "motivo_cierre", "motivo_salida", "version")),
+        filtro_tipico="motivo_salida", grupo_por=("product",), inmutable_sql='"resultado_ms" IS NOT NULL'),
+    # reentrenos (G8): registro solo-agregar (triggers). Pocas filas: un archivo por mes. Sin producto. Tiempo = creado_ms.
+    "auditor_reentrenos": TablaConfig(
+        nombre="auditor_reentrenos", sqlite="reentrenos", tiempo="creado_ms", clave=("creado_ms", "id"), producto=None, granularidad="mes",
+        columnas=_cols("id:int corte_ms:int dataset_hash:text spec_json:text metricas_fuera_de_muestra_json:text creado_ms:int",
+                       sin_stats=("spec_json", "metricas_fuera_de_muestra_json")),
+        hash="dataset_hash"),
     # ---- futures-market: resumen por minuto de ETH (docs/resumen-minuto-eth.md). Una fila por minuto cerrado, escrita una sola vez
     # (INSERT OR IGNORE): no cambia despues. Dia por minute_start_ms.
     "eth_minute_summary": TablaConfig(

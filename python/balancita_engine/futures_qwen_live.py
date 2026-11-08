@@ -64,6 +64,7 @@ OPEN_TRADE_QUERY = "SELECT 1 FROM trades WHERE status='open' LIMIT 1"
 OPEN_POSITION_QUERY = "SELECT 1 FROM trader_state WHERE position_json IS NOT NULL LIMIT 1"
 BAR_MS = qt.BAR_MS
 BUCKET_MS = 15 * MINUTE_MS                      # one wake per product and bucket
+AUDIT_TRAINING_SLOW_MS = 500                    # the auditor's record for training (facts, proposals, positions) taking longer than this is warned about
 DB_ENV = "QWEN_LIVE_DB"
 DEFAULT_DIR = os.path.join(qt.ROOT, "data", "qwen-live")
 DEFAULT_DB = os.path.join(DEFAULT_DIR, "live.sqlite")
@@ -901,6 +902,7 @@ class LiveOperator:
         self._pending_error = None                              # None: not probed yet
         self._probe_failures, self._next_probe = 0, 0.0
         self._errors = {}
+        self._trained = {}                                  # product -> the look whose training record was already tried
         self.failed_cycle = False
 
     # ---- start
@@ -1411,6 +1413,8 @@ class LiveOperator:
             self._resolve_examples(product, trader, now)
         if events and self.cfg.get("decide_by") == "formula":          # el auditor no necesita la opinión de Qwen
             self._audit(product, trader, events, now)
+        if self.cfg.get("decide_by") == "formula":
+            self._audit_training(product, trader, events, now, marks)
 
     def _log_rebote(self, product, event):
         head = "{} {}: Experto rebotes — caída de {} % desde el máximo de la ventana (umbral {} %)".format(
@@ -1482,11 +1486,47 @@ class LiveOperator:
                 if event["type"] in ("decision", "guardrail"):
                     auditor.snapshot(self.store.path, product, trader, event, now)
             closes = {int(t) + BAR_MS: float(c) for t, c in zip(trader.t, trader.c)}
-            auditor.resolve(self.store.path, product, closes, dict(self.cfg, products=[product]), now,
-                            float(round_trip_cost_bps(product)))
+            ranges = {int(t) + BAR_MS: (float(h), float(l)) for t, h, l in zip(trader.t, trader.h, trader.l)}
+            result = auditor.resolve(self.store.path, product, closes, dict(self.cfg, products=[product]), now,
+                                     float(round_trip_cost_bps(product)), ranges=ranges)
             self._recovered("auditor", product)
         except Exception as error:                        # noqa: BLE001 - el auditor nunca bloquea la operación en vivo
             self._failure("auditor", product, error)
+            self.failed_cycle = failed
+            return
+        self._warn_training(product, result.get("avisos"), result.get("ms"), failed)
+
+    def _audit_training(self, product, trader, events, now, marks):
+        """What the auditor keeps to train later (facts of the maestro, entry proposals with their block reason, state of every open
+        position): written AFTER the decision is made and stored, only in ``auditor.sqlite``, reading only what the trader left in
+        ``trader.look_audit``. Whatever fails or is slow is noted as a warning (table ``errors``) and nothing else changes: not a
+        decision, not a trade, not an old auditor row, not the polling."""
+        look = getattr(trader, "look_audit", None)
+        if not look or self._trained.get(product) == look.get("t_ms"):
+            return
+        self._trained[product] = look.get("t_ms")
+        failed = self.failed_cycle
+        try:
+            out = auditor.record_look(self.store.path, product, trader, events, now, marks, config_hash=self.config_hash)
+        except Exception as error:                        # noqa: BLE001 - lo que se guarda para entrenar nunca bloquea la operación en vivo
+            self._failure("auditor_entrenar", product, error)
+            self.failed_cycle = failed
+            return
+        self._warn_training(product, out.get("avisos"), out.get("ms"), failed)
+
+    def _warn_training(self, product, problems, ms, failed):
+        """Warnings of the training record: what failed (``avisos``) and a record or label step slower than ``AUDIT_TRAINING_SLOW_MS``."""
+        try:
+            if problems:
+                self._failure("auditor_entrenar", product, RuntimeError("; ".join(problems)))
+            else:
+                self._recovered("auditor_entrenar", product)
+            if isinstance(ms, (int, float)) and ms > AUDIT_TRAINING_SLOW_MS:
+                self._failure("auditor_entrenar_lento", product, TimeoutError(
+                    "el registro para entrenar tardó {:.0f} ms (aviso desde {} ms)".format(ms, AUDIT_TRAINING_SLOW_MS)))
+            else:
+                self._recovered("auditor_entrenar_lento", product)
+        finally:
             self.failed_cycle = failed
 
     @staticmethod

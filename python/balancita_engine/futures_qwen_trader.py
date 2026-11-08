@@ -662,6 +662,7 @@ class Trader:
         self.opened_this_look = False
         self.closed_this_look = False
         self.cooldown_until = 0
+        self.look_audit = None            # read-only note of the last look for the auditor (``futures_auditor.record_look``); nothing here reads it
         self.last_call_ms = None
         self.trade_seq = 0
         self.hooks = [WAKE_HOOKS[name] for name in cfg["wake"].get("hooks", [])]
@@ -1064,6 +1065,7 @@ class Trader:
             return []
         events = []
         self.opened_this_look = self.closed_this_look = False
+        self.look_audit = None
         if self.position is not None:
             try:
                 events += self._guardrails(t_ms)
@@ -1084,10 +1086,12 @@ class Trader:
         if priority_events is not None:
             return priority_events
         if events and self.position is None:
+            self.look_audit = {"t_ms": t_ms, "skip": "eventos"}
             return events
         if self.max_positions == 1 and self.position is not None and self.position.exit_plan is not None:
             return events                       # ya está saliendo: no se decide otra cosa hasta que se cierre
         if self.position is None and t_ms < self.cooldown_until:
+            self.look_audit = {"t_ms": t_ms, "skip": "cooldown"}
             return events
         reasons = self.wake_reasons(t_ms)
         if reasons:
@@ -1502,6 +1506,9 @@ class Trader:
         if noticias.priority_enabled(self.cfg) and self.position is None:
             action, why = self._independent_formula_action(readings)
         event.update(formula_action=action, formula=corta.formula_json(readings, why), action=action, override=None)
+        self.look_audit = {"t_ms": t_ms, "readings": readings, "prev_entry_side": None, "blocked": None, "closed_here": action == "CERRAR",
+                           "open_ids": [] if self.position is None else [self.position.trade_no],
+                           "exits": {self.position.trade_no: why} if action == "CERRAR" else {}}
         event["formula"]["opinion_enabled"] = candle_opinions_enabled(self.cfg)
         if candle_opinions_enabled(self.cfg):
             self._ask_formula_opinion(t_ms, action, event, state, question)
@@ -1550,6 +1557,7 @@ class Trader:
                             else corta.formula_action(readings, None))
         entry_side = 1 if entry == "LARGO" else -1 if entry == "CORTO" else 0
         waiting = "MANTENER" if self.positions else "ESPERAR"
+        blocked, open_ids = None, [position.trade_no for position in self.maestro_positions()]
         if closes:
             action, why = "CERRAR", closes[0][1]
         elif entry_side:
@@ -1563,6 +1571,9 @@ class Trader:
                 event["override"] = blocked[1]
         else:
             action, why = waiting, (hold if self.positions and hold else entry_why)
+        self.look_audit = {"t_ms": t_ms, "readings": readings, "prev_entry_side": self.prev_entry_side, "closed_here": bool(closes),
+                           "blocked": None if blocked is None else blocked[1], "open_ids": open_ids,
+                           "exits": {position.trade_no: close_why for position, close_why in closes}}
         self.prev_entry_side = entry_side
         event.update(formula_action=action, formula=corta.formula_json(readings, why), action=action)
         event["formula"]["opinion_enabled"] = candle_opinions_enabled(self.cfg)
