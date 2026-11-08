@@ -1,0 +1,38 @@
+docs/archivo-parquet.md
+  h_92dd6654ceb221 59-64,74-87,141-147
+docs/auditor-para-entrenar.md
+  h_92dd6654ceb221 1-41
+odd/tasks/noticias-y-auditor.md
+  h_92dd6654ceb221 40,63
+python/archivo_parquet/config.py
+  h_92dd6654ceb221 336-337,339-340,342-389
+python/archivo_parquet/sintetico.py
+  h_92dd6654ceb221 401
+python/balancita_engine/futures_auditor.py
+  h_92dd6654ceb221 35-51,113-115,118,168-210,224,229,233-236,261-266,856,861-865,871,1016-1396,1552-1564,1594-1595,1622,1624-1629
+python/balancita_engine/futures_qwen_live.py
+  h_92dd6654ceb221 67,905,1416-1417,1489-1491,1496-1530
+python/balancita_engine/futures_qwen_trader.py
+  h_92dd6654ceb221 665,1068,1089,1094,1509-1511,1560,1574-1576
+python/tests/test_archivo_parquet_auditor_entrenar.py
+  h_92dd6654ceb221 1-124
+python/tests/test_archivo_parquet_fase2.py
+  h_92dd6654ceb221 141-142
+python/tests/test_futures_auditor_entrenar.py
+  h_92dd6654ceb221 1-842
+server/src/features/live-gateway/auditor-verdicts.test.ts
+  h_92dd6654ceb221 96-97,181-342
+server/src/features/live-gateway/auditor-verdicts.ts
+  h_92dd6654ceb221 63-87,97-98,174-193,227-228,238-249,251-255,257,267,309-326,380-390,410,454-468
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "ec446e4e5df4b63e0322e4e91596d6b640ffa45e",
+  "prompts": {},
+  "humans": {
+    "h_92dd6654ceb221": {
+      "author": "Franco Sevillano <79455847+Sevillanof@users.noreply.github.com>"
+    }
+  }
+}
