@@ -32,6 +32,23 @@ Dirección (S3 de ``odd/tasks/noticias-y-auditor.md``; aparte de los veredictos 
   quedan intactas con ``NULL`` y ``resolve`` las completa con las velas y operaciones que el auditor ya lee (incluso las ya resueltas a
   36 h). Se deshace con ``ALTER TABLE miradas DROP COLUMN direccion_json`` / ``direccion_ms`` y ``DROP TABLE operaciones``.
 
+Para entrenar más adelante (S8 y T15 de ``odd/tasks/noticias-y-auditor.md``; ``docs/auditor-para-entrenar.md``). Solo TABLAS NUEVAS; nada de lo
+anterior cambia y el trader no cambia ninguna decisión: lo único que expone es ``Trader.look_audit``, una nota de solo lectura.
+
+* ``hechos_mirada`` (G1 + G4): por mirada, los hechos aplanados del maestro (``maestro.flat_facts``: los 15 direccionales y los 5 tamaños),
+  su puntaje y veredicto, lo que hace falta para recalcular el voto del portero y la identidad del proponente (hash del maestro y del
+  portero, hash y versión de la config, modelo de costos). ``version`` sigue siendo la del auditor.
+* ``propuestas`` (G2): cada señal de entrada (maestro fuerte con el portero a favor), abierta o bloqueada, con el motivo del bloqueo
+  (``lugares_ocupados``, ``mismo_episodio``, ``enfriamiento``, ``cierre_en_la_mirada``, ``otro``). La etiqueta contrafactual (neto con costos,
+  motivo de salida y horas con las reglas oficiales: ``corta.formula_action`` y el tope de tiempo) la calcula DESPUÉS ``resolve``.
+* ``mirada_operaciones`` (G3): una fila por posición abierta y mirada con lado, horas, neto ahora, puntaje del maestro contra el lado y lo que
+  dice la regla de salida.
+* ``resultados_operacion`` (G5): el resultado real de cada operación cerrada (neto de los recibos, motivos, precios y MFE/MAE con máximos y
+  mínimos de las velas; ``operaciones`` con los cierres no cambia).
+* ``reentrenos`` (G8): registro solo-agregar (``registrar_reentreno``, ``--registrar-reentreno``).
+* ``record_look`` (en vivo) y los pasos nuevos de ``resolve`` NUNCA propagan una excepción: lo que falla queda en ``avisos`` y el proceso en
+  vivo lo anota en su tabla ``errors``. Migración: ``_open`` crea las tablas (``CREATE TABLE IF NOT EXISTS``); se deshace con ``DROP TABLE``.
+
 Acciones (``accion``)
 
     ENTRAR, ENTRAR_noticias (entró por noticias con el portero en contra), NO_ENTRAR_portero (maestro fuerte, portero no),
@@ -93,9 +110,12 @@ from zoneinfo import ZoneInfo
 
 from . import futures_qwen_corta as corta
 from . import futures_qwen_ficha as ficha
+from . import futures_qwen_maestro as maestro_formula
+from . import futures_qwen_noticias as noticias
+from . import futures_qwen_portero as portero_formula
 from . import futures_qwen_trader as qt
 from . import futures_qwen_trader_exam as ex
-from .futures_costs import round_trip_cost_bps
+from .futures_costs import COST_MODEL_VERSION, round_trip_cost_bps
 
 SCHEMA_NAME = "balancita-auditor.v1"
 VERSION = "auditor.v1"
@@ -145,6 +165,49 @@ CREATE TABLE IF NOT EXISTS operaciones(
 # Columnas que se sumaron a ``miradas`` después de la primera versión (migración aditiva: ``_migrate``). Van siempre al final.
 _ADDED_COLUMNS = (("direccion_json", "TEXT"), ("direccion_ms", "INTEGER"))
 
+# Para entrenar más adelante (S8, T15): solo tablas NUEVAS (``_migrate_training``). Ninguna tabla ni columna de antes cambia.
+_TRAINING_SQL = """
+CREATE TABLE IF NOT EXISTS hechos_mirada(
+  product TEXT NOT NULL, bucket_ms INTEGER NOT NULL, t_ms INTEGER NOT NULL,
+  hechos_json TEXT NOT NULL, puntaje REAL, veredicto INTEGER, portero_json TEXT,
+  maestro_hash TEXT, portero_hash TEXT, config_hash TEXT, config_version INTEGER, costos_id TEXT,
+  version TEXT NOT NULL,
+  PRIMARY KEY(product, bucket_ms));
+CREATE TABLE IF NOT EXISTS propuestas(
+  product TEXT NOT NULL, bucket_ms INTEGER NOT NULL, t_ms INTEGER NOT NULL,
+  lado INTEGER NOT NULL, inicio_episodio INTEGER NOT NULL, estado TEXT NOT NULL,
+  motivo_bloqueo TEXT, detalle_bloqueo TEXT, trade_no INTEGER,
+  maestro INTEGER, puntaje REAL, portero_p REAL, precio REAL,
+  contrafactual_json TEXT, neto_pb REAL, motivo_salida TEXT, horas REAL, salida_ms INTEGER, resuelto_ms INTEGER,
+  version TEXT NOT NULL,
+  PRIMARY KEY(product, bucket_ms));
+CREATE TABLE IF NOT EXISTS mirada_operaciones(
+  product TEXT NOT NULL, bucket_ms INTEGER NOT NULL, trade_no INTEGER NOT NULL, t_ms INTEGER NOT NULL,
+  lado INTEGER NOT NULL, evento TEXT NOT NULL, origen TEXT, entry_ms INTEGER, entry_px REAL,
+  horas REAL, neto_ahora_pb REAL, puntaje REAL, maestro INTEGER, puntaje_lado REAL, maestro_lado INTEGER,
+  salida_dice TEXT, salida_motivo TEXT,
+  version TEXT NOT NULL,
+  PRIMARY KEY(product, bucket_ms, trade_no));
+CREATE TABLE IF NOT EXISTS resultados_operacion(
+  product TEXT NOT NULL, trade_no INTEGER NOT NULL, lado INTEGER NOT NULL, entry_ms INTEGER NOT NULL, exit_ms INTEGER NOT NULL,
+  neto_pb REAL, neto_usd REAL, notional_usd REAL, motivo_entrada TEXT, motivo_cierre TEXT, motivo_salida TEXT,
+  entry_px REAL, exit_px REAL, mfe_hl_pb REAL, mae_hl_pb REAL, hl_hasta_ms INTEGER, resultado_ms INTEGER,
+  version TEXT NOT NULL,
+  PRIMARY KEY(product, trade_no));
+CREATE TABLE IF NOT EXISTS reentrenos(
+  id INTEGER PRIMARY KEY, corte_ms INTEGER NOT NULL, dataset_hash TEXT NOT NULL, spec_json TEXT NOT NULL,
+  metricas_fuera_de_muestra_json TEXT NOT NULL, creado_ms INTEGER NOT NULL);
+CREATE TRIGGER IF NOT EXISTS reentrenos_no_update BEFORE UPDATE ON reentrenos
+BEGIN SELECT RAISE(ABORT,'el registro de reentrenos es solo-agregar'); END;
+CREATE TRIGGER IF NOT EXISTS reentrenos_no_delete BEFORE DELETE ON reentrenos
+BEGIN SELECT RAISE(ABORT,'el registro de reentrenos es solo-agregar'); END;
+"""
+
+BLOCK_REASONS = ("lugares_ocupados", "mismo_episodio", "enfriamiento", "cierre_en_la_mirada", "otro")
+RESOLVE_LIMIT = 300                           # propuestas que ``resolve`` etiqueta por llamada (acota el CPU dentro del proceso en vivo)
+TRAINING_LOCK_TIMEOUT_S = 2.0                # lo nuevo no espera más que esto una base ocupada (por otro proceso): falla con aviso, no detiene el sondeo
+GIVE_UP_MS = 12 * HOUR_MS                     # pasado el tope de la operación más esto sin precios, la etiqueta queda ``sin_datos`` (no traba el archivo)
+
 _COLUMNS = ("product", "bucket_ms", "t_ms", "estado", "accion", "maestro", "puntaje", "umbral_flojo", "umbral_fuerte",
             "portero_si", "portero_p", "portero_umbral", "noticias_si", "noticias_lado", "qwen", "qwen_coincide",
             "lado_posicion", "horas_en_posicion", "neto_ahora_pb", "trade_no", "condiciones_json", "version")
@@ -158,15 +221,19 @@ def auditor_path(live_db_path):
     return os.path.join(os.path.dirname(live_db_path), DB_NAME)
 
 
-def _open(live_db_path):
+def _open(live_db_path, timeout=30):
     path = auditor_path(live_db_path)
     folder = os.path.dirname(path)
     if folder:
         os.makedirs(folder, exist_ok=True)
-    db = sqlite3.connect(path, timeout=30)
+    db = sqlite3.connect(path, timeout=timeout)
     db.row_factory = sqlite3.Row
     db.executescript(_SCHEMA_SQL)
     _migrate(db)
+    try:
+        _migrate_training(db)
+    except sqlite3.Error:                              # solo agrega: si no se pudo, lo de siempre sigue y el registro nuevo avisa solo
+        pass
     if db.execute("SELECT 1 FROM meta WHERE key='schema'").fetchone() is None:
         with db:
             db.execute("INSERT OR IGNORE INTO meta VALUES('schema', ?)", (SCHEMA_NAME,))
@@ -189,6 +256,12 @@ def _migrate(db):
         except sqlite3.OperationalError as error:
             if "duplicate column" not in str(error).lower():          # otro proceso (el vivo y la línea de comandos) la sumó antes
                 raise
+
+
+def _migrate_training(db):
+    """Crea las tablas nuevas de ``_TRAINING_SQL`` si faltan. Solo agrega (``CREATE TABLE IF NOT EXISTS``): ninguna tabla ni columna vieja
+    cambia, así que una base vieja sigue siendo legible por el código y el servidor anteriores. Se deshace con ``DROP TABLE``."""
+    db.executescript(_TRAINING_SQL)
 
 
 def _live_readonly(live_db_path):
@@ -780,17 +853,22 @@ def _judged(hit, cost, rule, text, value):
     return {"acerto": bool(hit), "costo_error_pb": round(cost, 2), "regla": rule, "texto": text, "valor_pb": round(value, 2)}
 
 
-def resolve(live_db_path, product, closes, cfg, now_ms, cost_bp):
+def resolve(live_db_path, product, closes, cfg, now_ms, cost_bp, ranges=None):
     """Completa lo que ya se puede saber de cada mirada sin resolver: ``despues_json`` (movimientos, MFE/MAE, operaciones
     simuladas) y los veredictos a 12, 24 y 36 h cuando el horizonte ya pasó (12 h = provisorio; 36 h = definitivo, escribe
     ``resuelto_ms``). Después, la dirección a 4, 12 y 24 h de cada mirada y la dirección y el MAE/MFE de cada operación (aparte, sin
     tocar nada de lo anterior). ``closes``: ``{t_ms del cierre: cierre}`` de velas de 5 min. Solo lee ``live.sqlite``. Devuelve
-    ``{"miradas", "actualizadas", "veredictos", "pendientes", "direcciones", "operaciones"}``."""
+    ``{"miradas", "actualizadas", "veredictos", "pendientes", "direcciones", "operaciones", "propuestas", "resultados", "avisos"}``.
+
+    Para entrenar (S8): al final etiqueta las propuestas de entrada con el resultado contrafactual (``propuestas``) y completa el
+    resultado real de cada operación (``resultados``; ``ranges`` = ``{t_ms del cierre: (máximo, mínimo)}`` de las velas de 5 min para
+    el MFE/MAE con extremos). Esos pasos van aparte y protegidos: si uno falla, ``avisos`` lo cuenta y todo lo demás queda igual."""
     result = _resolve_verdicts(live_db_path, product, closes, cfg, now_ms, cost_bp)
     prices = _Prices(closes)
     with contextlib.closing(_open(live_db_path)) as db:
         result["direcciones"] = _resolve_look_directions(db, product, prices, now_ms)
         result["operaciones"] = _resolve_operations(live_db_path, db, product, prices, now_ms)
+    result.update(_resolve_training(live_db_path, product, prices, ranges, cfg, now_ms, cost_bp))
     return result
 
 
@@ -933,6 +1011,387 @@ def _resolve_operations(live_db_path, db, product, prices, now_ms):
                        (product, trade["trade_no"]) + values + (now_ms if finished else None, VERSION))
             written += 1
     return written
+
+
+# --------------------------------------------------------------------------- to train later (S8, T15): facts, proposals, positions
+
+
+# La regla oficial de entrada y de salida del trader (``corta.formula_action``), enlazada al importar: el auditor aplica SIEMPRE esa función
+# (no una copia) aunque otra cosa la reemplace durante la corrida (las pruebas del trader la sustituyen por respuestas en orden).
+_official_action = corta.formula_action
+
+_HASHES = {}                                           # id(objeto) -> (objeto, hash): el objeto vive en la caché de las fórmulas, no se recalcula por mirada
+_VERSIONS = {}                                         # (carpeta, config_hash) -> id de config_versions (solo se guardan los encontrados)
+
+
+def _cached_hash(obj, make):
+    found = _HASHES.get(id(obj))
+    if found is None or found[0] is not obj:
+        found = _HASHES[id(obj)] = (obj, make(obj))
+    return found[1]
+
+
+def _config_version(live_db_path, config_hash):
+    """El ``id`` de esa config en ``config_versions`` de la base viva (solo lectura), o ``None``."""
+    key = (os.path.abspath(live_db_path), config_hash)
+    if key in _VERSIONS:
+        return _VERSIONS[key]
+    try:
+        with contextlib.closing(_live_readonly(live_db_path)) as live:
+            row = live.execute("SELECT id FROM config_versions WHERE config_hash=? ORDER BY id DESC LIMIT 1", (config_hash,)).fetchone()
+    except sqlite3.Error:
+        return None
+    if row is not None:
+        _VERSIONS[key] = int(row[0])
+    return None if row is None else int(row[0])
+
+
+def _identity(live_db_path, trader, t_ms, readings_, config_hash):
+    """Quién propuso: hash del maestro y del portero (16 caracteres), hash y versión de la config y modelo de costos. Aparte de ``version``
+    (la del auditor)."""
+    teacher, keeper = _safe(corta.formulas, trader.cfg, t_ms) or (None, None)
+    vote = readings_.get("portero_autonomo")
+    config_hash = config_hash or _safe(_cached_hash, trader.cfg, qt.config_hash)
+    keeper_hash = (str(vote["model_sha256"])[:16] if isinstance(vote, dict) and vote.get("model_sha256") else
+                   None if keeper is None else _safe(_cached_hash, keeper, lambda k: portero_formula.portero_hash(k)[:16]))
+    return {"maestro_hash": None if teacher is None else _safe(_cached_hash, teacher, lambda t: maestro_formula.teacher_hash(t)[:16]),
+            "portero_hash": keeper_hash, "config_hash": config_hash,
+            "config_version": None if config_hash is None else _config_version(live_db_path, config_hash),
+            "costos_id": COST_MODEL_VERSION}
+
+
+def _keeper_inputs(trader, t_ms, readings_):
+    """Lo que hace falta para recalcular el veredicto del portero con los hechos guardados: su voto, su probabilidad o apoyo y su umbral."""
+    vote = readings_.get("portero_autonomo")
+    keeper = (_safe(corta.formulas, trader.cfg, t_ms) or (None, None))[1]
+    return {"tipo": "autonomo" if isinstance(vote, dict) else ("legacy" if keeper is not None else None),
+            "si": readings_.get("portero_si"), "p": _num(readings_.get("portero_p")),
+            "umbral": None if keeper is None else _num(keeper.get("umbral")), "direccion": readings_.get("portero_direccion"),
+            "autonomo": vote if isinstance(vote, dict) else None}
+
+
+def _entry_side(trader, readings_):
+    """El lado de la señal de entrada de la mirada (+1 / -1 / 0), con la misma función oficial que usa el trader."""
+    if noticias.priority_enabled(trader.cfg):
+        action, _ = qt.Trader._independent_formula_action(readings_)
+    else:
+        action, _ = _official_action(readings_, None)
+    return 1 if action == "LARGO" else -1 if action == "CORTO" else 0
+
+
+def _block_reason(look, events):
+    """``(motivo, detalle)`` por el que una propuesta no abrió: ``motivo`` es uno de ``BLOCK_REASONS``, ``detalle`` el motivo crudo del trader
+    cuando cae en ``otro``."""
+    skip = look.get("skip")
+    if skip == "cooldown":
+        return "enfriamiento", None
+    if skip == "eventos":
+        return ("cierre_en_la_mirada", None) if any(e.get("type") in ("trade", "guardrail") for e in events) else ("otro", "eventos")
+    if look.get("closed_here"):
+        return "cierre_en_la_mirada", None
+    kind = look.get("blocked")
+    if kind in ("lugares_ocupados", "mismo_episodio", "cierre_en_la_mirada"):
+        return kind, None
+    if kind:
+        return "otro", str(kind)
+    skipped = next((e for e in events if e.get("type") == "skipped"), None)
+    if skipped is not None:
+        return "otro", str(skipped.get("kind"))
+    return "otro", "posicion_abierta" if look.get("open_ids") else "sin_apertura"
+
+
+def _opened_trade(events, t_ms):
+    """El ``trade_no`` de la posición que esta mirada abrió, o ``None``."""
+    for e in events:
+        if e.get("type") == "decision" and e.get("t_ms") == t_ms and e.get("action") in ("LARGO", "CORTO") and e.get("trade_no") is not None:
+            return e["trade_no"]
+    return None
+
+
+def _record_facts(db, live_db_path, product, trader, readings_, t_ms, config_hash):
+    """G1 + G4: los hechos aplanados del maestro, su puntaje y veredicto, lo del portero y la identidad del proponente."""
+    who = _identity(live_db_path, trader, t_ms, readings_, config_hash)
+    with db:
+        cursor = db.execute(
+            "INSERT OR IGNORE INTO hechos_mirada(product, bucket_ms, t_ms, hechos_json, puntaje, veredicto, portero_json, maestro_hash, "
+            "portero_hash, config_hash, config_version, costos_id, version) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (product, t_ms - BUCKET_MS, t_ms, _dumps(readings_["hechos"]), _num(readings_.get("puntaje")),
+             readings_["veredicto"] if isinstance(readings_.get("veredicto"), int) else None,
+             _dumps(_keeper_inputs(trader, t_ms, readings_)), who["maestro_hash"], who["portero_hash"], who["config_hash"],
+             who["config_version"], who["costos_id"], VERSION))
+    return cursor.rowcount == 1
+
+
+def _record_proposal(db, product, trader, look, readings_, events, t_ms):
+    """G2: la propuesta de entrada de la mirada (el maestro fuerte con el portero a favor), abierta o bloqueada, con su motivo. Sin etiqueta:
+    ``resolve`` la calcula después. Devuelve ``"abierta"`` / ``"bloqueada"`` o ``None`` si no hubo señal."""
+    side = _entry_side(trader, readings_)
+    if not side:
+        return None
+    previous = look.get("prev_entry_side")
+    if previous is None:                                                 # modo de un solo lugar: el trader no lleva el borde; sale de la mirada anterior
+        row = db.execute("SELECT lado FROM propuestas WHERE product=? AND bucket_ms=?", (product, t_ms - 2 * BUCKET_MS)).fetchone()
+        previous = 0 if row is None else row[0]
+    opened = _opened_trade(events, t_ms)
+    reason, detail = (None, None) if opened is not None else _block_reason(look, events)
+    index = _safe(_index_of, trader, t_ms)
+    with db:
+        db.execute(
+            "INSERT OR IGNORE INTO propuestas(product, bucket_ms, t_ms, lado, inicio_episodio, estado, motivo_bloqueo, detalle_bloqueo, "
+            "trade_no, maestro, puntaje, portero_p, precio, version) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (product, t_ms - BUCKET_MS, t_ms, side, int(previous != side), "abierta" if opened is not None else "bloqueada", reason, detail,
+             opened, readings_["veredicto"], _num(readings_.get("puntaje")), _num(readings_.get("portero_p")),
+             None if index is None else _num(trader.c[index]), VERSION))
+    return "abierta" if opened is not None else "bloqueada"
+
+
+def _record_positions(db, product, trader, look, readings_, events, marks, t_ms):
+    """G3: una fila por posición abierta en la mirada (las que había al empezar, la que cerró en ella y la que abrió): lado, entrada, horas,
+    neto ahora, el puntaje del maestro contra el lado y lo que dice la regla de salida. Devuelve cuántas filas escribió."""
+    closed = {e["trade"]["trade_no"]: e["trade"] for e in events if e.get("type") == "trade" and isinstance(e.get("trade"), dict)}
+    held = {p.trade_no: p for p in trader.positions}
+    opened = _opened_trade(events, t_ms)
+    exits = look.get("exits") or {}
+    ids = list(dict.fromkeys(list(look.get("open_ids") or []) + ([] if opened is None else [opened])))
+    score, verdict = _num(readings_.get("puntaje")), readings_.get("veredicto")
+    written = 0
+    with db:
+        for number in ids:
+            if number in closed:
+                trade = closed[number]
+                side, entry_ms, entry_px = _side_of(trade.get("side")), trade.get("entry_ms"), _num(trade.get("entry_px"))
+                event, net, origin = "cierra", _num(trade.get("net_bp")), trade.get("entry_reason")
+            elif number in held:
+                position = held[number]
+                side, entry_ms, entry_px = _side_of(position.side), position.entry_ms, _num(position.entry_px)
+                event, origin = "abre" if number == opened else "mantiene", position.entry_reason
+                net = _num(((marks or {}).get(number) or {}).get("net_bp"))
+            else:
+                continue
+            if not side:
+                continue
+            says = "CERRAR" if number in exits or event == "cierra" else (None if event == "abre" else "MANTENER")
+            db.execute(
+                "INSERT OR IGNORE INTO mirada_operaciones(product, bucket_ms, trade_no, t_ms, lado, evento, origen, entry_ms, entry_px, horas, "
+                "neto_ahora_pb, puntaje, maestro, puntaje_lado, maestro_lado, salida_dice, salida_motivo, version) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (product, t_ms - BUCKET_MS, number, t_ms, side, event, origin, entry_ms, entry_px,
+                 None if entry_ms is None else (t_ms - entry_ms) / HOUR_MS, net, score, verdict,
+                 None if score is None else side * score, side * verdict if isinstance(verdict, int) else None, says,
+                 exits.get(number), VERSION))
+            written += 1
+    return written
+
+
+def record_look(live_db_path, product, trader, events, now_ms, marks=None, config_hash=None):
+    """Lo que el auditor guarda además de la mirada, para entrenar más adelante (S8): los hechos del maestro y la identidad del proponente,
+    la propuesta de entrada con su motivo de bloqueo y el estado de cada posición abierta. Lee solo lo que el trader dejó en
+    ``trader.look_audit`` (o, en una mirada de enfriamiento, lo calcula con ``corta.readings``) y no hace ninguna llamada de red.
+
+    NUNCA propaga una excepción ni cambia nada del trader: cada pedazo va protegido y lo que falle queda en ``avisos`` (el proceso en vivo
+    lo anota en su tabla ``errors``). ``marks``: ``{trade_no: valuación}`` que el proceso ya calculó. Devuelve
+    ``{"hechos", "propuesta", "posiciones", "avisos", "ms"}``."""
+    started = time.monotonic()
+    out = {"hechos": False, "propuesta": None, "posiciones": 0, "avisos": [], "ms": 0.0}
+
+    def guarded(name, function, *args):
+        try:
+            return function(*args)
+        except Exception as error:                                     # noqa: BLE001 - el registro nuevo nunca rompe la operación
+            out["avisos"].append("{}: {}: {}".format(name, type(error).__name__, error))
+            return None
+
+    try:
+        look = getattr(trader, "look_audit", None)
+        if look and trader.t and look.get("t_ms") == trader.t[-1] + BAR_MS:
+            t_ms = int(look["t_ms"])
+            readings_ = look.get("readings")
+            if readings_ is None and look.get("skip") and _safe(trader.wake_reasons, t_ms):
+                readings_ = _safe(corta.readings, trader, t_ms)          # el trader no miró (enfriamiento, cierre): la mirada igual existía
+            if readings_ is not None:
+                events = list(events or ())
+                with contextlib.closing(_open(live_db_path, TRAINING_LOCK_TIMEOUT_S)) as db:
+                    out["hechos"] = bool(guarded("hechos", _record_facts, db, live_db_path, product, trader, readings_, t_ms, config_hash))
+                    out["propuesta"] = guarded("propuesta", _record_proposal, db, product, trader, look, readings_, events, t_ms)
+                    out["posiciones"] = guarded("posiciones", _record_positions, db, product, trader, look, readings_, events, marks, t_ms) or 0
+    except Exception as error:                                         # noqa: BLE001
+        out["avisos"].append("registro: {}: {}".format(type(error).__name__, error))
+    out["ms"] = (time.monotonic() - started) * 1000.0
+    return out
+
+
+# --------------------------------------------------------------------------- to train later: labels and real results (resolve)
+
+
+def _proposal_exit(side, t0, looks, now_ms, hold_ms, exhaust_min):
+    """``(salida_ms, motivo, mirada)`` de una operación simulada abierta en ``t0`` del lado ``side`` con las reglas OFICIALES de salida:
+    la fórmula del trader (``corta.formula_action``: el maestro se dio vuelta, o pasaron ``exhaust_min`` y perdió fuerza) mirada tras
+    mirada, y el tope de tiempo (``max_hold_min``) que el trader revisa antes. Solo con miradas ya pasadas (``<= now_ms``). ``None`` si
+    todavía no salió."""
+    for t_ms, verdict, score in looks:
+        if t_ms <= t0 or t_ms > now_ms:
+            continue
+        held = t_ms - t0
+        if hold_ms and held >= hold_ms:
+            return t0 + hold_ms, "tiempo", None
+        action, why = _official_action({"veredicto": verdict, "puntaje": score}, side, held_min=held // MINUTE_MS, exhaust_min=exhaust_min)
+        if action == "CERRAR":
+            return t_ms, ("maestro_agotado" if "perdió fuerza" in why else "maestro_vuelta"), t_ms
+    if hold_ms and now_ms >= t0 + hold_ms:
+        return t0 + hold_ms, "tiempo", None
+    return None
+
+
+def _resolve_proposals(db, product, prices, cfg, now_ms, cost_bp):
+    """Etiqueta contrafactual de cada propuesta sin resolver (abierta o bloqueada): neto después de costos, motivo de salida y horas de la
+    operación que habría salido con las reglas oficiales (``_proposal_exit``), desde el cierre de la mirada y sin funding. Calculado aquí,
+    nunca en la mirada. Una propuesta sin precios después del tope más ``GIVE_UP_MS`` queda ``sin_datos`` para no trabar el archivo.
+    Devuelve cuántas etiquetó."""
+    rows = db.execute("SELECT bucket_ms, t_ms, lado FROM propuestas WHERE product=? AND resuelto_ms IS NULL AND t_ms<? ORDER BY t_ms LIMIT ?",
+                      (product, now_ms, RESOLVE_LIMIT)).fetchall()
+    if not rows:
+        return 0
+    guard = (cfg or {}).get("guardrails") or {}
+    hold_ms = (guard.get("max_hold_min") or 0) * MINUTE_MS or None
+    exhaust = guard.get("exhaust_hold_min")
+    horizon = hold_ms or 4 * DAY_MS
+    looks = db.execute("SELECT t_ms, veredicto, puntaje FROM hechos_mirada WHERE product=? AND t_ms>? AND t_ms<=? ORDER BY t_ms",
+                       (product, min(r["t_ms"] for r in rows), min(now_ms, max(r["t_ms"] for r in rows) + horizon))).fetchall()
+    times = [r["t_ms"] for r in looks]
+    done = 0
+    with db:
+        for row in rows:
+            t0, side = row["t_ms"], row["lado"]
+            p0 = prices.at(t0)
+            found = None
+            if p0 is not None:
+                lo, hi = bisect.bisect_right(times, t0), bisect.bisect_right(times, min(now_ms, t0 + horizon))
+                found = _proposal_exit(side, t0, [(r["t_ms"], r["veredicto"], r["puntaje"]) for r in looks[lo:hi]], now_ms, hold_ms, exhaust)
+            exit_px = None if found is None else prices.at(found[0])
+            if p0 is None or found is None or exit_px is None:
+                if now_ms >= t0 + horizon + GIVE_UP_MS:
+                    db.execute("UPDATE propuestas SET contrafactual_json=?, resuelto_ms=? WHERE product=? AND bucket_ms=?",
+                               (_dumps({"estado": "sin_datos"}), now_ms, product, row["bucket_ms"]))
+                    done += 1
+                continue
+            exit_ms, motive, look_ms = found
+            gross = side * _pb(exit_px, p0)
+            label = {"neto_pb": gross - cost_bp, "bruto_pb": gross, "costo_pb": float(cost_bp), "motivo": motive,
+                     "horas": (exit_ms - t0) / HOUR_MS, "salida_ms": exit_ms, "mirada_salida_ms": look_ms, "entrada_px": p0,
+                     "salida_px": exit_px, "regla": "formula_action + tope de tiempo; sin funding"}
+            db.execute("UPDATE propuestas SET contrafactual_json=?, neto_pb=?, motivo_salida=?, horas=?, salida_ms=?, resuelto_ms=? "
+                       "WHERE product=? AND bucket_ms=?",
+                       (_dumps(label), label["neto_pb"], motive, label["horas"], exit_ms, now_ms, product, row["bucket_ms"]))
+            done += 1
+    return done
+
+
+def _high_low_excursions(ranges, keys, side, p0, entry, end, exit_px):
+    """``(mfe, mae, hasta_ms)`` de la operación sobre los máximos y mínimos de las velas con cierre en ``(entry, end]`` (más el precio de
+    salida real): lo mejor y lo peor a favor del lado respecto de ``p0``. ``mfe >= 0 >= mae``. ``None`` sin ninguna vela."""
+    start, stop = bisect.bisect_right(keys, entry), bisect.bisect_right(keys, end)
+    seen = keys[start:stop]
+    if not seen:
+        return None, None, None
+    run = [side * _pb(price, p0) for key in seen for price in ranges[key]]
+    if exit_px is not None and exit_px > 0:
+        run.append(side * _pb(exit_px, p0))
+    return max(0.0, max(run)), min(0.0, min(run)), seen[-1]
+
+
+def _resolve_trade_results(live_db_path, db, product, prices, ranges, now_ms):
+    """G5: el resultado REAL de cada operación cerrada, en ``resultados_operacion`` (tabla nueva; ``operaciones`` y sus MFE/MAE sobre
+    cierres no se tocan): neto después de costos tal como lo dejaron los recibos (``trades``), motivos, precios y MFE/MAE con máximos y
+    mínimos de las velas. Queda final (``resultado_ms``) cuando la operación está cerrada, su funding completo y hay velas; mientras
+    tanto se actualiza. Devuelve cuántas filas escribió."""
+    final = {r[0] for r in db.execute("SELECT trade_no FROM resultados_operacion WHERE product=? AND resultado_ms IS NOT NULL", (product,))}
+    try:
+        with contextlib.closing(_live_readonly(live_db_path)) as live:
+            trades = [dict(r) for r in live.execute(
+                "SELECT trade_no, side, entry_ms, exit_ms, entry_px, exit_px, net_bp, net_usd, notional_usd, closed_by, exit_reason, "
+                "entry_reason, funding_status FROM trades WHERE product=? AND status='closed' AND exit_ms IS NOT NULL AND exit_ms<=? "
+                "ORDER BY trade_no", (product, now_ms))]
+    except sqlite3.Error:
+        return 0
+    keys = sorted(ranges) if ranges else []
+    written = 0
+    with db:
+        for trade in trades:
+            side = _side_of(trade["side"])
+            if trade["trade_no"] in final or not side:
+                continue
+            exit_px = _num(trade["exit_px"])
+            p0 = prices.at(trade["entry_ms"])
+            mfe = mae = until = None
+            if p0 is not None and keys:
+                mfe, mae, until = _high_low_excursions(ranges, keys, side, p0, trade["entry_ms"], trade["exit_ms"], exit_px)
+            done = trade["funding_status"] == "complete" and until is not None
+            values = (side, trade["entry_ms"], trade["exit_ms"], _num(trade["net_bp"]), _num(trade["net_usd"]), _num(trade["notional_usd"]),
+                      trade["entry_reason"], trade["closed_by"], trade["exit_reason"], _num(trade["entry_px"]), exit_px, mfe, mae, until)
+            before = db.execute("SELECT lado, entry_ms, exit_ms, neto_pb, neto_usd, notional_usd, motivo_entrada, motivo_cierre, motivo_salida, "
+                                "entry_px, exit_px, mfe_hl_pb, mae_hl_pb, hl_hasta_ms FROM resultados_operacion WHERE product=? AND trade_no=?",
+                                (product, trade["trade_no"])).fetchone()
+            if before is not None and tuple(before) == values and not done:
+                continue
+            db.execute("INSERT OR REPLACE INTO resultados_operacion(product, trade_no, lado, entry_ms, exit_ms, neto_pb, neto_usd, notional_usd, "
+                       "motivo_entrada, motivo_cierre, motivo_salida, entry_px, exit_px, mfe_hl_pb, mae_hl_pb, hl_hasta_ms, resultado_ms, "
+                       "version) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                       (product, trade["trade_no"]) + values + (now_ms if done else None, VERSION))
+            written += 1
+    return written
+
+
+def _resolve_training(live_db_path, product, prices, ranges, cfg, now_ms, cost_bp):
+    """Los pasos nuevos de ``resolve`` (etiquetas contrafactuales y resultados reales), cada uno protegido: un fallo queda en ``avisos`` y no
+    toca lo demás. ``ms`` = lo que tardaron."""
+    started = time.monotonic()
+    out = {"propuestas": 0, "resultados": 0, "avisos": []}
+    try:
+        with contextlib.closing(_open(live_db_path, TRAINING_LOCK_TIMEOUT_S)) as db:
+            for key, step in (("propuestas", lambda: _resolve_proposals(db, product, prices, cfg, now_ms, float(cost_bp))),
+                              ("resultados", lambda: _resolve_trade_results(live_db_path, db, product, prices, ranges, now_ms))):
+                try:
+                    out[key] = step()
+                except Exception as error:                              # noqa: BLE001 - lo nuevo nunca cambia lo que ya se resolvió
+                    out["avisos"].append("{}: {}: {}".format(key, type(error).__name__, error))
+    except Exception as error:                                          # noqa: BLE001
+        out["avisos"].append("abrir: {}: {}".format(type(error).__name__, error))
+    out["ms"] = (time.monotonic() - started) * 1000.0
+    return out
+
+
+# --------------------------------------------------------------------------- registry of retrains (G8)
+
+
+def _assert_finite(value, where):
+    if isinstance(value, float) and not math.isfinite(value):
+        raise ValueError("{}: hay un número no finito".format(where))
+    if isinstance(value, dict):
+        for item in value.values():
+            _assert_finite(item, where)
+    elif isinstance(value, (list, tuple)):
+        for item in value:
+            _assert_finite(item, where)
+
+
+def registrar_reentreno(live_db_path, *, corte_ms, dataset_hash, spec, metricas, creado_ms=None):
+    """Anota UN reentreno en ``reentrenos`` (solo-agregar: ni se corrige ni se borra): ``corte_ms`` = hasta cuándo llegan los datos de
+    entrenamiento (ms UTC), ``dataset_hash`` = hash del conjunto, ``spec`` = la especificación completa (dict), ``metricas`` = las
+    métricas FUERA de muestra (dict). Sin alguno de los cuatro, ``ValueError`` y no queda nada. Devuelve el ``id`` de la fila."""
+    if isinstance(corte_ms, bool) or not isinstance(corte_ms, int) or corte_ms <= 0:
+        raise ValueError("corte_ms: tiene que ser un entero positivo (ms UTC)")
+    if not isinstance(dataset_hash, str) or not dataset_hash.strip():
+        raise ValueError("dataset_hash: hace falta el hash del conjunto de datos")
+    for name, value in (("spec", spec), ("metricas", metricas)):
+        if not isinstance(value, dict) or not value:
+            raise ValueError("{}: tiene que ser un objeto con contenido".format(name))
+        _assert_finite(value, name)
+    created = int(time.time() * 1000) if creado_ms is None else int(creado_ms)
+    with contextlib.closing(_open(live_db_path)) as db:
+        with db:
+            cursor = db.execute("INSERT INTO reentrenos(corte_ms, dataset_hash, spec_json, metricas_fuera_de_muestra_json, creado_ms) "
+                                "VALUES(?,?,?,?,?)", (corte_ms, dataset_hash.strip(), _dumps(spec), _dumps(metricas), created))
+            return cursor.lastrowid
 
 
 # --------------------------------------------------------------------------- the summary
@@ -1090,6 +1549,19 @@ def load_cache_closes(path, from_ms=0):
         db.close()
 
 
+def load_cache_ranges(path, from_ms=0):
+    """``{t_ms del cierre: (máximo, mínimo)}`` de la caché de velas de 5 min, en solo lectura y sin red (para el MFE/MAE con extremos).
+    ``{}`` si el archivo no existe."""
+    if not os.path.isfile(path):
+        return {}
+    db = sqlite3.connect(Path(os.path.abspath(path)).as_uri() + "?mode=ro", uri=True, timeout=5)
+    try:
+        return {int(t) + BAR_MS: (float(h), float(l)) for t, h, l in db.execute(
+            "SELECT t, h, l FROM candles WHERE res='5m' AND t>=? ORDER BY t", (max(0, from_ms - BAR_MS),))}
+    finally:
+        db.close()
+
+
 def _candles_file(args, product):
     where = args.candles or os.path.join(os.path.dirname(os.path.abspath(args.db)), "cache")
     return where if os.path.isfile(where) else os.path.join(where, "candles-{}.sqlite".format(product))
@@ -1119,6 +1591,8 @@ def _parser():
     parser.add_argument("--config", help="config con la que se decidió (por defecto, la última guardada en la base viva)")
     parser.add_argument("--since-ms", type=int, help="el resumen solo mira desde este momento")
     parser.add_argument("--now-ms", type=int, help="la hora de 'ahora' al resolver (por defecto, el reloj)")
+    parser.add_argument("--registrar-reentreno", metavar="ARCHIVO.json",
+                        help="anota un reentreno (solo-agregar): JSON con corte_ms, dataset_hash, spec, metricas y, opcional, creado_ms")
     return parser
 
 
@@ -1145,8 +1619,14 @@ def main(argv=None):
                 out["resolve"][name] = {"miradas": 0, "actualizadas": 0, "veredictos": 0, "pendientes": 0}
                 continue
             closes = load_cache_closes(_candles_file(args, name), firsts[name])
+            ranges = load_cache_ranges(_candles_file(args, name), firsts[name])
             out["resolve"][name] = resolve(args.db, name, closes, dict(cfg, products=[name]), now,
-                                           float(round_trip_cost_bps(name)))
+                                           float(round_trip_cost_bps(name)), ranges=ranges)
+    if args.registrar_reentreno:
+        with open(args.registrar_reentreno, encoding="utf-8") as handle:
+            body = json.load(handle)
+        out["reentreno"] = {"id": registrar_reentreno(args.db, corte_ms=body.get("corte_ms"), dataset_hash=body.get("dataset_hash"),
+                                                      spec=body.get("spec"), metricas=body.get("metricas"), creado_ms=body.get("creado_ms"))}
     if args.summary or not out:
         out["summary"] = summary(args.db, args.product, args.since_ms)
     print(json.dumps(out, indent=2, ensure_ascii=False))
