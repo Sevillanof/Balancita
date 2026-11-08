@@ -1,5 +1,9 @@
 """Read-only report: does the ETH price move the way Qwen's news labels said it would?
 
+An item answered by the two old questions is read from them; an item with only a news card (card-only
+configuration, T14 of ``odd/tasks/noticias-y-auditor.md``) is read from the card: its direction, and its strength as
+the group ``ficha N`` (never mixed with the ``relevance`` labels of the old questions).
+
 Usage: python -m balancita_engine.futures_news_effect --news-db N --market-db M [--desde D] [--hasta D] [--json]
 """
 
@@ -76,6 +80,7 @@ def _news(db):
           LEFT JOIN paper_futures_news_analysis d ON d.item_hash=i.item_hash
            AND d.question_id='news_direction' AND d.question_version=2
          ORDER BY i.item_id""").fetchall()
+    cards = _cards(db)
     news = {}
     for h, source, title, published, received, rs, ra, rc, ds, da, dc in rows:
         entry = news.setdefault(h, {"item_hash": h, "source_id": source, "title": title,
@@ -84,7 +89,25 @@ def _news(db):
         entry["statuses"].update(s for s in (rs, ds) if s)
         if rs == "done" and ds == "done" and entry["done"] is None:
             entry["done"] = (max(received, ra, da), rc, dc)
+    for h, entry in news.items():
+        card = cards.get(h)
+        if entry["done"] is not None or card is None:
+            continue
+        status, written, direction, strength = card
+        if status == "done" and direction is not None and strength is not None:
+            entry["done"] = (max(entry["received_at"], written), "ficha {}".format(strength), direction)
+        else:
+            entry["statuses"].add(status)
     return list(news.values())
+
+
+def _cards(db):
+    """``{item_hash: (status, written_at, direction, strength)}`` of the latest card version; no card table, no cards."""
+    if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='paper_futures_news_cards'").fetchone() is None:
+        return {}
+    return {h: (status, written, direction, strength) for h, status, written, direction, strength in db.execute(
+        "SELECT item_hash, status, written_at, direction, strength FROM paper_futures_news_cards "
+        "ORDER BY card_version, card_id")}
 
 
 def _group(items):
@@ -167,7 +190,7 @@ def render(report):
         for g in (g for g in report["groups"] if g["by"] == by):
             cells = ["n={} acierto {} · {}".format(g["n"][h], _fmt(g["hit_pct"][h], " %"), _fmt(g["avg_bp"][h], " pb"))
                      for h, _ in HORIZONS]
-            label = "relevancia " + g["key"] if by == "relevance" else g["key"]
+            label = "relevancia " + g["key"] if by == "relevance" and not g["key"].startswith("ficha ") else g["key"]
             out.append("  {:<22} {}".format(label, "  |  ".join(cells)))
     out.append("")
     out.append("Latencia de ingesta (minutos desde la publicación: mediana / p90)")

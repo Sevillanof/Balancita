@@ -141,8 +141,11 @@ _ID = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
 _OPTION_ID = re.compile(r"^[a-z0-9_]{1,32}$")
 QUESTION_TYPES = ("choice", "bool", "score")
 # ``verdict`` (default, the only scope Q asks) questions describe a verdict STATE; ``news`` questions
-# are asked by the news process N about one news item (its text is the state), never by Q.
-QUESTION_SCOPES = ("verdict", "news", "exit", "signal")
+# are asked by the news process N about one news item (its text is the state), never by Q. ``news_card``
+# questions (event type, strength, direction, scope/status) are asked by N too, but only when it runs with
+# ``--cards``, as one cascade per item; the plain ``news`` scope keeps its two questions.
+QUESTION_SCOPES = ("verdict", "news", "news_card", "exit", "signal")
+ITEM_TEXT_SCOPES = ("news", "news_card")
 UNKNOWN_PROBABILITY_SOURCE = "unknown probability source {!r}"
 FIELD_VALUE_FORMAT = "{}={}"
 HTTP_ERROR_KIND = "http_{}"
@@ -180,7 +183,7 @@ def validate_question(question):
 
 def _validate_question_fields(question, name, scope):
     fields = question.get("state_fields")
-    if scope == "news":
+    if scope in ITEM_TEXT_SCOPES:
         if fields:
             raise ValueError("{}: a news question carries the item text, not state_fields".format(name))
     else:

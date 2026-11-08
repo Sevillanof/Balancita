@@ -23,6 +23,10 @@ engine is the Terminal trader (maestro, portero, lifecycle); the forward books o
 C25-C31/Kronos and engine D are retired by default (data kept as history). The ADR is immutable and read-only:
 consult it, never edit it, unless the user directly requests an amendment.
 
+Amendment 2026-11-07 (b) (requested by the user): Claude Haiku through the
+Anthropic API may analyse news (public text only; key outside the repo; a
+failure is no signal; it does not trade until proven).
+
 Amendment 2026-11-07 (requested by the user): public keyless third-party market
 data (Binance Vision, Deribit DVOL) is allowed for research and backtests; live
 use needs a separate user decision. Everything stays a paper simulation.

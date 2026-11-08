@@ -1,6 +1,6 @@
 {
   "version": "decision-questions.v1",
-  "note": "Question catalog for LLM decisions (process Q). Callers use ids only. Changing any text of a question requires bumping its version, because a rewritten question is a different question and its calibration no longer applies; python/tests/test_futures_llm_decisions.py pins a hash per id@version. Each question declares the STATE fields it needs (names from the registry STATE_FIELDS in futures_llm_decisions.py); adding a question, any number of options or any of the three types (choice, bool, score) needs no code change. Questions with \"scope\": \"signal\" (signal_filter) are asked only by the Qwen practice batch (python/balancita_engine/futures_qwen_practice.py), one per historical strategy signal, never by Q. Questions with \"scope\": \"news\" are asked by the news process N (python/balancita_engine/futures_news.py) about one news item, whose sanitized headline and summary are the STATE; they have no state_fields and Q never asks them (Q loads only the default \"verdict\" scope). The same id/version rules and pins apply (python/tests/test_futures_news.py).",
+  "note": "Question catalog for LLM decisions (process Q). Callers use ids only. Changing any text of a question requires bumping its version, because a rewritten question is a different question and its calibration no longer applies; python/tests/test_futures_llm_decisions.py pins a hash per id@version. Each question declares the STATE fields it needs (names from the registry STATE_FIELDS in futures_llm_decisions.py); adding a question, any number of options or any of the three types (choice, bool, score) needs no code change. Questions with \"scope\": \"signal\" (signal_filter) are asked only by the Qwen practice batch (python/balancita_engine/futures_qwen_practice.py), one per historical strategy signal, never by Q. Questions with \"scope\": \"news\" are asked by the news process N (python/balancita_engine/futures_news.py) about one news item, whose sanitized headline and summary are the STATE; they have no state_fields and Q never asks them (Q loads only the default \"verdict\" scope). The same id/version rules and pins apply (python/tests/test_futures_news.py). Questions with \"scope\": \"news_card\" (news_card_type, news_card_strength, news_card_direction, news_card_scope_status; S7 of odd/tasks/noticias-y-auditor.md) are the news card: four one-letter questions about the same item, asked by the news process N only with --cards, in this order, as a cascade (a price recap stops after the first). Their evaluation and the fixed rules on top are in analisis/qwen-preguntas/informe.md and docs/medir-noticias.md. They are separate ids, so the two news questions above (and every row stored with them) are untouched.",
   "questions": [
     {
       "id": "direction_1h",
@@ -169,6 +169,134 @@
         {
           "id": "neutral",
           "description": "no clear direction, or no effect"
+        }
+      ]
+    },
+    {
+      "id": "news_card_type",
+      "version": 1,
+      "scope": "news_card",
+      "type": "choice",
+      "instruction": "Read the news item above. Which kind of news is it? Choose the best fit.",
+      "options": [
+        {
+          "id": "hack",
+          "description": "an exchange, protocol, bridge or wallet is hacked, drained or exploited"
+        },
+        {
+          "id": "regulation",
+          "description": "a law, court case or regulator action or decision, including ETF approvals or rejections"
+        },
+        {
+          "id": "macro_fed",
+          "description": "central bank decisions or speeches, CPI, jobs or GDP data, elections, tariffs, wars, stock-market moves or other macro and political news"
+        },
+        {
+          "id": "etf_flows",
+          "description": "money flowing in or out of crypto funds or ETFs"
+        },
+        {
+          "id": "network_outage",
+          "description": "a chain, major exchange or stablecoin halts, stops working or loses its peg; a project shuts down or freezes withdrawals"
+        },
+        {
+          "id": "adoption",
+          "description": "a company, bank, state or fund buys, launches or integrates crypto; deals and product launches"
+        },
+        {
+          "id": "price_recap",
+          "description": "only narrates a price or volume move that already happened: live updates, market wrap-ups"
+        },
+        {
+          "id": "opinion",
+          "description": "a column, analyst view, prediction, price target, interview, newsletter, podcast, or analysis of what an event could mean"
+        },
+        {
+          "id": "other",
+          "description": "anything else that fits none of the above"
+        }
+      ]
+    },
+    {
+      "id": "news_card_strength",
+      "version": 1,
+      "scope": "news_card",
+      "type": "score",
+      "instruction": "Read the news item above. How strongly can this single item move the Ethereum and crypto markets? Judge the news itself, not its tone. Most items are noise or minor; when unsure between two levels, pick the lower one.",
+      "options": [
+        {
+          "id": "noise",
+          "description": "no new event: a price recap, live blog, opinion, prediction, newsletter, small product change, analysis of old news, or unrelated to crypto prices",
+          "value": 0.0
+        },
+        {
+          "id": "minor",
+          "description": "a small real event, e.g. an exploit of 5-50 million dollars, a company buying 10-30 million dollars of ETH, a Fed speaker repeating known guidance, a scheduled network upgrade",
+          "value": 1.0
+        },
+        {
+          "id": "significant",
+          "description": "a big real event that can move the crypto market for hours, e.g. a DeFi exploit of 100-500 million dollars, CPI or jobs data clearly off expectations, new broad tariffs, a record day of ETF outflows, a regulator suing a top-ten exchange",
+          "value": 2.0
+        },
+        {
+          "id": "shock",
+          "description": "a market-wide shock, fresh and confirmed, e.g. a big exchange hacked for over 500 million dollars or freezing withdrawals, a top stablecoin losing its peg, an emergency Fed move, an ETF approval or rejection, Ethereum or Bitcoin halting",
+          "value": 3.0
+        }
+      ]
+    },
+    {
+      "id": "news_card_direction",
+      "version": 1,
+      "scope": "news_card",
+      "type": "choice",
+      "instruction": "Read the news item above. Over the next few hours, is its likely effect on the Ethereum price bullish, bearish or neutral? Answer neutral when there is no clear price effect, and for price recaps and opinions.",
+      "options": [
+        {
+          "id": "bullish",
+          "description": "likely to push Ethereum and crypto prices up"
+        },
+        {
+          "id": "bearish",
+          "description": "likely to push Ethereum and crypto prices down"
+        },
+        {
+          "id": "neutral",
+          "description": "no clear direction, or no effect"
+        }
+      ]
+    },
+    {
+      "id": "news_card_scope_status",
+      "version": 1,
+      "scope": "news_card",
+      "type": "choice",
+      "instruction": "Read the news item above. Who does it affect, and did the reported event already take place? Choose planned only when the item says it will, may, could or is expected to happen, or is a rumor or proposal; otherwise choose happened.",
+      "options": [
+        {
+          "id": "eth_happened",
+          "description": "specific to Ethereum, its apps or ETH; already happened"
+        },
+        {
+          "id": "eth_planned",
+          "description": "specific to Ethereum, its apps or ETH; planned, proposed, rumored or expected"
+        },
+        {
+          "id": "crypto_happened",
+          "description": "the crypto market as a whole, Bitcoin, stablecoins or big exchanges; already happened"
+        },
+        {
+          "id": "crypto_planned",
+          "description": "the crypto market as a whole, Bitcoin, stablecoins or big exchanges; planned, proposed, rumored or expected"
+        },
+        {
+          "id": "macro_happened",
+          "description": "outside crypto: central banks, stocks, elections, politics, trade; already happened"
+        },
+        {
+          "id": "macro_planned",
+          "description": "outside crypto: central banks, stocks, elections, politics, trade; planned, proposed, rumored or expected"
         }
       ]
     }

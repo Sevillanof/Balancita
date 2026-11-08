@@ -147,6 +147,262 @@ describe('createNewsItems', () => {
     })
   })
 
+  const CARDS_TABLE = `
+    CREATE TABLE paper_futures_news_cards(
+      card_id INTEGER PRIMARY KEY, item_hash TEXT NOT NULL, card_version INTEGER NOT NULL,
+      status TEXT NOT NULL, written_at INTEGER NOT NULL, event_type TEXT, scope TEXT, direction TEXT,
+      strength INTEGER, strength_model INTEGER, strength_value REAL, already_happened INTEGER,
+      amount_usd REAL, rules_json TEXT, questions_json TEXT
+    );`
+
+  it('exposes the news card of each item additively and keeps the rest of the item unchanged', () => {
+    const path = seedNewsDb()
+    const db = new DatabaseSync(path)
+    db.exec(CARDS_TABLE)
+    db.exec(`INSERT INTO paper_futures_news_cards VALUES
+      (1, 'h1', 1, 'done', 1300, 'hack', 'crypto', 'bearish', 2, 1, 1.4, 1, 6300000000.0, '["hack_100m"]', '["news_card_type@1"]'),
+      (2, 'h2', 1, 'done', 2300, 'price_recap', NULL, 'neutral', 0, 1, NULL, NULL, NULL, '["recap"]', '["news_card_type@1"]'),
+      (3, 'h3', 1, 'skipped_stale', 3300, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL)`)
+    db.close()
+    const result = createNewsItems({ newsDbPath: path }).list(10)
+    expect(result).toMatchObject({
+      status: 'ok',
+      items: [
+        { id: 'h3', card: null, analysis_status: 'stale' },
+        {
+          id: 'h2',
+          relevance: 'medium',
+          direction: 'neutral',
+          card: {
+            version: 1,
+            event_type: 'price_recap',
+            scope: null,
+            direction: 'neutral',
+            strength: 0,
+            strength_model: 1,
+            strength_value: null,
+            already_happened: null,
+            amount_usd: null,
+            rules: ['recap'],
+            known_at_ms: 2300,
+          },
+        },
+        {
+          id: 'h1',
+          relevance: 'high',
+          direction: 'bullish',
+          card: {
+            version: 1,
+            event_type: 'hack',
+            scope: 'crypto',
+            direction: 'bearish',
+            strength: 2,
+            strength_model: 1,
+            strength_value: 1.4,
+            already_happened: true,
+            amount_usd: 6300000000,
+            rules: ['hack_100m'],
+            known_at_ms: 1300,
+          },
+        },
+      ],
+    })
+  })
+
+  it('gives every item a null card when the database has no card table or an invalid card', () => {
+    const path = seedNewsDb()
+    const before = createNewsItems({ newsDbPath: path }).list(10)
+    expect(before).toMatchObject({
+      status: 'ok',
+      items: [{ card: null }, { card: null }, { card: null }],
+    })
+    const db = new DatabaseSync(path)
+    db.exec(CARDS_TABLE)
+    db.exec(`INSERT INTO paper_futures_news_cards VALUES
+      (1, 'h1', 1, 'done', 1300, 'astrology', 'crypto', 'bearish', 2, 1, 1.4, 1, NULL, '[]', '[]'),
+      (2, 'h2', 1, 'done', 2300, 'hack', 'crypto', 'bearish', 7, 1, NULL, 1, NULL, '[]', '[]')`)
+    db.close()
+    const after = createNewsItems({ newsDbPath: path }).list(10)
+    expect(after).toMatchObject({
+      status: 'ok',
+      items: [{ card: null }, { card: null }, { card: null }],
+    })
+    if (before.status === 'ok' && after.status === 'ok')
+      expect(after.items.map((i) => ({ ...i, card: null }))).toEqual(
+        before.items.map((i) => ({ ...i, card: null })),
+      )
+  })
+
+  it('uses the latest card version of an item', () => {
+    const path = seedNewsDb()
+    const db = new DatabaseSync(path)
+    db.exec(CARDS_TABLE)
+    db.exec(`INSERT INTO paper_futures_news_cards VALUES
+      (1, 'h1', 1, 'done', 1300, 'other', 'crypto', 'neutral', 1, 1, NULL, 1, NULL, '[]', '[]'),
+      (2, 'h1', 2, 'done', 1400, 'hack', 'crypto', 'bearish', 3, 3, NULL, 1, NULL, '[]', '[]')`)
+    db.close()
+    expect(createNewsItems({ newsDbPath: path }).list(10)).toMatchObject({
+      status: 'ok',
+      items: [
+        { id: 'h3' },
+        { id: 'h2' },
+        { id: 'h1', card: { version: 2, strength: 3 } },
+      ],
+    })
+  })
+
+  describe('card-only news (no answer of the two old questions)', () => {
+    function cardOnlyDb(cards: string): string {
+      const path = seedNewsDb()
+      const db = new DatabaseSync(path)
+      db.exec(`
+        DELETE FROM paper_futures_news_analysis;
+        ${CARDS_TABLE}
+        INSERT INTO paper_futures_news_cards VALUES ${cards};
+      `)
+      db.close()
+      return path
+    }
+
+    it('reads relevance, direction and the analysis state from the card and says so', () => {
+      const path = cardOnlyDb(`
+        (1, 'h1', 1, 'done', 1300, 'hack', NULL, 'bearish', 3, 3, 2.4, NULL, 6300000000.0, '["hack_100m_unconfirmed"]', '[]'),
+        (2, 'h2', 1, 'done', 2300, 'other', NULL, 'neutral', 1, 1, 0.9, NULL, NULL, '[]', '[]'),
+        (3, 'h3', 1, 'done', 3300, 'price_recap', NULL, 'neutral', 0, 1, NULL, NULL, NULL, '["recap"]', '[]')`)
+      expect(createNewsItems({ newsDbPath: path }).list(10)).toMatchObject({
+        status: 'ok',
+        items: [
+          {
+            id: 'h3',
+            relevance: 'none',
+            relevance_value: null,
+            direction: 'neutral',
+            analysis_status: 'done',
+            analysis_source: 'card',
+            analysis_version: null,
+            known_at_ms: 3300,
+            relevance_at_ms: 3300,
+            direction_at_ms: 3300,
+            card: { strength: 0 },
+          },
+          {
+            id: 'h2',
+            relevance: 'low',
+            relevance_value: 0.3,
+            direction: 'neutral',
+            analysis_status: 'done',
+            analysis_source: 'card',
+            known_at_ms: 2300,
+          },
+          {
+            id: 'h1',
+            relevance: 'high',
+            relevance_value: 0.8,
+            direction: 'bearish',
+            analysis_status: 'done',
+            analysis_source: 'card',
+            analysis_version: null,
+            known_at_ms: 1300,
+            card: { strength: 3, rules: ['hack_100m_unconfirmed'] },
+          },
+        ],
+      })
+    })
+
+    it('shows «sin dato» (nulls and the real state) for items without a usable card', () => {
+      const path = cardOnlyDb(`
+        (1, 'h1', 1, 'skipped_stale', 1300, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL),
+        (2, 'h2', 1, 'failed', 2300, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL),
+        (3, 'h3', 1, 'done', 3300, 'astrology', NULL, 'bearish', 2, 1, NULL, NULL, NULL, '[]', '[]')`)
+      const result = createNewsItems({ newsDbPath: path }).list(10)
+      expect(result).toMatchObject({
+        status: 'ok',
+        items: [
+          { id: 'h3', analysis_status: 'pending', analysis_source: null },
+          { id: 'h2', analysis_status: 'failed', analysis_source: null },
+          { id: 'h1', analysis_status: 'stale', analysis_source: null },
+        ],
+      })
+      if (result.status === 'ok')
+        for (const item of result.items) {
+          expect(item).toMatchObject({
+            relevance: null,
+            relevance_value: null,
+            direction: null,
+            known_at_ms: null,
+            card: null,
+          })
+        }
+    })
+
+    it('leaves an item without any card or old answer pending, as before', () => {
+      const path = cardOnlyDb(
+        `(1, 'h1', 1, 'done', 1300, 'other', NULL, 'bullish', 2, 2, NULL, NULL, NULL, '[]', '[]')`,
+      )
+      expect(createNewsItems({ newsDbPath: path }).list(10)).toMatchObject({
+        status: 'ok',
+        items: [
+          {
+            id: 'h3',
+            analysis_status: 'pending',
+            analysis_source: null,
+            relevance: null,
+          },
+          { id: 'h2', analysis_status: 'pending', analysis_source: null },
+          {
+            id: 'h1',
+            analysis_status: 'done',
+            analysis_source: 'card',
+            relevance: 'medium',
+          },
+        ],
+      })
+    })
+
+    it('keeps the old answers when an item has both, and marks them as such', () => {
+      const path = seedNewsDb()
+      const db = new DatabaseSync(path)
+      db.exec(CARDS_TABLE)
+      db.exec(`INSERT INTO paper_futures_news_cards VALUES
+        (1, 'h1', 1, 'done', 1300, 'other', NULL, 'bearish', 1, 1, 0.5, NULL, NULL, '[]', '[]')`)
+      db.close()
+      expect(createNewsItems({ newsDbPath: path }).list(10)).toMatchObject({
+        status: 'ok',
+        items: [
+          { id: 'h3', analysis_status: 'stale', analysis_source: null },
+          {
+            id: 'h2',
+            analysis_source: 'questions',
+            relevance: 'medium',
+            direction: 'neutral',
+          },
+          {
+            id: 'h1',
+            analysis_source: 'questions',
+            relevance: 'high',
+            relevance_value: 0.92,
+            direction: 'bullish',
+            analysis_version: 2,
+            known_at_ms: 1200,
+            card: { strength: 1, direction: 'bearish' },
+          },
+        ],
+      })
+    })
+
+    it('reads a database without the card table exactly as before', () => {
+      const path = seedNewsDb()
+      expect(createNewsItems({ newsDbPath: path }).list(10)).toMatchObject({
+        status: 'ok',
+        items: [
+          { id: 'h3', analysis_status: 'stale', analysis_source: null },
+          { id: 'h2', analysis_status: 'done', analysis_source: 'questions' },
+          { id: 'h1', analysis_status: 'done', analysis_source: 'questions' },
+        ],
+      })
+    })
+  })
+
   it('reports fetch failures separately from a successfully readable cache', () => {
     const path = seedNewsDb()
     const db = new DatabaseSync(path)
