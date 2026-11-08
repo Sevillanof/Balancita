@@ -74,6 +74,11 @@ export interface NewsItem {
   readonly relevance_value: number | null
   readonly direction: NewsDirection | null
   readonly analysis_status: AnalysisStatus
+  /**
+   * Where `relevance`/`direction` come from: the two old questions, or (card-only configuration, when the item has
+   * no answer of them) the card's strength and direction. `null` when there is no analysis («sin dato»).
+   */
+  readonly analysis_source: 'questions' | 'card' | null
   readonly analysis_version: number | null
   readonly relevance_at_ms: number | null
   readonly direction_at_ms: number | null
@@ -198,9 +203,23 @@ function cardOf(row: Row): NewsCard | null {
   }
 }
 
+/** The card strength 0-3 as the relevance label of the old question (`none`..`high`). */
+const CARD_RELEVANCE: readonly NewsRelevance[] = [
+  'none',
+  'low',
+  'medium',
+  'high',
+]
+
+/** What the card table says about an item: the latest row's status and its card when it is a valid `done` one. */
+interface CardEntry {
+  readonly status: string
+  readonly card: NewsCard | null
+}
+
 /** Latest card per item hash; an old database without the table has none. */
 function cardsOf(db: DatabaseSync, hashes: readonly string[]) {
-  const cards = new Map<string, NewsCard | null>()
+  const cards = new Map<string, CardEntry>()
   const table = rowOf(
     db
       .prepare(
@@ -221,7 +240,10 @@ function cardsOf(db: DatabaseSync, hashes: readonly string[]) {
     .all(...hashes)
   for (const raw of rows) {
     const row = rowOf(raw)
-    cards.set(String(row.item_hash), cardOf(row))
+    cards.set(String(row.item_hash), {
+      status: String(row.status),
+      card: cardOf(row),
+    })
   }
   return cards
 }
@@ -685,10 +707,28 @@ export function createNewsItems(options: {
         if (seen.has(id))
           return { status: 'error', reason: 'duplicate_news_analysis' }
         seen.add(id)
-        const state = analysisStatus(row)
+        const cardEntry = opened.value.cards.get(id)
+        const legacyAnswered =
+          row.relevance_status === 'done' || row.direction_status === 'done'
+        const noLegacyRows =
+          row.relevance_status == null && row.direction_status == null
+        // Card-only news: no old answer, so the card stands for relevance and direction.
+        const fromCard =
+          !legacyAnswered && cardEntry?.card ? cardEntry.card : null
+        const state: AnalysisStatus = fromCard
+          ? 'done'
+          : noLegacyRows && cardEntry?.status === 'skipped_stale'
+            ? 'stale'
+            : noLegacyRows && cardEntry?.status === 'failed'
+              ? 'failed'
+              : analysisStatus(row)
         const published = num(row.published_at)
-        const relevanceAt = num(row.relevance_at)
-        const directionAt = num(row.direction_at)
+        const relevanceAt = fromCard
+          ? fromCard.known_at_ms
+          : num(row.relevance_at)
+        const directionAt = fromCard
+          ? fromCard.known_at_ms
+          : num(row.direction_at)
         const knownAt =
           state === 'done' && relevanceAt !== null && directionAt !== null
             ? Math.max(received, relevanceAt, directionAt)
@@ -717,13 +757,30 @@ export function createNewsItems(options: {
           title: String(row.title ?? ''),
           published_at_ms: published,
           received_at_ms: received,
-          relevance: row.relevance_status === 'done' ? relevance : null,
-          relevance_value:
-            row.relevance_status === 'done' ? num(row.relevance_value) : null,
-          direction:
-            row.direction_status === 'done' ? directionOf(row.direction) : null,
+          relevance: fromCard
+            ? CARD_RELEVANCE[fromCard.strength]
+            : row.relevance_status === 'done'
+              ? relevance
+              : null,
+          relevance_value: fromCard
+            ? fromCard.strength_value === null
+              ? null
+              : Math.round((fromCard.strength_value / 3) * 1e6) / 1e6
+            : row.relevance_status === 'done'
+              ? num(row.relevance_value)
+              : null,
+          direction: fromCard
+            ? fromCard.direction
+            : row.direction_status === 'done'
+              ? directionOf(row.direction)
+              : null,
           analysis_status: state,
-          analysis_version: num(row.question_version),
+          analysis_source: fromCard
+            ? 'card'
+            : state === 'done' || state === 'partial'
+              ? 'questions'
+              : null,
+          analysis_version: fromCard ? null : num(row.question_version),
           relevance_at_ms: relevanceAt,
           direction_at_ms: directionAt,
           known_at_ms: knownAt,
@@ -738,7 +795,7 @@ export function createNewsItems(options: {
                   ? 'owner_state_not_current'
                   : null,
           ...licenseOf(lifecycle, String(row.source_id ?? ''), row.url),
-          card: opened.value.cards.get(id) ?? null,
+          card: cardEntry?.card ?? null,
         })
         if (items.length >= limit) break
       }

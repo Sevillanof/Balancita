@@ -77,13 +77,47 @@ def create_table(db):
     """)
 
 
+_ORDER = "ORDER BY COALESCE(i.published_at,i.received_at) DESC,i.received_at DESC,i.item_id DESC LIMIT 200"
+_FRESH = ("WHERE i.received_at>? AND i.received_at<=? "
+          "AND (i.published_at IS NULL OR (i.published_at>? AND i.published_at<=?))")
+
+
+def _has_cards(db):
+    return db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='paper_futures_news_cards'").fetchone() is not None
+
+
+def _card_rows(db, now):
+    """Items with no old answer at all that have a finished news card of strength 1-3 known by ``now``.
+
+    Card-only configuration (T14): the card replaces the two old questions, so its strength stands for the relevance
+    (``CARD_RELEVANCE``) and its direction for the direction. An item with an old answer, whatever it said, is read
+    from the old rows only."""
+    if not _has_cards(db):
+        return []
+    return db.execute("""
+        SELECT i.item_hash,i.source_id,i.source,i.url,i.title,i.summary,i.published_at,i.received_at,
+               c.strength,c.written_at,c.direction,c.written_at,c.strength,i.item_id
+          FROM paper_futures_news_items i
+          JOIN paper_futures_news_cards c ON c.item_hash=i.item_hash AND c.status='done'
+           AND c.strength>=1 AND c.direction IN ('bullish','bearish','neutral')
+           AND c.written_at BETWEEN i.received_at AND ?
+           AND c.card_version=(SELECT MAX(card_version) FROM paper_futures_news_cards
+                                WHERE item_hash=i.item_hash AND status='done')
+          {fresh}
+           AND NOT EXISTS (SELECT 1 FROM paper_futures_news_analysis a WHERE a.item_hash=i.item_hash
+                            AND a.question_id IN ('news_relevance_btc','news_direction') AND a.question_version=2
+                            AND a.status='done')
+         {order}
+    """.format(fresh=_FRESH, order=_ORDER), (now, now - WINDOW_MS, now, now - WINDOW_MS, now)).fetchall()
+
+
 def select_inputs(db, now):
     from .futures_news import clean_text
-    from .futures_qwen_noticias import is_irrelevant_headline
+    from .futures_qwen_noticias import CARD_RELEVANCE, is_irrelevant_headline
 
-    cursor = db.execute("""
+    legacy = db.execute("""
         SELECT i.item_hash,i.source_id,i.source,i.url,i.title,i.summary,i.published_at,i.received_at,
-               r.chosen,r.analyzed_at,d.chosen,d.analyzed_at
+               r.chosen,r.analyzed_at,d.chosen,d.analyzed_at,NULL,i.item_id
           FROM paper_futures_news_items i
           JOIN paper_futures_news_analysis r ON r.item_hash=i.item_hash
            AND r.question_id='news_relevance_btc' AND r.question_version=2
@@ -93,13 +127,14 @@ def select_inputs(db, now):
            AND d.question_id='news_direction' AND d.question_version=2
            AND d.status='done' AND d.chosen IN ('bullish','bearish','neutral')
            AND d.analyzed_at BETWEEN i.received_at AND ?
-         WHERE i.received_at>? AND i.received_at<=?
-           AND (i.published_at IS NULL OR (i.published_at>? AND i.published_at<=?))
-         ORDER BY COALESCE(i.published_at,i.received_at) DESC,i.received_at DESC,i.item_id DESC
-         LIMIT 200
-    """, (now, now, now - WINDOW_MS, now, now - WINDOW_MS, now))
+          {fresh}
+         {order}
+    """.format(fresh=_FRESH, order=_ORDER), (now, now, now - WINDOW_MS, now, now - WINDOW_MS, now)).fetchall()
+    cards = _card_rows(db, now)
+    # Both lists are already newest first; the card rows carry the strength in column 12 (legacy rows carry NULL).
+    rows = sorted(legacy + cards, key=lambda r: (-(r[6] if r[6] is not None else r[7]), -r[7], -r[13]))
     inputs, seen = [], set()
-    for id_, source_id, source, url, title, summary, published, received, relevance, r_at, direction, d_at in cursor:
+    for id_, source_id, source, url, title, summary, published, received, relevance, r_at, direction, d_at, strength, _ in rows:
         title, summary = clean_text(title, 300), clean_text(summary, 1500)
         source = clean_text(source, 100)
         try:
@@ -113,13 +148,16 @@ def select_inputs(db, now):
                 or any(k in seen for k in keys)):
             continue
         seen.update(keys)
-        inputs.append({
+        row = {
             "id": id_, "source_id": source_id, "source": source, "url": url,
             "title": title, "summary": summary, "published_at_ms": published, "received_at_ms": received,
             "relevance": relevance, "relevance_at_ms": r_at, "direction": direction, "direction_at_ms": d_at,
             # The ingestion catalog records no verified reuse-license evidence.
             "license_status": "unknown",
-        })
+        }
+        if strength is not None:
+            row.update(relevance=CARD_RELEVANCE[strength], analysis_source="card", card_strength=strength)
+        inputs.append(row)
         if len(inputs) == MAX_ITEMS:
             break
     return inputs

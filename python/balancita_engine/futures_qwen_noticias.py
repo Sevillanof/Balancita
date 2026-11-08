@@ -116,7 +116,16 @@ def parse_amount_usd(title, summary=""):
     return None
 
 
-def apply_card_rules(card, title, summary=""):
+# Strength 0-3 of a news card as the relevance label of the two old questions (``news_relevance_btc``), for the readers
+# that still speak that scale when an item has a card and no old answer (briefing, news API).
+CARD_RELEVANCE = ("none", "low", "medium", "high")
+# Card-only (no scope question): nobody says whether the event already happened, so the hack rule assumes it did unless
+# the model typed the item as one of these, and records the assumption in the rule name.
+HACK_UNCONFIRMED_RULE = "hack_100m_unconfirmed"
+_NOT_AN_EVENT = ("price_recap", "opinion")
+
+
+def apply_card_rules(card, title, summary="", scope_known=True):
     """The final card: ``card`` is what Qwen answered (``event_type``, ``strength`` 0-3, ``direction``,
     ``already_happened``, ...). Returns a copy with ``strength_model`` (Qwen's own strength), ``amount_usd`` and
     ``rules`` (the names of the rules that changed something), in this order:
@@ -126,6 +135,11 @@ def apply_card_rules(card, title, summary=""):
     * ``hack_100m``: a hack or exploit that already happened (Qwen says ``hack`` or the headline says so) with an
       amount of at least 100 M US$ gets strength of at least 2. It runs after ``recap``, so a big hack whose
       headline also quotes a price move keeps its weight.
+
+    ``scope_known=False`` is the card-only configuration, where the scope question (the only source of
+    ``already_happened``) is not asked: the hack rule then takes the event as happened unless Qwen typed the item as a
+    price recap or an opinion, and the rule is recorded as ``hack_100m_unconfirmed``. With ``scope_known=True``
+    (default) nothing differs from before.
     """
     out = dict(card)
     out["strength_model"] = card["strength"]
@@ -136,10 +150,12 @@ def apply_card_rules(card, title, summary=""):
         out["rules"].append("recap")
     amount = out["amount_usd"]
     is_hack = card["event_type"] == "hack" or bool(_HACK_RE.search(str(title or "")))
-    if (is_hack and card.get("already_happened") and amount is not None and amount >= HACK_MIN_USD
+    happened = card.get("already_happened")
+    assumed = not scope_known and happened is None and card["event_type"] not in _NOT_AN_EVENT
+    if (is_hack and (happened or assumed) and amount is not None and amount >= HACK_MIN_USD
             and out["strength"] < HACK_STRENGTH):
         out["strength"] = HACK_STRENGTH
-        out["rules"].append("hack_100m")
+        out["rules"].append(HACK_UNCONFIRMED_RULE if assumed else "hack_100m")
     return out
 
 
