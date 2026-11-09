@@ -19,14 +19,14 @@ Mejoras de la operatoria pedidas por el usuario después de la sombra maker. Con
 
 ## Tasks
 
-| ID  | Specs | Ruta                                                                                               | Estado                                 | Commit |
-| --- | ----- | -------------------------------------------------------------------------------------------------- | -------------------------------------- | ------ |
-| T1  | S1    | worker captura: libro de ETH cada 10 s                                                             | hecha                                  | —      |
-| T2  | S2-S3 | worker trader: mirada de recuperación, perdidas, fecha de entrada                                  | hecha                                  | —      |
-| T3  | S4    | worker operatoria: script de despliegue, cuenta gh, test inestable                                 | hecha                                  | —      |
-| T4  | S5    | alarma: latido del operador, miradas perdidas, posición sin valorar, reloj (healthcheck de la VPS) | hecha                                  | —      |
-| T5  | S6    | marcador de la revisión en el desplegable del saldo (maqueta en gentle-design primero)             | en curso (implementando 02-contra-eth) | —      |
-| T6  | S7    | pendientes del informe: #547 a main, opción 4, 6a, 7                                               | pendiente                              | —      |
+| ID  | Specs | Ruta                                                                                               | Estado    | Commit |
+| --- | ----- | -------------------------------------------------------------------------------------------------- | --------- | ------ |
+| T1  | S1    | worker captura: libro de ETH cada 10 s                                                             | hecha     | —      |
+| T2  | S2-S3 | worker trader: mirada de recuperación, perdidas, fecha de entrada                                  | hecha     | —      |
+| T3  | S4    | worker operatoria: script de despliegue, cuenta gh, test inestable                                 | hecha     | —      |
+| T4  | S5    | alarma: latido del operador, miradas perdidas, posición sin valorar, reloj (healthcheck de la VPS) | hecha     | —      |
+| T5  | S6    | marcador de la revisión en el desplegable del saldo (maqueta en gentle-design primero)             | hecha     | —      |
+| T6  | S7    | pendientes del informe: #547 a main, opción 4, 6a, 7                                               | pendiente | —      |
 
 ## Log
 
@@ -41,3 +41,4 @@ Mejoras de la operatoria pedidas por el usuario después de la sombra maker. Con
 - **L9** (usuario, comentarios en el canvas sobre 02-contra-eth): «Me gusta esta opcion» · «quiero que sea mas visual, no se pone texto a no ser que sea necesario, podes hacerlo tipo KPI, con hover o mostrame opciones» · «Este me gusta, pero hay que verificar su correcto funcionamiento» (curva contra ETH) · «Este texto no me gusta. Tiene que ser mas visual, no tanto texto» (revisión 20/30) · «Este texto, no es necesario» · «cuando se le haga hover a cada una, tiene que mostrar la operacion con datos visuales» (barras). → 02 rehecha: 3 KPI con hover (Terminal, tener ETH, diferencia), curva sin leyenda de texto, 30 casilleros + chips 20/30 y ritmo por día, y tarjeta al pasar por cada barra (lado, neto, duración contra el tope de 36 h, horas de entrada y salida en Madrid, precios, motivo). Al implementar: la curva de ETH = capital inicial × precio de ETH al cierre de cada operación / precio al inicio, con test.
 - **L10** (handoff de gentle-design): implementar `design/marcador-saldo/02-contra-eth.html` (artboard elegido; 01 y 03 quedan como alternativas) en el desplegable del saldo (`src/app/AccountBalance.tsx`).
 - **L11** (evidencia T4): el chequeo de salud de la VPS ahora falla (mail) si: el operador no tiene latido hace > 20 min; hay ≥ 2 miradas perdidas en la última hora; una posición abierta no se valora hace > 30 min (con el motivo, p. ej. `libro_obsoleto`); el reloj no está sincronizado (NTP) o se desfasa > 3 s contra Kraken. Qwen caído ya no falla el ping (solo log). Umbrales por variables `HC_*`. `desplegar.sh` instala el script si cambió. 254 tests node (252 OK, 2 shellcheck omitidos).
+- **L12** (evidencia T5): desplegable del saldo según 02-contra-eth: 3 KPI con tooltip (Terminal, tener ETH, diferencia), curva de la Terminal y de tener ETH (punteada), 30 casilleros + «N/30» y «⏱ X,X/d», tarjeta por barra (lado, neto, duración contra 36 h, entrada/salida en hora de Madrid, precios, motivo). Tener ETH = capital inicial × precio de ETH ahora / precio al inicio, con velas de 1 min de Kraken ya cerradas y de menos de 5 min; si falta un precio, «sin dato». `/api/qwen/account` suma campos (aditivo). 657 tests de la web, 350 del gateway, typecheck limpio; capturas reales a 1440, 640 y 390 px.
