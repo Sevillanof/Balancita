@@ -1,0 +1,30 @@
+docs/datos-libro-eth.md
+  h_92dd6654ceb221 1-45
+docs/resumen-minuto-eth.md
+  h_92dd6654ceb221 38-43,67,72
+odd/tasks/operacion-mejoras.md
+  h_92dd6654ceb221 20,27
+server/src/app/capture-main.ts
+  h_92dd6654ceb221 28,112-114,116
+server/src/features/kraken-futures/capture-book-sample.test.ts
+  h_92dd6654ceb221 1-46
+server/src/features/kraken-futures/capture-book-sample.ts
+  h_92dd6654ceb221 1-31
+server/src/features/market-summary/eth-minute-summary.test.ts
+  h_92dd6654ceb221 214-242
+server/src/features/market-summary/eth-minute-summary.ts
+  h_92dd6654ceb221 15
+server/src/features/market-summary/eth-summary-wiring.test.ts
+  h_92dd6654ceb221 9-13,352-552
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "c74a32ac9d32c00ed9d46f5bf042d8cd0c7b987b",
+  "prompts": {},
+  "humans": {
+    "h_92dd6654ceb221": {
+      "author": "Franco Sevillano <79455847+Sevillanof@users.noreply.github.com>"
+    }
+  }
+}
