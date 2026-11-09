@@ -1,0 +1,64 @@
+e2e/terminal-lifecycle.pw.ts
+  h_92dd6654ceb221 549-553,609-613,615,618,620-634,639-642,644,646-647,715,805,825-828
+e2e/terminal-viewport-news.pw.ts
+  h_92dd6654ceb221 269,272
+odd/tasks/operacion-mejoras.md
+  h_92dd6654ceb221 22-29,56
+server/src/features/live-gateway/qwen-decisions.test.ts
+  h_92dd6654ceb221 712-731
+server/src/features/live-gateway/qwen-decisions.ts
+  h_92dd6654ceb221 183-185,795-796
+src/app/FuturesTerminal.tsx
+  h_92dd6654ceb221 46,50,634,674,703
+src/app/MobileTerminal.tsx
+  h_92dd6654ceb221 9,267
+src/app/QwenTradesPanel.tsx
+  h_92dd6654ceb221 1,59,74-77
+src/app/TerminalNewsPanel.test.tsx
+  h_92dd6654ceb221 277,282,311-444
+src/app/TerminalNewsPanel.tsx
+  h_92dd6654ceb221 4-5,90-91,94,97,99,105-136,167,171-172,175-192,194-196,198,200,202-222,224-232,408,593,598,614,616,767-768,771,774-775,799
+src/app/TerminalOperationCard.fplus.test.tsx
+  h_92dd6654ceb221 1-210
+src/app/TerminalOperationCard.test.tsx
+  h_92dd6654ceb221 166-167,211
+src/app/TerminalOperationCard.tsx
+  h_92dd6654ceb221 2,5-11,13-24,63,65-66,102-409,418,428-429,479-485,490,495-534,537-549,556-569,571-580,583-587,589-591,593-595,619,624-626,648,650-651,717-719,723-729
+src/app/terminal-date.ts
+  h_92dd6654ceb221 1-11,16-20
+src/app/terminal-labels.ts
+  h_92dd6654ceb221 3-7,25-26,28,90
+src/app/terminal-lifecycle.ts
+  h_92dd6654ceb221 2,123,761-779
+src/app/terminal-operation-view.test.ts
+  h_92dd6654ceb221 1-185
+src/app/terminal-operation-view.ts
+  h_92dd6654ceb221 1-240
+src/app/useQwenTrades.ts
+  h_92dd6654ceb221 98-103,259-269,354-355
+src/features/trading-view/presentation/LifecycleSteps.test.tsx
+  h_92dd6654ceb221 1-158
+src/features/trading-view/presentation/LifecycleSteps.tsx
+  h_92dd6654ceb221 12-13,128-146,374-395,434-444,446-454,496-497,513,516-524,526-536
+src/features/trading-view/presentation/TerminalTradeOverlay.tsx
+  h_92dd6654ceb221 2,164,182
+src/features/trading-view/presentation/Tip.tsx
+  h_92dd6654ceb221 1-98
+src/features/trading-view/presentation/row-steps.ts
+  h_92dd6654ceb221 1-19
+src/shared/finance/format.test.ts
+  h_92dd6654ceb221 8-10,40-70
+src/shared/finance/format.ts
+  h_92dd6654ceb221 44-68,115-131
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "f892d181cb81abb81c649d4cdff380ba2ad143df",
+  "prompts": {},
+  "humans": {
+    "h_92dd6654ceb221": {
+      "author": "Franco Sevillano <79455847+Sevillanof@users.noreply.github.com>"
+    }
+  }
+}
