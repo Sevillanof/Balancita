@@ -32,6 +32,15 @@ const utcDate = new Intl.DateTimeFormat('es-ES', {
   second: '2-digit',
 })
 
+const madridDate = new Intl.DateTimeFormat('es-ES', {
+  timeZone: 'Europe/Madrid',
+  day: 'numeric',
+  month: 'short',
+  hour: '2-digit',
+  minute: '2-digit',
+  hourCycle: 'h23',
+})
+
 /** `1.234,50 US$` for a number; `—` when absent. */
 export function usd(value: number | null | undefined, digits = 2): string {
   return value == null ? '—' : money('USD', digits).format(value)
@@ -72,4 +81,9 @@ export function usdFromString(value: unknown, digits = 2): string | null {
 /** `7/10/2026, 12:39:00 UTC` from epoch milliseconds. */
 export function utcDateTime(ms: number): string {
   return `${utcDate.format(ms)} UTC`
+}
+
+/** `2 nov, 14:05` in Europe/Madrid (CET/CEST) from epoch milliseconds. */
+export function madridDateTime(ms: number): string {
+  return madridDate.format(ms)
 }

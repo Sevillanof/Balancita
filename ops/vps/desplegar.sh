@@ -13,6 +13,8 @@
 #   6. Instala los drop-ins de systemd que cambiaron (y `daemon-reload`). Un drop-in que está en el repo
 #      pero NO instalado en la VPS no se instala solo y tampoco se deja pasar: el script frena hasta que
 #      se decida con --dropin NOMBRE (instalarlo) o --omitir NOMBRE (dejarlo afuera esta vez).
+#      También copia el chequeo de salud (ops/vps/balancita-healthcheck.sh) a /usr/local/bin si difiere del instalado
+#      (`install -m 755`); no hace falta reiniciar nada: el timer lo vuelve a ejecutar cada 5 min.
 #   7. Reinicia `balancita` solo entre los minutos :16 y :27 UTC (espera la ventana).
 #   8. Chequeos: servicio activo, llama-server con VmLck > 0 y `-t 5`, sin integridad corriendo
 #      justo después del arranque, sin errores nuevos en qwen-live y sin Traceback en el journal.
@@ -43,6 +45,8 @@ VPS_DIR="${DESPLIEGUE_VPS_DIR:-/home/balancita/Balancita}"
 VPS_DB="$VPS_DIR/server/data/dev-live/qwen-live/live.sqlite"
 DROPINS_ORIGEN="$VPS_DIR/ops/vps/systemd/balancita.service.d"
 DROPINS_DESTINO="/etc/systemd/system/balancita.service.d"
+HEALTHCHECK_ORIGEN="$VPS_DIR/ops/vps/balancita-healthcheck.sh"
+HEALTHCHECK_DESTINO="/usr/local/bin/balancita-healthcheck.sh"
 CI_MAX_SEG="${DESPLIEGUE_CI_MAX_SEG:-3600}"
 SONDEO_SEG="${DESPLIEGUE_SONDEO_SEG:-30}"
 AVISO_SEG="${DESPLIEGUE_AVISO_SEG:-120}"
@@ -298,9 +302,22 @@ vps_dropins() {
   fi
 }
 
+# Chequeo de salud (S5): copia ops/vps/balancita-healthcheck.sh a /usr/local/bin solo si difiere. Es un oneshot que el timer
+# vuelve a lanzar cada 5 min, así que no hay nada que reiniciar. Las unidades .service/.timer no cambian con este paso.
+vps_healthcheck() {
+  local estado
+  estado="$(vps "if [ -e $HEALTHCHECK_DESTINO ] && cmp -s $HEALTHCHECK_ORIGEN $HEALTHCHECK_DESTINO; then echo igual; else install -m 755 $HEALTHCHECK_ORIGEN $HEALTHCHECK_DESTINO && echo instalado; fi")" ||
+    fallar 5 "no pude instalar el chequeo de salud en $HEALTHCHECK_DESTINO."
+  case "$estado" in
+    igual) info "Chequeo de salud: igual al instalado en $HEALTHCHECK_DESTINO." ;;
+    instalado) info "Chequeo de salud: instalado en $HEALTHCHECK_DESTINO (el timer lo usa en su próxima corrida de 5 min)." ;;
+    *) fallar 5 "respuesta inesperada al instalar el chequeo de salud: '$estado'." ;;
+  esac
+}
+
 # Imprime "si" o "no": el servicio necesita reiniciarse si arrancó antes del último commit o drop-in.
 vps_necesita_reinicio() {
-  vps "inicio=\$(date -d \"\$(systemctl show balancita -p ActiveEnterTimestamp --value)\" +%s 2>/dev/null || echo 0); commit=\$(git -C $VPS_DIR log -1 --format=%ct); dropin=\$(stat -c %Y $DROPINS_DESTINO/*.conf 2>/dev/null | sort -n | tail -1); dropin=\${dropin:-0}; mayor=\$commit; [ \"\$dropin\" -gt \"\$mayor\" ] && mayor=\$dropin; if [ \"\$inicio\" -lt \"\$mayor\" ]; then echo si; else echo no; fi" ||
+  vps "inicio=\$(date -d \"\$(systemctl show balancita -p ActiveEnterTimestamp --value)\" +%s 2>/dev/null || echo 0); commit=\$(sudo -u balancita git -C $VPS_DIR log -1 --format=%ct 2>/dev/null); [ -n \"\$commit\" ] || { echo error; exit 0; }; dropin=\$(stat -c %Y $DROPINS_DESTINO/*.conf 2>/dev/null | sort -n | tail -1); dropin=\${dropin:-0}; mayor=\$commit; [ \"\$dropin\" -gt \"\$mayor\" ] && mayor=\$dropin; if [ \"\$inicio\" -lt \"\$mayor\" ]; then echo si; else echo no; fi" ||
     fallar 5 "no pude saber si el servicio necesita reinicio."
 }
 
@@ -404,14 +421,19 @@ main() {
   if [ "$DRY" = 1 ]; then
     plan="reinicio de balancita dentro de :$VENTANA_DESDE-:$VENTANA_HASTA UTC y chequeos posteriores"
     [ "$SIN_REINICIO" = 0 ] || plan="sin reinicio (--sin-reinicio)"
-    simular "en la VPS: git pull --ff-only; instalar los drop-ins distintos (los nuevos solo con --dropin); $plan."
+    simular "en la VPS: git pull --ff-only; instalar los drop-ins distintos (los nuevos solo con --dropin); copiar el chequeo de salud si cambió; $plan."
     info "Fin del dry-run: no se cambió nada."
     return 0
   fi
 
   vps_pull
   vps_dropins
+  vps_healthcheck
   necesita="$(vps_necesita_reinicio)"
+  case "$necesita" in
+    si | no) ;;
+    *) fallar 5 "la VPS no pudo decir la fecha del último commit (respuesta: '$necesita'); no reinicio a ciegas." ;;
+  esac
 
   if [ "$SIN_REINICIO" = 1 ]; then
     if [ "$necesita" = "si" ]; then

@@ -244,6 +244,63 @@ describe('live market gateway', () => {
     expect(asked).toEqual(['PF_XBTUSD:5', 'bad:undefined'])
   })
 
+  it('serves the account with the ETH prices from Kraken candles, null where there are none', async () => {
+    const path = dbPath()
+    const writer = seedWriter(path, 5)
+    closers.push(() => writer.close())
+    // Official ETH candles: 2000 at minute 1, 1900 at minute 3.
+    saveOfficial(writer, [1], '2000', BASE + 100 * MINUTE, 'PF_ETHUSD')
+    saveOfficial(writer, [3], '1900', BASE + 100 * MINUTE, 'PF_ETHUSD')
+    const step = (product: string, exit: number) => ({
+      product,
+      trade_no: 1,
+      side: 'LONG' as const,
+      exit_ms: exit,
+      net_usd: -10,
+      balance_usd: 990,
+      entry_ms: BASE,
+      entry_price: null,
+      exit_price: null,
+      closed_by: null,
+      exit_reason: null,
+      max_hold_ms: null,
+    })
+    const on = await start(path, {
+      clock: () => BASE + 4 * MINUTE,
+      qwenDecisions: {
+        report: () => ({ status: 'off', reason: 'test' }),
+        trades: () => ({ status: 'off', reason: 'test' }),
+        account: () => ({
+          status: 'ok',
+          start_usd: 1000,
+          start_ms: BASE + 2 * MINUTE,
+          balance_usd: 990,
+          realized_usd: -10,
+          open_usd: 0,
+          open_count: 0,
+          funding_incomplete: false,
+          steps: [
+            step('PF_XBTUSD', BASE + 4 * MINUTE),
+            step('PF_XBTUSD', BASE),
+          ],
+        }),
+      },
+    })
+    const body = (await on.app.inject('/api/qwen/account')).json()
+    expect(body).toMatchObject({
+      status: 'ok',
+      as_of_ms: BASE + 4 * MINUTE,
+      eth_start_price: 2000,
+      eth_now_price: 1900,
+    })
+    expect(body.steps.map((s: any) => s.eth_price)).toEqual([1900, null])
+    const off = await start(path)
+    expect((await off.app.inject('/api/qwen/account')).json()).toEqual({
+      status: 'off',
+      reason: 'decisions_not_configured',
+    })
+  })
+
   it('serves Kronos scores and reports them off when not configured', async () => {
     const path = dbPath()
     const writer = seedWriter(path, 5)

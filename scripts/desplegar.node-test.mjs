@@ -67,6 +67,7 @@ echo "@{*:1:$#-1}" >> "$d/ssh.opts"
 case "$cmd" in
   true) ;;
   *"git pull"*) [ -z "@{STUB_PULL_FALLA:-}" ] || { echo "fatal: Not possible to fast-forward" ; exit 1; }; printf 'Updating a..b\nFast-forward\n' ;;
+  *balancita-healthcheck.sh*) [ -z "@{STUB_HC_FALLA:-}" ] || { echo "install: cannot create" >&2; exit 1; }; echo "@{STUB_HC:-igual}" ;;
   *"cmp -s"*) printf '%b' "@{STUB_DROPINS:-llama.conf distinto\n}" ;;
   install\ -D*) ;;
   *daemon-reload*) ;;
@@ -538,6 +539,30 @@ describe('desplegar', { concurrency: 8 }, () => {
       assert.doesNotMatch(r.ssh, /systemctl restart/)
     })
 
+    it('lee el último commit en la VPS como balancita (root ve el repo como «dubious ownership» y daba 0)', async () => {
+      const r = await correr([], {
+        env: { STUB_PR_ABIERTO: '1', STUB_CI_SEQ: '2 0 0' },
+      })
+      assert.equal(r.status, 0, r.todo)
+      assert.match(
+        r.ssh,
+        /ActiveEnterTimestamp[^\n]*sudo -u balancita git -C \S+ log -1 --format=%ct/,
+      )
+      assert.match(r.ssh, /ActiveEnterTimestamp[^\n]*echo error/)
+    })
+
+    it('si la VPS no puede decir la fecha del último commit, frena con código 5 sin reiniciar', async () => {
+      const r = await correr([], {
+        env: {
+          STUB_PR_ABIERTO: '1',
+          STUB_CI_SEQ: '2 0 0',
+          STUB_NECESITA: 'error',
+        },
+      })
+      assert.equal(r.status, 5, r.todo)
+      assert.doesNotMatch(r.ssh, /systemctl restart/)
+    })
+
     it('--dropin instala también un drop-in nuevo', async () => {
       const r = await correr(['--dropin', 'noticias.conf'], {
         env: {
@@ -563,6 +588,57 @@ describe('desplegar', { concurrency: 8 }, () => {
       })
       assert.equal(r.status, 0, r.todo)
       assert.ok(!sshLlamo(r, 'install -D') && !sshLlamo(r, 'daemon-reload'))
+    })
+
+    it('copia el chequeo de salud a /usr/local/bin si cambió: después de los drop-ins, antes del reinicio, sin reiniciar nada por eso', async () => {
+      const r = await correr(['--sin-reinicio'], {
+        env: {
+          STUB_PR_ABIERTO: '1',
+          STUB_CI_SEQ: '2 0 0',
+          STUB_HC: 'instalado',
+          STUB_NECESITA: 'no',
+        },
+      })
+      assert.equal(r.status, 0, r.todo)
+      assert.match(
+        r.ssh,
+        /install -m 755 \S+\/ops\/vps\/balancita-healthcheck\.sh \/usr\/local\/bin\/balancita-healthcheck\.sh/,
+      )
+      assert.match(
+        r.ssh,
+        /cmp -s \S+balancita-healthcheck\.sh \/usr\/local\/bin\/balancita-healthcheck\.sh/,
+      )
+      assert.ok(
+        r.ssh.indexOf('git pull') < r.ssh.indexOf('balancita-healthcheck.sh'),
+      )
+      assert.ok(!sshLlamo(r, 'systemctl restart'))
+      assert.match(
+        r.out,
+        /Chequeo de salud: instalado en \/usr\/local\/bin\/balancita-healthcheck\.sh/,
+      )
+    })
+
+    it('con el chequeo de salud igual al instalado solo lo dice (el comando remoto copia solo si difiere)', async () => {
+      const r = await correr([], {
+        env: { STUB_PR_ABIERTO: '1', STUB_CI_SEQ: '2 0 0', STUB_HC: 'igual' },
+      })
+      assert.equal(r.status, 0, r.todo)
+      assert.match(r.out, /Chequeo de salud: igual al instalado/)
+    })
+
+    it('si no se puede instalar el chequeo de salud aborta con código 5 antes de reiniciar', async () => {
+      const r = await correr([], {
+        env: { STUB_PR_ABIERTO: '1', STUB_CI_SEQ: '2 0 0', STUB_HC_FALLA: '1' },
+      })
+      assert.equal(r.status, 5, r.todo)
+      assert.match(r.err, /no pude instalar el chequeo de salud/)
+      assert.ok(!sshLlamo(r, 'systemctl restart'))
+    })
+
+    it('--dry-run no copia el chequeo de salud', async () => {
+      const r = await correr(['--dry-run'], { env: { STUB_PR_ABIERTO: '1' } })
+      assert.equal(r.status, 0, r.todo)
+      assert.ok(!sshLlamo(r, 'balancita-healthcheck'))
     })
 
     it('git pull que no avanza rápido aborta con código 5 y sin reiniciar', async () => {
