@@ -265,7 +265,7 @@ describe('balancita-healthcheck.sh', { concurrency: 1 }, () => {
         assert.match(r.log, /sin_valorar_min=\d+/)
         assert.match(r.log, /reloj_s=-?\d+/)
         assert.match(r.log, /llama=ok/)
-        assert.match(r.log, /vela_eth_edad_min=1 /)
+        assert.match(r.log, /vela_eth_edad_min=[01] /) // the test clock and the script may straddle a minute
       })
 
       it('sin HC_PING_URL no pinguea nada pero sigue escribiendo el log y devolviendo el estado', async () => {
@@ -289,7 +289,7 @@ describe('balancita-healthcheck.sh', { concurrency: 1 }, () => {
         })
         debeFallar(r, /balancita\.service no activo/)
         const v = veredicto(r)
-        assert.match(v.motivo, /ultima vela 1m ETH de hace 15 min/)
+        assert.match(v.motivo, /ultima vela 1m ETH de hace 1[45] min/) // minute rounding against the real clock
         assert.match(v.motivo, /disco al 85%/)
         assert.match(v.motivo, /RAM disponible 300 MB/)
         assert.equal(v.motivo.split(';').length >= 4, true, v.motivo)
