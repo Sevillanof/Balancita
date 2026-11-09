@@ -39,6 +39,19 @@ export function integrityFromEnv(env: Env): {
 }
 
 /**
+ * Wait before the first integrity check after the capture starts: `FUTURES_DB_INTEGRITY_FIRST_DELAY_MINUTES`
+ * (default 60). Reading the 10 GB market database right after a restart saturated the VPS disk for ~20-40 min,
+ * exactly while Qwen warms up (odd/tasks/noticias-y-auditor.md T16). A missing or invalid value keeps 60.
+ */
+export function integrityFirstDelayFromEnv(env: Env): number {
+  return minutesFromEnv(
+    env,
+    'FUTURES_DB_INTEGRITY_FIRST_DELAY_MINUTES',
+    60 * MINUTE,
+  )
+}
+
+/**
  * Databases the app's own daily backup copies. `futures-market` (10 GB) is OUT by default: the VPS copies it
  * every night (ops/vps balancita-respaldo.timer, 03:30 UTC) and the internal copy never finished there
  * (cut at 90 min, 57 times in a row; analisis/vps-qwen-lento). `FUTURES_DB_BACKUP_MARKET=1` puts it back
