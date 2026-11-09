@@ -1,0 +1,16 @@
+design/terminal-detalles/_build.py
+  h_92dd6654ceb221 1-88
+odd/tasks/operacion-mejoras.md
+  h_92dd6654ceb221 49-55
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "66c88c60dc57a7ffe90a9dd42195e93c23a02380",
+  "prompts": {},
+  "humans": {
+    "h_92dd6654ceb221": {
+      "author": "Franco Sevillano <79455847+Sevillanof@users.noreply.github.com>"
+    }
+  }
+}
