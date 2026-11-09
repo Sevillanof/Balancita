@@ -19,14 +19,14 @@ Mejoras de la operatoria pedidas por el usuario después de la sombra maker. Con
 
 ## Tasks
 
-| ID  | Specs | Ruta                                                                                               | Estado    | Commit |
-| --- | ----- | -------------------------------------------------------------------------------------------------- | --------- | ------ |
-| T1  | S1    | worker captura: libro de ETH cada 10 s                                                             | hecha     | —      |
-| T2  | S2-S3 | worker trader: mirada de recuperación, perdidas, fecha de entrada                                  | hecha     | —      |
-| T3  | S4    | worker operatoria: script de despliegue, cuenta gh, test inestable                                 | hecha     | —      |
-| T4  | S5    | alarma: latido del operador, miradas perdidas, posición sin valorar, reloj (healthcheck de la VPS) | hecha     | —      |
-| T5  | S6    | marcador de la revisión en el desplegable del saldo (maqueta en gentle-design primero)             | hecha     | —      |
-| T6  | S7    | pendientes del informe: #547 a main, opción 4, 6a, 7                                               | pendiente | —      |
+| ID  | Specs | Ruta                                                                                               | Estado               | Commit |
+| --- | ----- | -------------------------------------------------------------------------------------------------- | -------------------- | ------ |
+| T1  | S1    | worker captura: libro de ETH cada 10 s                                                             | hecha                | —      |
+| T2  | S2-S3 | worker trader: mirada de recuperación, perdidas, fecha de entrada                                  | hecha                | —      |
+| T3  | S4    | worker operatoria: script de despliegue, cuenta gh, test inestable                                 | hecha                | —      |
+| T4  | S5    | alarma: latido del operador, miradas perdidas, posición sin valorar, reloj (healthcheck de la VPS) | hecha                | —      |
+| T5  | S6    | marcador de la revisión en el desplegable del saldo (maqueta en gentle-design primero)             | hecha                | —      |
+| T6  | S7    | pendientes del informe: #547 a main, opción 4, 6a, 7                                               | en curso (opción 4a) | —      |
 
 ## Log
 
@@ -42,3 +42,7 @@ Mejoras de la operatoria pedidas por el usuario después de la sombra maker. Con
 - **L10** (handoff de gentle-design): implementar `design/marcador-saldo/02-contra-eth.html` (artboard elegido; 01 y 03 quedan como alternativas) en el desplegable del saldo (`src/app/AccountBalance.tsx`).
 - **L11** (evidencia T4): el chequeo de salud de la VPS ahora falla (mail) si: el operador no tiene latido hace > 20 min; hay ≥ 2 miradas perdidas en la última hora; una posición abierta no se valora hace > 30 min (con el motivo, p. ej. `libro_obsoleto`); el reloj no está sincronizado (NTP) o se desfasa > 3 s contra Kraken. Qwen caído ya no falla el ping (solo log). Umbrales por variables `HC_*`. `desplegar.sh` instala el script si cambió. 254 tests node (252 OK, 2 shellcheck omitidos).
 - **L12** (evidencia T5): desplegable del saldo según 02-contra-eth: 3 KPI con tooltip (Terminal, tener ETH, diferencia), curva de la Terminal y de tener ETH (punteada), 30 casilleros + «N/30» y «⏱ X,X/d», tarjeta por barra (lado, neto, duración contra 36 h, entrada/salida en hora de Madrid, precios, motivo). Tener ETH = capital inicial × precio de ETH ahora / precio al inicio, con velas de 1 min de Kraken ya cerradas y de menos de 5 min; si falta un precio, «sin dato». `/api/qwen/account` suma campos (aditivo). 657 tests de la web, 350 del gateway, typecheck limpio; capturas reales a 1440, 640 y 390 px.
+- **L13** (usuario): «arranca con la 4» → opción 4 del informe (pantalla: los pasos que no cambian decisiones se ven apagados, todas las horas en Madrid, desplegables con iconos en vez de párrafos, tarjeta de noticia con título, fuerza y dirección); maqueta en gentle-design antes de implementar.
+- **L14** (diseño opción 4): `design/terminal-quien-decide/` con 3 direcciones: 01-apagados-e-iconos (misma pantalla; pasos que nunca deciden apagados con tooltip, horas en Madrid, noticia en una línea con fuerza y dirección), 02-columna-angosta (columna de 260 px, cinta ENTRAR visible con lo que no decide apagado), 03-noticias-en-el-grafico (noticias como puntos sobre el tiempo; la columna queda para la operación). Datos de ejemplo; espera elección.
+- **L15** (usuario): «No me gusta ninguna de las 3, no se que es lo que estas tratando de cambiar.» → se descartan las 3 maquetas de `design/terminal-quien-decide/`. Propuesta (a): arreglar solo lo concreto con captura de antes y después.
+- **L16** (usuario): «Hace la a. Pero hace un pequeño rediseño de esas cosas» → opción 4a: (1) la fila de íconos SALIR/ENTRAR muestra apagados los pasos que no decidieron, con el motivo al pasar el mouse; (2) todas las horas en hora de Madrid (tarjeta de la operación, noticias, cinta); (3) la tarjeta de noticia sin el texto repetido («Vencida · Permiso sin verificar»), compacta: fuerza, dirección, título, fuente y hora; con un pequeño rediseño visual de esas tres piezas, sin cambiar la distribución de la pantalla. Se muestra antes y después antes de mergear.
