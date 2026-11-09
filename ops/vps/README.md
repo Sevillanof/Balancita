@@ -6,7 +6,7 @@ Copia versionada de lo que corre en el VPS (antes vivía solo allá). Si se camb
 | ------------------------------------------- | ------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `balancita-respaldo.sh`                     | `/usr/local/bin/`                          | 04:30 Madrid: copia cada base de `server/data/dev-live` con `VACUUM INTO` + `integrity_check` a `/home/balancita/backups/AAAA-MM-DD` (7 días), después corre `archivo_parquet nocturno` sobre esas copias hacia `/home/balancita/parquet`, y avisa a healthchecks.io |
 | `balancita-respaldo.service` / `.timer`     | `/etc/systemd/system/`                     | Programa el respaldo; lee `/etc/balancita/alert.env`                                                                                                                                                                                                                 |
-| `balancita-healthcheck.sh`                  | `/usr/local/bin/`                          | Cada 5 min: servicio, última vela, llama-server, disco y RAM → `HC_PING_URL`                                                                                                                                                                                         |
+| `balancita-healthcheck.sh`                  | `/usr/local/bin/`                          | Cada 5 min: servicio, última vela, disco, RAM y, del operador, latido, miradas perdidas, posición sin valorar y reloj → `HC_PING_URL` (ver «Chequeo de salud» abajo). `desplegar.sh` lo instala solo                                                                 |
 | `balancita-healthcheck.service` / `.timer`  | `/etc/systemd/system/`                     | Programa el chequeo                                                                                                                                                                                                                                                  |
 | `systemd/balancita.service.d/llama.conf`    | `/etc/systemd/system/balancita.service.d/` | **Aplicado el 2026-11-07.** Drop-in de llama-server: 5 hilos (`LLAMA_THREADS`), `mlock` (`LLAMA_ARG_LOAD_MODE=mmap+mlock`) y `LimitMEMLOCK=infinity`                                                                                                                 |
 | `desplegar.sh`                              | se corre desde el Mac, no se instala       | Despliegue único develop → main → VPS con verificaciones (ver «Desplegar» abajo)                                                                                                                                                                                     |
@@ -33,6 +33,7 @@ Qué hace, en orden:
 4. **Merge** (merge commit, sin borrar `develop`). Si el PR ya estaba mergeado, sigue.
 5. **VPS** (`ssh -o BatchMode=yes root@13.140.202.221`): `cd /home/balancita/Balancita && sudo -u balancita git pull --ff-only`.
 6. **Drop-ins** de `ops/vps/systemd/balancita.service.d/`: instala con `install -D -m 644` los que **difieren** de los instalados y hace `systemctl daemon-reload`. Un drop-in que está en el repo pero no en la VPS **no se instala solo ni se deja pasar**: el script frena (código 2) antes de instalar nada, hasta que se decida con `--dropin NOMBRE` (instalarlo) o `--omitir NOMBRE` (dejarlo afuera esta vez). Así no hay que acordarse.
+   Después copia `ops/vps/balancita-healthcheck.sh` a `/usr/local/bin/` con `install -m 755` **solo si difiere** del instalado y lo anota (`Chequeo de salud: instalado…` / `…igual al instalado`); no reinicia nada por eso: el timer lanza el script de nuevo cada 5 min. Las unidades `.service` y `.timer` del chequeo **no** las toca el script (ver «Instalar»).
 7. **Reinicio** de `balancita` solo si el servicio arrancó antes del último commit o drop-in, y **solo entre los minutos :16 y :27 UTC** (si está fuera de la ventana, espera). La ventana de la sección «Cuándo reiniciar» es :16-:28; el script usa :16-:27 para no acercarse a la mirada de :30.
 8. **Chequeos posteriores** (a los 60 s del reinicio): `systemctl is-active` = `active`; llama-server con `VmLck` > 0 y `-t 5` (espera hasta 4 min a que aparezca); ningún `db-health-child … integrity` corriendo justo después del arranque; sin filas nuevas en la tabla `errors` de `server/data/dev-live/qwen-live/live.sqlite` (`id, at_ms, place, product, kind, detail`); sin líneas con `Traceback` en `journalctl -u balancita` desde el reinicio. Cualquier falla termina con código 4 y la lista; no se deshace nada solo (ver «Deshacer»).
 
@@ -56,6 +57,49 @@ Hace lo mismo que el script de despliegue: toma el token de Sevillanof, comprueb
 
 `scripts/desplegar.node-test.mjs` (corre en la CI con `node --test scripts/*.node-test.mjs`) ejecuta el script con `gh`, `ssh`, `date` y `sleep` falsos en un `PATH` temporal: no toca GitHub ni la VPS, y el reloj falso solo avanza con `sleep`. Cubre CI verde, rojo, conflicto, sin checks, tiempo agotado, 401/5xx, cuenta equivocada, ventana de reinicio, `--dry-run`, `--sin-reinicio`, drop-ins y cada chequeo posterior.
 
+## Chequeo de salud (`balancita-healthcheck.sh`, S5 de `odd/tasks/operacion-mejoras.md`)
+
+Corre cada 5 min como `balancita` (`balancita-healthcheck.timer`), siempre agrega una línea a `~/health.log` (últimas 2.000) y avisa a healthchecks.io con `HC_PING_URL` (de `/etc/balancita/alert.env`): ping de éxito si todo está bien, `<url>/fail` con el motivo corto en español si algo falla. El código de salida es 0 solo si todo está bien. Todo es de solo lectura (`sqlite3 -readonly`, consultas acotadas, espera de 2 s como máximo por base ocupada) y tarda menos de 1 s en condiciones normales (peor caso acotado: Kraken 3 s, llama-server 3 s, bases 2 s cada una).
+
+| Chequeo                          | Falla cuando…                                                                                                                                                                                                                                                                            | Motivo en el `/fail`                                                       | Umbral (entorno, por defecto)                         |
+| -------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------- | ----------------------------------------------------- |
+| Servicio                         | `balancita.service` no está activo                                                                                                                                                                                                                                                       | `balancita.service no activo`                                              | —                                                     |
+| Última vela 1m de ETH            | tiene 10 min o más, o no se pudo leer `futures-market.sqlite`                                                                                                                                                                                                                            | `ultima vela 1m ETH de hace N min`                                         | —                                                     |
+| Disco / RAM                      | disco ≥ 80 % o RAM disponible < 500 MB                                                                                                                                                                                                                                                   | `disco al N%` / `RAM disponible N MB`                                      | —                                                     |
+| **Latido del operador**          | la mirada más reciente (`max(t_ms)` de `decisions` y de `skipped` sin `proceso_detenido`) es más vieja que el umbral. El operador mira cada 15 min, así que 20 min = 1 retraso                                                                                                           | `operador sin latido (ultima mirada hace N min)`                           | `HC_LATIDO_MAX_MIN` = 20                              |
+| **Miradas perdidas**             | hay ≥ umbral miradas distintas perdidas en la ventana: `skipped` con `proceso_detenido` en `live.sqlite` y/o filas de `miradas_perdidas` del auditor (una mirada cuenta una vez)                                                                                                         | `N miradas perdidas en la ultima hora`                                     | `HC_PERDIDAS_MIN` = 2, `HC_PERDIDAS_VENTANA_MIN` = 60 |
+| **Posición abierta sin valorar** | la marca de valoración (`trades.mark_ms`, la última valoración con el libro; si nunca hubo, `opened_at_ms`) de una posición abierta es más vieja que el umbral. Si falla, el motivo del operador (`execution_error`, p. ej. `libro_no_disponible`, `libro_obsoleto`) va entre paréntesis | `posicion PF_ETHUSD #15 sin valorar hace N min (libro_obsoleto)`           | `HC_SIN_VALORAR_MAX_MIN` = 30                         |
+| **Reloj de la VPS**              | `timedatectl show -p NTPSynchronized` dice `no`, o la diferencia contra la cabecera `Date` de `https://futures.kraken.com` pasa el umbral (positivo = VPS adelantada). Con la diferencia chica el libro se rechaza por «viejo» y el operador sigue «sano», por eso se mide               | `reloj de la VPS desfasado +N s` / `reloj de la VPS sin sincronizar (NTP)` | `HC_RELOJ_MAX_S` = 3                                  |
+
+Detalles que conviene saber:
+
+- **`live.sqlite` es obligatoria:** si falta o no se puede leer (bloqueada más de 2 s) falla con `no existe live.sqlite del operador` / `no se pudo leer live.sqlite del operador`. Las demás bases no: sin `auditor.sqlite` (o con una vieja sin la tabla `miradas_perdidas`) o bloqueada, esa parte cuenta 0 y no falla; si falta `futures-market.sqlite` falla solo por la vela, como antes.
+- **Qwen ya no falla el ping.** `llama-server /health` caído solo queda en el log (`llama=caido`): Qwen no afecta al paper (auditoría 4.3).
+- **Sin medida no hay alarma de reloj:** si Kraken no contesta, o no hay `timedatectl`, se usa lo que sí hay (`reloj_s=NA` / `ntp=NA` en el log); falla solo con una diferencia medida fuera del umbral o con NTP en `no`.
+- **Una reiniciada también cuenta.** Reiniciar `balancita` fuera de la ventana :16-:28 deja una fila `proceso_detenido` por mirada saltada: con 2 o más se avisa durante la hora siguiente (con 1 no). Es lo esperado: el despliegue reinicia dentro de la ventana para no cruzar ninguna.
+- **Línea del log:** `AAAA-MM-DDTHH:MM:SSZ OK|FALLA vela_eth_edad_min= latido_min= perdidas_1h= sin_valorar_min= reloj_s= ntp= llama= disco= ram_disp_mb= <motivos separados por «;»>`.
+- Rutas y comandos configurables solo para pruebas: `HC_DATA_DIR`, `HC_LOG`, `HC_DISK_PATH`, `HC_LLAMA_URL`, `HC_KRAKEN_URL`, `HC_SQLITE_TIMEOUT_MS`.
+
+Los umbrales se cambian con un `Environment=` en un drop-in del servicio (`systemctl edit balancita-healthcheck.service`) o agregando la variable a `/etc/balancita/alert.env` (el mismo archivo que ya lee la unidad; no se versiona).
+
+### Instalar el chequeo (o actualizarlo)
+
+`ops/vps/desplegar.sh` copia el script solo (paso 6). A mano, como root en la VPS después de `git pull`:
+
+```
+cd /home/balancita/Balancita/ops/vps
+install -m 755 balancita-healthcheck.sh /usr/local/bin/
+systemctl restart balancita-healthcheck.timer      # solo si cambiaron las unidades .service/.timer (con install -m 644 y daemon-reload antes)
+systemctl start balancita-healthcheck.service      # prueba inmediata; el resultado queda en ~balancita/health.log
+tail -n 3 /home/balancita/health.log
+```
+
+El script se ejecuta de nuevo en cada corrida del timer, así que con solo copiarlo alcanza; no hay que reiniciar `balancita`. La primera corrida puede dar `FALLA` si en la última hora hubo 2 o más miradas perdidas: se limpia sola al pasar la hora.
+
+### Pruebas del chequeo
+
+`scripts/healthcheck.node-test.mjs` (corre en la CI con `node --test scripts/*.node-test.mjs`; necesita el binario `sqlite3`) crea bases sqlite reales en un directorio temporal con el esquema de `futures_qwen_live.py` y `futures_auditor.py`, y pone `systemctl`, `curl`, `timedatectl`, `df` y `free` falsos en el `PATH`: no toca la VPS ni la red. Cubre cada chequeo en bien y en falla y en el borde del umbral, los umbrales cambiados por entorno, Qwen caído (el ping sigue siendo de éxito), `live.sqlite` ausente o bloqueada, auditor ausente o bloqueado, varios fallos juntos, que los chequeos de antes sigan igual y que el ping y el log salgan como siempre.
+
 ## Alerta del respaldo
 
 `HC_PING_URL_RESPALDO` en `/etc/balancita/alert.env` (un chequeo aparte en healthchecks.io, período 1 día y gracia 2 h):
@@ -74,6 +118,8 @@ install -m 755 balancita-respaldo.sh balancita-healthcheck.sh /usr/local/bin/
 install -m 644 balancita-respaldo.service balancita-respaldo.timer balancita-healthcheck.service balancita-healthcheck.timer /etc/systemd/system/
 systemctl daemon-reload
 ```
+
+(Para solo el chequeo de salud, ver «Instalar el chequeo» arriba: `desplegar.sh` instala `balancita-healthcheck.sh` pero **no** las unidades `.service`/`.timer`; si cambian, se copian a mano como en este bloque.)
 
 Agregar `HC_PING_URL_RESPALDO=<url del chequeo nuevo>` a `/etc/balancita/alert.env` (no se versiona: tiene la URL secreta).
 
