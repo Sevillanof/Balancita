@@ -40,7 +40,7 @@ Contexto y cifras: `analisis/vps-qwen-lento/informe.md`. El VPS no tiene GPU, as
 ### Ya va en el código (se aplica con el despliegue normal + reinicio de `balancita`)
 
 - **`futures-market` fuera del respaldo interno de la app.** Lo copia cada noche `balancita-respaldo.timer` (03:30 UTC). El respaldo interno (`capture-main.ts`) sigue con las demás bases. Para volver a copiarla también desde la app: `Environment=FUTURES_DB_BACKUP_MARKET=1` (por defecto apagado). El panel «Salud del sistema» deja de listar `futures-market` en la copia diaria de la app.
-- **Integridad cada 6 h con 45 min de margen** (antes cada 15 min y 10 min de margen). Se cambia con `FUTURES_DB_INTEGRITY_MINUTES` (por defecto 360) y `FUTURES_DB_INTEGRITY_TIMEOUT_MINUTES` (por defecto 45). El chequeo después de un despertar y el que se pide al ver «malformed» siguen igual.
+- **Integridad cada 6 h con 45 min de margen** (antes cada 15 min y 10 min de margen). Se cambia con `FUTURES_DB_INTEGRITY_MINUTES` (por defecto 360) y `FUTURES_DB_INTEGRITY_TIMEOUT_MINUTES` (por defecto 45). El primero tras arrancar espera 60 min (`FUTURES_DB_INTEGRITY_FIRST_DELAY_MINUTES`, antes 2 min), para no saturar el disco mientras Qwen arranca. El chequeo después de un despertar y el que se pide al ver «malformed» siguen igual.
 - **`nice -n 19 ionice -c3`** para los procesos hijos de salud y respaldo de la app, solo en Linux y si `nice` e `ionice` están instalados; si no, arrancan como antes.
 
 ### Paso 2, preparado y SIN aplicar: drop-in de llama-server y swap

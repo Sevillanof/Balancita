@@ -1,9 +1,30 @@
 import { describe, expect, it } from 'vitest'
-import { backupTargetsFromEnv, integrityFromEnv } from './db-health-env.ts'
+import {
+  backupTargetsFromEnv,
+  integrityFirstDelayFromEnv,
+  integrityFromEnv,
+} from './db-health-env.ts'
 
 const MIN = 60_000
 
 describe('integrity check settings from the environment', () => {
+  it('waits 60 minutes after start before the first check, so a restart does not saturate the disk while Qwen warms up', () => {
+    expect(integrityFirstDelayFromEnv({})).toBe(60 * MIN)
+  })
+
+  it('FUTURES_DB_INTEGRITY_FIRST_DELAY_MINUTES overrides the first wait; an invalid value keeps 60', () => {
+    expect(
+      integrityFirstDelayFromEnv({
+        FUTURES_DB_INTEGRITY_FIRST_DELAY_MINUTES: '5',
+      }),
+    ).toBe(5 * MIN)
+    expect(
+      integrityFirstDelayFromEnv({
+        FUTURES_DB_INTEGRITY_FIRST_DELAY_MINUTES: 'abc',
+      }),
+    ).toBe(60 * MIN)
+  })
+
   it('defaults to every 6 hours with a 45 minute limit', () => {
     expect(integrityFromEnv({})).toEqual({
       integrityMs: 360 * MIN,

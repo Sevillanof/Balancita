@@ -29,7 +29,7 @@ La captura (`capture-main.ts`) copia una vez por día, de a una base por vez, en
 
 ## Detección y mensaje claro
 
-`quick_check` de la base de captura **cada 6 h** (`FUTURES_DB_INTEGRITY_MINUTES`, por defecto 360; antes 15 min) en un proceso hijo que se corta a los 45 min sin dar veredicto (`FUTURES_DB_INTEGRITY_TIMEOUT_MINUTES`, por defecto 45; antes 10 min). En Linux los hijos de chequeo y copia corren con `nice -n 19 ionice -c3`. Una base dañada se detecta hasta 6 h tarde; la copia nocturna con `integrity_check` completo lo cubre. Además se chequea justo después de cada despertar. Si una escritura de la captura devuelve «malformed» se marca la base como dañada al instante y se confirma con un chequeo. El estado se publica en `server/data/dev-live/db-health-state.json`.
+`quick_check` de la base de captura **cada 6 h** (`FUTURES_DB_INTEGRITY_MINUTES`, por defecto 360; antes 15 min) en un proceso hijo que se corta a los 45 min sin dar veredicto (`FUTURES_DB_INTEGRITY_TIMEOUT_MINUTES`, por defecto 45; antes 10 min). En Linux los hijos de chequeo y copia corren con `nice -n 19 ionice -c3`. Una base dañada se detecta hasta 6 h tarde; la copia nocturna con `integrity_check` completo lo cubre. El primer chequeo después de arrancar espera 60 min (`FUTURES_DB_INTEGRITY_FIRST_DELAY_MINUTES`; antes 2 min): leer los 10 GB apenas se reinicia saturaba el disco mientras Qwen arranca. Además se chequea justo después de cada despertar. Si una escritura de la captura devuelve «malformed» se marca la base como dañada al instante y se confirma con un chequeo. El estado se publica en `server/data/dev-live/db-health-state.json`.
 
 El panel **Salud del sistema** (componente «Datos», filas «Integridad de la base de captura» y «Copia de seguridad diaria») muestra:
 
