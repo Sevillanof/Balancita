@@ -50,7 +50,9 @@ anterior cambia y el trader no cambia ninguna decisión: lo único que expone es
   con una orden límite en el mejor precio sobre la cinta real capturada por el servidor (solo lectura): tipo de llenado (``maker`` /
   ``maker_mercado`` / ``sin_datos``), precio y hora, comisiones de cada punta y la diferencia contra el oficial en US$ y pb. La calcula ``resolve``
   (``market_db``) solo con 15 min de cinta ya capturada; acotada (8 tramos y 1,5 s por llamada); nunca adivina (sin libro o cinta, ``sin_datos``).
-* ``record_look`` (en vivo) y los pasos nuevos de ``resolve`` NUNCA propagan una excepción: lo que falla queda en ``avisos`` y el proceso en
+* ``miradas_perdidas`` (``odd/tasks/operacion-mejoras.md`` S2, ``docs/terminal-ciclo-de-vida.md``): una fila por mirada programada que la Terminal no hizo
+  (``record_missed``): hora, motivo (``proceso_detenido``), si había posición y lo que la fórmula habría dicho con las velas de esa mirada (hipotético: nunca operó).
+* ``record_look`` y ``record_missed`` (en vivo) y los pasos nuevos de ``resolve`` NUNCA propagan una excepción: lo que falla queda en ``avisos`` y el proceso en
   vivo lo anota en su tabla ``errors``. Migración: ``_open`` crea las tablas (``CREATE TABLE IF NOT EXISTS``); se deshace con ``DROP TABLE``.
 
 Acciones (``accion``)
@@ -217,6 +219,12 @@ CREATE TABLE IF NOT EXISTS sombra_maker(
   comision_sombra_usd REAL, comision_sombra_tipo TEXT, delta_usd REAL, delta_pb REAL,
   modelo TEXT NOT NULL, costos_id TEXT, resuelto_ms INTEGER, version TEXT NOT NULL,
   PRIMARY KEY(product, trade_no, leg));
+CREATE TABLE IF NOT EXISTS miradas_perdidas(
+  product TEXT NOT NULL, bucket_ms INTEGER NOT NULL, t_ms INTEGER NOT NULL,
+  motivo TEXT NOT NULL, detalle TEXT, despertar_json TEXT, estado TEXT NOT NULL,
+  maestro INTEGER, puntaje REAL, entrada_dice TEXT, salida_dice TEXT, formula_json TEXT,
+  registrada_ms INTEGER NOT NULL, version TEXT NOT NULL,
+  PRIMARY KEY(product, bucket_ms));
 """
 
 BLOCK_REASONS = ("lugares_ocupados", "mismo_episodio", "enfriamiento", "cierre_en_la_mirada", "otro")
@@ -1236,6 +1244,59 @@ def record_look(live_db_path, product, trader, events, now_ms, marks=None, confi
                     out["posiciones"] = guarded("posiciones", _record_positions, db, product, trader, look, readings_, events, marks, t_ms) or 0
     except Exception as error:                                         # noqa: BLE001
         out["avisos"].append("registro: {}: {}".format(type(error).__name__, error))
+    out["ms"] = (time.monotonic() - started) * 1000.0
+    return out
+
+
+def record_missed(live_db_path, product, trader, event, now_ms):
+    """Una mirada programada que la Terminal NO hizo (el proceso estaba apagado o trabado: evento ``skipped`` de motivo ``proceso_detenido``)
+    queda en ``miradas_perdidas``: hora, motivo, si había posición y, calculado de las velas que ya tiene el trader, lo que la fórmula
+    habría dicho (entrada, y salida de cada posición abierta). Es HIPOTÉTICO: esa mirada no operó nunca (la de recuperación opera con los datos
+    de ahora). Idempotente (``INSERT OR IGNORE`` por producto y balde). Nunca propaga una excepción ni cambia nada del trader; lo que falle queda
+    en ``avisos``. Devuelve ``{"perdida", "avisos", "ms"}``."""
+    started = time.monotonic()
+    out = {"perdida": False, "avisos": [], "ms": 0.0}
+    try:
+        t_ms = int(event["t_ms"])
+        positions = list(trader.maestro_positions()) if hasattr(trader, "maestro_positions") else list(getattr(trader, "positions", ()))
+        readings_ = _safe(corta.readings, trader, t_ms) if trader.t and trader.t[-1] + BAR_MS == t_ms else None
+        if readings_ is None:
+            out["avisos"].append("perdida: sin lectura de la fórmula en {}".format(t_ms))
+        entry, exits, says_entry, says_exit = None, [], None, None
+        if readings_ is not None:
+            if noticias.priority_enabled(trader.cfg):
+                entry = qt.Trader._independent_formula_action(readings_)
+            else:
+                entry = _official_action(readings_, None)
+            says_entry = entry[0]
+            exhaust_min = (trader.cfg.get("guardrails") or {}).get("exhaust_hold_min")
+            for position in positions:
+                side = _side_of(position.side)
+                held_min = (t_ms - position.entry_ms) // MINUTE_MS
+                action, why = _official_action(readings_, side, held_min=held_min, exhaust_min=exhaust_min)
+                exits.append({"trade_no": position.trade_no, "lado": side, "horas": round(held_min / 60.0, 2), "dice": action, "motivo": why})
+            if exits:
+                says_exit = "CERRAR" if any(e["dice"] == "CERRAR" for e in exits) else "MANTENER"
+        detail = None if readings_ is None else {
+            "entrada": {"dice": entry[0], "motivo": entry[1]}, "posiciones": exits, "maestro": readings_.get("veredicto"),
+            "puntaje": _num(readings_.get("puntaje")), "portero_si": _flag(readings_.get("portero_si")),
+            "portero_p": _num(readings_.get("portero_p")), "volatilidad": readings_.get("volatilidad"),
+            "nota": "hipotético: lo que la fórmula habría dicho con los datos de esa mirada; no se operó"}
+        wake = event.get("wake")
+        with contextlib.closing(_open(live_db_path, TRAINING_LOCK_TIMEOUT_S)) as db:
+            with db:
+                cursor = db.execute(
+                    "INSERT OR IGNORE INTO miradas_perdidas(product, bucket_ms, t_ms, motivo, detalle, despertar_json, estado, maestro, puntaje, "
+                    "entrada_dice, salida_dice, formula_json, registrada_ms, version) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    (product, t_ms - BUCKET_MS, t_ms, str(event.get("kind")), event.get("detail"),
+                     _dumps([str(x) for x in wake][:8]) if isinstance(wake, (list, tuple)) else None,
+                     "en_posicion" if positions else "plana",
+                     None if readings_ is None or not isinstance(readings_.get("veredicto"), int) else readings_["veredicto"],
+                     None if readings_ is None else _num(readings_.get("puntaje")), says_entry, says_exit,
+                     None if detail is None else _dumps(detail), int(now_ms), VERSION))
+                out["perdida"] = cursor.rowcount == 1
+    except Exception as error:                                         # noqa: BLE001 - el registro nuevo nunca rompe la operación
+        out["avisos"].append("perdida: {}: {}".format(type(error).__name__, error))
     out["ms"] = (time.monotonic() - started) * 1000.0
     return out
 

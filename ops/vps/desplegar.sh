@@ -11,7 +11,8 @@
 #   4. Merge del PR.
 #   5. VPS (ssh BatchMode): `git pull --ff-only` como balancita.
 #   6. Instala los drop-ins de systemd que cambiaron (y `daemon-reload`). Un drop-in que está en el repo
-#      pero NO instalado en la VPS (hoy noticias.conf) no se instala solo: pedirlo con --dropin NOMBRE.
+#      pero NO instalado en la VPS no se instala solo y tampoco se deja pasar: el script frena hasta que
+#      se decida con --dropin NOMBRE (instalarlo) o --omitir NOMBRE (dejarlo afuera esta vez).
 #   7. Reinicia `balancita` solo entre los minutos :16 y :27 UTC (espera la ventana).
 #   8. Chequeos: servicio activo, llama-server con VmLck > 0 y `-t 5`, sin integridad corriendo
 #      justo después del arranque, sin errores nuevos en qwen-live y sin Traceback en el journal.
@@ -20,6 +21,7 @@
 #   --dry-run        solo lecturas (cuenta gh, PR, ssh de prueba); no crea ni mergea PR ni cambia la VPS.
 #   --sin-reinicio   hace todo menos reiniciar y los chequeos posteriores; dice si el reinicio queda pendiente.
 #   --dropin NOMBRE  también instala ese drop-in aunque todavía no esté en la VPS (se puede repetir).
+#   --omitir NOMBRE  deja afuera, esta vez, un drop-in nuevo que no está en la VPS (se puede repetir).
 #
 # Idempotente: se puede volver a correr tras un corte; lo que ya está hecho se salta. Solo reinicia si
 # el servicio arrancó antes del último commit o drop-in instalado.
@@ -54,6 +56,7 @@ REINTENTOS=4
 DRY=0
 SIN_REINICIO=0
 DROPINS_NUEVOS=()
+DROPINS_OMITIDOS=()
 PR=""
 
 ERR_ARCHIVO="$(mktemp)"
@@ -82,6 +85,14 @@ while [ $# -gt 0 ]; do
         */* | "" | .*) fallar 2 "--dropin va con el nombre del archivo, sin rutas: '$2'." ;;
       esac
       DROPINS_NUEVOS+=("$2")
+      shift
+      ;;
+    --omitir)
+      [ $# -ge 2 ] || fallar 2 "--omitir necesita el nombre de un archivo (por ejemplo noticias.conf)."
+      case "$2" in
+        */* | "" | .*) fallar 2 "--omitir va con el nombre del archivo, sin rutas: '$2'." ;;
+      esac
+      DROPINS_OMITIDOS+=("$2")
       shift
       ;;
     -h | --ayuda | --help)
@@ -246,17 +257,33 @@ dropin_pedido() {
   return 1
 }
 
+dropin_omitido() {
+  local nombre="$1" omitido
+  for omitido in ${DROPINS_OMITIDOS[@]+"${DROPINS_OMITIDOS[@]}"}; do
+    [ "$omitido" != "$nombre" ] || return 0
+  done
+  return 1
+}
+
 vps_dropins() {
-  local estado nombre situacion instalados=0
+  local estado nombre situacion instalados=0 sin_decidir=
   estado="$(vps "for f in $DROPINS_ORIGEN/*.conf; do [ -e \"\$f\" ] || continue; n=\$(basename \"\$f\"); d=$DROPINS_DESTINO/\$n; if [ ! -e \"\$d\" ]; then echo \"\$n nuevo\"; elif cmp -s \"\$f\" \"\$d\"; then echo \"\$n igual\"; else echo \"\$n distinto\"; fi; done")" ||
     fallar 5 "no pude comparar los drop-ins de systemd en la VPS."
+  # Primero, que no quede ningún drop-in nuevo sin decidir: así no se instala nada a medias.
+  while read -r nombre situacion; do
+    [ "$situacion" = nuevo ] || continue
+    dropin_pedido "$nombre" || dropin_omitido "$nombre" || sin_decidir="$sin_decidir $nombre"
+  done <<<"$estado"
+  if [ -n "$sin_decidir" ]; then
+    fallar 2 "Hay drop-ins en el repo que NO están instalados en la VPS:$sin_decidir. Cambian cómo corre la Terminal: volvé a correr con --dropin NOMBRE para instalarlo o --omitir NOMBRE para dejarlo afuera (el script es idempotente)."
+  fi
   while read -r nombre situacion; do
     [ -n "$nombre" ] || continue
     case "$situacion" in
       igual) info "Drop-in $nombre: igual al instalado." ;;
       distinto | nuevo)
         if [ "$situacion" = nuevo ] && ! dropin_pedido "$nombre"; then
-          info "Drop-in $nombre: está en el repo pero NO instalado en la VPS; no lo instalo solo (pasá --dropin $nombre para aplicarlo)."
+          info "Drop-in $nombre: nuevo, omitido a pedido (--omitir); no se instala."
           continue
         fi
         info "Drop-in $nombre: $situacion; lo instalo."

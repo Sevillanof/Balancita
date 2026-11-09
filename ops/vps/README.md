@@ -21,7 +21,8 @@ Un solo comando, desde el Mac y en el repo, que reproduce el despliegue que se h
 ops/vps/desplegar.sh --dry-run        # solo lecturas: cuenta gh, PR, ssh de prueba; no cambia nada
 ops/vps/desplegar.sh                  # despliegue completo
 ops/vps/desplegar.sh --sin-reinicio   # todo menos reiniciar (el reinicio queda pendiente y el script lo avisa)
-ops/vps/desplegar.sh --dropin noticias.conf   # además instala ese drop-in aunque todavía no esté en la VPS
+ops/vps/desplegar.sh --dropin NOMBRE.conf     # instala un drop-in nuevo (si hay uno sin decidir, el script frena)
+ops/vps/desplegar.sh --omitir NOMBRE.conf     # deja afuera, esta vez, un drop-in nuevo
 ```
 
 Qué hace, en orden:
@@ -31,7 +32,7 @@ Qué hace, en orden:
 3. **Espera la CI** hasta 60 min (consulta cada 30 s, imprime una línea de estado cada 2 min). Mira los checks del último commit del PR y exige que existan corridas de **push y de pull_request**. Aborta (código 3) con `CONFLICTING`, cualquier check en `FAILURE`/`CANCELLED`/`TIMED_OUT`, «sin checks» pasados 10 min, o falta de uno de los dos conjuntos. Un 401 o 5xx transitorio de GitHub se reintenta 4 veces (5, 10, 15 s) y después aborta.
 4. **Merge** (merge commit, sin borrar `develop`). Si el PR ya estaba mergeado, sigue.
 5. **VPS** (`ssh -o BatchMode=yes root@13.140.202.221`): `cd /home/balancita/Balancita && sudo -u balancita git pull --ff-only`.
-6. **Drop-ins** de `ops/vps/systemd/balancita.service.d/`: instala con `install -D -m 644` los que **difieren** de los instalados y hace `systemctl daemon-reload`. Un drop-in que está en el repo pero no en la VPS (hoy `noticias.conf`, «preparado, sin aplicar») **no se instala solo**: hay que pedirlo con `--dropin NOMBRE`.
+6. **Drop-ins** de `ops/vps/systemd/balancita.service.d/`: instala con `install -D -m 644` los que **difieren** de los instalados y hace `systemctl daemon-reload`. Un drop-in que está en el repo pero no en la VPS **no se instala solo ni se deja pasar**: el script frena (código 2) antes de instalar nada, hasta que se decida con `--dropin NOMBRE` (instalarlo) o `--omitir NOMBRE` (dejarlo afuera esta vez). Así no hay que acordarse.
 7. **Reinicio** de `balancita` solo si el servicio arrancó antes del último commit o drop-in, y **solo entre los minutos :16 y :27 UTC** (si está fuera de la ventana, espera). La ventana de la sección «Cuándo reiniciar» es :16-:28; el script usa :16-:27 para no acercarse a la mirada de :30.
 8. **Chequeos posteriores** (a los 60 s del reinicio): `systemctl is-active` = `active`; llama-server con `VmLck` > 0 y `-t 5` (espera hasta 4 min a que aparezca); ningún `db-health-child … integrity` corriendo justo después del arranque; sin filas nuevas en la tabla `errors` de `server/data/dev-live/qwen-live/live.sqlite` (`id, at_ms, place, product, kind, detail`); sin líneas con `Traceback` en `journalctl -u balancita` desde el reinicio. Cualquier falla termina con código 4 y la lista; no se deshace nada solo (ver «Deshacer»).
 

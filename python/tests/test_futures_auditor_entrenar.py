@@ -27,7 +27,7 @@ from test_futures_auditor import (BAR, CFG, COST, HOUR, MIN, PRODUCT, STRONG, T0
 from test_futures_qwen_live import Policy, make
 
 DAY = qt.DAY_MS
-NEW_TABLES = ("hechos_mirada", "propuestas", "mirada_operaciones", "resultados_operacion", "reentrenos", "sombra_maker")
+NEW_TABLES = ("hechos_mirada", "propuestas", "mirada_operaciones", "resultados_operacion", "reentrenos", "sombra_maker", "miradas_perdidas")
 
 
 def facts(seed=0.1):
@@ -574,6 +574,54 @@ CREATE TABLE operaciones(
   direccion_json TEXT, mfe_pb REAL, mae_pb REAL, hasta_ms INTEGER, resuelto_ms INTEGER, version TEXT NOT NULL,
   PRIMARY KEY(product, trade_no));
 """
+
+
+class LostLookTests(TrainingCase):
+    """``record_missed`` (operacion-mejoras S2): la mirada programada que la Terminal no hizo queda con su hora, su motivo y lo que la fórmula
+    habría dicho, y no cambia nada más."""
+
+    def lost(self, trader=None, t_ms=T0, **fields):
+        event = {"type": "skipped", "t_ms": t_ms, "wake": ["cada_15_min"], "kind": "proceso_detenido",
+                 "detail": "el proceso estaba apagado a esa hora"}
+        with mock.patch.object(corta, "readings", return_value=readings(**fields)):
+            return aud.record_missed(self.path, PRODUCT, trader or LookTrader(t_ms), event, t_ms + 5 * MIN)
+
+    def test_a_flat_look_keeps_its_time_its_reason_and_what_the_entry_formula_says(self):
+        out = self.lost(veredicto=2)
+        self.assertEqual((out["perdida"], out["avisos"]), (True, []))
+        row = self.table("miradas_perdidas")[0]
+        self.assertEqual((row["product"], row["t_ms"], row["bucket_ms"], row["motivo"], row["estado"]),
+                         (PRODUCT, T0, T0 - 15 * MIN, "proceso_detenido", "plana"))
+        self.assertEqual((row["maestro"], row["entrada_dice"], row["salida_dice"], row["registrada_ms"], row["version"]),
+                         (2, "LARGO", None, T0 + 5 * MIN, aud.VERSION))
+        self.assertEqual(json.loads(row["despertar_json"]), ["cada_15_min"])
+        self.assertIn("hipotético", json.loads(row["formula_json"])["nota"])
+
+    def test_an_open_position_keeps_whether_the_formula_would_have_closed_it(self):
+        trader = LookTrader(T0)
+        trader.positions = [Pos(1, "LONG", entry_ms=T0 - 2 * HOUR)]
+        self.lost(trader=trader, veredicto=-2, portero_si=False)
+        row = self.table("miradas_perdidas")[0]
+        self.assertEqual((row["estado"], row["salida_dice"], row["entrada_dice"]), ("en_posicion", "CERRAR", "ESPERAR"))
+        position = json.loads(row["formula_json"])["posiciones"][0]
+        self.assertEqual((position["trade_no"], position["lado"], position["horas"], position["dice"]), (1, 1, 2.0, "CERRAR"))
+        later = LookTrader(T0 + 15 * MIN)
+        later.positions = list(trader.positions)
+        self.lost(trader=later, t_ms=T0 + 15 * MIN, veredicto=2)
+        self.assertEqual(self.table("miradas_perdidas", "t_ms={}".format(T0 + 15 * MIN))[0]["salida_dice"], "MANTENER")
+
+    def test_it_is_written_once_and_what_fails_is_a_warning_not_an_exception(self):
+        self.assertTrue(self.lost(veredicto=2)["perdida"])
+        self.assertFalse(self.lost(veredicto=-2)["perdida"])                                  # la misma mirada: no cambia
+        self.assertEqual([r["maestro"] for r in self.table("miradas_perdidas")], [2])
+        with mock.patch.object(corta, "readings", side_effect=RuntimeError("ficha rota")):
+            out = aud.record_missed(self.path, PRODUCT, LookTrader(T0 + 30 * MIN),
+                                    {"type": "skipped", "t_ms": T0 + 30 * MIN, "wake": ["cada_15_min"], "kind": "proceso_detenido"}, T0)
+        self.assertTrue(out["perdida"])                                                       # sin lectura: la hora y el motivo igual quedan
+        self.assertTrue(out["avisos"])
+        row = self.table("miradas_perdidas", "t_ms={}".format(T0 + 30 * MIN))[0]
+        self.assertEqual((row["maestro"], row["entrada_dice"], row["formula_json"]), (None, None, None))
+        self.assertEqual(aud.record_missed("/no/existe/live.sqlite", PRODUCT, LookTrader(T0), {"t_ms": T0}, T0)["perdida"], False)
 
 
 class MigrationTests(TrainingCase):

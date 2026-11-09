@@ -66,7 +66,9 @@ class TraderBookTests(unittest.TestCase):
         trader = self.trader()
         position = trader._open(BASE, "LONG", 1, "formula")
         self.assertGreaterEqual(position.entry_px, D("101"))
-        self.assertEqual(position.entry_ms, BASE + 200)
+        self.assertEqual(position.entry_ms, BASE)                                       # dated with the look that decided (operacion-mejoras S3)
+        self.assertEqual(position.fill_ms, BASE + 200)                                  # the real execution time, kept apart
+        self.assertEqual(position.entry_execution["executed_at_ms"], BASE + 200)
         self.assertEqual(position.entry_execution["model"], book.MODEL)
         self.assertEqual(position.entry_execution["fee_kind"], "taker")
         self.assertLessEqual(position.notional_usd, D("100"))

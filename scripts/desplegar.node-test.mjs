@@ -67,7 +67,7 @@ echo "@{*:1:$#-1}" >> "$d/ssh.opts"
 case "$cmd" in
   true) ;;
   *"git pull"*) [ -z "@{STUB_PULL_FALLA:-}" ] || { echo "fatal: Not possible to fast-forward" ; exit 1; }; printf 'Updating a..b\nFast-forward\n' ;;
-  *"cmp -s"*) printf '%b' "@{STUB_DROPINS:-llama.conf distinto\nnoticias.conf nuevo\n}" ;;
+  *"cmp -s"*) printf '%b' "@{STUB_DROPINS:-llama.conf distinto\n}" ;;
   install\ -D*) ;;
   *daemon-reload*) ;;
   *ActiveEnterTimestamp*) echo "@{STUB_NECESITA:-si}" ;;
@@ -188,9 +188,12 @@ describe('desplegar', { concurrency: 8 }, () => {
 
   describe('desplegar.sh: camino feliz', { concurrency: true }, () => {
     it('CI verde → crea el PR, mergea, hace pull, instala el drop-in distinto y reinicia dentro de la ventana', async () => {
-      const r = await correr([], {
+      const r = await correr(['--omitir', 'noticias.conf'], {
         inicio: '10:20',
-        env: { STUB_CI_SEQ: '2 2 0,2 1 0,2 0 0' },
+        env: {
+          STUB_CI_SEQ: '2 2 0,2 1 0,2 0 0',
+          STUB_DROPINS: 'llama.conf distinto\\nnoticias.conf nuevo\\n',
+        },
       })
       assert.equal(r.status, 0, r.todo)
       assert.ok(ghLlamo(r, 'pr create'), 'crea el PR')
@@ -228,7 +231,7 @@ describe('desplegar', { concurrency: 8 }, () => {
         /install -D[^\n]*noticias\.conf/,
         'un drop-in nuevo no se instala solo',
       )
-      assert.match(r.out, /noticias\.conf: está en el repo pero NO instalado/)
+      assert.match(r.out, /noticias\.conf: nuevo, omitido a pedido/)
       const minuto = Number(r.reinicio.split(':')[1])
       assert.ok(minuto >= 16 && minuto <= 27, `reinicio a las ${r.reinicio}`)
       assert.match(r.out, /Despliegue completo\./)
@@ -520,9 +523,28 @@ describe('desplegar', { concurrency: 8 }, () => {
   })
 
   describe('desplegar.sh: VPS y drop-ins', { concurrency: true }, () => {
+    it('un drop-in nuevo sin decidir frena con código 2, sin instalar ni reiniciar', async () => {
+      const r = await correr([], {
+        env: {
+          STUB_PR_ABIERTO: '1',
+          STUB_CI_SEQ: '2 0 0',
+          STUB_DROPINS: 'llama.conf distinto\\nnoticias.conf nuevo\\n',
+        },
+      })
+      assert.equal(r.status, 2, r.todo)
+      assert.match(r.err + r.out, /noticias\.conf/)
+      assert.match(r.err + r.out, /--dropin NOMBRE.*--omitir NOMBRE/)
+      assert.doesNotMatch(r.ssh, /install -D/)
+      assert.doesNotMatch(r.ssh, /systemctl restart/)
+    })
+
     it('--dropin instala también un drop-in nuevo', async () => {
       const r = await correr(['--dropin', 'noticias.conf'], {
-        env: { STUB_PR_ABIERTO: '1', STUB_CI_SEQ: '2 0 0' },
+        env: {
+          STUB_PR_ABIERTO: '1',
+          STUB_CI_SEQ: '2 0 0',
+          STUB_DROPINS: 'llama.conf distinto\\nnoticias.conf nuevo\\n',
+        },
       })
       assert.equal(r.status, 0, r.todo)
       assert.match(

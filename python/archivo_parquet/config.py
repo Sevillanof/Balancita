@@ -392,6 +392,15 @@ TABLAS.update({
                        dicc=("product", "leg", "motivo_salida", "orden", "comision_oficial_tipo", "estado", "motivo_sin_datos",
                              "comision_sombra_tipo", "modelo", "costos_id", "version")),
         filtro_tipico="estado", grupo_por=("product",)),
+    # miradas_perdidas (odd/tasks/operacion-mejoras.md S2): una fila por mirada programada que la Terminal no hizo (proceso apagado o trabado), con lo que la
+    # formula habria dicho (hipotetico: no se opero). Se escribe UNA vez, ya final (INSERT OR IGNORE; nunca se actualiza): sin ``inmutable_sql``. Tiempo = t_ms.
+    "auditor_perdidas": TablaConfig(
+        nombre="auditor_perdidas", sqlite="miradas_perdidas", tiempo="t_ms", clave=("product", "t_ms", "bucket_ms"), producto="product",
+        columnas=_cols("product:text bucket_ms:int t_ms:int motivo:text detalle:text? despertar_json:text? estado:text maestro:int? puntaje:real? "
+                       "entrada_dice:text? salida_dice:text? formula_json:text? registrada_ms:int version:text",
+                       dicc=("product", "motivo", "estado", "entrada_dice", "salida_dice", "version"),
+                       sin_stats=("detalle", "despertar_json", "formula_json")),
+        filtro_tipico="motivo", grupo_por=("product",)),
     # reentrenos (G8): registro solo-agregar (triggers). Pocas filas: un archivo por mes. Sin producto. Tiempo = creado_ms.
     "auditor_reentrenos": TablaConfig(
         nombre="auditor_reentrenos", sqlite="reentrenos", tiempo="creado_ms", clave=("creado_ms", "id"), producto=None, granularidad="mes",

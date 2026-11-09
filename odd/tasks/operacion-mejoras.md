@@ -15,14 +15,16 @@ Mejoras de la operatoria pedidas por el usuario después de la sombra maker. Con
 
 ## Tasks
 
-| ID  | Specs | Ruta                                                               | Estado                                                | Commit |
-| --- | ----- | ------------------------------------------------------------------ | ----------------------------------------------------- | ------ |
-| T1  | S1    | worker captura: libro de ETH cada 10 s                             | hecha                                                 | —      |
-| T2  | S2-S3 | worker trader: mirada de recuperación, perdidas, fecha de entrada  | en curso                                              | —      |
-| T3  | S4    | worker operatoria: script de despliegue, cuenta gh, test inestable | hecha (falta enganchar la caché atómica en el trader) | —      |
+| ID  | Specs | Ruta                                                               | Estado | Commit |
+| --- | ----- | ------------------------------------------------------------------ | ------ | ------ |
+| T1  | S1    | worker captura: libro de ETH cada 10 s                             | hecha  | —      |
+| T2  | S2-S3 | worker trader: mirada de recuperación, perdidas, fecha de entrada  | hecha  | —      |
+| T3  | S4    | worker operatoria: script de despliegue, cuenta gh, test inestable | hecha  | —      |
 
 ## Log
 
 - **L1** (usuario, 2026-11-09): «1. La reserva es todo apartir del 19 de abril hasta lo nuevo que venga. Despues vamos a definir unas pruebas por pequeños tramos de la reserva. Ademas hace la 3,4,5»
 - **L2** (evidencia T1): libro de ETH cada 10 s por defecto (`FUTURES_ETH_BOOK_SAMPLE_MS`), mismo formato; BTC sin libro, sin cambios. Costo medido ≈ 4,2 KB por foto: ~37 MB/día (+25 MB), cota superior ~57 MB/día; con 7 días de retención ~260-400 MB. Ya archivado en Parquet como `market_events`. 694 tests del servidor, typecheck limpio.
 - **L3** (evidencia T3): `ops/vps/desplegar.sh` (`--dry-run`, `--sin-reinicio`, `--dropin`; espera el CI de push y PR, ventana :16-:27, chequeos posteriores; 45 tests con stubs) y `scripts/gh-sevillanof.sh` (gh con Sevillanof solo para ese proceso). Test inestable: `History.funding` escribe `funding-{product}.json` con `open("w")` no atómico; reproducción determinista de lectura parcial; módulo `futures_funding_cache` (escritura atómica, carpeta inyectable `BALANCITA_QWEN_CACHE_DIR`) y `ci_python_run.py` da a cada proceso su carpeta. Falta usar el módulo en `futures_qwen_trader.py` (archivo de T2).
+- **L4** (evidencia T2): la entrada se fecha con la mirada (el llenado queda en `fill_ms` y el recibo); «agotado» ve 1.440 min a las 24 h, tope 36 h y enfriamiento de 15 min desde la mirada. Mirada de recuperación al arrancar o tras un bloqueo (entradas y salidas permitidas, nunca hacia atrás) y tabla `miradas_perdidas` (archivada en Parquet). Diferencial: replay de 30 días byte-idéntico; en vivo con libro cambia `entry_ms` (4 s antes) y, por el enfriamiento más corto, hay entradas una mirada antes. No volver a la versión anterior con una posición abierta guardada por esta. 984 tests OK.
+- **L5** (usuario): «pero como vas acordarte de pedirlo siempre?» → `desplegar.sh` frena (código 2) antes de instalar nada si hay un drop-in nuevo sin decidir; se decide con `--dropin` o `--omitir`. La caché de funding del trader ya escribe de forma atómica (`futures_funding_cache`).
