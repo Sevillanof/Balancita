@@ -81,9 +81,16 @@ test.afterAll(() => {
   gateway?.kill('SIGTERM')
 })
 
-const hhmm = (ms: number) => new Date(ms).toISOString().slice(11, 16)
 // AHORA prints the hour without a leading zero (es-ES long format).
-const hmm = (ms: number) => hhmm(ms).replace(/^0/, '')
+// The decision detail shows the time in Europe/Madrid (odd/tasks/operacion-mejoras.md, opción 4a).
+const madridHhmm = (ms: number) =>
+  new Intl.DateTimeFormat('es-ES', {
+    timeZone: 'Europe/Madrid',
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+  }).format(new Date(ms))
+const hmm = (ms: number) => madridHhmm(ms).replace(/^0/, '')
 
 async function markerPositions(chart: Locator) {
   await expect
