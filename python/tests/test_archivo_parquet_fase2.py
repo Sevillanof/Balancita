@@ -236,6 +236,17 @@ class DatosUtilesTests(unittest.TestCase):
         self.assertEqual(sorted(self.archivo("qwen-live__auditor", "auditor_miradas"), key=repr), sorted(orig, key=repr))  # con el valor ya definitivo
         self.assertEqual(verificar(self.destino)["problemas"], [])
 
+    def test_auditor_sombra_maker_se_archiva_todos_los_dias_porque_cada_fila_se_escribe_una_vez_y_final(self):  # maker-sombra S5
+        n = sintetico.crear_copia_auditor(self.copia, DIA0, con_sombra=True)
+        self.assertEqual(n["auditor_sombra"], 6)
+        r = self.exp("qwen-live__auditor", ["auditor_sombra"])
+        self.assertEqual((r["no_confirmados"], r["pendientes_por_abrir"]), ([], []))
+        self.assertEqual(self.filas_por_dia("auditor_sombra"), {self.dia(0): 2, self.dia(1): 2, self.dia(2): 2})
+        cfg = TABLAS["auditor_sombra"]
+        orig = self.sqlite("SELECT %s FROM sombra_maker" % ", ".join(cfg.nombres))
+        self.assertEqual(sorted(self.archivo("qwen-live__auditor", "auditor_sombra"), key=repr), sorted(orig, key=repr))
+        self.assertEqual(verificar(self.destino)["problemas"], [])
+
     # ---------- S2: velas oficiales, funding_periods y analytics_points ----------
     def test_mercado_velas_oficiales_funding_y_analytics_ida_y_vuelta(self):  # S2
         n = sintetico.crear_copia_mercado_util(self.copia, DIA0)

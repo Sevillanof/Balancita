@@ -490,6 +490,165 @@ describe('decision auditor verdicts per operation', () => {
     })
   })
 
+  it('attaches the maker shadow of each operation (entry and exit apart), even one no look names', () => {
+    const path = seedAudit()
+    const db = new DatabaseSync(join(dirname(path), 'auditor.sqlite'))
+    db.exec(`CREATE TABLE sombra_maker(product TEXT, trade_no INTEGER, leg TEXT, motivo_salida TEXT, lado INTEGER,
+      orden TEXT, t_oficial_ms INTEGER, precio_oficial REAL, comision_oficial_usd REAL, comision_oficial_tipo TEXT,
+      cantidad REAL, notional_oficial_usd REAL, libro_ms INTEGER, limite_px REAL, estado TEXT, motivo_sin_datos TEXT,
+      llenado_ms INTEGER, llenado_px REAL, cinta_px REAL, espera_ms INTEGER, comision_sombra_usd REAL,
+      comision_sombra_tipo TEXT, delta_usd REAL, delta_pb REAL, modelo TEXT, costos_id TEXT, resuelto_ms INTEGER,
+      version TEXT)`)
+    const insert = db.prepare(
+      'INSERT INTO sombra_maker VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+    )
+    const leg = (
+      product: string,
+      tradeNo: number,
+      name: 'entry' | 'exit',
+      over: Record<string, string | number | null> = {},
+    ) => {
+      const row = {
+        motivo_salida: name === 'exit' ? 'vuelta' : null,
+        lado: 1,
+        orden: name === 'entry' ? 'compra' : 'venta',
+        t_oficial_ms: 1_000,
+        precio_oficial: 2250.1,
+        comision_oficial_usd: 0.225,
+        comision_oficial_tipo: 'taker',
+        cantidad: 0.2,
+        notional_oficial_usd: 450.02,
+        libro_ms: 995,
+        limite_px: 2250,
+        estado: 'maker',
+        motivo_sin_datos: null,
+        llenado_ms: 1_090,
+        llenado_px: 2250,
+        cinta_px: null,
+        espera_ms: 90,
+        comision_sombra_usd: 0.09,
+        comision_sombra_tipo: 'maker',
+        delta_usd: 0.155,
+        delta_pb: 3.44,
+        modelo: 'sombra-maker.v1',
+        costos_id: 'kraken-futures-costs.v2',
+        resuelto_ms: 5_000,
+        version: 'auditor.v1',
+        ...over,
+      }
+      insert.run(product, tradeNo, name, ...Object.values(row))
+    }
+    leg('PF_XBTUSD', 7, 'entry')
+    leg('PF_XBTUSD', 7, 'exit', {
+      estado: 'maker_mercado',
+      llenado_px: 2249.8,
+      cinta_px: 2249.76,
+      comision_sombra_tipo: 'taker',
+      delta_pb: -10.2,
+      delta_usd: -0.46,
+      espera_ms: 900_000,
+    })
+    // Operation 8: the entry had no book snapshot; nothing is guessed.
+    leg('PF_XBTUSD', 8, 'entry', {
+      estado: 'sin_datos',
+      motivo_sin_datos: 'sin_libro',
+      limite_px: null,
+      libro_ms: null,
+      llenado_ms: null,
+      llenado_px: null,
+      espera_ms: null,
+      comision_sombra_usd: null,
+      comision_sombra_tipo: null,
+      delta_usd: null,
+      delta_pb: null,
+    })
+    // Operation 12: a shadow row but no look names it.
+    leg('PF_XBTUSD', 12, 'exit', { motivo_salida: 'agotado' })
+    // The same operation number of another product must not leak in.
+    leg('PF_ETHUSD', 8, 'exit', { estado: 'maker_mercado' })
+    db.close()
+
+    const audits = readAuditorTrades(path, 'PF_XBTUSD', [7, 8, 12, 9])!
+    expect(audits.get(7)!.sombra).toEqual({
+      entrada: {
+        estado: 'maker',
+        motivo_sin_datos: null,
+        motivo_salida: null,
+        orden: 'compra',
+        t_oficial_ms: 1_000,
+        precio_oficial: 2250.1,
+        comision_oficial_usd: 0.225,
+        comision_oficial_tipo: 'taker',
+        limite_px: 2250,
+        llenado_ms: 1_090,
+        llenado_px: 2250,
+        cinta_px: null,
+        espera_ms: 90,
+        comision_sombra_usd: 0.09,
+        comision_sombra_tipo: 'maker',
+        delta_usd: 0.155,
+        delta_pb: 3.44,
+        modelo: 'sombra-maker.v1',
+      },
+      salida: expect.objectContaining({
+        estado: 'maker_mercado',
+        motivo_salida: 'vuelta',
+        orden: 'venta',
+        cinta_px: 2249.76,
+        comision_sombra_tipo: 'taker',
+        delta_pb: -10.2,
+        espera_ms: 900_000,
+      }),
+    })
+    expect(audits.get(8)!.sombra).toEqual({
+      entrada: expect.objectContaining({
+        estado: 'sin_datos',
+        motivo_sin_datos: 'sin_libro',
+        limite_px: null,
+        llenado_px: null,
+        delta_usd: null,
+        delta_pb: null,
+      }),
+      salida: null,
+    })
+    expect(audits.get(12)).toMatchObject({
+      miradas: 0,
+      sombra: { entrada: null, salida: { motivo_salida: 'agotado' } },
+    })
+    expect(audits.has(9)).toBe(false)
+    // Everything the audit carried before is untouched.
+    expect(audits.get(7)).toMatchObject({
+      entrada_horizonte: '36h',
+      miradas: 5,
+      operacion: null,
+      resultado: null,
+    })
+  })
+
+  it('leaves the shadow null when the auditor has no such table or the row is damaged', () => {
+    const path = seedAudit()
+    expect(readAuditorTrades(path, 'PF_XBTUSD', [7])!.get(7)!.sombra).toBeNull()
+    const db = new DatabaseSync(join(dirname(path), 'auditor.sqlite'))
+    db.exec(
+      `CREATE TABLE sombra_maker(product TEXT, trade_no INTEGER, leg TEXT, estado TEXT, delta_pb REAL)`,
+    )
+    db.exec(
+      "INSERT INTO sombra_maker VALUES('PF_XBTUSD',7,'entry','maker','no es un numero')",
+    )
+    db.exec("INSERT INTO sombra_maker VALUES('PF_XBTUSD',7,'raro',NULL,1)")
+    db.close()
+    // Columns the table does not have read as null; a leg name nobody knows is ignored; a text where a number goes is null.
+    expect(readAuditorTrades(path, 'PF_XBTUSD', [7])!.get(7)!.sombra).toEqual({
+      entrada: expect.objectContaining({
+        estado: 'maker',
+        delta_pb: null,
+        llenado_px: null,
+        orden: null,
+      }),
+      salida: null,
+    })
+  })
+
   it('reads as no audit without a file, a table or operations, in one query', () => {
     const { path } = seedLive()
     expect(readAuditorTrades(path, 'PF_XBTUSD', [1])).toBeNull()
@@ -515,6 +674,33 @@ describe('decision auditor verdicts per operation', () => {
     const byNo = new Map(result.trades.map((t) => [t.trade_no, t.auditoria]))
     expect(byNo.get(7)).toMatchObject({ entrada_horizonte: '36h', miradas: 5 })
     expect(byNo.get(9)).toBeNull()
+  })
+
+  it('serves the maker shadow inside the audit of the operations the gateway serves', () => {
+    const path = seedAudit()
+    const audit = new DatabaseSync(join(dirname(path), 'auditor.sqlite'))
+    audit.exec(
+      `CREATE TABLE sombra_maker(product TEXT, trade_no INTEGER, leg TEXT, estado TEXT, delta_pb REAL)`,
+    )
+    audit.exec(
+      "INSERT INTO sombra_maker VALUES('PF_XBTUSD',7,'exit','maker',3.5)",
+    )
+    audit.close()
+    const db = new DatabaseSync(path)
+    db.exec(`CREATE TABLE trades(product TEXT, trade_no INTEGER, status TEXT, side TEXT, entry_ms INTEGER,
+      exit_ms INTEGER, entry_px TEXT, exit_px TEXT, qty TEXT, notional_usd TEXT, leverage TEXT, margin_usd TEXT,
+      gross_usd TEXT, fees_usd TEXT, funding_usd TEXT, funding_status TEXT, net_usd TEXT, net_now_usd TEXT,
+      closed_by TEXT, exit_reason TEXT, hold_min INTEGER, mark_px REAL, mark_ms INTEGER)`)
+    db.exec(
+      "INSERT INTO trades(product, trade_no, status, side, entry_ms) VALUES('PF_XBTUSD',7,'closed','SHORT',1000)",
+    )
+    db.close()
+    const result = createQwenDecisions({ liveDbPath: path }).trades('PF_XBTUSD')
+    if (result.status !== 'ok') throw new Error('expected ok')
+    expect(result.trades[0]!.auditoria!.sombra).toMatchObject({
+      entrada: null,
+      salida: { estado: 'maker', delta_pb: 3.5 },
+    })
   })
 
   it('serves null auditoria on every operation when the auditor file is damaged', () => {

@@ -61,14 +61,19 @@ def fee_rate(kind="taker"):
     return Decimal(MAKER_RATE if kind == "maker" else TAKER_RATE)
 
 
-def round_trip_rate(product_id, *, exit_kind="taker"):
-    """Fraction of notional one entry plus one exit costs (fees and execution)."""
-    fees = fee_rate("taker") + fee_rate(exit_kind)
-    return fees + 2 * side_impact_bps(product_id) / TEN_THOUSAND
+def round_trip_rate(product_id, *, entry_kind="taker", exit_kind="taker"):
+    """Fraction of notional one entry plus one exit costs (fees and execution).
+
+    ``entry_kind`` / ``exit_kind`` say how each leg is executed: ``taker`` crosses the book (taker fee plus the one-side
+    impact) and ``maker`` is a resting limit order that fills at its own level (maker fee, no impact). It is the same
+    accounting ``futures_qwen_trader.settle`` applies to a maker exit (``exit_fill`` with reason ``target``)."""
+    fees = fee_rate(entry_kind) + fee_rate(exit_kind)
+    crossing = (entry_kind != "maker") + (exit_kind != "maker")
+    return fees + crossing * side_impact_bps(product_id) / TEN_THOUSAND
 
 
-def round_trip_cost_bps(product_id, *, exit_kind="taker"):
-    return round_trip_rate(product_id, exit_kind=exit_kind) * TEN_THOUSAND
+def round_trip_cost_bps(product_id, *, entry_kind="taker", exit_kind="taker"):
+    return round_trip_rate(product_id, entry_kind=entry_kind, exit_kind=exit_kind) * TEN_THOUSAND
 
 
 def cost_model_hash():
