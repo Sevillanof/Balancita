@@ -19,14 +19,14 @@ Mejoras de la operatoria pedidas por el usuario después de la sombra maker. Con
 
 ## Tasks
 
-| ID  | Specs | Ruta                                                                                               | Estado               | Commit |
-| --- | ----- | -------------------------------------------------------------------------------------------------- | -------------------- | ------ |
-| T1  | S1    | worker captura: libro de ETH cada 10 s                                                             | hecha                | —      |
-| T2  | S2-S3 | worker trader: mirada de recuperación, perdidas, fecha de entrada                                  | hecha                | —      |
-| T3  | S4    | worker operatoria: script de despliegue, cuenta gh, test inestable                                 | hecha                | —      |
-| T4  | S5    | alarma: latido del operador, miradas perdidas, posición sin valorar, reloj (healthcheck de la VPS) | hecha                | —      |
-| T5  | S6    | marcador de la revisión en el desplegable del saldo (maqueta en gentle-design primero)             | hecha                | —      |
-| T6  | S7    | pendientes del informe: #547 a main, opción 4, 6a, 7                                               | en curso (opción 4a) | —      |
+| ID  | Specs | Ruta                                                                                               | Estado                         | Commit |
+| --- | ----- | -------------------------------------------------------------------------------------------------- | ------------------------------ | ------ |
+| T1  | S1    | worker captura: libro de ETH cada 10 s                                                             | hecha                          | —      |
+| T2  | S2-S3 | worker trader: mirada de recuperación, perdidas, fecha de entrada                                  | hecha                          | —      |
+| T3  | S4    | worker operatoria: script de despliegue, cuenta gh, test inestable                                 | hecha                          | —      |
+| T4  | S5    | alarma: latido del operador, miradas perdidas, posición sin valorar, reloj (healthcheck de la VPS) | hecha                          | —      |
+| T5  | S6    | marcador de la revisión en el desplegable del saldo (maqueta en gentle-design primero)             | hecha                          | —      |
+| T6  | S7    | pendientes del informe: #547 a main, opción 4, 6a, 7                                               | opción 4a hecha; quedan 6a y 7 | —      |
 
 ## Log
 
@@ -53,3 +53,4 @@ Mejoras de la operatoria pedidas por el usuario después de la sombra maker. Con
 - **L21** (usuario, comentarios sobre «F+ · Anillo, rango y reglas» en 04): «Este me gusta» · sobre el rango: «Esto me gusta, que muestra?» → lo peor y lo mejor que llegó a ir la operación desde la entrada (en US$), la raya del 0 y un marcador de dónde está ahora; se aclara en su tooltip · sobre los chips de reglas: «Esto que sea menos texto, solo visual y con tooltip cuando haga hover.» → tres íconos (vuelta, agotado 24 h, tope 36 h) con una barrita de progreso cada uno y el detalle solo en el tooltip. Elegida para implementar.
 - **L22** (usuario, comentario sobre los íconos de reglas en 04): «Esto tiene que ir centrado, con el tooltop cuando haga hover.» → íconos centrados en la tarjeta; el detalle aparece en el tooltip al pasar el mouse o con el foco.
 - **L23** (usuario, comentario en 04 sobre «F+ · Anillo, rango y reglas»): «Implementa este» → implementar juntas: fila de pasos de `01-minimo` (solo los que deciden), tarjeta de noticia de `02-con-etiqueta`, y la tarjeta de la operación F+ con rango de `04-tarjeta-operacion` (elegida; las demás quedan como alternativas). Horas en Madrid. Capturas reales de antes y después antes de mergear.
+- **L24** (evidencia 4a): fila SALIR con los pasos que existen en los datos y deciden (gira el maestro, 24 h sin fuerza, tope 36 h, auditor; los que no aplican se ven apagados con tooltip); tarjeta de noticia con borde por fuerza y «fuente · hora»; tarjeta de la operación F+ (anillo de horas contra 36 h con marca de 24 h, neto y %, entrada → ahora, rango peor/mejor desde `mfe_bp`/`mae_bp` × nocional, 3 íconos de reglas con tooltip; «sin dato» si falta); horas en Madrid en tarjeta, noticias, fila, ficha y franja de operaciones. `/api/qwen/trades` suma `mfe_bp`/`mae_bp`. 703 tests web, 351 gateway, e2e 87 OK (2 fallas previas: puerto 8789 ocupado por el gateway local y `integracion-gateway` que ya fallaba en HEAD). Nota: enfriamiento y tamaño no son pasos de salida en los datos, no se inventaron.

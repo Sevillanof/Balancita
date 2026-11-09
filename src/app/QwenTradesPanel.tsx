@@ -1,4 +1,4 @@
-import { utcDateTime } from '../shared/finance/format.ts'
+import { madridDateTimeSeconds } from '../shared/finance/format.ts'
 import { useQwenTrades, type QwenTrade } from './useQwenTrades.ts'
 import { qwenTradesNotice, signedUsd } from './qwen-trades-text.ts'
 import { TERMINAL_PANEL } from '../shared/design-system/terminal-styles.ts'
@@ -56,7 +56,7 @@ export default function QwenTradesPanel({
           {open.map((trade) => (
             <p key={trade.tradeNo} data-testid="qwen-open-trade">
               <strong>Abierta ahora:</strong> posición {side(trade)} desde{' '}
-              {utcDateTime(trade.entryMs)}
+              {madridDateTimeSeconds(trade.entryMs)}
               {trade.entryPrice !== null
                 ? `, entrada ${trade.entryPrice.toFixed(2)}`
                 : ''}
@@ -71,8 +71,10 @@ export default function QwenTradesPanel({
                 {closed.map((trade) => (
                   <li key={trade.tradeNo} data-testid="qwen-closed-trade">
                     <strong>{trade.side === 'LONG' ? 'LARGO' : 'CORTO'}</strong>{' '}
-                    {trade.exitMs !== null ? utcDateTime(trade.exitMs) : ''} ·
-                    neto {signedUsd(trade.netUsd)} ·{' '}
+                    {trade.exitMs !== null
+                      ? madridDateTimeSeconds(trade.exitMs)
+                      : ''}{' '}
+                    · neto {signedUsd(trade.netUsd)} ·{' '}
                     {CLOSED_BY[trade.closedBy ?? ''] ?? 'cerrada'}
                     {trade.holdMin !== null ? ` · ${hold(trade.holdMin)}` : ''}
                     {trade.fundingComplete

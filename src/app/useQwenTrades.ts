@@ -95,6 +95,12 @@ export interface QwenTrade {
   entryReason?: string | null
   /** The longest it may stay open in ms (the rebound expert exits at 4 h), when it has its own. */
   maxHoldMs?: number | null
+  /**
+   * Best and worst the price went for the operation since its entry, in basis points of the entry price (best >= 0,
+   * worst <= 0), before costs. The gateway's `mfe_bp` / `mae_bp`, or the auditor's measure when the gateway has none; null when neither exists.
+   */
+  mfeBp?: number | null
+  maeBp?: number | null
   holdMin: number | null
   markPrice: number | null
   notionalUsd: number | null
@@ -250,6 +256,17 @@ function auditOf(value: unknown): QwenTradeAudit | null {
   }
 }
 
+/** The excursion of an operation: the gateway's own field, else the auditor's measure of the same operation. */
+function excursion(
+  row: Record<string, unknown>,
+  own: string,
+  audited: string,
+): number | null {
+  return (
+    number(row[own]) ?? number(record(record(row.auditoria).operacion)[audited])
+  )
+}
+
 function executionOf(value: unknown): QwenExecution | null {
   const row = record(value)
   const entry = executionPhase(row.entry)
@@ -334,6 +351,8 @@ export function qwenTrades(payload: unknown): QwenTrade[] {
         entryReason:
           typeof row.entry_reason === 'string' ? row.entry_reason : null,
         maxHoldMs: number(row.max_hold_ms),
+        mfeBp: excursion(row, 'mfe_bp', 'mfe_pb'),
+        maeBp: excursion(row, 'mae_bp', 'mae_pb'),
         holdMin: number(row.hold_min),
         markPrice: number(row.mark_price),
         notionalUsd: number(row.notional_usd),

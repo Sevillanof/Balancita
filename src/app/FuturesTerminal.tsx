@@ -43,10 +43,11 @@ import {
   marketStatusLabel,
   shortTime,
   strategyLabel,
-  utcTime,
+  madridStamp,
 } from './terminal-labels.ts'
 import { record } from '../shared/wire/decode.ts'
 import {
+  latestMasterReading,
   lifecycleView,
   minutePrices,
   positionsReading,
@@ -630,6 +631,7 @@ export default function FuturesTerminal({
                         nowMs={displayClock}
                         onFocus={() => focusTrade(selectedTradeId)}
                         notice={qwenHealthNotice(qwenSource, displayClock)}
+                        master={latestMasterReading(analyses)}
                       />
                     ) : undefined
                   }
@@ -669,7 +671,7 @@ export default function FuturesTerminal({
                         <SelectedDecision
                           analysis={selectedAnalysis}
                           id={selectedId}
-                          time={utcTime(selectedDecisionTime)}
+                          time={madridStamp(selectedDecisionTime)}
                           reason={analysisReason(selectedAnalysis)}
                           notes={selectedNotes}
                         />
@@ -698,7 +700,7 @@ export default function FuturesTerminal({
                       <SelectedDecision
                         analysis={selectedAnalysis}
                         id={selectedId}
-                        time={utcTime(selectedDecisionTime)}
+                        time={madridStamp(selectedDecisionTime)}
                         reason={analysisReason(selectedAnalysis)}
                         notes={selectedNotes}
                       />
