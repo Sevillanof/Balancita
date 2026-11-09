@@ -300,7 +300,7 @@ vps_dropins() {
 
 # Imprime "si" o "no": el servicio necesita reiniciarse si arrancó antes del último commit o drop-in.
 vps_necesita_reinicio() {
-  vps "inicio=\$(date -d \"\$(systemctl show balancita -p ActiveEnterTimestamp --value)\" +%s 2>/dev/null || echo 0); commit=\$(git -C $VPS_DIR log -1 --format=%ct); dropin=\$(stat -c %Y $DROPINS_DESTINO/*.conf 2>/dev/null | sort -n | tail -1); dropin=\${dropin:-0}; mayor=\$commit; [ \"\$dropin\" -gt \"\$mayor\" ] && mayor=\$dropin; if [ \"\$inicio\" -lt \"\$mayor\" ]; then echo si; else echo no; fi" ||
+  vps "inicio=\$(date -d \"\$(systemctl show balancita -p ActiveEnterTimestamp --value)\" +%s 2>/dev/null || echo 0); commit=\$(sudo -u balancita git -C $VPS_DIR log -1 --format=%ct 2>/dev/null); [ -n \"\$commit\" ] || { echo error; exit 0; }; dropin=\$(stat -c %Y $DROPINS_DESTINO/*.conf 2>/dev/null | sort -n | tail -1); dropin=\${dropin:-0}; mayor=\$commit; [ \"\$dropin\" -gt \"\$mayor\" ] && mayor=\$dropin; if [ \"\$inicio\" -lt \"\$mayor\" ]; then echo si; else echo no; fi" ||
     fallar 5 "no pude saber si el servicio necesita reinicio."
 }
 
@@ -412,6 +412,10 @@ main() {
   vps_pull
   vps_dropins
   necesita="$(vps_necesita_reinicio)"
+  case "$necesita" in
+    si | no) ;;
+    *) fallar 5 "la VPS no pudo decir la fecha del último commit (respuesta: '$necesita'); no reinicio a ciegas." ;;
+  esac
 
   if [ "$SIN_REINICIO" = 1 ]; then
     if [ "$necesita" = "si" ]; then

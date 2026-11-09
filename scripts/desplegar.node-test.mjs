@@ -538,6 +538,30 @@ describe('desplegar', { concurrency: 8 }, () => {
       assert.doesNotMatch(r.ssh, /systemctl restart/)
     })
 
+    it('lee el último commit en la VPS como balancita (root ve el repo como «dubious ownership» y daba 0)', async () => {
+      const r = await correr([], {
+        env: { STUB_PR_ABIERTO: '1', STUB_CI_SEQ: '2 0 0' },
+      })
+      assert.equal(r.status, 0, r.todo)
+      assert.match(
+        r.ssh,
+        /ActiveEnterTimestamp[^\n]*sudo -u balancita git -C \S+ log -1 --format=%ct/,
+      )
+      assert.match(r.ssh, /ActiveEnterTimestamp[^\n]*echo error/)
+    })
+
+    it('si la VPS no puede decir la fecha del último commit, frena con código 5 sin reiniciar', async () => {
+      const r = await correr([], {
+        env: {
+          STUB_PR_ABIERTO: '1',
+          STUB_CI_SEQ: '2 0 0',
+          STUB_NECESITA: 'error',
+        },
+      })
+      assert.equal(r.status, 5, r.todo)
+      assert.doesNotMatch(r.ssh, /systemctl restart/)
+    })
+
     it('--dropin instala también un drop-in nuevo', async () => {
       const r = await correr(['--dropin', 'noticias.conf'], {
         env: {
