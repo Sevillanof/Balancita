@@ -398,7 +398,7 @@ DDL.update({
         horas_en_posicion REAL, neto_ahora_pb REAL, trade_no INTEGER,
         condiciones_json TEXT NOT NULL, despues_json TEXT,
         veredicto_12h_json TEXT, veredicto_24h_json TEXT, veredicto_36h_json TEXT,
-        resuelto_ms INTEGER, version TEXT NOT NULL,
+        resuelto_ms INTEGER, version TEXT NOT NULL, direccion_json TEXT, direccion_ms INTEGER,
         PRIMARY KEY(product, bucket_ms))""",
     "official_candles": """CREATE TABLE paper_futures_official_candles(
         product_id TEXT NOT NULL, interval_ms INTEGER NOT NULL, bucket_start INTEGER NOT NULL,

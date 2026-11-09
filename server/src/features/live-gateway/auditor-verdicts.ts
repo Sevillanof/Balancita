@@ -60,6 +60,31 @@ export interface QwenDirection {
   readonly '24h': QwenDirectionHorizon | null
 }
 
+/**
+ * An entry proposal of the look (the maestro strong and agreed by the keeper), open or blocked, with the counterfactual
+ * label the auditor computes later with the official exit rules. Every label field is null until it is resolved.
+ */
+export interface QwenProposal {
+  /** +1 long / -1 short. */
+  readonly lado: 1 | -1 | null
+  /** True when the previous look had no entry signal of this side. */
+  readonly inicio_episodio: boolean | null
+  /** `abierta` (it opened a position) or `bloqueada`. */
+  readonly estado: string | null
+  /** Why it did not open: lugares_ocupados, mismo_episodio, enfriamiento, cierre_en_la_mirada or otro. */
+  readonly motivo_bloqueo: string | null
+  /** The trader's raw reason when `motivo_bloqueo` is `otro`. */
+  readonly detalle_bloqueo: string | null
+  readonly trade_no: number | null
+  /** Net after costs of the operation the official rules would have run from this look, in basis points. */
+  readonly neto_pb: number | null
+  /** Why it would have exited: maestro_vuelta, maestro_agotado or tiempo. */
+  readonly motivo_salida: string | null
+  readonly horas: number | null
+  /** True once the label is final (computed, or given up as «sin datos»). */
+  readonly resuelta: boolean
+}
+
 export interface QwenAuditoria {
   /** What the auditor saw the look do (ENTRAR, NO_ENTRAR_portero, MANTENER, SALIR_vuelta, ...). */
   readonly accion: string
@@ -69,6 +94,8 @@ export interface QwenAuditoria {
   readonly despues: QwenAfter | null
   /** Direction at 4, 12 and 24 h; null when the auditor has not written it yet (old rows, or too early). */
   readonly direccion: QwenDirection | null
+  /** The entry proposal of this look (open or blocked, with its label); null when the look had none or the auditor has no such table. */
+  readonly propuesta: QwenProposal | null
 }
 
 const AFTER_FIELDS = [
@@ -144,6 +171,26 @@ function directionOf(value: unknown): QwenDirection | null {
   }
 }
 
+function proposalOf(row: Record<string, unknown>): QwenProposal {
+  return {
+    lado: row.lado === 1 || row.lado === -1 ? row.lado : null,
+    inicio_episodio:
+      row.inicio_episodio === 1
+        ? true
+        : row.inicio_episodio === 0
+          ? false
+          : null,
+    estado: text(row.estado),
+    motivo_bloqueo: text(row.motivo_bloqueo),
+    detalle_bloqueo: text(row.detalle_bloqueo),
+    trade_no: num(row.trade_no),
+    neto_pb: num(row.neto_pb),
+    motivo_salida: text(row.motivo_salida),
+    horas: num(row.horas),
+    resuelta: num(row.resuelto_ms) !== null,
+  }
+}
+
 function hasColumn(db: DatabaseSync, table: string, column: string): boolean {
   return db
     .prepare(`PRAGMA table_info(${table})`)
@@ -177,8 +224,8 @@ export function readAuditorVerdicts(
   fromBucketMs: number,
   toBucketMs: number,
 ): ReadonlyMap<number, QwenAuditoria> | null {
-  const opened = withDb(auditorDbPath(liveDbPath), (db) =>
-    db
+  const opened = withDb(auditorDbPath(liveDbPath), (db) => ({
+    looks: db
       .prepare(
         // A file the auditor has not migrated yet has no direction column: it reads as null, not as «no auditor».
         `SELECT bucket_ms, accion, veredicto_12h_json, veredicto_24h_json,
@@ -188,10 +235,26 @@ export function readAuditorVerdicts(
       )
       .all(product, fromBucketMs, toBucketMs)
       .map((row) => rowOf(row)),
-  )
+    // Written by a newer auditor (to train later): without the table the looks just carry no proposal.
+    proposals: hasTable(db, 'propuestas')
+      ? db
+          .prepare(
+            `SELECT bucket_ms, lado, inicio_episodio, estado, motivo_bloqueo, detalle_bloqueo,
+                    trade_no, neto_pb, motivo_salida, horas, resuelto_ms
+               FROM propuestas WHERE product=? AND bucket_ms BETWEEN ? AND ?`,
+          )
+          .all(product, fromBucketMs, toBucketMs)
+          .map((row) => rowOf(row))
+      : [],
+  }))
   if (opened.state !== 'read') return null
+  const proposals = new Map<number, QwenProposal>()
+  for (const row of opened.value.proposals) {
+    const bucket = num(row.bucket_ms)
+    if (bucket !== null) proposals.set(bucket, proposalOf(row))
+  }
   const out = new Map<number, QwenAuditoria>()
-  for (const row of opened.value) {
+  for (const row of opened.value.looks) {
     const bucket = num(row.bucket_ms)
     if (bucket === null || typeof row.accion !== 'string') continue
     out.set(bucket, {
@@ -201,6 +264,7 @@ export function readAuditorVerdicts(
       veredicto_36h: verdictOf(row.veredicto_36h_json),
       despues: afterOf(row.despues_json),
       direccion: directionOf(row.direccion_json),
+      propuesta: proposals.get(bucket) ?? null,
     })
   }
   return out
@@ -242,6 +306,24 @@ export interface QwenTradeAudit {
   readonly miradas: number
   /** The operation measured by itself (direction from its entry, MAE/MFE); null while the auditor has not written it or has no such table. */
   readonly operacion: QwenTradeOperation | null
+  /** The real result of the closed operation (receipts, reasons, prices, MFE/MAE from candle highs and lows); null while open or not written. */
+  readonly resultado: QwenTradeResult | null
+}
+
+/** The real result of a closed operation, as the auditor keeps it to train later. */
+export interface QwenTradeResult {
+  /** Net after costs from the execution receipts, in basis points / USD. */
+  readonly neto_pb: number | null
+  readonly neto_usd: number | null
+  readonly motivo_cierre: string | null
+  readonly motivo_salida: string | null
+  readonly entry_px: number | null
+  readonly exit_px: number | null
+  /** Best / worst the price did for the operation using the candles' highs and lows (>= 0 / <= 0), in basis points. */
+  readonly mfe_hl_pb: number | null
+  readonly mae_hl_pb: number | null
+  /** True once funding is complete and the candles are in: the numbers no longer change. */
+  readonly final: boolean
 }
 
 /** One operation measured from its entry, on the closes of the 5 minute candles. */
@@ -295,6 +377,17 @@ export function readAuditorTrades(
           .all(product, ...tradeNos)
           .map((row) => rowOf(row))
       : [],
+    results: hasTable(db, 'resultados_operacion')
+      ? db
+          .prepare(
+            `SELECT trade_no, neto_pb, neto_usd, motivo_cierre, motivo_salida, entry_px, exit_px,
+                    mfe_hl_pb, mae_hl_pb, resultado_ms
+               FROM resultados_operacion
+              WHERE product=? AND trade_no IN (${marks})`,
+          )
+          .all(product, ...tradeNos)
+          .map((row) => rowOf(row))
+      : [],
   }))
   if (opened.state !== 'read') return null
   type Draft = {
@@ -314,6 +407,7 @@ export function readAuditorTrades(
         mantener: { aciertos: 0, total: 0 },
         miradas: 0,
         operacion: null,
+        resultado: null,
       }
       out.set(tradeNo, audit)
     }
@@ -355,6 +449,21 @@ export function readAuditorTrades(
       mae_pb: num(row.mae_pb),
       hasta_ms: num(row.hasta_ms),
       resuelta: num(row.resuelto_ms) !== null,
+    }
+  }
+  for (const row of opened.value.results) {
+    const tradeNo = num(row.trade_no)
+    if (tradeNo === null) continue
+    draftOf(tradeNo).resultado = {
+      neto_pb: num(row.neto_pb),
+      neto_usd: num(row.neto_usd),
+      motivo_cierre: text(row.motivo_cierre),
+      motivo_salida: text(row.motivo_salida),
+      entry_px: num(row.entry_px),
+      exit_px: num(row.exit_px),
+      mfe_hl_pb: num(row.mfe_hl_pb),
+      mae_hl_pb: num(row.mae_hl_pb),
+      final: num(row.resultado_ms) !== null,
     }
   }
   return out

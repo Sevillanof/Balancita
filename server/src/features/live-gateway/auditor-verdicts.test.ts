@@ -93,6 +93,8 @@ describe('decision auditor verdicts', () => {
       despues: null,
       // An auditor file written before the direction existed has no such column: null, not «no auditor».
       direccion: null,
+      // ...and one written before the training record has no `propuestas` table: no proposal.
+      propuesta: null,
     })
     expect(unseen!.auditoria).toBeNull()
   })
@@ -173,6 +175,168 @@ describe('decision auditor verdicts', () => {
     const decisions = reportOf(damaged.path)
     expect(decisions).toHaveLength(3)
     expect(decisions.every((d) => d.auditoria === null)).toBe(true)
+  })
+})
+
+describe('decision auditor training record', () => {
+  const PROPUESTAS = `CREATE TABLE propuestas(product TEXT, bucket_ms INTEGER, lado INTEGER, inicio_episodio INTEGER,
+    estado TEXT, motivo_bloqueo TEXT, detalle_bloqueo TEXT, trade_no INTEGER, neto_pb REAL, motivo_salida TEXT,
+    horas REAL, resuelto_ms INTEGER)`
+
+  it('attaches the entry proposal of each look with its block reason and its counterfactual label', () => {
+    const { dir, path } = seedLive()
+    const db = new DatabaseSync(join(dir, 'auditor.sqlite'))
+    db.exec(MIRADAS)
+    const looks = db.prepare('INSERT INTO miradas VALUES(?,?,?,?,?,?,?)')
+    for (const bucket of [0, MIN15, 2 * MIN15])
+      looks.run('PF_XBTUSD', bucket, 'NO_ENTRAR_regla', null, null, null, null)
+    db.exec(PROPUESTAS)
+    const insert = db.prepare(
+      'INSERT INTO propuestas VALUES(?,?,?,?,?,?,?,?,?,?,?,?)',
+    )
+    insert.run(
+      'PF_XBTUSD',
+      0,
+      1,
+      1,
+      'bloqueada',
+      'lugares_ocupados',
+      null,
+      null,
+      41.5,
+      'maestro_vuelta',
+      3,
+      99,
+    )
+    insert.run(
+      'PF_XBTUSD',
+      MIN15,
+      -1,
+      0,
+      'bloqueada',
+      'otro',
+      'saldo_insuficiente',
+      null,
+      null,
+      null,
+      null,
+      null,
+    )
+    // The same bucket of another product must not leak in.
+    insert.run(
+      'PF_ETHUSD',
+      2 * MIN15,
+      1,
+      1,
+      'abierta',
+      null,
+      null,
+      5,
+      null,
+      null,
+      null,
+      null,
+    )
+    db.close()
+
+    const [none, open, resolved] = reportOf(path)
+    expect(resolved!.auditoria!.propuesta).toEqual({
+      lado: 1,
+      inicio_episodio: true,
+      estado: 'bloqueada',
+      motivo_bloqueo: 'lugares_ocupados',
+      detalle_bloqueo: null,
+      trade_no: null,
+      neto_pb: 41.5,
+      motivo_salida: 'maestro_vuelta',
+      horas: 3,
+      resuelta: true,
+    })
+    expect(open!.auditoria!.propuesta).toMatchObject({
+      lado: -1,
+      inicio_episodio: false,
+      motivo_bloqueo: 'otro',
+      detalle_bloqueo: 'saldo_insuficiente',
+      neto_pb: null,
+      resuelta: false,
+    })
+    expect(none!.auditoria!.propuesta).toBeNull()
+  })
+
+  it('attaches the real result of each closed operation, even one no look names', () => {
+    const { dir, path } = seedLive()
+    const db = new DatabaseSync(join(dir, 'auditor.sqlite'))
+    db.exec(`CREATE TABLE miradas(product TEXT, bucket_ms INTEGER, t_ms INTEGER, accion TEXT, trade_no INTEGER,
+      veredicto_12h_json TEXT, veredicto_24h_json TEXT, veredicto_36h_json TEXT);
+      CREATE TABLE resultados_operacion(product TEXT, trade_no INTEGER, neto_pb REAL, neto_usd REAL,
+      motivo_cierre TEXT, motivo_salida TEXT, entry_px REAL, exit_px REAL, mfe_hl_pb REAL, mae_hl_pb REAL,
+      resultado_ms INTEGER)`)
+    const insert = db.prepare(
+      'INSERT INTO resultados_operacion VALUES(?,?,?,?,?,?,?,?,?,?,?)',
+    )
+    insert.run(
+      'PF_XBTUSD',
+      7,
+      80.5,
+      0.8,
+      'formula',
+      'maestro_vuelta',
+      100,
+      101,
+      300,
+      -100,
+      5,
+    )
+    insert.run(
+      'PF_XBTUSD',
+      8,
+      -12,
+      -0.1,
+      'tiempo',
+      null,
+      100,
+      99.9,
+      4,
+      -20,
+      null,
+    )
+    // The same operation number of another product must not leak in.
+    insert.run('PF_ETHUSD', 7, 1, 1, 'x', 'x', 1, 1, 1, -1, 1)
+    db.close()
+
+    const audits = readAuditorTrades(path, 'PF_XBTUSD', [7, 8, 9])!
+    expect(audits.get(7)!.resultado).toEqual({
+      neto_pb: 80.5,
+      neto_usd: 0.8,
+      motivo_cierre: 'formula',
+      motivo_salida: 'maestro_vuelta',
+      entry_px: 100,
+      exit_px: 101,
+      mfe_hl_pb: 300,
+      mae_hl_pb: -100,
+      final: true,
+    })
+    expect(audits.get(7)).toMatchObject({ miradas: 0, entrada: null })
+    expect(audits.get(8)!.resultado).toMatchObject({
+      neto_pb: -12,
+      motivo_salida: null,
+      final: false,
+    })
+    expect(audits.has(9)).toBe(false)
+  })
+
+  it('leaves the result null when the auditor has no such table', () => {
+    const { dir, path } = seedLive()
+    const db = new DatabaseSync(join(dir, 'auditor.sqlite'))
+    db.exec(`CREATE TABLE miradas(product TEXT, bucket_ms INTEGER, t_ms INTEGER, accion TEXT, trade_no INTEGER,
+      veredicto_12h_json TEXT, veredicto_24h_json TEXT, veredicto_36h_json TEXT)`)
+    db.exec(
+      "INSERT INTO miradas VALUES('PF_XBTUSD',0,1,'ENTRAR',7,NULL,NULL,NULL)",
+    )
+    db.close()
+    expect(
+      readAuditorTrades(path, 'PF_XBTUSD', [7])!.get(7)!.resultado,
+    ).toBeNull()
   })
 })
 

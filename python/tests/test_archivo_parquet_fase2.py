@@ -138,7 +138,8 @@ class DatosUtilesConfigTests(unittest.TestCase):
             self.assertIn(nombre, TABLAS)
             self.assertEqual((TABLAS[nombre].sqlite, TABLAS[nombre].tiempo, TABLAS[nombre].granularidad), (sqlite_, tiempo, gran), nombre)
         # solo lo mutable declara cuando una fila ya no cambia
-        self.assertEqual({n for n, c in TABLAS.items() if c.inmutable_sql}, {"qwen_trades", "auditor_miradas"})
+        self.assertEqual({n for n, c in TABLAS.items() if c.inmutable_sql},
+                         {"qwen_trades", "auditor_miradas", "auditor_operaciones", "auditor_propuestas", "auditor_resultados"})
         self.assertEqual(TABLAS["qwen_trades"].filtro_sql, "\"status\" = 'closed' AND \"exit_ms\" IS NOT NULL")
 
 

@@ -102,9 +102,14 @@ describe('Estrategias: the Terminal laboratory', () => {
       name: /Detalle de «Salida a 30 h»/,
     })
     await within(detalle).findByRole('list', { name: 'Etapas de la variante' })
+    // The comparison loads after the list: wait for it instead of reading «cargando…» (flaky in CI).
+    await waitFor(() =>
+      expect(within(detalle).getAllByRole('listitem')[0]).toHaveTextContent(
+        'listo · 22 s',
+      ),
+    )
     const etapas = within(detalle).getAllByRole('listitem')
     expect(etapas[0]).toHaveTextContent('Backtest')
-    expect(etapas[0]).toHaveTextContent('listo · 22 s')
     expect(etapas[1]).toHaveTextContent('Sombra')
     expect(etapas[1]).toHaveTextContent('0 / 100 operaciones')
     expect(etapas[1]).toHaveAttribute('aria-disabled', 'true')

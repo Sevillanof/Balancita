@@ -4,6 +4,7 @@ import { dirname, join } from 'node:path'
 import { createDbHealth } from '../features/kraken-futures/db-health.ts'
 import {
   backupTargetsFromEnv,
+  integrityFirstDelayFromEnv,
   integrityFromEnv,
 } from '../features/kraken-futures/db-health-env.ts'
 import {
@@ -234,7 +235,10 @@ async function main(): Promise<void> {
   })
   hooks.onMalformed = (line) => dbHealth.reportMalformed(line)
   dbHealth.start()
-  setTimeout(() => void dbHealth.integrityNow(), 2 * 60_000).unref()
+  setTimeout(
+    () => void dbHealth.integrityNow(),
+    integrityFirstDelayFromEnv(process.env),
+  ).unref()
   // One row per closed minute of PF_ETHUSD (datos-utiles S4), derived from the events above. Started
   // after the capture; it waits while a backup runs or the database is known damaged, and its failures only log.
   const ethSummary = wireEthMinuteSummary({
