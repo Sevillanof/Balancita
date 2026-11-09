@@ -1,0 +1,24 @@
+odd/tasks/operacion-mejoras.md
+  h_92dd6654ceb221 22-29,40-43
+ops/vps/README.md
+  h_92dd6654ceb221 9,36,60-102,122-123
+ops/vps/balancita-healthcheck.sh
+  h_92dd6654ceb221 5-32,35-55,58-60,68-135,137,149
+ops/vps/desplegar.sh
+  h_92dd6654ceb221 16-17,48-49,305-317,424,431
+scripts/desplegar.node-test.mjs
+  h_92dd6654ceb221 70,593-643
+scripts/healthcheck.node-test.mjs
+  h_92dd6654ceb221 1-555
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "2ae4f4eefb75ac60339b596ac1611ab4426746ae",
+  "prompts": {},
+  "humans": {
+    "h_92dd6654ceb221": {
+      "author": "Franco Sevillano <79455847+Sevillanof@users.noreply.github.com>"
+    }
+  }
+}
