@@ -709,6 +709,26 @@ describe('createQwenDecisions: trades', () => {
     })
   })
 
+  it('serves the best and worst the price went since entry (mfe_bp / mae_bp), null when the base lacks them', () => {
+    const open = { ...base, trade_no: 9, status: 'open', entry_ms: 1_000 }
+    const path = seed([], [open])
+    const without = createQwenDecisions({ liveDbPath: path }).trades(
+      'PF_XBTUSD',
+    )
+    expect(without.status).toBe('ok')
+    if (without.status !== 'ok') return
+    expect(without.trades[0]).toMatchObject({ mfe_bp: null, mae_bp: null })
+    const db = new DatabaseSync(path)
+    db.exec(
+      'ALTER TABLE trades ADD COLUMN mfe_bp REAL; ALTER TABLE trades ADD COLUMN mae_bp REAL; UPDATE trades SET mfe_bp=293.75, mae_bp=-41.9',
+    )
+    db.close()
+    const result = createQwenDecisions({ liveDbPath: path }).trades('PF_XBTUSD')
+    expect(result.status).toBe('ok')
+    if (result.status !== 'ok') return
+    expect(result.trades[0]).toMatchObject({ mfe_bp: 293.75, mae_bp: -41.9 })
+  })
+
   it('says off when the base has no trades table yet', () => {
     const path = seed([])
     const db = new DatabaseSync(path)

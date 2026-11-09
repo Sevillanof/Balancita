@@ -274,12 +274,12 @@ describe('TerminalNewsPanel', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Siguiente' }))
     expect(within(list).getAllByRole('listitem')).toHaveLength(1)
     expect(screen.getByText('Relevancia Nula')).toBeTruthy()
-    expect(screen.getByText('29/10 18:45')).toBeTruthy()
+    expect(screen.getByText('29/10 19:45')).toBeTruthy()
 
     const search = screen.getByRole('searchbox', {
       name: 'Buscar noticia por fecha u hora',
     })
-    fireEvent.change(search, { target: { value: '30/10 14:15' } })
+    fireEvent.change(search, { target: { value: '30/10 15:15' } })
     expect(within(list).getAllByRole('listitem')).toHaveLength(1)
     expect(
       screen.getByText('Ethereum L2 blobs reach new milestone'),
@@ -306,5 +306,139 @@ describe('TerminalNewsPanel', () => {
     })
     expect(decoded).toHaveLength(1)
     expect(decoded[0]?.relevance).toBe('high')
+  })
+})
+
+describe('news card (viewport column)', () => {
+  const NOW = Date.UTC(2026, 9, 30, 15, 30) // 30 oct 16:30 in Madrid (CET)
+  const renderCards = (
+    items: TerminalNewsItem[],
+    extra: Partial<Parameters<typeof TerminalNewsPanel>[0]> = {},
+  ) =>
+    render(
+      <TerminalNewsPanel
+        viewport
+        items={items}
+        briefing={briefing}
+        nowMs={NOW}
+        {...extra}
+      />,
+    )
+  // The measuring copy (inert, hidden) holds the same titles: read the real list.
+  const cardOf = (title: string) =>
+    within(screen.getByRole('list', { name: 'Lista de noticias' }))
+      .getByText(title)
+      .closest('li') as HTMLElement
+  beforeEach(() => {
+    vi.spyOn(Element.prototype, 'getBoundingClientRect').mockImplementation(
+      function (this: Element) {
+        return new DOMRect(
+          0,
+          0,
+          280,
+          this.getAttribute('data-testid') === 'news-available-space'
+            ? 400
+            : this.tagName === 'LI'
+              ? 50
+              : 0,
+        )
+      },
+    )
+  })
+
+  it('colours the left edge by strength and shows the direction as an arrow on the right', () => {
+    renderCards(sampleNews.slice(0, 3))
+    expect(cardOf('Ethereum L2 blobs reach new milestone')).toHaveClass(
+      'border-l-warn',
+    )
+    expect(cardOf('ETH validator queue steadies')).toHaveClass('border-l-info')
+    expect(cardOf('DeFi yields compress slightly')).toHaveClass(
+      'border-l-ink-2',
+    )
+    const card = cardOf('Ethereum L2 blobs reach new milestone')
+    const arrow = within(card).getByRole('img', { name: 'alcista' })
+    expect(arrow).toHaveTextContent('▲')
+    expect(arrow).toHaveClass('text-long')
+    expect(
+      within(cardOf('DeFi yields compress slightly')).getByRole('img', {
+        name: 'bajista',
+      }),
+    ).toHaveClass('text-short')
+  })
+
+  it('has the title and one muted «fuente · hora» line in Madrid time, nothing else visible', () => {
+    renderCards([sampleNews[0]!])
+    const card = cardOf('Ethereum L2 blobs reach new milestone')
+    // 14:15 UTC on 30 oct (CET) = 15:15 in Madrid, the same day as «now».
+    const meta = within(card).getByRole('button', {
+      name: /Ver procedencia y vigencia/,
+    })
+    expect(meta).toHaveTextContent('The Defiant · 15:15')
+    expect(card.textContent).not.toMatch(/UTC/)
+    expect(card.textContent).not.toMatch(/Vencida|Permiso|Señal habilitada/)
+    // Only a screen reader gets the strength in words; the eye gets the edge colour.
+    const visible = card.cloneNode(true) as HTMLElement
+    visible.querySelectorAll('.sr-only').forEach((node) => node.remove())
+    expect(visible.textContent).not.toMatch(/Alta|Relevancia|Importancia/)
+  })
+
+  it('adds the day for older news and follows the Madrid clock across the DST change', () => {
+    // 24 oct 20:30 UTC is still CEST (UTC+2): 22:30 on the 24th, a day before «now».
+    renderCards(
+      [{ ...sampleNews[0]!, publishedAtMs: Date.UTC(2026, 9, 24, 20, 30) }],
+      { nowMs: Date.UTC(2026, 9, 25, 12, 0) },
+    )
+    expect(
+      screen.getByRole('button', { name: /Ver procedencia y vigencia/ }),
+    ).toHaveTextContent('The Defiant · 24 oct, 22:30')
+  })
+
+  it('keeps «Vencida · Permiso sin verificar» out of the card and in the tooltip of the line', () => {
+    renderCards(
+      [
+        {
+          ...sampleNews[0]!,
+          expiresAtMs: NOW - 60_000,
+          licenseStatus: 'unknown',
+        },
+      ],
+      {
+        source: {
+          state: 'ok',
+          collectorStatus: 'ok',
+          collectorReason: null,
+          policy: 'priority_v2',
+        },
+      },
+    )
+    const card = cardOf('Ethereum L2 blobs reach new milestone')
+    expect(card.textContent).not.toMatch(/Vencida/)
+    fireEvent.mouseEnter(
+      within(card).getByRole('button', { name: /Ver procedencia/ }),
+    )
+    const tip = screen.getByRole('tooltip')
+    expect(tip).toHaveTextContent('Vencida · Permiso sin verificar')
+    expect(tip).toHaveTextContent('Importancia alta · alcista')
+    expect(tip).toHaveTextContent('hora de Madrid')
+    expect(tip.textContent).not.toMatch(/UTC/)
+  })
+
+  it('still opens the provenance dialog from the line, in Madrid time', () => {
+    renderCards([sampleNews[0]!])
+    fireEvent.click(
+      screen.getByRole('button', { name: /Ver procedencia y vigencia/ }),
+    )
+    const dialog = screen.getByRole('dialog')
+    expect(dialog).toHaveTextContent('Publicada 30/10 15:15')
+    expect(dialog.textContent).not.toMatch(/UTC/)
+  })
+
+  it('greys the arrow of an expired item and says the strength to screen readers', () => {
+    renderCards([{ ...sampleNews[0]!, expiresAtMs: NOW - 1 }])
+    const card = cardOf('Ethereum L2 blobs reach new milestone')
+    expect(within(card).getByRole('img', { name: 'alcista' })).toHaveClass(
+      'text-ink-2',
+    )
+    expect(card).toHaveTextContent('Importancia Alta.')
   })
 })

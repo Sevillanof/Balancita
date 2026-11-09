@@ -9,6 +9,8 @@ import {
   type TradeJudgment,
   type TradeMark,
 } from '../../../app/terminal-lifecycle.ts'
+import Tip from './Tip.tsx'
+import { rowSteps } from './row-steps.ts'
 import { TONE_RING, TONE_TEXT } from './step-tones.ts'
 
 const TONE_FILL: Record<StepTone, string> = {
@@ -119,6 +121,25 @@ export function Icon({ name }: { name: StepIcon }) {
       aria-hidden="true"
     >
       {PATHS[name]}
+    </svg>
+  )
+}
+
+/** A small «i» in a circle: the rule or the explanation lives in its tooltip. */
+function InfoGlyph() {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      width="14"
+      height="14"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.7"
+      strokeLinecap="round"
+      aria-hidden="true"
+    >
+      <circle cx="12" cy="12" r="9" />
+      <path d="M12 11v5M12 8v.5" />
     </svg>
   )
 }
@@ -350,11 +371,28 @@ function Detail({
               </button>
             ))}
           </div>
-          <span className="text-label text-ink-2">
-            Verde acertó, rojo falló, gris todavía no se sabe. A los 30 min mide
-            el precio; a las 12, 24 y 36 h el auditor pone el veredicto real
-            (qué habría pasado con la operación completa).
-          </span>
+          <div className="flex items-center gap-2 text-label text-ink-2">
+            <span className="inline-flex items-center gap-1">
+              <i className="size-2 rounded-full bg-long" />
+              acertó
+            </span>
+            <span className="inline-flex items-center gap-1">
+              <i className="size-2 rounded-full bg-short" />
+              falló
+            </span>
+            <span className="inline-flex items-center gap-1">
+              <i className="size-2 rounded-full bg-line-strong" />
+              aún no
+            </span>
+            <Tip
+              focusable
+              label="Cómo se juzga"
+              align="end"
+              content="A los 30 min mide el precio; a las 12, 24 y 36 h el auditor pone el veredicto real (qué habría pasado con la operación completa)."
+            >
+              <InfoGlyph />
+            </Tip>
+          </div>
         </div>
       )}
       {step.judgments && judgments.length > 0 && (
@@ -393,18 +431,27 @@ function Detail({
         </div>
       )}
       {step.judgments && (judgments.length > 0 || flat.length > 0) && (
-        <span className="text-label text-ink-2">
-          Arriba la entrada, abajo la salida: verde acertó, rojo falló, gris
-          todavía no. Clic en una ficha lleva a esa operación. Barra hueca:
-          veredicto provisorio (12 o 24 h).
-        </span>
+        <div className="flex items-center gap-2 text-label text-ink-2">
+          <span>↑ entrada · ↓ salida · hueca: provisorio</span>
+          <Tip
+            focusable
+            label="Cómo leer las fichas"
+            align="end"
+            content="Verde acertó, rojo falló, gris todavía no. Clic en una ficha lleva a esa operación. Barra hueca: veredicto provisorio (12 o 24 h); el definitivo llega a las 36 h."
+          >
+            <InfoGlyph />
+          </Tip>
+        </div>
       )}
-      <p className="m-0 border-0 border-t border-solid border-line pt-2 text-label text-ink-2">
-        {step.rule}
-      </p>
-      <span className="text-label text-ink-2">
-        Mirada de las {madridTime(evaluatedMs)} (hora de Madrid)
-      </span>
+      <div className="flex items-center justify-between gap-2 border-0 border-t border-solid border-line pt-2 text-label text-ink-2">
+        <span className="inline-flex items-center gap-1">
+          <Icon name="clock12" />
+          {madridTime(evaluatedMs)}
+        </span>
+        <Tip focusable label="Regla del paso" align="end" content={step.rule}>
+          <InfoGlyph />
+        </Tip>
+      </div>
     </div>
   )
 }
@@ -446,7 +493,8 @@ export default function LifecycleSteps({
     setPhase(view.phase)
     setOpenId(null)
   }
-  const open = view.steps.find((step) => step.id === openId) ?? null
+  const steps = rowSteps(view)
+  const open = steps.find((step) => step.id === openId) ?? null
   return (
     <div
       ref={root}
@@ -462,19 +510,30 @@ export default function LifecycleSteps({
         {view.phase === 'entry' ? 'Entrar' : 'Salir'}
       </span>
       <div className="flex items-center">
-        {view.steps.map((step, index) => (
+        {steps.map((step, index) => (
           <div key={step.id} className="flex items-center">
             {index > 0 && <span className="h-0.5 w-3 bg-line-strong" />}
-            <button
-              type="button"
-              title={step.label}
-              aria-label={`${step.label}: ${step.headline}`}
-              aria-expanded={openId === step.id}
-              onClick={() => setOpenId(openId === step.id ? null : step.id)}
-              className={`grid h-7 w-7 cursor-pointer place-items-center rounded-full border-2 border-solid bg-surface-2 p-0 ${TONE_RING[step.tone]} ${openId === step.id ? 'ring-2 ring-line-focus' : ''}`}
+            <Tip
+              align="end"
+              content={
+                <>
+                  <b className="block">{step.label}</b>
+                  <span className="block">{step.headline}</span>
+                  <span className="mt-1 block text-ink-2">{step.rule}</span>
+                </>
+              }
             >
-              <Icon name={step.icon} />
-            </button>
+              <button
+                type="button"
+                aria-label={`${step.label}: ${step.headline}`}
+                aria-expanded={openId === step.id}
+                data-tone={step.tone}
+                onClick={() => setOpenId(openId === step.id ? null : step.id)}
+                className={`grid h-7 w-7 cursor-pointer place-items-center rounded-full border-2 border-solid bg-surface-2 p-0 ${TONE_RING[step.tone]} ${step.tone === 'na' ? 'opacity-50' : ''} ${openId === step.id ? 'ring-2 ring-line-focus' : ''}`}
+              >
+                <Icon name={step.icon} />
+              </button>
+            </Tip>
           </div>
         ))}
       </div>

@@ -180,6 +180,9 @@ export interface QwenTrade {
   readonly entry_reason?: string | null
   /** The longest it may stay open, in ms (the rebound expert's own exit); null when the general cap applies. */
   readonly max_hold_ms?: number | null
+  /** Best / worst the price went for the operation since its entry, in basis points of the entry price (>= 0 / <= 0), before costs; null on a base that does not keep them. */
+  readonly mfe_bp?: number | null
+  readonly mae_bp?: number | null
   readonly hold_min: number | null
   readonly mark_price: number | null
   readonly mark_ms: number | null
@@ -789,6 +792,8 @@ export function createQwenDecisions(options: {
           exit_reason: text(row.exit_reason),
           entry_reason: text(row.entry_reason),
           max_hold_ms: num(row.max_hold_ms),
+          mfe_bp: num(row.mfe_bp),
+          mae_bp: num(row.mae_bp),
           hold_min: num(row.hold_min),
           mark_price: open ? num(row.mark_px) : null,
           mark_ms: open ? num(row.mark_ms) : null,
