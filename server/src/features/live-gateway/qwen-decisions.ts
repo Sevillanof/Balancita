@@ -220,6 +220,15 @@ export interface QwenAccountStep {
   readonly exit_ms: number
   readonly net_usd: number
   readonly balance_usd: number
+  /** What the operation card shows; each is null when the row does not carry it. */
+  readonly entry_ms: number | null
+  readonly entry_price: number | null
+  readonly exit_price: number | null
+  readonly closed_by: string | null
+  readonly exit_reason: string | null
+  readonly max_hold_ms: number | null
+  /** ETH price at the exit (see `qwen-account-eth.ts`); absent until the gateway adds it, null when unknown. */
+  readonly eth_price?: number | null
 }
 
 export type QwenAccountResponse =
@@ -227,6 +236,12 @@ export type QwenAccountResponse =
       readonly status: 'ok'
       /** Permanent account genesis; the setting is used only for unmigrated legacy databases. */
       readonly start_usd: number
+      /** When the account started: the earlier of its genesis and its first entry; null when neither exists. */
+      readonly start_ms: number | null
+      /** ETH price at `start_ms` and at `as_of_ms` (added by the gateway; null when Kraken's candles do not cover it). */
+      readonly eth_start_price?: number | null
+      readonly eth_now_price?: number | null
+      readonly as_of_ms?: number
       /** start + closed nets + what the open positions would net now. */
       readonly balance_usd: number
       readonly realized_usd: number
@@ -575,6 +590,13 @@ function sameDecimal(normalized: string, stored: unknown): boolean {
   return value !== null && decimalFromPython(value) === normalized
 }
 
+/** A stored price (text decimal or REAL) as a number; null when absent or not finite. */
+function decimalNumber(value: unknown): number | null {
+  if (value === null || value === undefined || value === '') return null
+  const out = Number(value)
+  return Number.isFinite(out) ? out : null
+}
+
 function text(value: unknown): string | null {
   return value === null || value === undefined ? null : String(value)
 }
@@ -814,7 +836,9 @@ export function createQwenDecisions(options: {
           )
           .get()
         const saved = hasAccount
-          ? db.prepare('SELECT initial_usd FROM account WHERE id=1').get()
+          ? db
+              .prepare('SELECT initial_usd, created_ms FROM account WHERE id=1')
+              .get()
           : undefined
         if (hasAccount && saved === undefined)
           throw new Error('account_not_initialized')
@@ -831,6 +855,9 @@ export function createQwenDecisions(options: {
           .all()
           .map((row) => rowOf(row))
         const steps: QwenAccountStep[] = []
+        const starts: number[] = []
+        const genesis = saved ? num(rowOf(saved).created_ms) : null
+        if (genesis !== null) starts.push(genesis)
         let balance = initial
         let realized = '0'
         let openUsd = '0'
@@ -843,6 +870,8 @@ export function createQwenDecisions(options: {
           if (side === null || tradeNo === null)
             throw new Error('account_invalid_trade')
           if (row.funding_status !== 'complete') incomplete = true
+          const entry = num(row.entry_ms)
+          if (entry !== null) starts.push(entry)
           if (row.status === 'open') {
             openUsd = sum(openUsd, money(row.net_now_usd, 'open_result'))
             openCount += 1
@@ -862,11 +891,18 @@ export function createQwenDecisions(options: {
             exit_ms: exit,
             net_usd: display(net),
             balance_usd: display(balance),
+            entry_ms: entry,
+            entry_price: decimalNumber(row.entry_px),
+            exit_price: decimalNumber(row.exit_px),
+            closed_by: text(row.closed_by),
+            exit_reason: text(row.exit_reason),
+            max_hold_ms: num(row.max_hold_ms),
           })
         }
         return {
           status: 'ok' as const,
           start_usd: display(initial),
+          start_ms: starts.length > 0 ? Math.min(...starts) : null,
           balance_usd: display(sum(balance, openUsd)),
           realized_usd: display(realized),
           open_usd: display(openUsd),

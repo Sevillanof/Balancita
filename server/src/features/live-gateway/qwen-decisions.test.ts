@@ -818,6 +818,81 @@ describe('createQwenDecisions: account balance', () => {
     expect(result.open_count).toBe(1)
   })
 
+  it('serves what the operation card needs and the start of the account, additively', () => {
+    const path = seed(
+      [],
+      [
+        {
+          product: 'PF_ETHUSD',
+          trade_no: 1,
+          status: 'closed',
+          side: 'LONG',
+          entry_ms: 500,
+          exit_ms: 900,
+          entry_px: '2223.7422503',
+          exit_px: '2242.957383',
+          net_usd: '5',
+          closed_by: 'formula',
+          exit_reason: 'maestro_vuelta',
+          funding_status: 'complete',
+        },
+        {
+          product: 'PF_XBTUSD',
+          trade_no: 1,
+          status: 'open',
+          side: 'SHORT',
+          entry_ms: 200,
+          exit_ms: null,
+          entry_px: '90000',
+          net_now_usd: '1',
+          funding_status: 'complete',
+        },
+      ],
+    )
+    const db = new DatabaseSync(path)
+    db.exec(
+      'ALTER TABLE trades ADD COLUMN max_hold_ms INTEGER; UPDATE trades SET max_hold_ms=129600000;' +
+        "CREATE TABLE account(id INTEGER PRIMARY KEY,initial_usd TEXT,created_ms INTEGER); INSERT INTO account VALUES(1,'1000',700)",
+    )
+    db.close()
+    const result = createQwenDecisions({ liveDbPath: path }).account()
+    if (result.status !== 'ok') throw new Error('expected ok')
+    // The account starts at the earliest of its genesis and the first entry (here an open one at 200).
+    expect(result.start_ms).toBe(200)
+    expect(result.steps).toEqual([
+      {
+        product: 'PF_ETHUSD',
+        trade_no: 1,
+        side: 'LONG',
+        exit_ms: 900,
+        net_usd: 5,
+        balance_usd: 1005,
+        entry_ms: 500,
+        entry_price: 2223.7422503,
+        exit_price: 2242.957383,
+        closed_by: 'formula',
+        exit_reason: 'maestro_vuelta',
+        max_hold_ms: 129_600_000,
+      },
+    ])
+  })
+
+  it('starts at the genesis alone, or reports no start without genesis and trades', () => {
+    const path = seed([])
+    const db = new DatabaseSync(path)
+    db.exec(
+      "CREATE TABLE account(id INTEGER PRIMARY KEY,initial_usd TEXT,created_ms INTEGER); INSERT INTO account VALUES(1,'1000',42)",
+    )
+    db.close()
+    expect(createQwenDecisions({ liveDbPath: path }).account()).toMatchObject({
+      status: 'ok',
+      start_ms: 42,
+    })
+    expect(
+      createQwenDecisions({ liveDbPath: seed([]) }).account(),
+    ).toMatchObject({ status: 'ok', start_ms: null })
+  })
+
   it('starts at the capital with no operations and says off without a base', () => {
     const result = createQwenDecisions({ liveDbPath: seed([]) }).account()
     expect(result).toMatchObject({

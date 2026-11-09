@@ -9,6 +9,12 @@ import { LiveMarketFollower } from './market-follower.ts'
 import { PaperEngineFollower } from './paper-engine-follower.ts'
 import { qwenScoresOff, type QwenScores } from './qwen-scores.ts'
 import { qwenDecisionsOff, type QwenDecisions } from './qwen-decisions.ts'
+import {
+  createEthPriceLookup,
+  ETH_PRODUCT,
+  withEthPrices,
+  type EthCandle,
+} from './qwen-account-eth.ts'
 import { newsItemsOff, type NewsItems } from './news-items.ts'
 import { createMovements, type Movements } from './movements.ts'
 import { CHART_INTERVALS_MS, MAX_CHART_CANDLES } from './terminal-chart.ts'
@@ -410,7 +416,19 @@ export async function buildLiveGateway(
       return result.status === 'error' ? reply.code(400).send(result) : result
     },
   )
-  app.get('/api/qwen/account', () => qwenDecisions.account())
+  // The account plus the ETH prices that tell what buying ETH at its start would be worth (Kraken PF_ETHUSD 1 m candles).
+  const ethPriceAt = createEthPriceLookup(
+    (beforeMs, limit) => {
+      const ethView = viewOf(ETH_PRODUCT)
+      if (!ethView) return []
+      return ethView.follower.terminalChartBefore(60_000, beforeMs, limit)
+        .candles as EthCandle[]
+    },
+    { now: clock },
+  )
+  app.get('/api/qwen/account', () =>
+    withEthPrices(qwenDecisions.account(), ethPriceAt, clock()),
+  )
   const newsItems = options.newsItems ?? newsItemsOff('news_not_configured')
   app.get<{ Querystring: { limit?: string } }>(
     '/api/news',
