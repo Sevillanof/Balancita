@@ -890,6 +890,9 @@ class LiveOperator:
         self.positioning_checked_ms = 0
         self._positioning_seen = {}                       # product -> last availability said in the log
         self.news_path = cfg.get("news_db") if "news_db" in cfg else noticias.default_path()
+        # the auditor's maker shadow reads the capture's trades and book samples (read-only) after the fact: where that file is
+        self.market_db_path = cfg.get("market_db") or auditor.market_db_path()
+        self._shadow_seen = {}                            # product -> last state of the shadow said in the log
         self.news = None
         self.news_checked_ms = 0
         self._context_warned = set()
@@ -1488,13 +1491,28 @@ class LiveOperator:
             closes = {int(t) + BAR_MS: float(c) for t, c in zip(trader.t, trader.c)}
             ranges = {int(t) + BAR_MS: (float(h), float(l)) for t, h, l in zip(trader.t, trader.h, trader.l)}
             result = auditor.resolve(self.store.path, product, closes, dict(self.cfg, products=[product]), now,
-                                     float(round_trip_cost_bps(product)), ranges=ranges)
+                                     float(round_trip_cost_bps(product)), ranges=ranges, market_db=self.market_db_path)
             self._recovered("auditor", product)
         except Exception as error:                        # noqa: BLE001 - el auditor nunca bloquea la operación en vivo
             self._failure("auditor", product, error)
             self.failed_cycle = failed
             return
+        self._say_shadow(product, result.get("sombra_estado"))
         self._warn_training(product, result.get("avisos"), result.get("ms"), failed)
+
+    def _say_shadow(self, product, state):
+        """One line in the log when the maker shadow cannot run because this machine has no capture file (and when it can again)."""
+        if state not in ("ok", "sin_captura") or self._shadow_seen.get(product) == state:
+            return
+        if state == "ok" and self._shadow_seen.get(product) is None:
+            self._shadow_seen[product] = state                  # the normal case is not news
+            return
+        self._shadow_seen[product] = state
+        if state == "sin_captura":
+            self.log("Qwen en vivo: ATENCIÓN, no existe la base de captura ({}): la sombra maker del auditor espera sin calcular y el proceso sigue "
+                     "igual. Se vuelve a mirar sola; para usar otra ruta, --market-db o FUTURES_MARKET_DB_PATH.".format(self.market_db_path))
+        else:
+            self.log("Qwen en vivo: la sombra maker del auditor volvió a leer la captura de {}.".format(product))
 
     def _audit_training(self, product, trader, events, now, marks):
         """What the auditor keeps to train later (facts of the maestro, entry proposals with their block reason, state of every open
@@ -1877,6 +1895,9 @@ def _parser():
                         help="activar explícitamente esta configuración en la misma cuenta, solo con el libro plano")
     parser.add_argument("--cache-dir", default=None, help="caché de velas públicas (default: junto a la base)")
     parser.add_argument("--llama-url", default=None, help="default http://127.0.0.1:$LLAMA_PORT (solo loopback)")
+    parser.add_argument("--market-db", default=None, metavar="RUTA",
+                        help="base de captura del servidor (futures-market.sqlite), abierta SOLO lectura para la sombra maker del auditor "
+                             "(default: $FUTURES_MARKET_DB_PATH o server/data/dev-live/futures-market.sqlite); sin base, la sombra espera y avisa")
     parser.add_argument("--positioning-db", default=None, metavar="RUTA",
                         help="base del colector de posicionamiento, abierta SOLO lectura para el renglón F6 de la ficha (default: "
                              "$POSITIONING_DB_PATH o server/data/dev-live/positioning.sqlite, la que escribe pnpm dev); sin "
@@ -1963,6 +1984,8 @@ def main(argv=None):
         cfg = apply_overrides(qt.load_config(args.config))
         if args.positioning_db:
             cfg["positioning_db"] = os.path.abspath(args.positioning_db)      # where the file is, not what Qwen is asked: not identity
+        if args.market_db:
+            cfg["market_db"] = os.path.abspath(args.market_db)                # same: where the capture is, not identity
         cache_dir = args.cache_dir or os.path.join(os.path.dirname(os.path.abspath(db_path)), "cache")
         with ProcessLock(db_path):
             provider = qt._provider(args.llama_url, timeout=float((cfg.get("live") or {}).get("model_timeout_seconds", 60)))

@@ -46,6 +46,10 @@ anterior cambia y el trader no cambia ninguna decisión: lo único que expone es
 * ``resultados_operacion`` (G5): el resultado real de cada operación cerrada (neto de los recibos, motivos, precios y MFE/MAE con máximos y
   mínimos de las velas; ``operaciones`` con los cierres no cambia).
 * ``reentrenos`` (G8): registro solo-agregar (``registrar_reentreno``, ``--registrar-reentreno``).
+* ``sombra_maker`` (``odd/tasks/maker-sombra.md``, ``docs/maker-sombra.md``): una fila por tramo OFICIAL (entrada o salida, a mercado) con lo que habría pasado
+  con una orden límite en el mejor precio sobre la cinta real capturada por el servidor (solo lectura): tipo de llenado (``maker`` /
+  ``maker_mercado`` / ``sin_datos``), precio y hora, comisiones de cada punta y la diferencia contra el oficial en US$ y pb. La calcula ``resolve``
+  (``market_db``) solo con 15 min de cinta ya capturada; acotada (8 tramos y 1,5 s por llamada); nunca adivina (sin libro o cinta, ``sin_datos``).
 * ``record_look`` (en vivo) y los pasos nuevos de ``resolve`` NUNCA propagan una excepción: lo que falla queda en ``avisos`` y el proceso en
   vivo lo anota en su tabla ``errors``. Migración: ``_open`` crea las tablas (``CREATE TABLE IF NOT EXISTS``); se deshace con ``DROP TABLE``.
 
@@ -105,9 +109,11 @@ import sqlite3
 import sys
 import time
 from datetime import datetime
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+from . import futures_maker_exit as maker_exit
 from . import futures_qwen_corta as corta
 from . import futures_qwen_ficha as ficha
 from . import futures_qwen_maestro as maestro_formula
@@ -115,7 +121,7 @@ from . import futures_qwen_noticias as noticias
 from . import futures_qwen_portero as portero_formula
 from . import futures_qwen_trader as qt
 from . import futures_qwen_trader_exam as ex
-from .futures_costs import COST_MODEL_VERSION, round_trip_cost_bps
+from .futures_costs import COST_MODEL_VERSION, entry_fill, exit_fill, fee_rate, round_trip_cost_bps
 
 SCHEMA_NAME = "balancita-auditor.v1"
 VERSION = "auditor.v1"
@@ -201,6 +207,16 @@ CREATE TRIGGER IF NOT EXISTS reentrenos_no_update BEFORE UPDATE ON reentrenos
 BEGIN SELECT RAISE(ABORT,'el registro de reentrenos es solo-agregar'); END;
 CREATE TRIGGER IF NOT EXISTS reentrenos_no_delete BEFORE DELETE ON reentrenos
 BEGIN SELECT RAISE(ABORT,'el registro de reentrenos es solo-agregar'); END;
+CREATE TABLE IF NOT EXISTS sombra_maker(
+  product TEXT NOT NULL, trade_no INTEGER NOT NULL, leg TEXT NOT NULL, motivo_salida TEXT,
+  lado INTEGER NOT NULL, orden TEXT NOT NULL, t_oficial_ms INTEGER NOT NULL,
+  precio_oficial REAL, comision_oficial_usd REAL, comision_oficial_tipo TEXT, cantidad REAL, notional_oficial_usd REAL,
+  libro_ms INTEGER, limite_px REAL,
+  estado TEXT NOT NULL, motivo_sin_datos TEXT,
+  llenado_ms INTEGER, llenado_px REAL, cinta_px REAL, espera_ms INTEGER,
+  comision_sombra_usd REAL, comision_sombra_tipo TEXT, delta_usd REAL, delta_pb REAL,
+  modelo TEXT NOT NULL, costos_id TEXT, resuelto_ms INTEGER, version TEXT NOT NULL,
+  PRIMARY KEY(product, trade_no, leg));
 """
 
 BLOCK_REASONS = ("lugares_ocupados", "mismo_episodio", "enfriamiento", "cierre_en_la_mirada", "otro")
@@ -853,7 +869,7 @@ def _judged(hit, cost, rule, text, value):
     return {"acerto": bool(hit), "costo_error_pb": round(cost, 2), "regla": rule, "texto": text, "valor_pb": round(value, 2)}
 
 
-def resolve(live_db_path, product, closes, cfg, now_ms, cost_bp, ranges=None):
+def resolve(live_db_path, product, closes, cfg, now_ms, cost_bp, ranges=None, market_db=None):
     """Completa lo que ya se puede saber de cada mirada sin resolver: ``despues_json`` (movimientos, MFE/MAE, operaciones
     simuladas) y los veredictos a 12, 24 y 36 h cuando el horizonte ya pasó (12 h = provisorio; 36 h = definitivo, escribe
     ``resuelto_ms``). Después, la dirección a 4, 12 y 24 h de cada mirada y la dirección y el MAE/MFE de cada operación (aparte, sin
@@ -862,13 +878,17 @@ def resolve(live_db_path, product, closes, cfg, now_ms, cost_bp, ranges=None):
 
     Para entrenar (S8): al final etiqueta las propuestas de entrada con el resultado contrafactual (``propuestas``) y completa el
     resultado real de cada operación (``resultados``; ``ranges`` = ``{t_ms del cierre: (máximo, mínimo)}`` de las velas de 5 min para
-    el MFE/MAE con extremos). Esos pasos van aparte y protegidos: si uno falla, ``avisos`` lo cuenta y todo lo demás queda igual."""
+    el MFE/MAE con extremos). Esos pasos van aparte y protegidos: si uno falla, ``avisos`` lo cuenta y todo lo demás queda igual.
+
+    Sombra maker (``odd/tasks/maker-sombra.md``): con ``market_db`` (la base de captura, solo lectura) calcula además ``sombra_maker`` de los tramos
+    oficiales que ya tienen 15 min de cinta; ``sombra`` = filas escritas y ``sombra_estado`` = ``ok`` / ``sin_captura`` (hay tramos por
+    calcular y el archivo no existe) / ``apagada`` (sin ``market_db``). Sin ``market_db`` no hace nada (como antes)."""
     result = _resolve_verdicts(live_db_path, product, closes, cfg, now_ms, cost_bp)
     prices = _Prices(closes)
     with contextlib.closing(_open(live_db_path)) as db:
         result["direcciones"] = _resolve_look_directions(db, product, prices, now_ms)
         result["operaciones"] = _resolve_operations(live_db_path, db, product, prices, now_ms)
-    result.update(_resolve_training(live_db_path, product, prices, ranges, cfg, now_ms, cost_bp))
+    result.update(_resolve_training(live_db_path, product, prices, ranges, cfg, now_ms, cost_bp, market_db))
     return result
 
 
@@ -1341,11 +1361,12 @@ def _resolve_trade_results(live_db_path, db, product, prices, ranges, now_ms):
     return written
 
 
-def _resolve_training(live_db_path, product, prices, ranges, cfg, now_ms, cost_bp):
-    """Los pasos nuevos de ``resolve`` (etiquetas contrafactuales y resultados reales), cada uno protegido: un fallo queda en ``avisos`` y no
-    toca lo demás. ``ms`` = lo que tardaron."""
+def _resolve_training(live_db_path, product, prices, ranges, cfg, now_ms, cost_bp, market_db=None):
+    """Los pasos nuevos de ``resolve`` (etiquetas contrafactuales, resultados reales y, al final, la sombra maker), cada uno protegido: un fallo
+    queda en ``avisos`` y no toca lo demás. ``ms`` = lo que tardaron las etiquetas y los resultados; ``sombra_ms`` = lo que tardó la sombra."""
     started = time.monotonic()
-    out = {"propuestas": 0, "resultados": 0, "avisos": []}
+    out = {"propuestas": 0, "resultados": 0, "sombra": 0, "sombra_estado": "apagada" if not market_db else "ok", "avisos": []}
+    shadow_started = None
     try:
         with contextlib.closing(_open(live_db_path, TRAINING_LOCK_TIMEOUT_S)) as db:
             for key, step in (("propuestas", lambda: _resolve_proposals(db, product, prices, cfg, now_ms, float(cost_bp))),
@@ -1354,10 +1375,277 @@ def _resolve_training(live_db_path, product, prices, ranges, cfg, now_ms, cost_b
                     out[key] = step()
                 except Exception as error:                              # noqa: BLE001 - lo nuevo nunca cambia lo que ya se resolvió
                     out["avisos"].append("{}: {}: {}".format(key, type(error).__name__, error))
+            out["ms"] = (time.monotonic() - started) * 1000.0
+            if market_db:
+                shadow_started = time.monotonic()
+                try:
+                    state = {}
+                    out["sombra"] = _resolve_shadow(live_db_path, db, product, now_ms, market_db, out["avisos"], state)
+                    out["sombra_estado"] = state.get("estado", "ok")
+                except Exception as error:                              # noqa: BLE001 - la sombra solo observa: si falla, un aviso y nada más
+                    out["avisos"].append("sombra: {}: {}".format(type(error).__name__, error))
     except Exception as error:                                          # noqa: BLE001
         out["avisos"].append("abrir: {}: {}".format(type(error).__name__, error))
-    out["ms"] = (time.monotonic() - started) * 1000.0
+    out.setdefault("ms", (time.monotonic() - started) * 1000.0)
+    out["sombra_ms"] = 0.0 if shadow_started is None else (time.monotonic() - shadow_started) * 1000.0
     return out
+
+
+# --------------------------------------------------------------------------- maker shadow (odd/tasks/maker-sombra.md)
+
+# Para cada entrada y cada salida OFICIAL (a mercado), una orden límite en papel sobre la cinta real que captura el servidor
+# (``futures-market.sqlite``, solo lectura). Variante V2 sellada en ``analisis/costo-maker/hipotesis.md``: orden en el mejor precio propio (compra
+# en el mejor bid, venta en el mejor ask) de la última foto del libro de hasta 20 s antes de la hora oficial; se llena con la primera operación
+# de la cinta que pasa el límite por al menos un tick (tocarlo no llena: la cola se desconoce); si no llena en 15 min, cruza a mercado al precio de
+# la cinta del minuto 15 con el costo del modelo (impacto y comisión taker). Solo se calcula DESPUÉS (``resolve``), con 15 min de cinta ya
+# capturada; nunca dentro de la mirada en vivo. Faltan libro o cinta: ``sin_datos`` (nunca se adivina).
+SHADOW_MODEL = "sombra-maker.v1"
+SHADOW_WINDOW_MS = 15 * MINUTE_MS                 # cuánto espera la orden antes de cruzar
+SHADOW_BOOK_AGE_MS = 20_000                       # la foto del libro no puede ser más vieja que esto respecto de la hora oficial
+SHADOW_SETTLE_MS = 60_000                         # margen después de los 15 min para que la captura haya escrito la cinta
+SHADOW_LEGS_PER_PASS = 8                          # tramos que ``resolve`` calcula por llamada (acota el CPU dentro del proceso en vivo)
+SHADOW_BUDGET_S = 1.5                             # tiempo total de la captura por llamada; pasado esto se corta con un aviso y sigue en la próxima
+SHADOW_CAPTURE_TIMEOUT_S = 1.0                    # espera máxima por una base de captura ocupada
+SHADOW_TAPE_GAP_MS = 5 * MINUTE_MS                # más que esto sin ninguna operación = la captura estuvo caída (ETH opera ~1 por segundo)
+SHADOW_TAPE_ROWS = 20_000                         # tope de filas de cinta por tramo (15 min de ETH son ~1 000)
+SHADOW_TICKS = {"PF_ETHUSD": Decimal("0.1")}      # solo los productos con libro y cinta capturados (tick de la API pública /instruments)
+MARKET_DB_ENV = "FUTURES_MARKET_DB_PATH"
+DEFAULT_MARKET_DB = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "..", "server", "data", "dev-live", "futures-market.sqlite"))
+_SHADOW_MOTIVES = {"maestro_vuelta": "vuelta", "maestro_agotado": "agotado", "noticia_12h": "noticia"}
+
+# Consultas a la captura. Todas por el índice ``paper_futures_market_received(product_id, received_at, seq)`` o por clave primaria: nunca un
+# recorrido de la tabla (la base de producción pesa decenas de GB). Hay una prueba con ``EXPLAIN QUERY PLAN``.
+_SHADOW_SQL_HIGH_WATER = "SELECT MAX(received_at) FROM paper_futures_market_events WHERE product_id=?"
+_SHADOW_SQL_BOOK = ("SELECT event_id, received_at FROM paper_futures_market_events WHERE product_id=? AND received_at BETWEEN ? AND ? "
+                    "AND feed=? ORDER BY received_at DESC, seq DESC LIMIT 1")
+_SHADOW_SQL_SNAPSHOT = "SELECT bids_json, asks_json FROM paper_futures_book_snapshots WHERE event_id=?"
+_SHADOW_SQL_TAPE = ("SELECT received_at, json_extract(raw_json, '$.price') FROM paper_futures_market_events WHERE product_id=? AND received_at>? "
+                    "AND received_at<=? AND feed=? ORDER BY received_at, seq LIMIT ?")
+
+
+def market_db_path(env=None):
+    """La base de captura de esta máquina: ``$FUTURES_MARKET_DB_PATH`` o la que escribe ``pnpm dev`` (``server/data/dev-live``)."""
+    env = os.environ if env is None else env
+    return (env.get(MARKET_DB_ENV) or "").strip() or DEFAULT_MARKET_DB
+
+
+class _Capture:
+    """La base de captura abierta SOLO para leer, con un plazo total: pasado ``deadline`` la consulta en curso se interrumpe."""
+
+    def __init__(self, db, deadline):
+        self.db, self.deadline = db, deadline
+
+    def _run(self, sql, args):
+        if time.monotonic() > self.deadline:
+            raise TimeoutError("la sombra agotó su tiempo ({:.1f} s)".format(SHADOW_BUDGET_S))
+        return self.db.execute(sql, args)
+
+    def high_water(self, product):
+        return self._run(_SHADOW_SQL_HIGH_WATER, (product,)).fetchone()[0]
+
+    def book(self, product, at_ms):
+        """``(recibida_ms, mejor compra, mejor venta)`` de la última foto del libro de hasta ``SHADOW_BOOK_AGE_MS`` antes de ``at_ms``, o ``None``."""
+        found = self._run(_SHADOW_SQL_BOOK, (product, at_ms - SHADOW_BOOK_AGE_MS, at_ms, "book")).fetchone()
+        if found is None:
+            return None
+        body = self._run(_SHADOW_SQL_SNAPSHOT, (found[0],)).fetchone()
+        if body is None:
+            return None
+        try:
+            bids = [_dec(level["price"]) for level in json.loads(body[0])]
+            asks = [_dec(level["price"]) for level in json.loads(body[1])]
+        except (ValueError, TypeError, KeyError):
+            return None
+        bids, asks = [p for p in bids if p is not None], [p for p in asks if p is not None]
+        return (int(found[1]), max(bids), min(asks)) if bids and asks else None
+
+    def tape(self, product, after_ms, until_ms):
+        """``[(recibida_ms, precio)]`` de las operaciones con ``after_ms < recibida <= until_ms``, en orden (a lo sumo el tope + 1)."""
+        rows = self._run(_SHADOW_SQL_TAPE, (product, after_ms, until_ms, "trade", SHADOW_TAPE_ROWS + 1)).fetchall()
+        priced = [(int(at), _dec(price)) for at, price in rows]
+        return [(at, price) for at, price in priced if price is not None and price > 0]
+
+    def close(self):
+        self.db.close()
+
+
+def _open_capture(path, deadline):
+    """La captura en solo lectura (``mode=ro``): nunca la escribe, ni siquiera un diario. ``deadline``: ``time.monotonic()`` límite."""
+    db = sqlite3.connect(Path(os.path.abspath(path)).as_uri() + "?mode=ro", uri=True, timeout=SHADOW_CAPTURE_TIMEOUT_S)
+    db.execute("PRAGMA query_only=1")
+    db.set_progress_handler(lambda: 1 if time.monotonic() > deadline else 0, 5_000)
+    return _Capture(db, deadline)
+
+
+def _dec(value):
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        out = Decimal(str(value))
+    except (InvalidOperation, ValueError):
+        return None
+    return out if out.is_finite() else None
+
+
+def _shadow_motive(trade):
+    """Por qué salió la operación oficial: ``vuelta``, ``agotado``, ``tiempo``, ``rebote`` (el experto de rebotes), ``noticia`` u ``otro``."""
+    if trade.get("entry_reason") == "rebote":
+        return "rebote"
+    motive = _SHADOW_MOTIVES.get(trade.get("exit_reason"))
+    if motive is not None:
+        return motive
+    return "tiempo" if trade.get("closed_by") == "tiempo" else "otro"
+
+
+def _official_leg(trade, leg, receipt):
+    """El tramo oficial ``leg`` (``entry`` / ``exit``) de una fila de ``trades`` con su recibo (si lo hay), o ``None`` si todavía no existe o le falta
+    algo para compararlo. Con recibo: hora, precio, cantidad y comisión son los del recibo; sin recibo (operaciones de antes de los recibos): los de
+    la fila de ``trades`` y la comisión del modelo (taker, salvo una salida que el plan marca como maker)."""
+    side = _side_of(trade.get("side"))
+    at = trade.get(leg + "_ms")
+    if not side or at is None or (leg == "exit" and trade.get("status") != "closed"):
+        return None
+    receipt = receipt or {}
+    price = _dec(receipt.get("price")) or _dec(trade.get(leg + "_px"))
+    qty = _dec(receipt.get("quantity")) or _dec(trade.get("qty"))
+    if price is None or qty is None or price <= 0 or qty <= 0:
+        return None
+    kind = receipt.get("fee_kind")
+    if kind not in ("maker", "taker"):
+        plan = _loads(trade.get("exit_plan_json")) if leg == "exit" else None
+        kind = "maker" if isinstance(plan, dict) and plan.get("outcome") == "maker" else "taker"
+    fee = _dec(receipt.get("fee_usd"))
+    if fee is None:
+        fee = price * qty * fee_rate(kind)
+    sells = (leg == "entry") == (side < 0)                         # abrir un corto vende; cerrar un largo vende
+    return {"trade_no": trade["trade_no"], "leg": leg, "lado": side, "orden": "venta" if sells else "compra",
+            "t_ms": int(receipt.get("executed_at_ms") or at), "price": price, "qty": qty, "fee": fee, "fee_kind": kind,
+            "notional": _dec(receipt.get("notional_usd")) or price * qty,
+            "motivo_salida": _shadow_motive(trade) if leg == "exit" else None}
+
+
+def _shadow_pending(live_db_path, db, product, now_ms):
+    """Los tramos oficiales con 15 min (más el margen) ya cumplidos y sin fila de sombra, del más viejo al más nuevo."""
+    done = {(r[0], r[1]) for r in db.execute("SELECT trade_no, leg FROM sombra_maker WHERE product=?", (product,))}
+    legs = []
+    with contextlib.closing(_live_readonly(live_db_path)) as live:
+        trades = [dict(r) for r in live.execute(
+            "SELECT trade_no, status, side, entry_ms, exit_ms, entry_px, exit_px, qty, closed_by, exit_reason, entry_reason, exit_plan_json "
+            "FROM trades WHERE product=? ORDER BY trade_no", (product,))]
+        receipts = {}
+        for number, purpose, evidence in live.execute(
+                "SELECT trade_no, purpose, evidence_json FROM execution_receipts WHERE product=? AND purpose IN ('entry','exit')", (product,)):
+            receipts[(number, purpose)] = _loads(evidence)
+    for trade in trades:
+        for leg in ("entry", "exit"):
+            if (trade["trade_no"], leg) in done:
+                continue
+            found = _official_leg(trade, leg, receipts.get((trade["trade_no"], leg)))
+            if found is not None and found["t_ms"] + SHADOW_WINDOW_MS + SHADOW_SETTLE_MS <= now_ms:
+                legs.append(found)
+    legs.sort(key=lambda found: (found["t_ms"], found["trade_no"], found["leg"]))
+    return legs
+
+
+def _shadow_row(product, leg, now_ms, **fields):
+    """La fila de ``sombra_maker`` de un tramo: lo oficial más lo que dicen ``fields`` (el resto, ``NULL``)."""
+    row = {"product": product, "trade_no": leg["trade_no"], "leg": leg["leg"], "motivo_salida": leg["motivo_salida"], "lado": leg["lado"],
+           "orden": leg["orden"], "t_oficial_ms": leg["t_ms"], "precio_oficial": float(leg["price"]),
+           "comision_oficial_usd": float(leg["fee"]), "comision_oficial_tipo": leg["fee_kind"], "cantidad": float(leg["qty"]),
+           "notional_oficial_usd": float(leg["notional"]), "libro_ms": None, "limite_px": None, "estado": "sin_datos",
+           "motivo_sin_datos": None, "llenado_ms": None, "llenado_px": None, "cinta_px": None, "espera_ms": None,
+           "comision_sombra_usd": None, "comision_sombra_tipo": None, "delta_usd": None, "delta_pb": None, "modelo": SHADOW_MODEL,
+           "costos_id": COST_MODEL_VERSION, "resuelto_ms": now_ms, "version": VERSION}
+    row.update(fields)
+    return row
+
+
+def _shadow_resolve_leg(capture, product, leg, now_ms):
+    """La sombra de UN tramo oficial, o ``None`` si todavía no se puede (la captura no llegó al minuto 15). Nunca adivina: sin libro o sin cinta
+    completa devuelve ``sin_datos`` con el motivo."""
+    start, end = leg["t_ms"], leg["t_ms"] + SHADOW_WINDOW_MS
+    tick = SHADOW_TICKS.get(product)
+    if tick is None:
+        return _shadow_row(product, leg, now_ms, motivo_sin_datos="producto_sin_captura")
+    high = capture.high_water(product)
+    if high is None or high < end:                                        # la captura todavía no vio el minuto 15: esperar (o rendirse)
+        return None if now_ms - end < GIVE_UP_MS else _shadow_row(product, leg, now_ms, motivo_sin_datos="cinta_incompleta")
+    book = capture.book(product, start)
+    if book is None:
+        return _shadow_row(product, leg, now_ms, motivo_sin_datos="sin_libro")
+    book_ms, bid, ask = book
+    try:                                                                  # abrir un largo compra (al bid) y cerrarlo vende (al ask): la misma regla que la salida maker
+        limit = maker_exit.passive_price("LONG" if leg["orden"] == "venta" else "SHORT", bid, ask)
+    except maker_exit.MakerExitError:
+        return _shadow_row(product, leg, now_ms, libro_ms=book_ms, motivo_sin_datos="libro_invalido")
+    known = {"libro_ms": book_ms, "limite_px": float(limit)}
+    tape = capture.tape(product, start, end)
+    if len(tape) > SHADOW_TAPE_ROWS:
+        return _shadow_row(product, leg, now_ms, motivo_sin_datos="cinta_truncada", **known)
+    buying = leg["orden"] == "compra"
+    filled, previous = None, start
+    for at, price in tape:
+        if at - previous > SHADOW_TAPE_GAP_MS:                            # hueco antes de esta operación: lo que pasó adentro no se sabe
+            return _shadow_row(product, leg, now_ms, motivo_sin_datos="cinta_con_huecos", **known)
+        previous = at
+        if (price <= limit - tick) if buying else (price >= limit + tick):       # un tick más allá: llena; tocar el límite no (cola desconocida)
+            filled = at
+            break
+    if filled is not None:
+        fill_px, fill_ms, kind, tape_px = limit, filled, "maker", None
+    else:
+        if end - previous > SHADOW_TAPE_GAP_MS:
+            return _shadow_row(product, leg, now_ms, motivo_sin_datos="cinta_con_huecos", **known)
+        tape_px = tape[-1][1]
+        side = "LONG" if leg["lado"] > 0 else "SHORT"
+        fill_px = entry_fill(tape_px, side, product) if leg["leg"] == "entry" else exit_fill(tape_px, side, product, "strategy_exit")
+        fill_ms, kind = end, "taker"
+    fee = fill_px * leg["qty"] * fee_rate(kind)
+    gain = (leg["price"] - fill_px) * leg["qty"] if buying else (fill_px - leg["price"]) * leg["qty"]
+    delta = gain + leg["fee"] - fee                                       # + = la sombra habría salido mejor que la operación oficial
+    return _shadow_row(product, leg, now_ms, estado="maker" if kind == "maker" else "maker_mercado", llenado_ms=fill_ms,
+                       llenado_px=float(fill_px), cinta_px=None if tape_px is None else float(tape_px), espera_ms=fill_ms - start,
+                       comision_sombra_usd=float(fee), comision_sombra_tipo=kind, delta_usd=float(delta),
+                       delta_pb=float(delta / leg["notional"] * 10_000), **known)
+
+
+_SHADOW_COLUMNS = ("product", "trade_no", "leg", "motivo_salida", "lado", "orden", "t_oficial_ms", "precio_oficial", "comision_oficial_usd",
+                   "comision_oficial_tipo", "cantidad", "notional_oficial_usd", "libro_ms", "limite_px", "estado", "motivo_sin_datos",
+                   "llenado_ms", "llenado_px", "cinta_px", "espera_ms", "comision_sombra_usd", "comision_sombra_tipo", "delta_usd",
+                   "delta_pb", "modelo", "costos_id", "resuelto_ms", "version")
+
+
+def _resolve_shadow(live_db_path, db, product, now_ms, market_db, avisos, state):
+    """Calcula y guarda (una sola vez, ``INSERT OR IGNORE``) la sombra de los tramos oficiales ya maduros, a lo sumo ``SHADOW_LEGS_PER_PASS`` por
+    llamada y dentro de ``SHADOW_BUDGET_S``. Lo que falla en un tramo queda en ``avisos`` y el tramo se reintenta en la próxima pasada. Con tramos
+    por calcular pero sin el archivo de captura no escribe nada y deja ``state["estado"] = "sin_captura"`` (la ruta es de esta máquina, no un fallo).
+    Devuelve cuántas filas escribió."""
+    legs = _shadow_pending(live_db_path, db, product, now_ms)[:SHADOW_LEGS_PER_PASS]
+    if not legs:
+        return 0
+    if not os.path.isfile(market_db):                                      # no es un fallo de la sombra: no hay captura en esta máquina (o la ruta no es esa)
+        state["estado"] = "sin_captura"
+        return 0
+    written = 0
+    with contextlib.closing(_open_capture(market_db, time.monotonic() + SHADOW_BUDGET_S)) as capture:
+        for leg in legs:
+            try:
+                row = _shadow_resolve_leg(capture, product, leg, now_ms)
+                if row is None:
+                    continue
+                with db:
+                    db.execute("INSERT OR IGNORE INTO sombra_maker({}) VALUES({})".format(
+                        ", ".join(_SHADOW_COLUMNS), ", ".join("?" * len(_SHADOW_COLUMNS))), tuple(row[name] for name in _SHADOW_COLUMNS))
+                written += 1
+            except TimeoutError:
+                raise
+            except sqlite3.OperationalError as error:
+                if "interrupted" in str(error):                            # el plazo se cumplió en medio de una consulta
+                    raise TimeoutError("la sombra agotó su tiempo ({:.1f} s)".format(SHADOW_BUDGET_S)) from error
+                avisos.append("sombra: {}: {}: {}".format(leg["leg"], type(error).__name__, error))
+            except Exception as error:                                     # noqa: BLE001 - un tramo que falla no frena a los demás ni a lo oficial
+                avisos.append("sombra: {} {}: {}: {}".format(leg["trade_no"], leg["leg"], type(error).__name__, error))
+    return written
 
 
 # --------------------------------------------------------------------------- registry of retrains (G8)
@@ -1586,6 +1874,8 @@ def _parser():
     parser.add_argument("--product", help="un solo producto (por defecto, todos)")
     parser.add_argument("--rebuild", action="store_true", help="crea las filas que falten desde la tabla decisions")
     parser.add_argument("--resolve", action="store_true", help="completa lo que pasó después y los veredictos de 12/24/36 h")
+    parser.add_argument("--market-db", help="base de captura del servidor (solo lectura) para la sombra maker (por defecto $FUTURES_MARKET_DB_PATH o "
+                                            "server/data/dev-live/futures-market.sqlite)")
     parser.add_argument("--summary", action="store_true", help="imprime el resumen en JSON")
     parser.add_argument("--candles", help="carpeta con candles-<producto>.sqlite, o un archivo de velas (por defecto <carpeta de live>/cache)")
     parser.add_argument("--config", help="config con la que se decidió (por defecto, la última guardada en la base viva)")
@@ -1621,7 +1911,8 @@ def main(argv=None):
             closes = load_cache_closes(_candles_file(args, name), firsts[name])
             ranges = load_cache_ranges(_candles_file(args, name), firsts[name])
             out["resolve"][name] = resolve(args.db, name, closes, dict(cfg, products=[name]), now,
-                                           float(round_trip_cost_bps(name)), ranges=ranges)
+                                           float(round_trip_cost_bps(name)), ranges=ranges,
+                                           market_db=args.market_db or market_db_path())
     if args.registrar_reentreno:
         with open(args.registrar_reentreno, encoding="utf-8") as handle:
             body = json.load(handle)

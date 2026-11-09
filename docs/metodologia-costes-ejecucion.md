@@ -51,3 +51,7 @@ Cifra principal: `chase − taker`, **emparejada** por señal (toda orden se eje
 ## Cuándo ejecutar las mediciones reales
 
 Cuando el piloto de 4 h termine y sus datos estén validados (cobertura, huecos). Trabajar sobre una copia en solo lectura. Cuatro horas con rejilla de 5 min dan ~48 observaciones por lado, pero solo **4 grupos horarios**; el veredicto exige 30, así que el piloto saldrá `insufficient_data` (una prueba lo garantiza). Es un ensayo del método, no una conclusión: no usar la banda maker para decidir hasta tener días de datos.
+
+## Un solo modelo de costos por punta (entrada taker o maker)
+
+`futures_costs.round_trip_cost_bps(producto, entry_kind=, exit_kind=)` y `futures_qwen_trader.settle` cobran lo mismo: una punta **taker** cruza el libro (comisión 5 pb + el impacto de un lado, `side_impact_bps`) y una punta **maker** es una orden límite que se llena en su nivel (comisión 2 pb y **sin impacto**: `exit_fill` con motivo `target`). ETH: taker/taker 10,38 pb (5 + 5 + 0,19 × 2, no cambia); un lado maker 7,19 pb (2 + 5 + 0,19); maker/maker 4,00 pb. Antes `round_trip_cost_bps(exit_kind="maker")` daba 7,38 porque sumaba también el impacto de la salida maker; `settle` (7,19) era el correcto y nada guardado usaba el 7,38 (ningún llamador pasaba `exit_kind`). Una prueba compara las dos funciones para cada producto y tipo de salida. La sombra maker del auditor (`docs/maker-sombra.md`) usa estas mismas piezas (`fee_rate`, `entry_fill`, `exit_fill`) y registra la comisión que pagó cada punta (`comision_oficial_tipo`, `comision_sombra_tipo`).

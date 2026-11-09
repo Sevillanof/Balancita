@@ -381,6 +381,17 @@ TABLAS.update({
                        "hl_hasta_ms:int? resultado_ms:int? version:text",
                        dicc=("product", "motivo_entrada", "motivo_cierre", "motivo_salida", "version")),
         filtro_tipico="motivo_salida", grupo_por=("product",), inmutable_sql='"resultado_ms" IS NOT NULL'),
+    # sombra_maker (odd/tasks/maker-sombra.md): por cada tramo oficial (entrada o salida) lo que habria pasado con una orden limite en sombra. La fila se
+    # escribe UNA vez, ya final (INSERT OR IGNORE, 16 min o mas despues del tramo; nunca se actualiza): sin ``inmutable_sql``. Tiempo = t_oficial_ms.
+    "auditor_sombra": TablaConfig(
+        nombre="auditor_sombra", sqlite="sombra_maker", tiempo="t_oficial_ms", clave=("product", "t_oficial_ms", "trade_no", "leg"), producto="product",
+        columnas=_cols("product:text trade_no:int leg:text motivo_salida:text? lado:int orden:text t_oficial_ms:int precio_oficial:real? "
+                       "comision_oficial_usd:real? comision_oficial_tipo:text? cantidad:real? notional_oficial_usd:real? libro_ms:int? limite_px:real? "
+                       "estado:text motivo_sin_datos:text? llenado_ms:int? llenado_px:real? cinta_px:real? espera_ms:int? comision_sombra_usd:real? "
+                       "comision_sombra_tipo:text? delta_usd:real? delta_pb:real? modelo:text costos_id:text? resuelto_ms:int? version:text",
+                       dicc=("product", "leg", "motivo_salida", "orden", "comision_oficial_tipo", "estado", "motivo_sin_datos",
+                             "comision_sombra_tipo", "modelo", "costos_id", "version")),
+        filtro_tipico="estado", grupo_por=("product",)),
     # reentrenos (G8): registro solo-agregar (triggers). Pocas filas: un archivo por mes. Sin producto. Tiempo = creado_ms.
     "auditor_reentrenos": TablaConfig(
         nombre="auditor_reentrenos", sqlite="reentrenos", tiempo="creado_ms", clave=("creado_ms", "id"), producto=None, granularidad="mes",

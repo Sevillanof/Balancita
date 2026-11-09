@@ -85,6 +85,46 @@ export interface QwenProposal {
   readonly resuelta: boolean
 }
 
+/**
+ * The maker shadow of ONE official leg (an entry or an exit, both taken at market by the Terminal): what a resting limit order at the best
+ * bid / ask would have done on the real tape (`odd/tasks/maker-sombra.md`). It only observes: nothing here changed the official trade.
+ * Positive deltas mean the shadow would have come out better than the official leg.
+ */
+export interface QwenShadowLeg {
+  /** `maker` (the tape went through the limit), `maker_mercado` (no fill in 15 min: crossed at the tape price of minute 15) or `sin_datos`. */
+  readonly estado: string | null
+  /** Why there is no shadow: sin_libro, cinta_con_huecos, cinta_incompleta, cinta_truncada, libro_invalido or producto_sin_captura. */
+  readonly motivo_sin_datos: string | null
+  /** Exits only: vuelta, agotado, tiempo, rebote, noticia or otro. */
+  readonly motivo_salida: string | null
+  /** `compra` or `venta`: what the leg does on the book. */
+  readonly orden: 'compra' | 'venta' | null
+  readonly t_oficial_ms: number | null
+  readonly precio_oficial: number | null
+  readonly comision_oficial_usd: number | null
+  /** How the official leg paid its fee: taker or maker. */
+  readonly comision_oficial_tipo: string | null
+  /** Price the shadow limit order rested at (best bid to buy, best ask to sell). */
+  readonly limite_px: number | null
+  readonly llenado_ms: number | null
+  readonly llenado_px: number | null
+  /** Raw tape price of minute 15 when the shadow had to cross; null when it filled as maker. */
+  readonly cinta_px: number | null
+  readonly espera_ms: number | null
+  readonly comision_sombra_usd: number | null
+  /** maker (2 bp) or taker (5 bp). */
+  readonly comision_sombra_tipo: string | null
+  readonly delta_usd: number | null
+  readonly delta_pb: number | null
+  readonly modelo: string | null
+}
+
+/** Both legs of one operation; a leg the auditor has not resolved yet (needs 15 minutes of tape) is null. */
+export interface QwenTradeShadow {
+  readonly entrada: QwenShadowLeg | null
+  readonly salida: QwenShadowLeg | null
+}
+
 export interface QwenAuditoria {
   /** What the auditor saw the look do (ENTRAR, NO_ENTRAR_portero, MANTENER, SALIR_vuelta, ...). */
   readonly accion: string
@@ -188,6 +228,50 @@ function proposalOf(row: Record<string, unknown>): QwenProposal {
     motivo_salida: text(row.motivo_salida),
     horas: num(row.horas),
     resuelta: num(row.resuelto_ms) !== null,
+  }
+}
+
+const SHADOW_FIELDS = [
+  'estado',
+  'motivo_sin_datos',
+  'motivo_salida',
+  'orden',
+  't_oficial_ms',
+  'precio_oficial',
+  'comision_oficial_usd',
+  'comision_oficial_tipo',
+  'limite_px',
+  'llenado_ms',
+  'llenado_px',
+  'cinta_px',
+  'espera_ms',
+  'comision_sombra_usd',
+  'comision_sombra_tipo',
+  'delta_usd',
+  'delta_pb',
+  'modelo',
+] as const
+
+function shadowLegOf(row: Record<string, unknown>): QwenShadowLeg {
+  return {
+    estado: text(row.estado),
+    motivo_sin_datos: text(row.motivo_sin_datos),
+    motivo_salida: text(row.motivo_salida),
+    orden: row.orden === 'compra' || row.orden === 'venta' ? row.orden : null,
+    t_oficial_ms: num(row.t_oficial_ms),
+    precio_oficial: num(row.precio_oficial),
+    comision_oficial_usd: num(row.comision_oficial_usd),
+    comision_oficial_tipo: text(row.comision_oficial_tipo),
+    limite_px: num(row.limite_px),
+    llenado_ms: num(row.llenado_ms),
+    llenado_px: num(row.llenado_px),
+    cinta_px: num(row.cinta_px),
+    espera_ms: num(row.espera_ms),
+    comision_sombra_usd: num(row.comision_sombra_usd),
+    comision_sombra_tipo: text(row.comision_sombra_tipo),
+    delta_usd: num(row.delta_usd),
+    delta_pb: num(row.delta_pb),
+    modelo: text(row.modelo),
   }
 }
 
@@ -308,6 +392,8 @@ export interface QwenTradeAudit {
   readonly operacion: QwenTradeOperation | null
   /** The real result of the closed operation (receipts, reasons, prices, MFE/MAE from candle highs and lows); null while open or not written. */
   readonly resultado: QwenTradeResult | null
+  /** What a resting limit order would have done on the entry and on the exit, per leg (maker shadow); null while the auditor has not written it or has no such table. */
+  readonly sombra: QwenTradeShadow | null
 }
 
 /** The real result of a closed operation, as the auditor keeps it to train later. */
@@ -388,6 +474,17 @@ export function readAuditorTrades(
           .all(product, ...tradeNos)
           .map((row) => rowOf(row))
       : [],
+    // Written by a newer auditor (maker shadow, after the fact): columns it does not have yet read as null.
+    shadows: hasTable(db, 'sombra_maker')
+      ? db
+          .prepare(
+            `SELECT trade_no, leg, ${SHADOW_FIELDS.map((name) => (hasColumn(db, 'sombra_maker', name) ? name : `NULL AS ${name}`)).join(', ')}
+               FROM sombra_maker
+              WHERE product=? AND trade_no IN (${marks})`,
+          )
+          .all(product, ...tradeNos)
+          .map((row) => rowOf(row))
+      : [],
   }))
   if (opened.state !== 'read') return null
   type Draft = {
@@ -408,6 +505,7 @@ export function readAuditorTrades(
         miradas: 0,
         operacion: null,
         resultado: null,
+        sombra: null,
       }
       out.set(tradeNo, audit)
     }
@@ -465,6 +563,19 @@ export function readAuditorTrades(
       mae_hl_pb: num(row.mae_hl_pb),
       final: num(row.resultado_ms) !== null,
     }
+  }
+  for (const row of opened.value.shadows) {
+    const tradeNo = num(row.trade_no)
+    if (tradeNo === null || (row.leg !== 'entry' && row.leg !== 'exit'))
+      continue
+    const audit = draftOf(tradeNo)
+    const legs = {
+      entrada: audit.sombra?.entrada ?? null,
+      salida: audit.sombra?.salida ?? null,
+    }
+    if (row.leg === 'entry') legs.entrada = shadowLegOf(row)
+    else legs.salida = shadowLegOf(row)
+    audit.sombra = legs
   }
   return out
 }
