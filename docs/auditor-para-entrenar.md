@@ -19,8 +19,9 @@ Origen: S8 y T15 de `odd/tasks/noticias-y-auditor.md` (L19). Huecos G1-G6 y G8 d
 | G5    | `resultados_operacion` | operación cerrada                           | neto con costos de los recibos (`neto_pb`, `neto_usd`), motivos de entrada/cierre/salida, precios, MFE/MAE con máximos y mínimos de las velas (`mfe_hl_pb`, `mae_hl_pb`). `operaciones` (cierres de 5 min) no cambia                                                                                 |
 | G8    | `reentrenos`           | reentreno                                   | `corte_ms`, `dataset_hash`, `spec_json`, `metricas_fuera_de_muestra_json`, `creado_ms`. Triggers de solo-agregar                                                                                                                                                                                     |
 | —     | `sombra_maker`         | tramo oficial (entrada o salida)            | lo que habría pasado con una orden límite en el mejor precio sobre la cinta real, y la diferencia contra el oficial (`delta_usd`, `delta_pb`). Se calcula después, con 15 min de cinta. Ver `docs/maker-sombra.md`                                                                                   |
+| G6    | `miradas_perdidas`     | mirada programada que no se hizo            | `motivo`, `detalle`, `estado` (`plana` / `en_posicion`), `maestro`, `puntaje`, `entrada_dice` (`LARGO` / `CORTO` / `ESPERAR`), `salida_dice` (`CERRAR` / `MANTENER`) y `formula_json` con el detalle por posición. Hipotético: no se operó                                                           |
 
-G6 (miradas perdidas con el proceso caído) no se resuelve aquí: `hechos_mirada` y `propuestas` solo tienen las miradas que el proceso vio; los episodios exigen miradas contiguas.
+G6 (miradas perdidas con el proceso caído): `hechos_mirada` y `propuestas` solo tienen las miradas que el proceso vio; los episodios exigen miradas contiguas. Las que no se hicieron quedan en `miradas_perdidas` (`odd/tasks/operacion-mejoras.md` S2, ver `docs/terminal-ciclo-de-vida.md`): una fila por mirada programada perdida, con su hora, el motivo (`proceso_detenido`), si había posición y lo que la fórmula habría dicho (hipotético: esa mirada no operó; la mirada de recuperación del arranque sí opera, con los datos de ese momento).
 
 ## La etiqueta contrafactual
 
@@ -32,8 +33,8 @@ G6 (miradas perdidas con el proceso caído) no se resuelve aquí: `hechos_mirada
 
 ## Migración y archivo
 
-- Aditiva: `_open` crea las tablas con `CREATE TABLE IF NOT EXISTS`. Una base vieja queda intacta; el servidor viejo la sigue leyendo y el nuevo lee una base sin migrar (campos `null`). Se deshace con `DROP TABLE hechos_mirada, propuestas, mirada_operaciones, resultados_operacion, reentrenos, sombra_maker` (un test lo comprueba).
-- Archivo Parquet: todas se archivan (`auditor_hechos`, `auditor_propuestas`, `auditor_mirada_operaciones`, `auditor_resultados`, `auditor_reentrenos`, `auditor_sombra`); también `operaciones` (`auditor_operaciones`), que estaba sin cubrir. Ver `docs/archivo-parquet.md`.
+- Aditiva: `_open` crea las tablas con `CREATE TABLE IF NOT EXISTS`. Una base vieja queda intacta; el servidor viejo la sigue leyendo y el nuevo lee una base sin migrar (campos `null`). Se deshace con `DROP TABLE hechos_mirada, propuestas, mirada_operaciones, resultados_operacion, reentrenos, sombra_maker, miradas_perdidas` (un test lo comprueba).
+- Archivo Parquet: todas se archivan (`auditor_hechos`, `auditor_propuestas`, `auditor_mirada_operaciones`, `auditor_resultados`, `auditor_reentrenos`, `auditor_sombra`, `auditor_perdidas`); también `operaciones` (`auditor_operaciones`), que estaba sin cubrir. Ver `docs/archivo-parquet.md`.
 - Servidor: `auditor-verdicts.ts` suma `auditoria.propuesta` (por mirada), `auditoria.resultado` y `auditoria.sombra` (por operación); `null` si falta la tabla.
 
 ## Costo (medido en la Mac, un producto)

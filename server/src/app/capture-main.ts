@@ -25,6 +25,7 @@ import {
 } from '../platform/sqlite-safety.ts'
 import { createWakeDetector } from '../platform/wake-detector.ts'
 import { createLoopMonitor } from '../features/live-gateway/loop-monitor.ts'
+import { ethExtraMarketFeed } from '../features/kraken-futures/capture-book-sample.ts'
 import { createLiveCapture } from '../features/live-gateway/live-capture.ts'
 import { wireEthMinuteSummary } from '../features/market-summary/eth-summary-wiring.ts'
 import {
@@ -108,10 +109,11 @@ async function main(): Promise<void> {
     // PF_ETHUSD (operated) and PF_XBTUSD (default terminal product, observed candles). The other pinned products
     // keep official candles, funding and analytics below.
     eventProducts: MARKET_EVENT_PRODUCTS,
-    // ETH over its own WebSocket: every trade stored, the book as a trimmed snapshot every 30 s
-    // (never the deltas), both read by the per-minute summary (docs/resumen-minuto-eth.md).
+    // ETH over its own WebSocket: every trade stored, the book as a trimmed snapshot every 10 s
+    // (FUTURES_ETH_BOOK_SAMPLE_MS; never the deltas), both read by the per-minute summary
+    // (docs/resumen-minuto-eth.md, docs/datos-libro-eth.md).
     // BTC keeps its trades-and-ticker socket exactly as before.
-    extraMarketFeed: { productId: 'PF_ETHUSD' },
+    extraMarketFeed: ethExtraMarketFeed(process.env),
     // Quote, sizes and funding by REST of the captured products other than BTC (today: ETH).
     tickerPollMs: 1_000,
     // Terminal chart: 15m/1h/4h/1d candles and Kraken's public analytics (ETH and BTC).

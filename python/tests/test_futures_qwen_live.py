@@ -421,20 +421,24 @@ class RestartTests(unittest.TestCase):
         self.assertEqual(env.provider.calls, calls)
         self.assertEqual(env.rows("SELECT * FROM decisions"), decided)
 
-    def test_after_a_long_stop_missed_wakes_are_omitted_with_the_reason_and_nothing_is_asked(self):
+    def test_after_a_long_stop_missed_wakes_are_omitted_with_the_reason_and_only_the_catch_up_look_is_asked(self):
         env = make(self)
         env.op.start()
         env.advance(30)
-        calls = env.provider.calls
+        calls, decided_before = env.provider.calls, env.rows("SELECT * FROM decisions")
         op = env.restart()
         env.now[0] += 2 * 60 * MIN                                           # the process was off for two hours
         op.start()
-        self.assertEqual(env.provider.calls, calls)
         skipped = env.rows("SELECT * FROM skipped WHERE product='PF_XBTUSD' ORDER BY t_ms")
         self.assertTrue(skipped)
         self.assertEqual({r["reason"] for r in skipped}, {"proceso_detenido"})
         decided = {r["t_ms"] for r in env.rows("SELECT t_ms FROM decisions WHERE product='PF_XBTUSD'")}
         self.assertFalse(decided & {r["t_ms"] for r in skipped})
+        # nothing is asked for a look that was missed; the one look made is the catch-up of now (operacion-mejoras S2): one per product
+        self.assertEqual(len(env.rows("SELECT * FROM decisions")), len(decided_before) + len(PRODUCTS))
+        self.assertGreater(env.provider.calls, calls)
+        for row in env.rows("SELECT wake_json FROM decisions WHERE t_ms > ?", max(r["t_ms"] for r in decided_before)):
+            self.assertEqual(json.loads(row["wake_json"]), ["recuperacion"])
 
     def test_a_database_of_another_config_is_refused(self):
         env = make(self)

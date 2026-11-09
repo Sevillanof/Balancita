@@ -55,6 +55,7 @@ from concurrent.futures import ThreadPoolExecutor
 from decimal import Decimal, ROUND_DOWN, ROUND_HALF_EVEN, localcontext
 from typing import Callable, Optional, TYPE_CHECKING
 
+from . import futures_funding_cache
 from . import futures_llm_decisions as llm
 from . import futures_qwen_funding as exact_funding
 from . import futures_qwen_posiciones as posiciones
@@ -88,7 +89,7 @@ DEFAULT_EXAM_DB_LIVE = os.path.join(DATA_DIR, "exam-live.sqlite")     # the Exam
 DEFAULT_DB_LIVE_PRACTICE = os.path.join(DATA_DIR, "practice-live.sqlite")
 PRACTICE_VERSIONS = ("1", "2", "2.1", "3")      # the ones that have a report
 VERSIONS = PRACTICE_VERSIONS + ("live",)        # "live": the rules of the live operator (``futures_qwen_live``)
-DEFAULT_CACHE = os.path.join(DATA_DIR, "cache")
+DEFAULT_CACHE = futures_funding_cache.default_cache_dir(os.path.join(DATA_DIR, "cache"))
 DEFAULT_URL = "http://127.0.0.1:{}".format(llm.DEFAULT_LLAMA_PORT)
 
 BAR_MS = 5 * MINUTE_MS
@@ -346,7 +347,7 @@ class FundingLine:
 class Position:
     __slots__ = ("side", "entry_ms", "entry_ref", "entry_px", "qty", "stop_px", "stop_pct", "max_hold_ms", "entry_p",
                  "entry_reason", "trade_no", "mfe_bp", "mae_bp", "notional_usd", "funding_model", "entry_execution",
-                 "exit_plan", "news_armed")
+                 "exit_plan", "news_armed", "fill_ms")
 
     def __init__(self, **kwargs):
         for name in self.__slots__:
@@ -357,6 +358,14 @@ class Position:
     def snapshot(self):
         return {"side": self.side, "entry_ms": self.entry_ms, "entry_px": str(self.entry_px), "qty": str(self.qty),
                 "stop_px": self.stop_px, "trade_no": self.trade_no}
+
+
+def fill_ms_of(position):
+    """When the entry was really executed: ``fill_ms`` (book execution: the look dated ``entry_ms`` and the fill came seconds later), or
+    ``entry_ms`` itself (candles, replay, and every position stored before ``fill_ms`` existed: there both were the same instant).
+    The funding of the holding time and the receipt's link to the position run from here; the HELD time (exhaustion, 36 h cap) and the
+    cooldown run from ``entry_ms``, the look that decided."""
+    return position.entry_ms if position.fill_ms is None else position.fill_ms
 
 
 def funding_status(held_ms, covered_ms):
@@ -377,7 +386,7 @@ def settle(product, position, ref_price, reason, end_ms, funding, notional=D(100
             if (position.entry_execution is None or execution.quantity != position.qty
                     or execution.quote.product != product
                     or execution.side != ("SHORT" if long else "LONG")
-                    or execution.executed_at_ms < position.entry_ms):
+                    or execution.executed_at_ms < fill_ms_of(position)):
                 raise TraderError("La ejecución no corresponde a la posición.")
             px = execution.price
             end_ms = execution.executed_at_ms
@@ -391,22 +400,23 @@ def settle(product, position, ref_price, reason, end_ms, funding, notional=D(100
             else:
                 fees = (position.entry_px + px) * position.qty * fee_rate("taker")
             gross = (px - position.entry_px) * position.qty if long else (position.entry_px - px) * position.qty
-        paid, covered = funding.accrue_position(position.entry_ms, end_ms, position.entry_px * position.qty,
+        funding_from = fill_ms_of(position)
+        paid, covered = funding.accrue_position(funding_from, end_ms, position.entry_px * position.qty,
                                                position.qty, long, position.funding_model) \
             if funding is not None else (D(0), 0)
-        held = max(0, end_ms - position.entry_ms)
+        held = max(0, end_ms - funding_from)
         status = funding_status(held, covered)
         net = gross - fees - paid
         receipt = None if execution is None else execution.evidence()
         if receipt is not None:
             periods = funding.absolute.periods if funding is not None and funding.absolute is not None else ()
             receipt["settlement"] = {
-                "position_side": position.side, "entry_at_ms": position.entry_ms,
+                "position_side": position.side, "entry_at_ms": funding_from,
                 "entry_execution_hash": book_execution.canonical_hash(position.entry_execution),
                 "funding_model": position.funding_model,
                 "funding_periods": [
                     dict(vars(period)) for period in periods
-                    if period.start_ms < end_ms and period.end_ms > position.entry_ms
+                    if period.start_ms < end_ms and period.end_ms > funding_from
                 ],
                 "expected": {
                     "net_usd": str(net), "gross_usd": str(gross), "fees_usd": str(fees), "funding_usd": str(paid),
@@ -662,6 +672,8 @@ class Trader:
         self.opened_this_look = False
         self.closed_this_look = False
         self.cooldown_until = 0
+        self.catching_up = False          # live only: this ``feed`` is the catch-up look after missed looks (``feed(catch_up_ms=...)``)
+        self.exec_ms = None               # while catching up: the wall-clock time of the look, the signal time the public book is asked at
         self.look_audit = None            # read-only note of the last look for the auditor (``futures_auditor.record_look``); nothing here reads it
         self.last_call_ms = None
         self.trade_seq = 0
@@ -812,6 +824,12 @@ class Trader:
         for hook in self.hooks:
             reasons += list(hook(self, t_ms))
         return reasons
+
+    def scheduled_look(self, t_ms):
+        """Is ``t_ms`` one of the looks the wake rules schedule (:00/:15/:30/:45 with the live config), with the state as it is now?"""
+        wake = self.cfg["wake"]
+        every = wake["position_every_min"] if self.position is not None else wake["flat_every_min"]
+        return t_ms % (every * MINUTE_MS) == 0
 
     def wake_reasons(self, t_ms):
         """Why Qwen should be asked now (``[]``: no). Pure function of the closed candles up to ``t_ms`` and the state."""
@@ -1052,10 +1070,20 @@ class Trader:
 
     # ---- feeding
 
-    def feed(self, candle, trade=True):
+    def feed(self, candle, trade=True, catch_up_ms=None):
         """One CLOSED 5m candle. Returns the events it caused: ``decision``, ``guardrail`` and ``trade`` dicts.
 
-        ``trade=False`` only warms the history up (no guardrail, no wake, no model)."""
+        ``trade=False`` only warms the history up (no guardrail, no wake, no model). ``catch_up_ms`` (live, after missed looks): this
+        candle is the most recent one and the process is back, so this IS a look even when it is not one of the scheduled ones (wake reason
+        ``recuperacion``). It is dated with the candle like any look, but the public book is asked at ``catch_up_ms`` (now): the signal of
+        this decision is of now, not of a candle that closed minutes ago."""
+        self.catching_up, self.exec_ms = catch_up_ms is not None, catch_up_ms
+        try:
+            return self._feed(candle, trade)
+        finally:
+            self.catching_up, self.exec_ms = False, None      # only this look: the orders that wait between candles use their own clock
+
+    def _feed(self, candle, trade):
         bucket = int(candle["bucket_start"])
         if self.t and bucket != self.t[-1] + BAR_MS:
             raise ValueError("velas de 5m no contiguas: {} despues de {}".format(bucket, self.t[-1]))
@@ -1094,6 +1122,8 @@ class Trader:
             self.look_audit = {"t_ms": t_ms, "skip": "cooldown"}
             return events
         reasons = self.wake_reasons(t_ms)
+        if self.catching_up:
+            reasons = reasons + ["recuperacion"]
         if reasons:
             try:
                 events += self._decide(t_ms, reasons)
@@ -1172,7 +1202,7 @@ class Trader:
             if self.book_execution is None:
                 raise WakeSkipped("libro_no_disponible", "Falta el libro público para esta posición.")
             try:
-                quote, now, _ = self.book_execution._quote(self.product, t_ms, "exit")
+                quote, now, _ = self.book_execution._quote(self.product, self._signal_ms(t_ms), "exit")
             except book_execution.BookError as error:
                 raise WakeSkipped(error.kind, error.detail) from error
             bid, ask, started = quote.bids[0][0], quote.asks[0][0], now
@@ -1257,6 +1287,7 @@ class Trader:
             done["execution"]["signal_reference_kind"] = "official_candle_close"
             if summary is not None and not maker:
                 done["execution"]["exit_plan"] = summary
+        decided_ms = t_ms                       # the look that decided the close (the maker fill: when it filled); the exit evidence keeps its fill time
         t_ms = done["executed_at_ms"]
         trade = {"trade_no": position.trade_no, "product": self.product, "side": position.side,
                  "entry_ms": position.entry_ms, "exit_ms": t_ms, "entry_px": float(position.entry_px),
@@ -1271,11 +1302,13 @@ class Trader:
                 "net_complete_usd": None if done["net_complete_usd"] is None else str(done["net_complete_usd"]),
                 "exit_fill": str(done["exit_px"]), "entry_execution": position.entry_execution,
                 "exit_execution": done["execution"], "exit_plan": summary}
+        if position.fill_ms is not None:                       # book execution only: replays and candle runs have no separate fill time
+            trade["fill_ms"] = position.fill_ms
         if self.cfg.get("cuenta") == "entera":
             self.notional += done["net_usd"]
         self._remove_position(position)
         self.closed_this_look = True
-        self.cooldown_until = t_ms + self.cfg["guardrails"]["cooldown_min"] * MINUTE_MS
+        self.cooldown_until = decided_ms + self.cfg["guardrails"]["cooldown_min"] * MINUTE_MS
         events = []
         if closed_by not in ("qwen", "formula"):
             events.append({"type": "guardrail", "kind": "guardrail", "t_ms": t_ms, "guardrail": closed_by, "action": "CERRAR",
@@ -1288,12 +1321,16 @@ class Trader:
             raise TraderError("No hay una posición abierta para gestionar o cerrar.")
         return self.position
 
+    def _signal_ms(self, t_ms):
+        """The signal time the public book is asked at: the look (candle close), or now when this is the catch-up look."""
+        return t_ms if self.exec_ms is None else self.exec_ms
+
     def _book_exit(self, t_ms, *, purpose="exit", position=None):
         position = self._require_position() if position is None else position
         if self.book_execution is None:
             raise WakeSkipped("libro_no_disponible", "Falta el libro público para esta posición.")
         try:
-            return self.book_execution.exit(self.product, position.side, position.qty, t_ms, purpose=purpose)
+            return self.book_execution.exit(self.product, position.side, position.qty, self._signal_ms(t_ms), purpose=purpose)
         except book_execution.BookError as error:
             raise WakeSkipped(error.kind, error.detail) from error
 
@@ -1354,16 +1391,16 @@ class Trader:
                 qty = notional / entry
         else:
             qty = notional / entry
-        execution = None
+        execution, fill_ms = None, None
         if self.cfg.get("execution"):
             if self.book_execution is None:
                 raise WakeSkipped("libro_no_disponible", "No hay libro público; no se usa el cierre de vela como sustituto.")
             try:
-                fill = self.book_execution.entry(self.product, side, notional, t_ms)
+                fill = self.book_execution.entry(self.product, side, notional, self._signal_ms(t_ms))
             except book_execution.BookError as error:
                 raise WakeSkipped(error.kind, error.detail) from error
             self._check_execution_deadline(t_ms, expires_at_ms)
-            entry, qty, notional, t_ms = fill.price, fill.quantity, fill.notional, fill.executed_at_ms
+            entry, qty, notional, fill_ms = fill.price, fill.quantity, fill.notional, fill.executed_at_ms
             execution = fill.evidence()
             execution.update(signal_reference_price=self.signal_price_text,
                              signal_reference_kind="official_candle_close", funding_model=funding_model)
@@ -1371,7 +1408,7 @@ class Trader:
         self.trade_seq += 1
         self.opened_this_look = True
         position = Position(
-            side=side, entry_ms=t_ms, entry_ref=last, entry_px=entry, qty=qty,
+            side=side, entry_ms=t_ms, fill_ms=fill_ms, entry_ref=last, entry_px=entry, qty=qty,
             stop_px=stop_px,
             stop_pct=stop_pct, max_hold_ms=None if guard["max_hold_min"] is None else guard["max_hold_min"] * MINUTE_MS, entry_p=probability, entry_reason=reason,
             trade_no=self.trade_seq, mfe_bp=0.0, mae_bp=0.0, notional_usd=notional, funding_model=funding_model,
@@ -1937,17 +1974,12 @@ class History:
     def funding(self, product):
         """``[(period_start_ms, rate)]`` with every period that starts before the holdout; cached on disk."""
         path = os.path.join(self.cache_dir, "funding-{}.json".format(product))
-        rows = None
-        if os.path.exists(path):
-            with open(path, encoding="utf-8") as handle:
-                rows = json.load(handle)
+        rows = futures_funding_cache.read_rows(path)
         if rows is None:
             if self.offline:
                 return []
             rows = [list(r) for r in self._fetch_funding(product)]
-            os.makedirs(self.cache_dir, exist_ok=True)
-            with open(path, "w", encoding="utf-8") as handle:
-                json.dump(rows, handle)
+            futures_funding_cache.write_rows_atomic(path, rows)  # a parallel reader never sees a partial file
         return [(int(s), float(r)) for s, r in rows if int(s) + HOUR_MS <= self.holdout_ms]
 
 

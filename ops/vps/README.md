@@ -9,8 +9,52 @@ Copia versionada de lo que corre en el VPS (antes vivía solo allá). Si se camb
 | `balancita-healthcheck.sh`                  | `/usr/local/bin/`                          | Cada 5 min: servicio, última vela, llama-server, disco y RAM → `HC_PING_URL`                                                                                                                                                                                         |
 | `balancita-healthcheck.service` / `.timer`  | `/etc/systemd/system/`                     | Programa el chequeo                                                                                                                                                                                                                                                  |
 | `systemd/balancita.service.d/llama.conf`    | `/etc/systemd/system/balancita.service.d/` | **Aplicado el 2026-11-07.** Drop-in de llama-server: 5 hilos (`LLAMA_THREADS`), `mlock` (`LLAMA_ARG_LOAD_MODE=mmap+mlock`) y `LimitMEMLOCK=infinity`                                                                                                                 |
+| `desplegar.sh`                              | se corre desde el Mac, no se instala       | Despliegue único develop → main → VPS con verificaciones (ver «Desplegar» abajo)                                                                                                                                                                                     |
 | `swap-2g.sh`                                | `/usr/local/bin/`                          | **Aplicado el 2026-11-07.** Swap de 2 GB en `/swapfile` y `vm.swappiness=10`; se puede correr más de una vez                                                                                                                                                         |
 | `systemd/balancita.service.d/noticias.conf` | `/etc/systemd/system/balancita.service.d/` | **Preparado, sin aplicar.** Drop-in de noticias en modo solo-ficha: `NEWS_CARDS=1`, `NEWS_LEGACY_QUESTIONS=0`, `NEWS_CARD_SCOPE=0`                                                                                                                                   |
+
+## Desplegar (`ops/vps/desplegar.sh`, S4 de `odd/tasks/operacion-mejoras.md`)
+
+Un solo comando, desde el Mac y en el repo, que reproduce el despliegue que se hacía a mano. Si algo no cuadra corta con el motivo y un código de salida distinto de 0.
+
+```
+ops/vps/desplegar.sh --dry-run        # solo lecturas: cuenta gh, PR, ssh de prueba; no cambia nada
+ops/vps/desplegar.sh                  # despliegue completo
+ops/vps/desplegar.sh --sin-reinicio   # todo menos reiniciar (el reinicio queda pendiente y el script lo avisa)
+ops/vps/desplegar.sh --dropin NOMBRE.conf     # instala un drop-in nuevo (si hay uno sin decidir, el script frena)
+ops/vps/desplegar.sh --omitir NOMBRE.conf     # deja afuera, esta vez, un drop-in nuevo
+```
+
+Qué hace, en orden:
+
+1. **gh con la cuenta Sevillanof**, solo dentro del script: `GH_TOKEN="$(gh auth token -u Sevillanof)"` exportado en el proceso, y chequea que `gh api user -q .login` sea `Sevillanof` (si no, aborta). No usa `gh auth switch`: la cuenta por defecto de gh en la máquina no cambia, y el token nunca se imprime.
+2. **PR develop → main.** Reutiliza el abierto; si no hay y develop va adelantado lo crea; si main ya tiene todo develop, salta al paso de la VPS.
+3. **Espera la CI** hasta 60 min (consulta cada 30 s, imprime una línea de estado cada 2 min). Mira los checks del último commit del PR y exige que existan corridas de **push y de pull_request**. Aborta (código 3) con `CONFLICTING`, cualquier check en `FAILURE`/`CANCELLED`/`TIMED_OUT`, «sin checks» pasados 10 min, o falta de uno de los dos conjuntos. Un 401 o 5xx transitorio de GitHub se reintenta 4 veces (5, 10, 15 s) y después aborta.
+4. **Merge** (merge commit, sin borrar `develop`). Si el PR ya estaba mergeado, sigue.
+5. **VPS** (`ssh -o BatchMode=yes root@13.140.202.221`): `cd /home/balancita/Balancita && sudo -u balancita git pull --ff-only`.
+6. **Drop-ins** de `ops/vps/systemd/balancita.service.d/`: instala con `install -D -m 644` los que **difieren** de los instalados y hace `systemctl daemon-reload`. Un drop-in que está en el repo pero no en la VPS **no se instala solo ni se deja pasar**: el script frena (código 2) antes de instalar nada, hasta que se decida con `--dropin NOMBRE` (instalarlo) o `--omitir NOMBRE` (dejarlo afuera esta vez). Así no hay que acordarse.
+7. **Reinicio** de `balancita` solo si el servicio arrancó antes del último commit o drop-in, y **solo entre los minutos :16 y :27 UTC** (si está fuera de la ventana, espera). La ventana de la sección «Cuándo reiniciar» es :16-:28; el script usa :16-:27 para no acercarse a la mirada de :30.
+8. **Chequeos posteriores** (a los 60 s del reinicio): `systemctl is-active` = `active`; llama-server con `VmLck` > 0 y `-t 5` (espera hasta 4 min a que aparezca); ningún `db-health-child … integrity` corriendo justo después del arranque; sin filas nuevas en la tabla `errors` de `server/data/dev-live/qwen-live/live.sqlite` (`id, at_ms, place, product, kind, detail`); sin líneas con `Traceback` en `journalctl -u balancita` desde el reinicio. Cualquier falla termina con código 4 y la lista; no se deshace nada solo (ver «Deshacer»).
+
+Idempotente: tras un corte se puede volver a correr; lo ya hecho se salta y no reinicia si no hace falta.
+
+Códigos de salida: 0 ok · 1 error general (por ejemplo cuenta gh equivocada) · 2 uso incorrecto · 3 PR/CI · 4 chequeos posteriores · 5 VPS (ssh, pull, drop-ins, reinicio). `ops/vps/desplegar.sh --ayuda` muestra el resumen.
+
+### `gh` siempre con Sevillanof en este repo: `scripts/gh-sevillanof.sh`
+
+Para comandos sueltos de `gh` (PR, CI, issues) sin cambiar la cuenta global:
+
+```
+scripts/gh-sevillanof.sh pr list --base main
+scripts/gh-sevillanof.sh run list --branch develop --limit 5
+source scripts/gh-sevillanof.sh && fijar_cuenta_sevillanof   # exporta GH_TOKEN solo en ese shell (así lo usa desplegar.sh)
+```
+
+Hace lo mismo que el script de despliegue: toma el token de Sevillanof, comprueba el login y recién entonces corre `gh` con los argumentos; si la cuenta no está guardada o el login no es Sevillanof, no corre nada.
+
+### Pruebas
+
+`scripts/desplegar.node-test.mjs` (corre en la CI con `node --test scripts/*.node-test.mjs`) ejecuta el script con `gh`, `ssh`, `date` y `sleep` falsos en un `PATH` temporal: no toca GitHub ni la VPS, y el reloj falso solo avanza con `sleep`. Cubre CI verde, rojo, conflicto, sin checks, tiempo agotado, 401/5xx, cuenta equivocada, ventana de reinicio, `--dry-run`, `--sin-reinicio`, drop-ins y cada chequeo posterior.
 
 ## Alerta del respaldo
 

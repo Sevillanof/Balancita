@@ -26,7 +26,10 @@ Diseño histórico de la versión 8 (``config/qwen-live-v7.json`` conserva la ve
       por factores, adaptador) queda congelada en ``config/qwen-live-v7.json`` para el examen y el LoRA.
 
 Una base propia (``data/qwen-live/live.sqlite`` o ``QWEN_LIVE_DB``) y UN solo proceso por base (candado de archivo). Si el
-proceso se reinicia, recupera la posición abierta y no repite un despertar ya decidido. Si la base es de OTRA configuración
+proceso se reinicia, recupera la posición abierta y no repite un despertar ya decidido.
+Si al arrancar o al volver de un bloqueo se perdieron miradas programadas, las pasadas se omiten (``proceso_detenido``; el auditor las guarda
+en ``miradas_perdidas`` con lo que la fórmula habría dicho) y la vela cerrada más reciente es UNA mirada de recuperación con los datos de
+ese momento, con entradas y salidas como cualquier mirada; nunca opera hacia atrás (``docs/terminal-ciclo-de-vida.md``). Si la base es de OTRA configuración
 (cambió la versión del prompt, el tamaño, los productos...), el arranque se rechaza sin cerrar ni renombrar nada.
 ``--activate-flat-config`` cambia de versión sobre la misma cuenta solo si está sin posiciones; no archiva ni reinicia dinero.
 
@@ -64,6 +67,7 @@ OPEN_TRADE_QUERY = "SELECT 1 FROM trades WHERE status='open' LIMIT 1"
 OPEN_POSITION_QUERY = "SELECT 1 FROM trader_state WHERE position_json IS NOT NULL LIMIT 1"
 BAR_MS = qt.BAR_MS
 BUCKET_MS = 15 * MINUTE_MS                      # one wake per product and bucket
+ENTRY_FILL_MAX_LAG_MS = 2 * BAR_MS              # the fill of an entry happens at most this long after the look that dated it
 AUDIT_TRAINING_SLOW_MS = 500                    # the auditor's record for training (facts, proposals, positions) taking longer than this is warned about
 DB_ENV = "QWEN_LIVE_DB"
 DEFAULT_DIR = os.path.join(qt.ROOT, "data", "qwen-live")
@@ -326,6 +330,8 @@ def position_to_json(position):
         body["notional_usd"] = str(position.notional_usd)
     if position.news_armed is not None:
         body["news_armed"] = position.news_armed
+    if position.fill_ms is not None:
+        body["fill_ms"] = position.fill_ms             # book execution: entry_ms is the look that decided, this is when it filled
     if position.entry_execution is not None:
         body["entry_execution"] = position.entry_execution
     if position.exit_plan is not None:
@@ -342,7 +348,8 @@ def position_from_json(text):
         from . import futures_book_execution as book
         fill = book.replay_fill(raw["entry_execution"])
         if (fill.purpose != "entry" or fill.price != raw["entry_px"] or fill.quantity != raw["qty"]
-                or fill.executed_at_ms != raw["entry_ms"]
+                or fill.executed_at_ms != raw.get("fill_ms", raw["entry_ms"])       # saved before ``fill_ms`` existed: both were the fill
+
                 or raw["entry_execution"].get("funding_model") != raw.get("funding_model")):
             raise qt.TraderError("La posición guardada contradice su recibo de entrada.")
     plan = raw.get("exit_plan")
@@ -559,8 +566,11 @@ class LiveStore:
                 or D(trade["qty"]) != D(evidence["quantity"])):
             raise qt.TraderError("La operación no corresponde al recibo de ejecución.")
         if evidence["purpose"] == "entry":
+            # ``entry_ms`` is the look that decided; the fill comes seconds later (a catch-up look: up to a candle later). Trades stored
+            # before that were dated at the fill itself (lag 0): the same check holds for both.
+            lag = evidence["executed_at_ms"] - trade["entry_ms"]
             if (evidence["side"] != trade["side"] or D(evidence["price"]) != D(trade["entry_px"])
-                    or evidence["executed_at_ms"] != trade["entry_ms"]):
+                    or not 0 <= lag <= ENTRY_FILL_MAX_LAG_MS):
                 raise qt.TraderError("La entrada contradice la posición guardada.")
         elif evidence["side"] != ("SHORT" if trade["side"] == "LONG" else "LONG"):
             raise qt.TraderError("La ejecución de salida tiene el lado incorrecto.")
@@ -906,6 +916,7 @@ class LiveOperator:
         self._probe_failures, self._next_probe = 0, 0.0
         self._errors = {}
         self._trained = {}                                  # product -> the look whose training record was already tried
+        self._missed = {}                                   # product -> scheduled looks lost in the batch of candles being processed
         self.failed_cycle = False
 
     # ---- start
@@ -975,9 +986,16 @@ class LiveOperator:
             side_label = "LARGO" if trader.position.side == "LONG" else "CORTO"
             pos_note = " (posición {} recuperada, abierta desde {})".format(side_label, _hhmm(trader.position.entry_ms))
         self.log("Qwen en vivo: {} calentado con {} velas de 5 min{}.".format(product, len(warm), pos_note))
-        for bar in fresh:
-            self._process(product, bar)
+        self._process_batch(product, fresh)
         self._data_health(product, trader)
+
+    def _process_batch(self, product, bars):
+        """The candles that closed since the last one fed, in order. If looks were lost on the way (the process was off, or stuck, for
+        more than ``max_late_seconds``), the most recent candle is the catch-up look (``_process``); the older ones only record what was lost."""
+        self._missed[product] = 0
+        last = bars[-1] if bars else None
+        for bar in bars:
+            self._process(product, bar, last=bar is last)
 
     def _warm_product_bars(self, product, trader, now, last_fed):
         warm_start = (now // BAR_MS) * BAR_MS - self.warmup_ms
@@ -1091,12 +1109,15 @@ class LiveOperator:
             return
         if fresh:
             self._load_context(product, trader, fresh[0]["bucket_start"] - 3 * BAR_MS, now)
+        closed = [bar for bar in fresh if bar["bucket_start"] + BAR_MS <= now]
+        last = closed[-1] if closed else None
+        self._missed[product] = 0
         for bar in fresh:
             if bar["bucket_start"] + BAR_MS > now or (trader.t and bar["bucket_start"] <= trader.t[-1]):
                 continue
             while trader.t and bar["bucket_start"] > trader.t[-1] + BAR_MS:
                 self._process(product, dict(_flat_candle(repr(trader.c[-1]), trader.t[-1] + BAR_MS), observed=False))
-            self._process(product, bar)
+            self._process(product, bar, last=bar is last)
         self._data_health(product, trader)
 
     def _data_health(self, product, trader, *, status=None, reason=None):
@@ -1307,10 +1328,15 @@ class LiveOperator:
         with self.store.db:
             for row in self.store.incomplete_funding(product):
                 long = row["side"] == "LONG"
+                entry_data = None
+                if row["execution_model"] is not None:
+                    entry_data = self.store.execution_evidence(row["entry_receipt_id"], product=product,
+                                                               trade_no=row["trade_no"], purpose="entry")
+                start_ms = row["entry_ms"] if entry_data is None else entry_data["executed_at_ms"]     # funding runs from the fill
                 paid, covered = line.accrue_position(
-                    row["entry_ms"], row["exit_ms"], D(row["entry_px"]) * D(row["qty"]), D(row["qty"]), long,
+                    start_ms, row["exit_ms"], D(row["entry_px"]) * D(row["qty"]), D(row["qty"]), long,
                     row["funding_model"] or qt.exact_funding.LEGACY_MODEL)
-                held = max(0, row["exit_ms"] - row["entry_ms"])
+                held = max(0, row["exit_ms"] - start_ms)
                 status = qt.funding_status(held, covered)
                 net = D(row["gross_usd"]) - D(row["fees_usd"]) - paid
                 notional = D(row["notional_usd"]) if row["notional_usd"] is not None else D(row["entry_px"]) * D(row["qty"])
@@ -1320,12 +1346,10 @@ class LiveOperator:
                 net_bp = float(net / notional * 10_000)
                 if row["execution_model"] is not None:
                     from . import futures_book_execution as book
-                    entry_data = self.store.execution_evidence(row["entry_receipt_id"], product=product,
-                                                               trade_no=row["trade_no"], purpose="entry")
                     exit_data = self.store.execution_evidence(row["exit_receipt_id"], product=product,
                                                               trade_no=row["trade_no"], purpose="exit")
                     position = qt.Position(
-                        side=row["side"], entry_ms=row["entry_ms"], entry_px=D(row["entry_px"]), qty=D(row["qty"]),
+                        side=row["side"], entry_ms=start_ms, entry_px=D(row["entry_px"]), qty=D(row["qty"]),
                         notional_usd=notional, entry_execution=entry_data, funding_model=row["funding_model"],
                     )
                     done = qt.settle(product, position, 0, "strategy_exit", row["exit_ms"], line, notional,
@@ -1348,21 +1372,39 @@ class LiveOperator:
     def _check_execution(self, trader):
         self.gate.check_execution()
         now = self.now_ms()
-        if noticias.priority_enabled(self.cfg) and now - (trader.t[-1] + BAR_MS) > self.max_late_ms:
+        if (noticias.priority_enabled(self.cfg) and now - (trader.t[-1] + BAR_MS) > self.max_late_ms
+                and not trader.catching_up):
             raise qt.WakeSkipped("proceso_detenido", SKIP_TEXT["proceso_detenido"])
         return now
 
-    def _process(self, product, bar):
+    def _recovers(self, product, trader, t_ms, now, late):
+        """Is the candle ``t_ms`` (the most recent one fed) the catch-up look? Yes when scheduled looks were lost before it in this batch, or
+        it is itself a scheduled look that came too late; and only while the data is current (a candle at most one candle old, plus the
+        lateness allowed): a feed that is itself behind gets no look on old data."""
+        if now - t_ms > BAR_MS + self.max_late_ms:
+            return False
+        return self._missed.get(product, 0) > 0 or (late and trader.scheduled_look(t_ms))
+
+    def _process(self, product, bar, *, last=False):
         trader = self.traders[product]
         if self.cfg.get("cuenta") == "entera":
             trader.notional = self.store.available_balance_usd(excluding_product=product)
         t_ms = int(bar["bucket_start"]) + BAR_MS
         now = self.now_ms()
+        catch_up_ms = None
         if self.store.bucket_done(product, t_ms):
             self.gate.begin("done")
         else:
-            self.gate.begin("late" if now - t_ms > self.max_late_ms else "live")
-        events = trader.feed(bar)
+            late = now - t_ms > self.max_late_ms
+            if last and bar.get("observed", True) and self._recovers(product, trader, t_ms, now, late):
+                catch_up_ms = now
+                self.gate.begin("live")
+            else:
+                self.gate.begin("late" if late else "live")
+        events = trader.feed(bar) if catch_up_ms is None else trader.feed(bar, catch_up_ms=catch_up_ms)
+        if catch_up_ms is not None:
+            self.log("{} {}: mirada de recuperación con los datos de ahora ({} miradas perdidas antes, registradas sin operarlas).".format(
+                _hhmm(t_ms), product, self._missed.get(product, 0)))
         self._record(product, trader, t_ms, events, self.now_ms(), observed=bar.get("observed", True))
         if self.cfg.get("cuenta") == "entera" and trader.position is None:
             trader.notional = self.store.available_balance_usd(excluding_product=product)
@@ -1412,12 +1454,29 @@ class LiveOperator:
             self._failure("ejecucion", product, mark_error)
         elif self.book_enabled:
             self._recovered("ejecucion", product)
+        for event in events:
+            if event["type"] == "skipped" and event["kind"] == "proceso_detenido":
+                self._lost_look(product, trader, event, now)
         if events and self.cfg.get("decide_by") == "formula" and qt.candle_opinions_enabled(self.cfg):
             self._resolve_examples(product, trader, now)
         if events and self.cfg.get("decide_by") == "formula":          # el auditor no necesita la opinión de Qwen
             self._audit(product, trader, events, now)
         if self.cfg.get("decide_by") == "formula":
             self._audit_training(product, trader, events, now, marks)
+
+    def _lost_look(self, product, trader, event, now):
+        """A scheduled look that was not made because the process was off or too late: counted for the catch-up look and kept for the
+        auditor in ``miradas_perdidas`` (what the formula would have said, never traded). Like the rest of the auditor, whatever fails
+        here is a warning and changes nothing else."""
+        self._missed[product] = self._missed.get(product, 0) + 1
+        failed = self.failed_cycle
+        try:
+            out = auditor.record_missed(self.store.path, product, trader, event, now)
+        except Exception as error:                        # noqa: BLE001 - lo que se guarda para el auditor nunca bloquea la operación en vivo
+            self._failure("auditor_entrenar", product, error)
+            self.failed_cycle = failed
+            return
+        self._warn_training(product, out.get("avisos"), None, failed)
 
     def _log_rebote(self, product, event):
         head = "{} {}: Experto rebotes — caída de {} % desde el máximo de la ventana (umbral {} %)".format(
@@ -1647,8 +1706,16 @@ def _restore_open_position(store, product, row):
                 return position
         if len(saved) == 1:
             return position_from_json(saved[0])
+    fill_ms = None
+    if row.get("entry_receipt_id"):
+        try:
+            fill_ms = store.execution_evidence(row["entry_receipt_id"], product=product, trade_no=row["trade_no"],
+                                               purpose="entry")["executed_at_ms"]
+        except qt.TraderError:
+            fill_ms = None
     return qt.Position(
-        side=row["side"], entry_ms=row["entry_ms"], entry_ref=float(row["entry_px"]), entry_px=D(row["entry_px"]),
+        side=row["side"], entry_ms=row["entry_ms"], fill_ms=None if fill_ms == row["entry_ms"] else fill_ms,
+        entry_ref=float(row["entry_px"]), entry_px=D(row["entry_px"]),
         qty=D(row["qty"]), stop_px=row["stop_px"], stop_pct=None, max_hold_ms=row["max_hold_ms"],
         entry_p=row["entry_p"], entry_reason=row["entry_reason"], trade_no=row["trade_no"],
         mfe_bp=row["mfe_bp"] or 0.0, mae_bp=row["mae_bp"] or 0.0)
