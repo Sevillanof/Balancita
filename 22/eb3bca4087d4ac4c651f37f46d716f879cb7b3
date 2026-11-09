@@ -1,0 +1,14 @@
+src/features/strategy-lab/presentation/EstrategiasPage.test.tsx
+  h_92dd6654ceb221 105-110
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "22eb3bca4087d4ac4c651f37f46d716f879cb7b3",
+  "prompts": {},
+  "humans": {
+    "h_92dd6654ceb221": {
+      "author": "Franco Sevillano <79455847+Sevillanof@users.noreply.github.com>"
+    }
+  }
+}
