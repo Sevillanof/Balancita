@@ -12,7 +12,7 @@ import { DatabaseSync } from 'node:sqlite'
  *
  * What fills each column: ETH trades (every trade, WebSocket) give the trade
  * columns; REST tickers give spread, top-of-book sizes and last price; the
- * capture stores a trimmed book snapshot every 30 s (levels within the depth
+ * capture stores a trimmed book snapshot every 10 s by default (levels within the depth
  * band of the mid, never the deltas) that gives `depth_*`. A column whose
  * events are missing in a minute stays NULL.
  */

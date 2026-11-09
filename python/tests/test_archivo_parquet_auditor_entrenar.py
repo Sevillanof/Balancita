@@ -20,7 +20,7 @@ HORA = 3_600_000
 # tabla del archivo -> tabla de SQLite que crea el auditor
 NUEVAS = {"auditor_operaciones": "operaciones", "auditor_hechos": "hechos_mirada", "auditor_propuestas": "propuestas",
           "auditor_mirada_operaciones": "mirada_operaciones", "auditor_resultados": "resultados_operacion", "auditor_reentrenos": "reentrenos",
-          "auditor_sombra": "sombra_maker"}
+          "auditor_sombra": "sombra_maker", "auditor_perdidas": "miradas_perdidas"}
 
 
 def auditor_db(carpeta):
@@ -55,13 +55,14 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(TABLAS["auditor_operaciones"].inmutable_sql, '"resuelto_ms" IS NOT NULL')
         self.assertEqual(TABLAS["auditor_propuestas"].inmutable_sql, '"resuelto_ms" IS NOT NULL')
         self.assertEqual(TABLAS["auditor_resultados"].inmutable_sql, '"resultado_ms" IS NOT NULL')
-        for nombre in ("auditor_hechos", "auditor_mirada_operaciones", "auditor_reentrenos", "auditor_sombra"):
-            self.assertIsNone(TABLAS[nombre].inmutable_sql, nombre)            # sombra_maker: una fila se escribe una sola vez y ya no cambia
+        for nombre in ("auditor_hechos", "auditor_mirada_operaciones", "auditor_reentrenos", "auditor_sombra", "auditor_perdidas"):
+            self.assertIsNone(TABLAS[nombre].inmutable_sql, nombre)            # sombra_maker, miradas_perdidas: una fila se escribe una sola vez y ya no cambia
 
     def test_el_tiempo_de_cada_periodo_es_una_columna_que_ya_no_cambia(self):
         esperado = {"auditor_operaciones": ("entry_ms", "dia"), "auditor_hechos": ("t_ms", "dia"), "auditor_propuestas": ("t_ms", "dia"),
                     "auditor_mirada_operaciones": ("t_ms", "dia"), "auditor_resultados": ("exit_ms", "dia"),
-                    "auditor_reentrenos": ("creado_ms", "mes"), "auditor_sombra": ("t_oficial_ms", "dia")}
+                    "auditor_reentrenos": ("creado_ms", "mes"), "auditor_sombra": ("t_oficial_ms", "dia"),
+                    "auditor_perdidas": ("t_ms", "dia")}
         for nombre, (tiempo, granularidad) in esperado.items():
             self.assertEqual((TABLAS[nombre].tiempo, TABLAS[nombre].granularidad), (tiempo, granularidad), nombre)
 
@@ -96,6 +97,8 @@ class IdaYVueltaTests(unittest.TestCase):
                 con.execute("INSERT INTO sombra_maker VALUES('PF_ETHUSD',?,?,?,1,'venta',?,2300.0,0.23,'taker',0.2,460.0,NULL,NULL,'sin_datos','sin_libro',NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,"
                             "'sombra-maker.v1','kraken-futures-costs.v2',?,'auditor.v1')",
                             (d + 1, "exit", "vuelta", t + 2 * HORA, t + 3 * HORA))
+                con.execute("INSERT INTO miradas_perdidas VALUES('PF_ETHUSD',?,?,'proceso_detenido','el proceso estaba apagado a esa hora','[\"cada_15_min\"]',"
+                            "'en_posicion',-2,-4.0,'ESPERAR','CERRAR','{\"nota\":\"hipotetico\"}',?,'auditor.v1')", (t - 900_000, t, t + HORA))
                 con.execute("INSERT INTO resultados_operacion VALUES('PF_ETHUSD',?,1,?,?,80.0,0.8,100.0,'formula','formula','maestro_vuelta',100.0,101.0,300.0,-100.0,?,?,'auditor.v1')",
                             (d + 1, t, t + HORA, t + HORA, None if abierta else t + 40 * HORA))
             con.commit()
@@ -111,7 +114,7 @@ class IdaYVueltaTests(unittest.TestCase):
         self.assertEqual(verificar(self.destino)["problemas"], [])
         hechos = {(e["tabla"], e["dia"]): e["filas"] for e in leer_manifiesto(self.destino)}
         dia0, dia1 = dia_de(DIA0).isoformat(), dia_de(DIA0 + DAY_MS).isoformat()
-        for nombre in ("auditor_hechos", "auditor_mirada_operaciones", "auditor_sombra"):    # solo-agregar: los dos dias
+        for nombre in ("auditor_hechos", "auditor_mirada_operaciones", "auditor_sombra", "auditor_perdidas"):    # solo-agregar: los dos dias
             self.assertEqual({d: hechos[(nombre, d)] for d in (dia0, dia1)}, {dia0: 2 if nombre == "auditor_sombra" else 1,
                                                                             dia1: 2 if nombre == "auditor_sombra" else 1}, nombre)
         for nombre in ("auditor_propuestas", "auditor_operaciones", "auditor_resultados"):    # se completan despues: solo el dia resuelto

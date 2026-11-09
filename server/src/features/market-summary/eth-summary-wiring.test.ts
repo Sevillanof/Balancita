@@ -6,6 +6,11 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { FuturesSocket } from '../kraken-futures/futures-market.ts'
 import { FuturesMarketStore } from '../kraken-futures/futures-market-store.ts'
 import { createLiveCapture } from '../live-gateway/live-capture.ts'
+import type { ExtraMarketFeedOptions } from '../live-gateway/live-capture.ts'
+import {
+  ETH_BOOK_SAMPLE_ENV,
+  ethExtraMarketFeed,
+} from '../kraken-futures/capture-book-sample.ts'
 import { wireEthMinuteSummary } from './eth-summary-wiring.ts'
 import { createEthMinuteSummary, SUMMARY_TABLE } from './eth-minute-summary.ts'
 
@@ -342,5 +347,206 @@ describe('ETH capture + summary, end to end', () => {
     expect(row.events_seen).toBe(6)
     for (const [column, value] of Object.entries(row))
       expect(value, column).not.toBeNull()
+  })
+})
+
+describe('ETH book snapshot cadence through the capture (operacion-mejoras S1)', () => {
+  const T = T0 + 5_000
+  const catalog = {
+    instruments: [
+      {
+        symbol: 'PF_XBTUSD',
+        type: 'flexible_futures',
+        pair: 'BTC:USD',
+        base: 'BTC',
+        quote: 'USD',
+        contractSize: '1',
+        contractValueTradePrecision: '4',
+        tickSize: '1',
+        tradeable: true,
+        isExpired: false,
+      },
+    ],
+  }
+  const offline = async (): Promise<Response> => {
+    throw new Error('offline in test')
+  }
+
+  /** A capture whose clock the test moves; books are fed to the ETH socket (index 1) or the BTC one (index 0). */
+  async function harness(feed: ExtraMarketFeedOptions) {
+    const path = tmpPath()
+    const store = new FuturesMarketStore(path)
+    const sockets: FuturesSocket[] = []
+    const sent: string[][] = []
+    const clock = { now: T }
+    const capture = createLiveCapture({
+      store,
+      clock: () => clock.now,
+      makeSocket: () => {
+        const messages: string[] = []
+        sent.push(messages)
+        const socket: FuturesSocket = {
+          onopen: null,
+          onmessage: null,
+          onerror: null,
+          onclose: null,
+          send: (message: string) => void messages.push(message),
+          close: () => undefined,
+        }
+        sockets.push(socket)
+        return socket
+      },
+      fetchCatalog: async () => catalog,
+      fundingFetch: offline,
+      officialCandlesFetch: offline,
+      tickerFetch: offline,
+      products: [
+        { productId: 'PF_XBTUSD', tickSize: '1' },
+        { productId: 'PF_ETHUSD', tickSize: '0.1' },
+      ],
+      extraMarketFeed: { ...feed, tickMs: 5 },
+    })
+    await capture.start()
+    sockets[0]!.onopen!()
+    sockets[1]!.onopen!()
+    const send = (index: number, product: string, seq: number) =>
+      sockets[index]!.onmessage!({
+        data: JSON.stringify({
+          feed: 'book_snapshot',
+          product_id: product,
+          seq,
+          timestamp: clock.now,
+          bids: [
+            { price: 2499.5, qty: 3 },
+            { price: 2498.5, qty: 100 }, // inside +-0.1 % of 2500 (2.5 USD)
+            { price: 2489.5, qty: 999 }, // far outside the band
+          ],
+          asks: [
+            { price: 2500.5, qty: 2 },
+            { price: 2501.5, qty: 50 },
+            { price: 2540.5, qty: 888 },
+          ],
+        }),
+      })
+    const count = () => {
+      const db = new DatabaseSync(path, { readOnly: true })
+      const n = db
+        .prepare(
+          "SELECT COUNT(*) AS n FROM paper_futures_market_events WHERE feed='book'",
+        )
+        .get() as { n: number }
+      db.close()
+      return n.n
+    }
+    const settle = () => new Promise((resolve) => setTimeout(resolve, 60))
+    /** Moves the clock and feeds the ETH socket a fresh book, so the sampler decides on cadence alone. */
+    const at = async (offsetMs: number, seq: number) => {
+      clock.now = T + offsetMs
+      send(1, 'PF_ETHUSD', seq)
+      await settle()
+    }
+    return { path, store, capture, sockets, sent, send, count, at, settle }
+  }
+
+  it('stores one ETH snapshot every 10 s with the default configuration', async () => {
+    const h = await harness(ethExtraMarketFeed({}))
+    await h.at(0, 1)
+    expect(h.count()).toBe(1)
+    await h.at(5_000, 2)
+    expect(h.count()).toBe(1)
+    await h.at(9_999, 3)
+    expect(h.count()).toBe(1)
+    await h.at(10_000, 4)
+    expect(h.count()).toBe(2)
+    await h.at(20_000, 5)
+    expect(h.count()).toBe(3)
+    await h.capture.stop()
+    h.store.close()
+  })
+
+  it('keeps the same range (+-0.1 %) and format as before at the new cadence', async () => {
+    const h = await harness(ethExtraMarketFeed({}))
+    await h.at(0, 1)
+    await h.capture.stop()
+    h.store.close()
+    const db = new DatabaseSync(h.path, { readOnly: true })
+    const row = db
+      .prepare(
+        "SELECT product_id, raw_json, normalized_json FROM paper_futures_market_events WHERE feed='book'",
+      )
+      .get() as {
+      product_id: string
+      raw_json: string
+      normalized_json: string
+    }
+    db.close()
+    expect(row.product_id).toBe('PF_ETHUSD')
+    expect(JSON.parse(row.raw_json)).toEqual({
+      feed: 'book_sample',
+      product_id: 'PF_ETHUSD',
+      source_seq: 1,
+    })
+    const normalized = JSON.parse(row.normalized_json)
+    expect(normalized.snapshot).toBe(true)
+    expect(normalized.sampled).toEqual({
+      band: '0.001',
+      maxLevelsPerSide: 100,
+      source: 'reconstructed_book',
+    })
+    expect(normalized.bids.map((l: { price: string }) => l.price)).toEqual([
+      '2499.5',
+      '2498.5',
+    ])
+    expect(normalized.asks.map((l: { price: string }) => l.price)).toEqual([
+      '2500.5',
+      '2501.5',
+    ])
+  })
+
+  it('follows FUTURES_ETH_BOOK_SAMPLE_MS', async () => {
+    const h = await harness(
+      ethExtraMarketFeed({ [ETH_BOOK_SAMPLE_ENV]: '20000' }),
+    )
+    await h.at(0, 1)
+    await h.at(10_000, 2)
+    expect(h.count()).toBe(1)
+    await h.at(20_000, 3)
+    expect(h.count()).toBe(2)
+    await h.capture.stop()
+    h.store.close()
+  })
+
+  it('PRESERVE: a feed with no explicit cadence still samples every 30 s', async () => {
+    const h = await harness({ productId: 'PF_ETHUSD' })
+    await h.at(0, 1)
+    await h.at(10_000, 2)
+    await h.at(29_999, 3)
+    expect(h.count()).toBe(1)
+    await h.at(30_000, 4)
+    expect(h.count()).toBe(2)
+    await h.capture.stop()
+    h.store.close()
+  })
+
+  it('PRESERVE: BTC keeps its own trades-and-ticker socket, with no book subscription', async () => {
+    const h = await harness(ethExtraMarketFeed({}))
+    const feeds = (index: number): [string | undefined, string][] =>
+      h.sent[index]!.map((message) => {
+        const { feed, product_ids: ids } = JSON.parse(message) as {
+          feed?: string
+          product_ids?: string[]
+        }
+        return [feed, (ids ?? []).join()]
+      })
+    expect(
+      feeds(0)
+        .map(([feed]) => feed)
+        .sort(),
+    ).toEqual(['ticker', 'trade'])
+    expect(feeds(0).every(([, ids]) => ids === 'PF_XBTUSD')).toBe(true)
+    expect(feeds(1).map(([feed]) => feed)).toContain('book')
+    expect(feeds(1).every(([, ids]) => ids === 'PF_ETHUSD')).toBe(true)
+    await h.capture.stop()
+    h.store.close()
   })
 })

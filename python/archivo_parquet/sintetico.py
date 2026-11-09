@@ -410,6 +410,12 @@ DDL.update({
         comision_sombra_usd REAL, comision_sombra_tipo TEXT, delta_usd REAL, delta_pb REAL,
         modelo TEXT NOT NULL, costos_id TEXT, resuelto_ms INTEGER, version TEXT NOT NULL,
         PRIMARY KEY(product, trade_no, leg))""",
+    "auditor_perdidas": """CREATE TABLE miradas_perdidas(
+        product TEXT NOT NULL, bucket_ms INTEGER NOT NULL, t_ms INTEGER NOT NULL,
+        motivo TEXT NOT NULL, detalle TEXT, despertar_json TEXT, estado TEXT NOT NULL,
+        maestro INTEGER, puntaje REAL, entrada_dice TEXT, salida_dice TEXT, formula_json TEXT,
+        registrada_ms INTEGER NOT NULL, version TEXT NOT NULL,
+        PRIMARY KEY(product, bucket_ms))""",
     "official_candles": """CREATE TABLE paper_futures_official_candles(
         product_id TEXT NOT NULL, interval_ms INTEGER NOT NULL, bucket_start INTEGER NOT NULL,
         revision_hash TEXT NOT NULL, known_at INTEGER NOT NULL, open_price TEXT NOT NULL,

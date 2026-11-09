@@ -225,8 +225,8 @@ período vivo es posterior a la reserva, no se registran intentos y el resultado
 - **Ventana**: sin `--desde`/`--hasta`, del día en que se activó esa config al día siguiente de su última decisión. El replay empieza
   en la primera vela posterior a la activación (el vivo empieza plano) y no compara nada anterior.
 - **Decisiones** (una por mirada de 15 min, por hora de la mirada): `coinciden`, `difieren` (con acción y motivo de los dos lados),
-  `solo_vivo` y `solo_replay` (con su explicación si el vivo omitió esa mirada, p. ej. `proceso_detenido`, o por el enfriamiento
-  contado desde la hora real del fill). `senal_coincide` cuenta las miradas donde el maestro y el portero dicen lo mismo sin importar
+  `solo_vivo` y `solo_replay` (con su explicación si el vivo omitió esa mirada, p. ej. `proceso_detenido`, o, hasta 2026-11-09, por el enfriamiento
+  contado desde la hora real del fill; desde entonces se cuenta desde la mirada). `senal_coincide` cuenta las miradas donde el maestro y el portero dicen lo mismo sin importar
   las posiciones (una diferencia de posición arrastra las acciones siguientes) y `puntaje_dif_max` es la mayor diferencia del puntaje.
 - **Saldo inicial**: el replay empieza con el `cash_usd` que tenía la Terminal al activarse esa config (`vivo.saldo_inicial_usd`),
   porque cada posición toma su fracción del saldo del momento (con 1000 US$ fijos el tamaño salía 0,1 % distinto y el tercer cupo, un
@@ -250,7 +250,7 @@ es la copia del 2026-11-05, anterior al tope: sus operaciones con «fuerte» son
 ### Resultado con la copia del 2026-11-05 (config `37f572…`, 2026-11-02 14:20 → 2026-11-05 03:45 UTC)
 
 213 de 213 decisiones del vivo coinciden (misma acción, mismo maestro y portero, puntaje idéntico); las 33 miradas que solo tiene el
-replay se explican (30 con el proceso del vivo detenido, 3 por el enfriamiento desde la hora real del fill); 9 de 9 operaciones
+replay se explican (30 con el proceso del vivo detenido, 3 por el enfriamiento desde la hora real del fill, que desde 2026-11-09 se mide desde la mirada como en el replay — `docs/terminal-ciclo-de-vida.md`); 9 de 9 operaciones
 emparejadas (6 cerradas con la salida en la misma vela y neto dentro de ±2 bp; 3 siguen abiertas en el vivo). Con el saldo inicial del
 vivo (998,68 US$) **el tamaño coincide**: 494,34 / 494,34 US$ (33 % × 1,5 del saldo), el tercer cupo 9,98 / 9,98 US$; comisiones y
 funding difieren menos de 0,0001 US$ y el neto hasta 0,09 US$ (≤ 2 bp: libro vs. vela).
