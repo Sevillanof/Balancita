@@ -211,6 +211,35 @@ describe('ETH minute summary: aggregation (S4)', () => {
     summary.stop()
   })
 
+  it('averages the six snapshots a 10 s cadence stores per minute, without mixing the next minute (operacion-mejoras S1)', () => {
+    const { path, store } = fresh()
+    store.append(ticker('PF_ETHUSD', T0 + 500, '99', '101'))
+    // Depth 1..6 on both sides, one snapshot every 10 s of minute 0.
+    for (let i = 0; i < 6; i += 1)
+      insertRaw(path, 'book', T0 + i * 10_000, {
+        type: 'book',
+        snapshot: true,
+        bids: [{ price: '99.95', quantity: String(i + 1) }],
+        asks: [{ price: '100.05', quantity: String(i + 1) }],
+      })
+    // A snapshot of minute 1 (depth 100) must not leak into minute 0.
+    insertRaw(path, 'book', T0 + MIN, {
+      type: 'book',
+      snapshot: true,
+      bids: [{ price: '99.95', quantity: '100' }],
+      asks: [{ price: '100.05', quantity: '100' }],
+    })
+    const summary = make(path, AFTER_CLOSE)
+    expect(summary.runOnce().written).toBe(1)
+    const [row] = rows(path)
+    expect(row.minute_start_ms).toBe(T0)
+    expect(row.depth_bid).toBeCloseTo(3.5, 9)
+    expect(row.depth_ask).toBeCloseTo(3.5, 9)
+    // 1 ticker + 6 snapshots.
+    expect(row.events_seen).toBe(7)
+    summary.stop()
+  })
+
   it('leaves NULL what the stored events cannot support (no book, no trades)', () => {
     const { path, store } = fresh()
     store.append(
