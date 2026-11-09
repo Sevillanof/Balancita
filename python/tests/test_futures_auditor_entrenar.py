@@ -27,7 +27,7 @@ from test_futures_auditor import (BAR, CFG, COST, HOUR, MIN, PRODUCT, STRONG, T0
 from test_futures_qwen_live import Policy, make
 
 DAY = qt.DAY_MS
-NEW_TABLES = ("hechos_mirada", "propuestas", "mirada_operaciones", "resultados_operacion", "reentrenos")
+NEW_TABLES = ("hechos_mirada", "propuestas", "mirada_operaciones", "resultados_operacion", "reentrenos", "sombra_maker")
 
 
 def facts(seed=0.1):

@@ -15,11 +15,12 @@ cuánto se habría pagado, para comparar señal por señal. Origen: T17 de
 
 ## Tasks
 
-| ID  | Specs | Ruta                                                                                           | Estado   | Commit |
-| --- | ----- | ---------------------------------------------------------------------------------------------- | -------- | ------ |
-| T1  | S1-S5 | worker: costo coherente + sombra maker de entradas y salidas en el auditor, Parquet, API, docs | en curso | —      |
+| ID  | Specs | Ruta                                                                                           | Estado | Commit |
+| --- | ----- | ---------------------------------------------------------------------------------------------- | ------ | ------ |
+| T1  | S1-S5 | worker: costo coherente + sombra maker de entradas y salidas en el auditor, Parquet, API, docs | hecha  | —      |
 
 ## Log
 
 - **L1** (usuario, 2026-11-09): «Hagamoslo. Quiero que analicemos como seria la integracion con la terminal actual, estamos teniendo en cuenta los costos que usamos ahora por operacion? Como diferenciariamos cuando entramos con uno u otro? Para las salidas lo podemos implementar tambien?»
 - **L2** (usuario): «Si, implementalo en sombra tanto las entradas como las salidas.»
+- **L3** (evidencia T1): el 7,38 era un error de `round_trip_cost_bps` (cobraba impacto a la pata maker); ahora taker/taker 10,38 exacto, una pata maker 7,19, maker/maker 4,00; `settle` sin cambios. Tabla `sombra_maker` (una fila por pata oficial) calculada en `resolve` sobre la cinta capturada (solo lectura, índices, ≤ 8 patas y 1,5 s por pasada); `sin_datos` con motivo si falta libro ≤ 20 s o hay huecos. Corrida diferencial: tablas del vivo y del auditor idénticas. Python 662 OK, Parquet 127/128 (falla local previa), TS 341/341. Se espera ~1/3 de patas `sin_datos` porque el libro se muestrea cada 30 s.

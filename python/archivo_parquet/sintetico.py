@@ -400,6 +400,16 @@ DDL.update({
         veredicto_12h_json TEXT, veredicto_24h_json TEXT, veredicto_36h_json TEXT,
         resuelto_ms INTEGER, version TEXT NOT NULL, direccion_json TEXT, direccion_ms INTEGER,
         PRIMARY KEY(product, bucket_ms))""",
+    "auditor_sombra": """CREATE TABLE sombra_maker(
+        product TEXT NOT NULL, trade_no INTEGER NOT NULL, leg TEXT NOT NULL, motivo_salida TEXT,
+        lado INTEGER NOT NULL, orden TEXT NOT NULL, t_oficial_ms INTEGER NOT NULL,
+        precio_oficial REAL, comision_oficial_usd REAL, comision_oficial_tipo TEXT, cantidad REAL, notional_oficial_usd REAL,
+        libro_ms INTEGER, limite_px REAL,
+        estado TEXT NOT NULL, motivo_sin_datos TEXT,
+        llenado_ms INTEGER, llenado_px REAL, cinta_px REAL, espera_ms INTEGER,
+        comision_sombra_usd REAL, comision_sombra_tipo TEXT, delta_usd REAL, delta_pb REAL,
+        modelo TEXT NOT NULL, costos_id TEXT, resuelto_ms INTEGER, version TEXT NOT NULL,
+        PRIMARY KEY(product, trade_no, leg))""",
     "official_candles": """CREATE TABLE paper_futures_official_candles(
         product_id TEXT NOT NULL, interval_ms INTEGER NOT NULL, bucket_start INTEGER NOT NULL,
         revision_hash TEXT NOT NULL, known_at INTEGER NOT NULL, open_price TEXT NOT NULL,
@@ -519,9 +529,10 @@ def crear_copia_qwen_live(ruta: str, dia0_ms: int, con_excluidas: bool = True) -
     return n
 
 
-def crear_copia_auditor(ruta: str, dia0_ms: int, con_excluidas: bool = True) -> dict:
+def crear_copia_auditor(ruta: str, dia0_ms: int, con_excluidas: bool = True, con_sombra: bool = False) -> dict:
     """``auditor.sqlite`` de 3 dias: 4 miradas por dia. Dia 0 todas resueltas (``resuelto_ms`` puesto, ya no cambian); dia 1 con UNA sin resolver
-    (el auditor todavia la actualiza); dia 2 ninguna resuelta. Devuelve las filas del archivo."""
+    (el auditor todavia la actualiza); dia 2 ninguna resuelta. Con ``con_sombra`` suma ``sombra_maker`` (la sombra maker del auditor): por dia una
+    entrada que lleno como maker y una salida sin datos, ambas ya finales (se escriben una vez). Devuelve las filas del archivo."""
     con = sqlite3.connect(ruta)
     total = 0
     try:
@@ -529,6 +540,8 @@ def crear_copia_auditor(ruta: str, dia0_ms: int, con_excluidas: bool = True) -> 
         if con_excluidas:
             con.execute(DDL_QWEN_EXCLUIDAS["meta"])
             con.execute("INSERT INTO meta VALUES('schema', 'balancita-auditor.v1')")
+        if con_sombra:
+            con.execute(DDL["auditor_sombra"])
         for d in range(3):
             base = dia0_ms + d * DAY_MS
             for h in range(4):
@@ -542,10 +555,25 @@ def crear_copia_auditor(ruta: str, dia0_ms: int, con_excluidas: bool = True) -> 
                     "veredicto_36h_json": '{"acerto": true}' if resuelta else None, "resuelto_ms": t + 36 * 3_600_000 if resuelta else None,
                     "version": "auditor.v1"})
                 total += 1
+            if con_sombra:
+                t = base + 5 * 3_600_000
+                _insertar(con, "sombra_maker", {
+                    "product": "PF_ETHUSD", "trade_no": d + 1, "leg": "entry", "lado": 1, "orden": "compra", "t_oficial_ms": t,
+                    "precio_oficial": 2250.1, "comision_oficial_usd": 0.225, "comision_oficial_tipo": "taker", "cantidad": 0.2,
+                    "notional_oficial_usd": 450.02, "libro_ms": t - 5000, "limite_px": 2250.0, "estado": "maker", "llenado_ms": t + 30_000,
+                    "llenado_px": 2250.0, "espera_ms": 30_000, "comision_sombra_usd": 0.09, "comision_sombra_tipo": "maker", "delta_usd": 0.15,
+                    "delta_pb": 3.4, "modelo": "sombra-maker.v1", "costos_id": "kraken-futures-costs.v2", "resuelto_ms": t + 16 * 60_000,
+                    "version": "auditor.v1"})
+                _insertar(con, "sombra_maker", {
+                    "product": "PF_ETHUSD", "trade_no": d + 1, "leg": "exit", "motivo_salida": "vuelta", "lado": 1, "orden": "venta",
+                    "t_oficial_ms": t + 2 * 3_600_000, "precio_oficial": 2300.0, "comision_oficial_usd": 0.23, "comision_oficial_tipo": "taker",
+                    "cantidad": 0.2, "notional_oficial_usd": 460.0, "estado": "sin_datos", "motivo_sin_datos": "sin_libro",
+                    "modelo": "sombra-maker.v1", "costos_id": "kraken-futures-costs.v2", "resuelto_ms": t + 2 * 3_600_000 + 16 * 60_000,
+                    "version": "auditor.v1"})
         con.commit()
     finally:
         con.close()
-    return {"auditor_miradas": total}
+    return {"auditor_miradas": total, **({"auditor_sombra": 6} if con_sombra else {})}
 
 
 def crear_copia_mercado_util(ruta: str, dia0_ms: int) -> dict:
