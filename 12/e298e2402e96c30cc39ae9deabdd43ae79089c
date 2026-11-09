@@ -1,0 +1,46 @@
+docs/auditor-para-entrenar.md
+  h_92dd6654ceb221 22,24,36-37
+docs/estrategias-laboratorio.md
+  h_92dd6654ceb221 228-229,253
+docs/terminal-ciclo-de-vida.md
+  h_92dd6654ceb221 1-59
+odd/tasks/operacion-mejoras.md
+  h_92dd6654ceb221 18-22,29-30
+ops/vps/README.md
+  h_92dd6654ceb221 24-25,35
+ops/vps/desplegar.sh
+  h_92dd6654ceb221 14-15,24,59,90-97,260-267,269,272-279,286
+python/archivo_parquet/config.py
+  h_92dd6654ceb221 395-403
+python/archivo_parquet/sintetico.py
+  h_92dd6654ceb221 413-418
+python/balancita_engine/futures_auditor.py
+  h_92dd6654ceb221 53-55,222-227,1251-1303
+python/balancita_engine/futures_qwen_live.py
+  h_92dd6654ceb221 29-32,70,333-334,351-352,569-571,573,919,989,992-999,1112-1114,1120,1331-1335,1337,1339,1352,1375-1376,1380-1388,1394,1398-1407,1457-1459,1467-1480,1709-1715,1717-1718
+python/balancita_engine/futures_qwen_trader.py
+  h_92dd6654ceb221 58,92,350,363-370,389,403-404,407,414,419,675-676,828-833,1073,1076-1086,1125-1126,1205,1290,1305-1306,1311,1324-1327,1333,1394,1399,1403,1411,1977,1982
+python/tests/test_archivo_parquet_auditor_entrenar.py
+  h_92dd6654ceb221 23,58-59,64-65,100-101,117
+python/tests/test_futures_auditor_entrenar.py
+  h_92dd6654ceb221 30,579-626
+python/tests/test_futures_qwen_book.py
+  h_92dd6654ceb221 69-71
+python/tests/test_futures_qwen_ciclo_vida.py
+  h_92dd6654ceb221 1-360
+python/tests/test_futures_qwen_live.py
+  h_92dd6654ceb221 424,428,437-441
+scripts/desplegar.node-test.mjs
+  h_92dd6654ceb221 70,191,193-196,234,526-540,543-547
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "12e298e2402e96c30cc39ae9deabdd43ae79089c",
+  "prompts": {},
+  "humans": {
+    "h_92dd6654ceb221": {
+      "author": "Franco Sevillano <79455847+Sevillanof@users.noreply.github.com>"
+    }
+  }
+}
