@@ -1,0 +1,38 @@
+odd/tasks/operacion-mejoras.md
+  h_92dd6654ceb221 22-29,44
+server/src/features/live-gateway/gateway.test.ts
+  h_92dd6654ceb221 247-303
+server/src/features/live-gateway/gateway.ts
+  h_92dd6654ceb221 12-17,419-431
+server/src/features/live-gateway/qwen-account-eth.test.ts
+  h_92dd6654ceb221 1-133
+server/src/features/live-gateway/qwen-account-eth.ts
+  h_92dd6654ceb221 1-86
+server/src/features/live-gateway/qwen-decisions.test.ts
+  h_92dd6654ceb221 821-895
+server/src/features/live-gateway/qwen-decisions.ts
+  h_92dd6654ceb221 223-231,239-244,593-599,839-841,858-860,873-874,894-899,905
+src/app/AccountBalance.test.tsx
+  h_92dd6654ceb221 5,9-19,22-25,36,39-45,51,54-60,63-70,80,106-328
+src/app/AccountBalance.tsx
+  h_92dd6654ceb221 1-2,5-8,10-11,13-16,25-401,430-431,447,471
+src/app/account-balance.test.ts
+  h_92dd6654ceb221 1-302
+src/app/account-balance.ts
+  h_92dd6654ceb221 3,11-19,24-27,33-35,39-45,48-53,93-99,105-106,112-113,129-137,141-191,193-198,201-322
+src/shared/finance/format.test.ts
+  h_92dd6654ceb221 7,28-37
+src/shared/finance/format.ts
+  h_92dd6654ceb221 35-43,85-89
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "4d185f153b864bbe8e9827307661baab77d5a55c",
+  "prompts": {},
+  "humans": {
+    "h_92dd6654ceb221": {
+      "author": "Franco Sevillano <79455847+Sevillanof@users.noreply.github.com>"
+    }
+  }
+}
