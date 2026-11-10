@@ -85,6 +85,15 @@ describe('immutable execution evidence', () => {
       receiptQty: '1',
       entryMs: 1000,
     },
+    {
+      // A catch-up look after a restart is dated with its candle but fills when the process is back:
+      // up to one candle plus the lateness allowed (futures_qwen_live: 2 × 5 min is the live rule).
+      name: 'entry of a catch-up look, fill 9 min after the look',
+      qty: '1',
+      px: '101',
+      receiptQty: '1',
+      entryMs: 1300 - 9 * 60_000,
+    },
   ])(
     'serves recorded fees and timing only after verifying the receipt hash ($name)',
     ({ qty, px, receiptQty, entryMs }) => {
@@ -181,8 +190,8 @@ describe('immutable execution evidence', () => {
           },
         },
       })
-      // A fill before the look, or more than two minutes after it, is not this entry.
-      for (const bad of [1301, 1300 - 120_001]) {
+      // A fill before the look, or more than two 5-minute candles after it (the live rule), is not this entry.
+      for (const bad of [1301, 1300 - 600_001]) {
         const db2 = new DatabaseSync(path)
         db2.prepare('UPDATE trades SET entry_ms=?').run(bad)
         db2.close()

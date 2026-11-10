@@ -76,7 +76,7 @@ describe('chart of one trade', () => {
     const { api } = await mostrar()
     expect(titulo(3)).toBeVisible()
     expect(screen.getByText('▲ LONG')).toBeVisible()
-    expect(screen.getByText('13 mar · entra 00:00')).toBeVisible()
+    expect(screen.getByText('13 mar · entra 01:00')).toBeVisible()
     expect(
       screen.getByRole('button', { name: 'Una operación' }),
     ).toHaveAttribute('aria-pressed', 'true')

@@ -3,7 +3,7 @@ import {
   productBase,
   productPair,
 } from '../features/trading-view/domain/product-label.ts'
-import { utcDateTime } from '../shared/finance/format.ts'
+import { madridDateTimeSeconds } from '../shared/finance/format.ts'
 import ApprovedTerminalLayout from '../features/trading-view/presentation/ApprovedTerminalLayout.tsx'
 import { AppShell } from '../shared/mission-control/index.ts'
 import MarketStrip from './MarketStrip.tsx'
@@ -351,11 +351,11 @@ export default function FuturesTerminal({
       ? `${
           quote.eventTime === null
             ? 'Hora del evento no disponible'
-            : `Evento ${utcDateTime(quote.eventTime)}`
+            : `Evento ${madridDateTimeSeconds(quote.eventTime)}`
         } · ${
           quote.receivedAt === null
             ? 'Recepción no disponible'
-            : `recibido ${utcDateTime(quote.receivedAt)} · hace ${Math.floor(Math.max(0, displayClock - quote.receivedAt) / 1_000)} s`
+            : `recibido ${madridDateTimeSeconds(quote.receivedAt)} · hace ${Math.floor(Math.max(0, displayClock - quote.receivedAt) / 1_000)} s`
         }`
       : null
   const statusItems: Array<{ key: string; tone?: string; text: string }> =
@@ -425,7 +425,7 @@ export default function FuturesTerminal({
           <p>
             Última recepción:{' '}
             {Number.isSafeInteger(lastReceivedAt)
-              ? utcDateTime(Number(lastReceivedAt))
+              ? madridDateTimeSeconds(Number(lastReceivedAt))
               : 'Aún no hay datos recibidos'}
           </p>
           {typeof feedReason === 'string' && (

@@ -1,3 +1,7 @@
+import {
+  MESES_CORTOS,
+  madridParts,
+} from '../../../shared/finance/madrid-time.ts'
 import type { Cambios, Perilla } from '../infrastructure/estrategias-api.ts'
 
 type Valor = number | string | null
@@ -287,26 +291,11 @@ export const usd = (valor: number | null) =>
 export const abreviado = (hash: string | null, largo = 6) =>
   hash ? `${hash.slice(0, largo)}…` : '—'
 
-const MESES = [
-  'ene',
-  'feb',
-  'mar',
-  'abr',
-  'may',
-  'jun',
-  'jul',
-  'ago',
-  'sep',
-  'oct',
-  'nov',
-  'dic',
-]
-
 /** «2026-11-02…» → «2 nov» (calendar date as written, no time zone). */
 export function diaCorto(fecha: string | null | undefined): string {
   const partes = /^(\d{4})-(\d{2})-(\d{2})/.exec(fecha ?? '')
   if (!partes) return '—'
-  return `${Number(partes[3])} ${MESES[Number(partes[2]) - 1]}`
+  return `${Number(partes[3])} ${MESES_CORTOS[Number(partes[2]) - 1]}`
 }
 
 const MOTIVOS: Record<string, string> = {
@@ -318,24 +307,20 @@ const MOTIVOS: Record<string, string> = {
 export const motivoTexto = (motivo: string) =>
   MOTIVOS[motivo] ?? motivo.replaceAll('_', ' ')
 
-/** UTC date and time of an instant: «3 feb 14:05». */
+/** Day and hour of an instant in Europe/Madrid: «3 feb 14:05». */
 export function instanteCorto(ms: number): string {
-  const fecha = new Date(ms)
-  const hh = String(fecha.getUTCHours()).padStart(2, '0')
-  const mm = String(fecha.getUTCMinutes()).padStart(2, '0')
-  return `${fecha.getUTCDate()} ${MESES[fecha.getUTCMonth()]} ${hh}:${mm}`
+  const { day, month, hour, minute } = madridParts(ms)
+  return `${day} ${MESES_CORTOS[month]} ${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`
 }
 
-/** «16 abr» (UTC). */
+/** «16 abr» (Madrid calendar). */
 export function diaDeInstante(ms: number): string {
-  const fecha = new Date(ms)
-  return `${fecha.getUTCDate()} ${MESES[fecha.getUTCMonth()]}`
+  const { day, month } = madridParts(ms)
+  return `${day} ${MESES_CORTOS[month]}`
 }
 
-/** «12:00» (UTC). */
+/** «12:00» (Madrid clock). */
 export function horaDeInstante(ms: number): string {
-  const fecha = new Date(ms)
-  const hh = String(fecha.getUTCHours()).padStart(2, '0')
-  const mm = String(fecha.getUTCMinutes()).padStart(2, '0')
-  return `${hh}:${mm}`
+  const { hour, minute } = madridParts(ms)
+  return `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`
 }

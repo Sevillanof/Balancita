@@ -2,7 +2,11 @@ import type {
   IntervaloVelas,
   Informe,
 } from '../infrastructure/estrategias-api.ts'
-import { numero } from './estrategias-format.ts'
+import {
+  madridWallMs,
+  madridWallToUtc,
+} from '../../../shared/finance/madrid-time.ts'
+import { diaDeInstante, horaDeInstante, numero } from './estrategias-format.ts'
 
 export type { IntervaloVelas }
 
@@ -527,3 +531,43 @@ export function pasoEjeHoras(spanMs: number): number {
     PASOS_EJE_HORAS.find((paso) => horas / paso <= 9) ?? PASOS_EJE_HORAS.at(-1)!
   )
 }
+
+export interface TickEje {
+  ms: number
+  etiqueta: string
+}
+
+/**
+ * Marks of the time axis on the Madrid wall clock: every `cadaHoras` hours when
+ * that is under a day (the hours of Madrid, whatever the UTC offset), every N
+ * Madrid days when it is a multiple of 24. The day mark is Madrid midnight, so on
+ * the 23 h and 25 h days of the changes of hour there is still one per day; an
+ * hour that does not exist is skipped and one that repeats is marked once.
+ */
+export function ticksEjeMadrid(
+  desdeMs: number,
+  hastaMs: number,
+  cadaHoras: number,
+): TickEje[] {
+  const ticks: TickEje[] = []
+  const diaMs = 24 * HORA_MS
+  const primero = Math.floor(madridWallMs(desdeMs) / diaMs)
+  const ultimo = Math.floor(madridWallMs(hastaMs) / diaMs)
+  const dias = Math.max(1, Math.round(cadaHoras / 24))
+  for (let dia = primero; dia <= ultimo; dia += 1) {
+    const horas = cadaHoras >= 24 ? [0] : horasDelDia(cadaHoras)
+    if (cadaHoras >= 24 && dia % dias !== 0) continue
+    for (const hora of horas) {
+      const ms = madridWallToUtc(dia * diaMs + hora * HORA_MS)
+      if (ms === null || ms < desdeMs || ms > hastaMs) continue
+      ticks.push({
+        ms,
+        etiqueta: hora === 0 ? diaDeInstante(ms) : horaDeInstante(ms),
+      })
+    }
+  }
+  return ticks
+}
+
+const horasDelDia = (cadaHoras: number) =>
+  Array.from({ length: Math.ceil(24 / cadaHoras) }, (_, i) => i * cadaHoras)

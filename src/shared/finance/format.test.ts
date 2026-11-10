@@ -5,10 +5,10 @@ import {
   usd,
   usdFromString,
   madridDateTime,
+  madridDateTimeMs,
   madridDateTimeSeconds,
   madridDayTime,
   madridTime,
-  utcDateTime,
 } from './format.ts'
 
 const plain = (text: string) => text.replace(/\u00a0/g, ' ')
@@ -21,11 +21,10 @@ describe('es-ES finance formatting', () => {
     expect(usd(null)).toBe('—')
   })
 
-  it('formats amounts, compact USD and UTC date-times', () => {
+  it('formats amounts and compact USD', () => {
     expect(amount(3.14159, 2)).toBe('3,14')
     expect(amount(undefined)).toBe('—')
     expect(compactUsd(null)).toBe('—')
-    expect(utcDateTime(0)).toBe('1/1/1970, 0:00:00 UTC')
   })
 })
 
@@ -66,6 +65,31 @@ describe('Europe/Madrid times', () => {
     )
     expect(madridDateTimeSeconds(Date.UTC(2026, 6, 1, 22, 5, 9))).toBe(
       '2/7/2026, 00:05:09',
+    )
+  })
+})
+
+describe('Madrid record timestamps', () => {
+  it('writes the date and the clock to the millisecond in Madrid, in winter and summer', () => {
+    expect(madridDateTimeMs(Date.UTC(2027, 0, 15, 7, 58, 30, 123))).toBe(
+      '2027-01-15 08:58:30.123',
+    )
+    expect(madridDateTimeMs(Date.UTC(2026, 6, 14, 22, 0, 0, 7))).toBe(
+      '2026-07-15 00:00:00.007',
+    )
+  })
+  it('follows both changes of hour', () => {
+    expect(madridDateTimeMs(Date.UTC(2026, 2, 29, 0, 59, 59, 999))).toBe(
+      '2026-03-29 01:59:59.999',
+    )
+    expect(madridDateTimeMs(Date.UTC(2026, 2, 29, 1, 0, 0, 0))).toBe(
+      '2026-03-29 03:00:00.000',
+    )
+    expect(madridDateTimeMs(Date.UTC(2026, 9, 25, 0, 30))).toBe(
+      '2026-10-25 02:30:00.000',
+    )
+    expect(madridDateTimeMs(Date.UTC(2026, 9, 25, 1, 30))).toBe(
+      '2026-10-25 02:30:00.000',
     )
   })
 })

@@ -142,6 +142,7 @@ describe('Mission Control components', () => {
     expect(screen.queryByText('No disponible')).toBeNull()
     expect(screen.getByText('run-7')).toBeTruthy()
     expect(screen.getByText(/hace 4 s/)).toBeTruthy()
+    expect(document.body.textContent).not.toMatch(/UTC/)
     // Only the received time is given: the event time stays unavailable.
     rerender(<DataProvenance origin="Kraken" receivedAt={1_800_000_005_000} />)
     expect(screen.getAllByText('No disponible')).toHaveLength(3)

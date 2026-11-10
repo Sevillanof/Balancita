@@ -3,6 +3,7 @@ import type {
   ApprovedTerminalCandle,
   ApprovedTerminalMarker,
 } from '../presentation/ApprovedTerminalChart.tsx'
+import { madridDateTimeMs } from '../../../shared/finance/format.ts'
 import { aggregate } from './chart-indicators.ts'
 
 const EXIT_LABELS: Record<string, string> = {
@@ -82,14 +83,6 @@ export function exitMarkers(
   })
 }
 
-const pad = (value: number, size = 2) => String(value).padStart(size, '0')
-
-/** `2026-10-14 12:34:56.789 UTC` from the fill's original event_time_ms. */
-export function utcTime(ms: number): string {
-  const date = new Date(ms)
-  return `${date.getUTCFullYear()}-${pad(date.getUTCMonth() + 1)}-${pad(date.getUTCDate())} ${pad(date.getUTCHours())}:${pad(date.getUTCMinutes())}:${pad(date.getUTCSeconds())}.${pad(date.getUTCMilliseconds(), 3)} UTC`
-}
-
 export interface FillDetailRow {
   key:
     'fill_id' | 'order_id' | 'time' | 'quantity' | 'side' | 'price' | 'source'
@@ -125,7 +118,7 @@ export function fillDetailRows(
     {
       key: 'time',
       label: 'Hora',
-      value: Number.isSafeInteger(at) ? utcTime(at) : none,
+      value: Number.isSafeInteger(at) ? madridDateTimeMs(at) : none,
     },
     {
       key: 'quantity',

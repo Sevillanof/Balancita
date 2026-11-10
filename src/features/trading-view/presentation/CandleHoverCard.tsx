@@ -1,3 +1,4 @@
+import { madridDateTime } from '../../../shared/finance/format.ts'
 import type { LookDecision } from '../../../app/terminal-lifecycle.ts'
 import type { ApprovedTerminalCandle } from './ApprovedTerminalChart.tsx'
 import DecisionIcons from './DecisionIcons.tsx'
@@ -135,7 +136,7 @@ export default function CandleHoverCard({
               />
             </span>
             <small className="text-ink-2">
-              {new Date(candle.time * 1000).toISOString().slice(11, 16)} UTC
+              {madridDateTime(candle.time * 1000)}
             </small>
           </div>
         </div>

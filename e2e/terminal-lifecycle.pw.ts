@@ -939,6 +939,9 @@ test('an operation shows its ficha without moving the chart, and a candle shows 
   await page.mouse.move(box.x + box.width * 0.35, box.y + box.height * 0.7)
   const card = page.getByTestId('candle-hover-card')
   await expect(card).toBeVisible()
+  // The candle's time is Madrid's (day and hour), never UTC, whatever zone the browser runs in.
+  await expect(card).toContainText(/\d{1,2} [a-zñ]{3,4}\.?, \d{2}:\d{2}/)
+  await expect(card).not.toContainText('UTC')
   const icons = card.locator('[data-decision]')
   await expect(icons.first()).toBeVisible()
   await icons.nth(2).hover()

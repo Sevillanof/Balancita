@@ -299,6 +299,15 @@ function executionOf(value: unknown): QwenExecution | null {
   }
 }
 
+/**
+ * Since operacion-mejoras T2 the entry is dated with the look that decided it and the receipt keeps the fill,
+ * seconds later (a catch-up look: up to two 5-minute candles). The gateway and the live trader link them under
+ * the same rule (`ENTRY_FILL_MAX_LAG_MS = 2 * BAR_MS`); older trades have both equal, which still matches.
+ */
+const ENTRY_FILL_MAX_LAG_MS = 2 * 5 * 60_000
+const entryFillMatches = (executedMs: number, entryMs: number): boolean =>
+  executedMs >= entryMs && executedMs - entryMs <= ENTRY_FILL_MAX_LAG_MS
+
 /** The trades of a `/api/qwen/trades` answer; anything malformed is left out. */
 export function qwenTrades(payload: unknown): QwenTrade[] {
   const body = record(payload)
@@ -316,7 +325,7 @@ export function qwenTrades(payload: unknown): QwenTrade[] {
       (row.execution != null && execution === null) ||
       (execution !== null &&
         (row.product !== 'PF_ETHUSD' ||
-          execution.entry.executedMs !== entryMs ||
+          !entryFillMatches(execution.entry.executedMs, entryMs) ||
           execution.entry.price !== number(row.entry_price) ||
           (row.status === 'closed' && execution.exit === null) ||
           (execution.error !== null && row.net_usd != null)))

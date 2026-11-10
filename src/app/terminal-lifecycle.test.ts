@@ -266,6 +266,26 @@ describe('lifecycleView · decisión óptima', () => {
     expect(flip.checks!.map((check) => check.state)).toEqual(['none', 'wrong'])
     expect(view.steps.find((s) => s.id === 'cap')!.checks).toBeNull()
   })
+
+  it('does not judge the look that opened the operation: since T2 the entry is dated with that very look', () => {
+    const view = lifecycleView({
+      analyses: [
+        look(NOW - 100 * MIN, 'MANTENER', { maestro: -2 }),
+        look(NOW - 90 * MIN, 'CORTO', { maestro: -2 }),
+        look(NOW - 75 * MIN, 'MANTENER', { maestro: -2 }),
+      ],
+      // Entry at 14:00 − 90 min = the look of the second analysis, as the live trader now dates it.
+      openTrade: trade({ entryMs: NOW - 90 * MIN }),
+      nowMs: NOW,
+      prices: rising,
+    })!
+    const flip = view.steps.find((step) => step.id === 'flip')!
+    expect(flip.checks!.map((check) => check.state)).toEqual([
+      'none',
+      'none',
+      'wrong',
+    ])
+  })
 })
 
 describe('lifecycleView · veredicto del auditor', () => {
