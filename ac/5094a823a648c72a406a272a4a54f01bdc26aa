@@ -1,0 +1,40 @@
+docs/archivo-parquet.md
+  h_92dd6654ceb221 114
+docs/auditor-para-entrenar.md
+  h_92dd6654ceb221 9-11,16-25,39-40,47-48
+docs/maker-sombra.md
+  h_92dd6654ceb221 35-37,39
+odd/tasks/noticias-y-auditor.md
+  h_92dd6654ceb221 22,45,72-73
+odd/tasks/operacion-mejoras.md
+  h_92dd6654ceb221 22-32,64-67
+python/archivo_parquet/nocturno.py
+  h_92dd6654ceb221 94-97
+python/archivo_parquet/sintetico.py
+  h_92dd6654ceb221 436-438,552
+python/balancita_engine/futures_auditor.py
+  h_92dd6654ceb221 52-53,58-59,225-227,238-247,896,909-915,917,920,922-923,925-929,1170-1171,1173-1179,1185-1186,1197-1202,1208-1209,1217-1240,1249-1251,1254-1255,1257,1259-1260,1271,1273-1298,1305-1319,1494,1496-1497,1499-1501,1506,1511,1513-1514,1518-1548,1564,1778,1781-1783
+python/balancita_engine/futures_qwen_live.py
+  h_92dd6654ceb221 71-73,908-910,1031,1054,1058,1062-1063,1423,1474-1481,1563-1568,1571,1573-1576,1602-1603,1615-1616,1619-1666,1668-1670,1677-1678
+python/tests/test_archivo_parquet_auditor_entrenar.py
+  h_92dd6654ceb221 54-62
+python/tests/test_archivo_parquet_nocturno.py
+  h_92dd6654ceb221 311
+python/tests/test_futures_auditor_entrenar.py
+  h_92dd6654ceb221 30-31,871,876-877,879-911,922-1088
+python/tests/test_futures_auditor_sombra.py
+  h_92dd6654ceb221 238-239,412-449,588,612,664,670-709
+python/tests/test_futures_qwen_live.py
+  h_92dd6654ceb221 127-131,133-135
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "ac5094a823a648c72a406a272a4a54f01bdc26aa",
+  "prompts": {},
+  "humans": {
+    "h_92dd6654ceb221": {
+      "author": "Franco Sevillano <79455847+Sevillanof@users.noreply.github.com>"
+    }
+  }
+}
