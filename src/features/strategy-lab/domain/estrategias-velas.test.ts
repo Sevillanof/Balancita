@@ -14,6 +14,7 @@ import {
   rangoVarias,
   salidaIdeal,
   ticksDePrecio,
+  ticksEjeMadrid,
   topeVarianteDeInforme,
   ubicarPildoras,
   ventanaDeInforme,
@@ -611,5 +612,101 @@ describe('axes', () => {
     expect(pasoEjeHoras(30 * H)).toBe(6)
     expect(pasoEjeHoras(120 * H)).toBe(24)
     expect(pasoEjeHoras(40 * 24 * H)).toBe(168)
+  })
+})
+
+describe('time axis in Madrid', () => {
+  const iso = (ticks: { ms: number }[]) =>
+    ticks.map((tick) => new Date(tick.ms).toISOString())
+
+  it('puts the daily marks on Madrid midnight in winter and in summer', () => {
+    expect(
+      iso(
+        ticksEjeMadrid(
+          Date.UTC(2026, 0, 14, 12),
+          Date.UTC(2026, 0, 16, 12),
+          24,
+        ),
+      ),
+    ).toEqual(['2026-01-14T23:00:00.000Z', '2026-01-15T23:00:00.000Z'])
+    expect(
+      iso(
+        ticksEjeMadrid(
+          Date.UTC(2026, 6, 14, 12),
+          Date.UTC(2026, 6, 16, 12),
+          24,
+        ),
+      ),
+    ).toEqual(['2026-07-14T22:00:00.000Z', '2026-07-15T22:00:00.000Z'])
+  })
+
+  it('keeps one mark per Madrid day over the 23 h spring day and the 25 h autumn day', () => {
+    expect(
+      iso(
+        ticksEjeMadrid(
+          Date.UTC(2026, 2, 28, 12),
+          Date.UTC(2026, 2, 30, 12),
+          24,
+        ),
+      ),
+    ).toEqual(['2026-03-28T23:00:00.000Z', '2026-03-29T22:00:00.000Z'])
+    expect(
+      iso(
+        ticksEjeMadrid(
+          Date.UTC(2026, 9, 24, 12),
+          Date.UTC(2026, 9, 26, 12),
+          24,
+        ),
+      ),
+    ).toEqual(['2026-10-24T22:00:00.000Z', '2026-10-25T23:00:00.000Z'])
+  })
+
+  it('labels the Madrid hours of the day over the spring change, and skips none that exist', () => {
+    const ticks = ticksEjeMadrid(
+      Date.UTC(2026, 2, 28, 22),
+      Date.UTC(2026, 2, 29, 23),
+      6,
+    )
+    expect(ticks.map((tick) => tick.etiqueta)).toEqual([
+      '29 mar', // 00:00 CET
+      '06:00', // 04:00 UTC (CEST)
+      '12:00',
+      '18:00',
+      '30 mar', // 00:00 CEST
+    ])
+    expect(iso(ticks)).toEqual([
+      '2026-03-28T23:00:00.000Z',
+      '2026-03-29T04:00:00.000Z',
+      '2026-03-29T10:00:00.000Z',
+      '2026-03-29T16:00:00.000Z',
+      '2026-03-29T22:00:00.000Z',
+    ])
+  })
+
+  it('does not repeat a label over the autumn change', () => {
+    const ticks = ticksEjeMadrid(
+      Date.UTC(2026, 9, 24, 22),
+      Date.UTC(2026, 9, 25, 23),
+      1,
+    )
+    const hours = ticks.map((tick) => tick.etiqueta)
+    // 25 h of 25 Oct: 02:00 happens twice, the axis writes it once (the first).
+    expect(hours.filter((label) => label === '02:00')).toHaveLength(1)
+    expect(new Set(hours).size).toBe(hours.length)
+    expect(hours[0]).toBe('25 oct')
+  })
+
+  it('spaces the marks of several days on the Madrid calendar', () => {
+    const ticks = ticksEjeMadrid(
+      Date.UTC(2026, 2, 20),
+      Date.UTC(2026, 3, 10),
+      168,
+    )
+    // Each one is a Madrid midnight, seven days apart on the wall calendar.
+    expect(ticks.every((tick) => tick.etiqueta.match(/^\d+ [a-z]{3}$/))).toBe(
+      true,
+    )
+    const days = ticks.map((tick) => Math.round(tick.ms / 86_400_000))
+    expect(days.length).toBeGreaterThan(1)
   })
 })

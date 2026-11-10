@@ -52,11 +52,14 @@ const chartMocks = vi.hoisted(() => {
     timeScale,
     markerApi,
     chart,
-    createChart: vi.fn((container: HTMLElement, options: unknown) => {
-      void container
-      void options
-      return chart
-    }),
+    createChartEx: vi.fn(
+      (container: HTMLElement, behavior: unknown, options: unknown) => {
+        void container
+        void behavior
+        void options
+        return chart
+      },
+    ),
     createSeriesMarkers: vi.fn(() => markerApi),
   }
 })
@@ -66,7 +69,8 @@ vi.mock('lightweight-charts', () => ({
   CandlestickSeries: 'candles',
   HistogramSeries: 'volume',
   LineSeries: 'line',
-  createChart: chartMocks.createChart,
+  createChartEx: chartMocks.createChartEx,
+  defaultHorzScaleBehavior: () => class {},
   createSeriesMarkers: chartMocks.createSeriesMarkers,
 }))
 
@@ -106,6 +110,37 @@ describe('approved connected terminal chart', () => {
     expect(lineOptions.autoscaleInfoProvider()).toBeNull()
   })
 
+  it('labels the time axis and the crosshair in Madrid time, on every viewport', () => {
+    render(
+      <ApprovedTerminalChart
+        candles={candles}
+        markers={[]}
+        selectedId=""
+        intervalSeconds={60}
+        onSelect={vi.fn()}
+      />,
+    )
+    const options = chartMocks.createChartEx.mock.calls[0]?.[2] as {
+      localization: { timeFormatter: (time: number) => string }
+      timeScale: {
+        tickMarkFormatter: (
+          time: number,
+          type: number,
+          locale: string,
+        ) => string | null
+      }
+    }
+    // 9 nov 2026 22:15 UTC = 23:15 CET; 14 jul 2026 22:15 UTC = 00:15 CEST the next day.
+    const winter = Date.UTC(2026, 10, 9, 22, 15) / 1000
+    const summer = Date.UTC(2026, 6, 14, 22, 15) / 1000
+    expect(options.localization.timeFormatter(winter)).toBe('9 nov, 23:15')
+    expect(options.localization.timeFormatter(summer)).toBe('15 jul, 00:15')
+    expect(options.timeScale.tickMarkFormatter(winter, 3, 'es-ES')).toBe(
+      '23:15',
+    )
+    expect(options.timeScale.tickMarkFormatter(summer, 2, 'es-ES')).toBe('15')
+  })
+
   it('restores the exported chart appearance and a compact initial view', () => {
     render(
       <ApprovedTerminalChart
@@ -118,8 +153,9 @@ describe('approved connected terminal chart', () => {
       />,
     )
 
-    expect(chartMocks.createChart).toHaveBeenCalledWith(
+    expect(chartMocks.createChartEx).toHaveBeenCalledWith(
       expect.any(HTMLDivElement),
+      expect.anything(),
       expect.objectContaining({
         layout: expect.objectContaining({
           fontFamily: 'IBM Plex Mono, monospace',
@@ -138,7 +174,7 @@ describe('approved connected terminal chart', () => {
         timeScale: expect.objectContaining({ rightOffset: 8, barSpacing: 8 }),
       }),
     )
-    expect(chartMocks.createChart.mock.calls[0]?.[1]).toEqual(
+    expect(chartMocks.createChartEx.mock.calls[0]?.[2]).toEqual(
       expect.objectContaining({
         layout: expect.objectContaining({
           background: {
@@ -185,8 +221,9 @@ describe('approved connected terminal chart', () => {
           onSelect={vi.fn()}
         />,
       )
-      expect(chartMocks.createChart).toHaveBeenCalledWith(
+      expect(chartMocks.createChartEx).toHaveBeenCalledWith(
         expect.any(HTMLDivElement),
+        expect.anything(),
         expect.objectContaining({
           layout: expect.objectContaining({
             background: { type: 'solid', color: '#111222' },

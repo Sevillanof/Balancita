@@ -15,7 +15,7 @@ import {
   type Section,
 } from '../infrastructure/observability-api.ts'
 import { useReport } from '../infrastructure/useReport.ts'
-import { utcDateTime } from '../../../shared/finance/format.ts'
+import { madridDateTimeSeconds } from '../../../shared/finance/format.ts'
 import { duration, momentLabel, shortProduct, sideLabel } from './format.ts'
 import { LABEL, TONE } from './health-view.ts'
 import type { HealthRead } from './HealthIndicator.tsx'
@@ -177,7 +177,7 @@ function Now({
             </>
           ) : null}
           {' · '}
-          {utcDateTime(unconfirmed.decisionTimeMs)} · hace{' '}
+          {madridDateTimeSeconds(unconfirmed.decisionTimeMs)} · hace{' '}
           {duration(nowMs - unconfirmed.decisionTimeMs)} ({clockNote})
           <small className={OBS.nowSource} data-testid="now-blockers">
             {' '}
@@ -195,7 +195,7 @@ function Now({
           {latest.reasonCode ? <code>{latest.reasonCode}</code> : 'Sin motivo'}
           {' · '}Régimen {latest.regime ?? 'No disponible'}
           {' · '}
-          {utcDateTime(latest.decisionTimeMs)} · hace{' '}
+          {madridDateTimeSeconds(latest.decisionTimeMs)} · hace{' '}
           {duration(nowMs - latest.decisionTimeMs)} ({clockNote})
           <small className={OBS.nowSource} data-testid="now-source">
             {' '}
@@ -218,7 +218,7 @@ function Now({
             </>
           ) : null}
           {' · '}
-          {utcDateTime(historic.decisionTimeMs)} · hace{' '}
+          {madridDateTimeSeconds(historic.decisionTimeMs)} · hace{' '}
           {duration(nowMs - historic.decisionTimeMs)} ({clockNote})
           <small className={OBS.nowSource}>
             {' '}

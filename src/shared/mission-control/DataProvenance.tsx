@@ -1,4 +1,4 @@
-import { utcDateTime } from '../finance/format.ts'
+import { madridDateTimeSeconds } from '../finance/format.ts'
 
 export const PROVENANCE_UNAVAILABLE = 'No disponible'
 
@@ -23,7 +23,7 @@ const known = (value: string | null | undefined) =>
 
 const time = (value: number | null | undefined) =>
   typeof value === 'number' && Number.isSafeInteger(value)
-    ? utcDateTime(value)
+    ? madridDateTimeSeconds(value)
     : null
 
 /**

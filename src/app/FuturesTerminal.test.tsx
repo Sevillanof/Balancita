@@ -82,7 +82,8 @@ vi.mock('lightweight-charts', () => {
     ColorType: { Solid: 'solid' },
     HistogramSeries: 'histogram',
     LineSeries: 'line',
-    createChart: () => chart,
+    createChartEx: () => chart,
+    defaultHorzScaleBehavior: () => class {},
     createSeriesMarkers: () => ({
       setMarkers(markers: Record<string, unknown>[]) {
         chartHarness.markerSets.push(markers)
@@ -303,9 +304,8 @@ describe('FuturesTerminal presentation', () => {
     expect(await screen.findByText(/100\.123,45/)).toBeTruthy()
     expect(screen.getByText(/^Último trade público/)).toBeTruthy()
     openStatus()
-    expect(
-      screen.getByText(/Evento .* UTC · recibido .* UTC · hace \d+ s/),
-    ).toBeTruthy()
+    const times = screen.getByText(/Evento .* · recibido .* · hace \d+ s/)
+    expect(times.textContent).not.toMatch(/UTC/)
     expect(screen.getByText(/Financiación: desconocida/)).toBeTruthy()
   })
 
@@ -1014,14 +1014,14 @@ describe('FuturesTerminal on the live gateway with paper execution', () => {
       })
       const fillDetail = () => screen.queryByLabelText('Ejecución seleccionada')
 
-      it('clicking the marker of a fill opens fill_id, order_id, UTC time, quantity, direction and source', async () => {
+      it('clicking the marker of a fill opens fill_id, order_id, Madrid time, quantity, direction and source', async () => {
         await renderReady(withPartialFills())
         expect(fillDetail()).toBeNull()
         await clickMarker('fill:7')
         const facts = within(fillDetail()!)
         expect(facts.getByText('fill:7')).toBeTruthy()
         expect(facts.getByText('order-partial')).toBeTruthy()
-        expect(facts.getByText('2027-01-15 07:58:30.123 UTC')).toBeTruthy()
+        expect(facts.getByText('2027-01-15 08:58:30.123')).toBeTruthy()
         expect(facts.getByText('0.2 BTC')).toBeTruthy()
         expect(facts.getByText('LONG (compra)')).toBeTruthy()
         expect(facts.getByText('100011 USD')).toBeTruthy()
@@ -1038,7 +1038,7 @@ describe('FuturesTerminal on the live gateway with paper execution', () => {
         expect(facts.getByText('fill:8')).toBeTruthy()
         expect(facts.queryByText('fill:7')).toBeNull()
         expect(facts.getByText('order-partial')).toBeTruthy()
-        expect(facts.getByText('2027-01-15 07:58:50.456 UTC')).toBeTruthy()
+        expect(facts.getByText('2027-01-15 08:58:50.456')).toBeTruthy()
         expect(facts.getByText('0.3 BTC')).toBeTruthy()
         // The fill carries no price: it says so instead of inventing one.
         expect(facts.getByText('No disponible')).toBeTruthy()

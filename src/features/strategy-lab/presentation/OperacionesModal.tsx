@@ -45,8 +45,8 @@ export default function OperacionesModal({
         </div>
       </div>
       <p className={EYEBROW}>
-        {operaciones.length - cerradas} operaciones · horas en UTC · neto en US$
-        después de costos
+        {operaciones.length - cerradas} operaciones · horas de Madrid · neto en
+        US$ después de costos
         {cerradas > 0 &&
           ` · ${cerradas} ${cerradas === 1 ? 'cerrada' : 'cerradas'} al final de la ventana (fuera de las métricas)`}
       </p>

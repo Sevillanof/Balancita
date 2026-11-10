@@ -1,4 +1,4 @@
-import { utcDateTime } from '../../../shared/finance/format.ts'
+import { madridDateTimeSeconds } from '../../../shared/finance/format.ts'
 
 /** `2 min`, `3 h 5 min`, `45 s`: a duration, never a judgement about it. */
 export function duration(ms: number): string {
@@ -13,13 +13,13 @@ export function duration(ms: number): string {
 }
 
 /**
- * A moment in UTC and how long before the report was written. The age is taken
+ * A moment in Madrid time and how long before the report was written. The age is taken
  * against the server's own clock (`generated_at_ms`), so a skewed browser clock
  * cannot make old data look fresh.
  */
 export function momentLabel(ms: number | null, reference: number): string {
   if (ms === null) return 'Sin datos'
-  return `${utcDateTime(ms)} · hace ${duration(reference - ms)}`
+  return `${madridDateTimeSeconds(ms)} · hace ${duration(reference - ms)}`
 }
 
 export function shortProduct(product: string): string {

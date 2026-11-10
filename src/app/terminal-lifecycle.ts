@@ -1094,10 +1094,11 @@ export function lifecycleView(input: {
       checks: JUDGED.has(step.id)
         ? recent.map((look) => {
             const at = Number(look.decision_time_ms)
-            // Looks from before the operation opened had nothing to hold or close.
+            // Looks from before the operation opened had nothing to hold or close, nor had the look that
+            // opened it: its entry is dated with that very look (operacion-mejoras T2).
             const past = build(look, at)[index]
             return judge(
-              at < trade.entryMs || !past ? null : claimOf(past, side, null),
+              at <= trade.entryMs || !past ? null : claimOf(past, side, null),
               look,
               at,
               input.nowMs,

@@ -10,9 +10,13 @@ import {
 } from './auditor-verdicts.ts'
 
 /** Since operacion-mejoras T2 a book entry is dated with the look that decided it and its receipt keeps the
- * fill, a few seconds later; the live trader links them when 0 ≤ fill − entry ≤ 2 one-minute candles
- * (futures_qwen_live.py). Older trades have both equal, which still matches. */
-const ENTRY_FILL_MAX_LAG_MS = 2 * 60_000
+ * fill, seconds later; a catch-up look (the process came back late) fills up to one candle plus the lateness
+ * allowed after the candle it is dated with. The live trader links them when 0 ≤ fill − entry ≤ 2 five-minute
+ * candles (`ENTRY_FILL_MAX_LAG_MS = 2 * BAR_MS` in futures_qwen_live.py): the same rule here, or the
+ * Terminal would answer 400 for the first trade opened by a catch-up look. Older trades have both equal,
+ * which still matches. */
+const BAR_MS = 5 * 60_000
+const ENTRY_FILL_MAX_LAG_MS = 2 * BAR_MS
 function entryFillMatches(
   executedAtMs: number,
   entryMs: number | null,

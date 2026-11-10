@@ -7,7 +7,7 @@ import {
 } from '../infrastructure/observability-api.ts'
 import { LABEL, TONE, componentOrder, reportTiming } from './health-view.ts'
 import { duration, momentLabel } from './format.ts'
-import { utcDateTime } from '../../../shared/finance/format.ts'
+import { madridDateTimeSeconds } from '../../../shared/finance/format.ts'
 
 function ageLabel(age: number | null): string {
   if (age === null) return 'sin verificar'
@@ -77,7 +77,7 @@ function ComponentRow({
                   {item.lastUpdatedMs === null
                     ? 'Sin datos'
                     : reference === null || item.lastUpdatedMs > reference
-                      ? `${utcDateTime(item.lastUpdatedMs)} · edad sin verificar`
+                      ? `${madridDateTimeSeconds(item.lastUpdatedMs)} · edad sin verificar`
                       : momentLabel(item.lastUpdatedMs, reference)}
                 </dd>
               </div>
@@ -151,7 +151,7 @@ function Inspector({
                 Recepción: {ageLabel(timing?.receiptAge ?? null)} · hora
                 gateway:{' '}
                 {Number.isFinite(report.generatedAtMs)
-                  ? utcDateTime(report.generatedAtMs)
+                  ? madridDateTimeSeconds(report.generatedAtMs)
                   : 'sin verificar'}
               </p>
             )}
