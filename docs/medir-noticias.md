@@ -1,6 +1,6 @@
 # Medir si las noticias anticipan el precio
 
-Informe de solo lectura: por cada noticia que Qwen analizó (relevancia y dirección, preguntas v2; o, en el modo solo-ficha, la fuerza y la dirección de la ficha) mide cuánto se movió ETH a **1 h, 4 h y 12 h** desde que Balancita la conoció. No cambia el trader ni las bases.
+Informe de solo lectura: por cada noticia que Qwen analizó (relevancia y dirección, preguntas v2; o la fuerza y la dirección de la ficha, de Qwen en el modo solo-ficha o de las reglas del backend desde S10) mide cuánto se movió ETH a **1 h, 4 h y 12 h** desde que Balancita la conoció. No cambia el trader ni las bases.
 
 ```
 PYTHONPATH=python python3 -m balancita_engine.futures_news_effect \
@@ -22,7 +22,64 @@ PYTHONPATH=python python3 -m balancita_engine.futures_news_effect \
 
 Las muestras son chicas y las noticias se agrupan en los mismos eventos: un acierto de 55 % con n=50 no es una ventaja demostrada.
 
+## Motor de reglas: el backend cataloga cada noticia, sin IA (S10, T18)
+
+Decisión del usuario (L26 de `odd/tasks/noticias-y-auditor.md`): «tenemos que hacerlo sin una IA, solo BE que catalogue cada noticia entre alcista, bajista e importante». El proceso de noticias (`futures_news`) cataloga **cada noticia al entrar**, al instante y sin llama-server, con reglas fijas: `python/balancita_engine/futures_news_reglas.py` y el léxico versionado `config/noticias-reglas.json`. Sin Qwen, sin Haiku, sin ningún modelo ni red; la misma noticia da siempre la misma ficha.
+
+**Qué escribe.** Una fila de `paper_futures_news_cards` con `card_version = 3` (las de Qwen son la 1 y no se tocan; los lectores toman la versión más nueva de cada noticia), `status = done`, y:
+
+| Columna                                       | Valor                                                                                                                                                   |
+| --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `event_type`                                  | `hack`, `regulation`, `macro_fed`, `etf_flows`, `network_outage`, `adoption`, `price_recap`, `opinion`, `other` (los ids de siempre, no `hack_exploit`) |
+| `direction`                                   | `bullish` (alcista), `bearish` (bajista), `neutral`                                                                                                     |
+| `strength`                                    | importancia 0-3: 0 ruido, 1 menor, 2 importante, 3 muy importante                                                                                       |
+| `strength_model`                              | la fuerza antes de los ajustes por fuente y topes (`strength_base`)                                                                                     |
+| `amount_usd`                                  | el monto principal en dólares (`parse_amount_usd`, el mismo de siempre)                                                                                 |
+| `rules_json`                                  | los nombres de las reglas que dispararon (para el tooltip y la auditoría): `recap`, `hack_100m`, `source_boost:fed`…                                    |
+| `questions_json`                              | `["engine:reglas", "lexicon:noticias-reglas.vN"]`: quién la hizo y con qué léxico                                                                       |
+| `scope`, `already_happened`, `strength_value` | nulos (las reglas no los deciden; `hack_100m` supone que ya pasó, como el modo solo-ficha)                                                              |
+
+Corre en el mismo ciclo que la ingesta, para toda noticia guardada que no tenga ficha 3 (también las anteriores al cambio: al primer arranque se catalogan todas). Si las reglas fallan con una noticia queda una ficha `failed` y las demás siguen.
+
+**Orden de las reglas** (el código solo sabe el orden; las palabras y los umbrales están en el JSON):
+
+1. **`recap`** (titular que narra el precio: «Ether slips 2% to $3,400», «live updates») y **`opinion`** (pregunta, «why/how…», `could`, columna, comentario de un hackeo: «…, Pandl says», «warns», «calls for») → fuerza 0, `neutral`. Una opinión no pasa de `caps.opinion_max_strength` (1) ni con el empujón de una fuente (`opinion_cap`).
+2. **Tipo de evento**, el primero que coincide: hackeo, caída de red/exchange, flujos de ETF, macro/Fed, regulación, hackeo en el resumen, adopción, macro amplia (`macro_broad`: ruido salvo sorpresa), otro.
+3. **Fuerza del tipo**: hackeo ≥ 100 M US$ → ≥ 2 (`hack_100m`), ≥ 1.000 M → 3 (`hack_1b`; una secuela del hackeo —«traces», «denies», «says»— se queda en 2: `hack_followup_cap`); caída que corta retiros u operaciones de un exchange → 2; sorpresa macro (CPI más alto, «no cuts», recorte/alza, aranceles con caída) → 2; flujos de ETF ≥ 500 M → 2 (`etf_flow_500m`); acción contra un exchange (demanda, sanción, «cuts off») → 2; adopción menor solo si es grande o de una institución conocida.
+4. **Reglas críticas** (patrones con nombre en el JSON): `chain_halt` (mainnet de Ethereum detenida) y `stablecoin_depeg` (USDT/USDC) → 3 bajista; `spot_etf_approval` (aprobación de un ETF spot de ETH/BTC) → 3 alcista; `fed_emergency_cut` → 3 alcista y `fed_emergency_hike` → 3 bajista; `hack_withdrawals_halted` (hackeo con retiros frenados, en el titular) → 2 bajista; `crypto_purchase` (una empresa compra ETH/BTC) → 1 alcista.
+5. **Dirección**: bajista para hackeos y caídas (con monto ≥ 1 M, palabra de caída o fuerza 2); flujos de ETF por su vocabulario (`inflows`/`outflows`…); el resto, por vocabulario solo desde fuerza 2; fuerza 0 siempre `neutral`.
+6. **Prioridad de la fuente** (`source_priors`): `fed_monetary` +1 y mínimo 2; `fed` +1 si es macro y habla de tasas/inflación/FOMC; `sec` +1 si es regulación o ETF y habla de cripto/demandas; `sec_speeches` y `eth_foundation` con tope 1 (`source_boost:…`, `source_floor:…`, `source_cap:…`).
+
+**Cómo se afina.** Editar `config/noticias-reglas.json` (listas de palabras, umbrales en `amounts_usd`, `source_priors`, `critical`) y **subir `version`**; el proceso valida el archivo al arrancar y sale con «configuration error» nombrando el campo (`types.hack: invalid pattern…`) en vez de catalogar a ciegas. Cada ficha guarda la versión que la hizo. No hace falta tocar código; sí correr los tests (`test_futures_news_reglas*.py`: una prueba por regla y los 22 casos claros como regresión).
+
+**Cómo se mide el acuerdo con Haiku** (informativo: acuerdo no es acierto; Haiku contra sí mismo coincide ~93 % en fuerza, ~97 % en dirección, ~91 % en tipo):
+
+```
+PYTHONPATH=python python3 -m balancita_engine.futures_news_reglas_eval analisis/clasificador-noticias/datos.jsonl [--solo-desarrollo] [--json]
+```
+
+Parte las 854 noticias etiquetadas en `desarrollo` (antes del 2026-11-07 00:00 UTC: 650) y `prueba` (desde ahí: 204). **El léxico se afinó mirando solo desarrollo y los 22 casos claros; la prueba no se usa para afinar** (se lee al final, con `--solo-desarrollo` mientras se afina).
+
+| `noticias-reglas.v1` vs fichas de Haiku | n   | fuerza 0/1/2-3 | fuerza exacta | dirección (siempre «neutral») | tipo   | recall 2-3 | precisión 2-3 | bajistas | alcistas |
+| --------------------------------------- | --- | -------------- | ------------- | ----------------------------- | ------ | ---------- | ------------- | -------- | -------- |
+| desarrollo (en muestra)                 | 650 | 67,2 %         | 66,2 %        | 86,3 % (88,9 %)               | 56,2 % | 50/59      | 50/66         | 40/64    | 0/8      |
+| **prueba final**                        | 204 | **60,8 %**     | 60,8 %        | **84,3 %** (93,6 %)           | 47,1 % | 1/4        | 1/10          | 2/8      | 0/5      |
+
+Cómo leerlo, sin adornos: en la prueba las reglas **no superan** a «siempre fuerza 0 / neutral» (68,1 % y 93,6 %): marcan 1 donde Haiku pone 0 (la frontera 0/1 es borrosa también para Haiku) y ponen dirección donde Haiku dice neutral. Solo hay 4 noticias de fuerza ≥ 2 en la prueba, así que el recall no mide nada (1 de 4). El prototipo previo (`analisis/clasificador-noticias/reglas.py`) sacó 59,8 % / 89,7 % / 49,5 % en la misma prueba; Qwen en vivo, 51,1 % en fuerza sobre las 135 noticias que alcanzó a procesar. Lo que las reglas sí hacen, y Qwen tardaba 44 s por noticia en hacer: marcar al instante los eventos raros fuertes (hackeos grandes, caídas, sorpresas de la Fed), que es lo que el trader querría ver. Los **22 casos claros** (`analisis/haiku-panorama/casos_esperados.py`, titulares inventados) salen **22/22** en fuerza, dirección y tipo aceptables (el prototipo, 16/22, 16/22 y 21/22) — pero el léxico se ajustó hasta que pasaran, así que es una guardia de regresión, no evidencia independiente. La prueba final se leyó dos veces (antes y después de un último ajuste hecho solo con la tabla de desarrollo: `macro_broad`); el número de arriba es el segundo (el primero fue 55,4 % / 84,3 % / 47,1 %).
+
+**Límites conocidos:** la dirección de las secuelas de un hackeo y de lo que Haiku llama «opinión» es la más discordante; no hay alcance ni «ya pasó»; el titular manda (el resumen solo cuenta para montos, el hackeo en el resumen y las reglas con `"where": "text"`); inglés solamente (las fuentes son en inglés); una errata («Bitcion tumbles») evita la regla de recap.
+
+**El resumen (briefing) y el panorama.** Con el motor de reglas el resumen de Qwen no se genera: el proceso escribe una fila `off` en `paper_futures_news_briefings` con el motivo `news_engine_reglas` (el panel de noticias ya sabe leer `off`). Lo que lo reemplaza es **determinista y ya lo soporta la UI sin cambiar el contrato de datos**: la tarjeta de arriba de la columna de noticias (`src/app/TerminalNewsPanel.tsx`) pasa a ser «Lo más importante · 6 h»: las 3 noticias de mayor importancia de las últimas 6 horas (importancia y, a igual importancia, la más reciente; sin duplicados de titular; sin las de importancia nula), cada una con su flecha de dirección; al hacer clic, las 8 primeras con fuente, importancia y enlace. Se calcula en el navegador con las fichas que la lista ya trae; sin hora de referencia o con la fuente sin confirmar muestra «Sin confirmar», no una lista. Se eligió esto y no quitarlo porque no agrega ninguna consulta ni columna y el usuario sigue viendo un panorama; la API de noticias no cambió salvo lo aditivo de abajo.
+
+**API y panel.** `server/src/features/live-gateway/news-items.ts` agrega, de forma aditiva, `card.engine` (`reglas` para la versión 3, `qwen` para las otras) y el valor `reglas` en `analysis_source` (junto a `questions`, `card` y `null`); `relevance` y `direction` salen de la ficha como ya salían con las de Qwen. Las noticias con respuestas viejas de las dos preguntas siguen leyéndose de ellas. El panel (`TerminalNewsPanel`) muestra el color de importancia y la flecha de dirección como siempre. Arreglo aparte que apareció al verificar: la API rechazaba (`invalid_briefing_record`) toda fila de resumen con `prompt_version` 4, que es la que escribe Python desde el arreglo de T1; ahora la reconoce. Propuesta fuera de lo editado aquí: el tooltip de cada noticia podría listar `card.rules`, pero `useTerminalNews.ts` no lleva la ficha al panel.
+
+**Interruptor.** `NEWS_ENGINE=reglas` (por defecto, también vacío) o `qwen` (la cascada de Qwen y su resumen, tal como eran: se comprobó que con `qwen` las tablas salen idénticas a las del commit anterior). Un valor desconocido es un error de configuración. Con `reglas` el lanzador (`scripts/dev-provider-env.mjs`) no pasa `--analyze` al proceso de noticias aunque llama-server esté encendido, y el proceso de noticias arranca y cataloga con llama-server parado, caído o ausente (`DECISIONS_ENABLED=0`). Instalar y deshacer en la VPS: `ops/vps/README.md`, «Noticias sin IA y llama-server apagado».
+
+**Qué lee la ficha 3.** El informe de efecto y la API leen la ficha más nueva de cada noticia: para las noticias que tenían ficha de Qwen (versión 1), desde ahora cuenta la de reglas. `priority_v2` (la única vía noticia → operación) sigue leyendo las respuestas viejas v2 y no lee fichas: sigue inerte, con o sin reglas.
+
 ## Resúmenes (briefings) de noticias
+
+> Desde S10, con `NEWS_ENGINE=reglas` (el valor por defecto) no se genera ningún resumen: ver el apartado anterior. Lo que sigue describe el resumen de Qwen (`NEWS_ENGINE=qwen`).
 
 El proceso de noticias (`futures_news`) pide a Qwen una frase en español sobre las noticias recientes. Es solo para mostrar: no entra en `news_features` ni en el trader. Cada intento escribe **dos filas** en `paper_futures_news_briefings` (solo-agregar): una `pending` y otra final (`ok`, `error`, `no_news` u `off`). Por eso los intentos son las filas `pending`; las filas finales de esos intentos son `ok` o `error` (en el VPS del 2-nov al 7-nov: 608 intentos, 56 `ok`, 552 `error`).
 

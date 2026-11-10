@@ -41,6 +41,13 @@ Design rules
   on, ``NEWS_LEGACY_QUESTIONS=0`` stops asking the two classifier questions and ``NEWS_CARD_SCOPE=0`` the scope
   question (the card then has no scope or "already happened"); both default to on, so nothing changes unset. Readers
   of the old answers are listed in ``docs/medir-noticias.md``.
+* The rules engine (S10, T18; ``NEWS_ENGINE=reglas``, the default) catalogues every item with NO model of any kind:
+  ``futures_news_reglas`` reads the headline, the summary and the source against the versioned lexicon
+  ``config/noticias-reglas.json`` and the card goes to ``paper_futures_news_cards`` with ``card_version`` 3 (the questions
+  column says ``engine:reglas`` and the lexicon version), at ingestion, in the same poll, for every stored item that has
+  none. The Qwen card cascade, the old questions and the Qwen briefing are not run (the briefing writes ``off`` rows with
+  the reason ``news_engine_reglas``), llama-server is never contacted, and the old Qwen cards (version 1) stay as they
+  are: readers take the newest card version of an item. ``NEWS_ENGINE=qwen`` brings back everything above unchanged.
 * The optional news briefing is a separate, append-only, view-only Qwen synthesis.
   Its bounded background chat never writes classifier rows or enters ``news_features``.
 * Stdlib only, Python 3.9+.
@@ -63,6 +70,7 @@ from email.utils import parsedate_to_datetime
 from datetime import datetime, timedelta, timezone
 from html import unescape
 
+from . import futures_news_reglas as reglas
 from . import system_trust
 from .futures_news_briefing import BriefingService, create_table as create_briefing_table
 from .futures_llm_decisions import (
@@ -127,6 +135,13 @@ CARD_ORDER = ("news_card_type", "news_card_strength", "news_card_direction", "ne
 CARD_TYPE, CARD_STRENGTH, CARD_DIRECTION, CARD_SCOPE = CARD_ORDER
 CARD_RECAP_TYPE = "price_recap"
 CARD_ORDER_NO_SCOPE = CARD_ORDER[:3]
+
+# The rules engine (S10): its cards are version 3 of the same table; a card says which engine and lexicon made it in
+# ``questions_json`` (``["engine:reglas", "lexicon:<version>"]``).
+CARD_VERSION_REGLAS = 3
+NEWS_ENGINES = ("reglas", "qwen")
+DEFAULT_NEWS_ENGINE = "reglas"
+REGLAS_BRIEFING_REASON = "news_engine_reglas"
 
 RELEVANCE_QUESTION = ("news_relevance_btc", 2)
 DIRECTION_QUESTION = ("news_direction", 2)
@@ -627,6 +642,15 @@ class NewsStore:
                  dump(row.get("rules")), dump(row.get("questions"))),
             )
 
+    def unresolved_rule_cards(self, version, limit=UNRESOLVED_BATCH):
+        """Items with no card row of one version, newest stored first, with their source id (the rules engine reads it)."""
+        return self.db.execute(
+            "SELECT i.item_id, i.item_hash, i.title, i.summary, i.published_at, i.received_at, i.source_id "
+            "FROM paper_futures_news_items i WHERE NOT EXISTS (SELECT 1 FROM paper_futures_news_cards c "
+            "WHERE c.item_hash=i.item_hash AND c.card_version=?) ORDER BY i.item_id DESC LIMIT ?",
+            (version, limit),
+        ).fetchall()
+
     def unresolved_cards(self, version, limit=UNRESOLVED_BATCH):
         """Items with no card row (any status) of one card version, newest stored first."""
         return self.db.execute(
@@ -739,6 +763,14 @@ def news_features_at(path, decision_time_ms, **kwargs):
 # --------------------------------------------------------------------------- service
 
 
+def news_engine(env):
+    """``NEWS_ENGINE``: ``reglas`` (default, also when blank) or ``qwen``; anything else is a configuration error."""
+    value = str(env.get("NEWS_ENGINE") or "").strip().lower() or DEFAULT_NEWS_ENGINE
+    if value not in NEWS_ENGINES:
+        raise ValueError("NEWS_ENGINE must be one of {} (got {!r})".format(", ".join(NEWS_ENGINES), value))
+    return value
+
+
 def news_state(item):
     """STATE text of one stored item: its sanitized headline and summary, no dates, no source."""
     text = "headline: " + item["title"]
@@ -758,6 +790,15 @@ class NewsService:
         card_questions = options.get("card_questions")
         legacy_questions = options.get("legacy_questions", True)
         card_scope = options.get("card_scope", True)
+        engine = options.get("engine", DEFAULT_NEWS_ENGINE)
+        if engine not in NEWS_ENGINES:
+            raise ValueError("engine must be one of {} (got {!r})".format(", ".join(NEWS_ENGINES), engine))
+        self.engine = engine
+        self.rules = engine == "reglas"
+        # The rules engine uses no model: whatever provider or card option was given is ignored, so nothing can ask one.
+        self.lexicon = reglas.load_lexicon() if self.rules else None
+        if self.rules:
+            provider, cards, legacy_questions = None, False, False
         if interval_ms < MIN_INTERVAL_MS:
             raise ValueError("the polling interval must be at least {} s".format(MIN_INTERVAL_MS // 1000))
         self.store = store
@@ -801,8 +842,9 @@ class NewsService:
             self.sources, self.clock(), self.interval_ms, self.retry_window_ms,
             self.max_published_age_ms, self.max_analyses_per_poll)
         self.briefing = BriefingService(
-            self.store, options.get("briefing_provider") or self.provider, enabled=options.get("briefing_enabled", False),
-            clock=self.clock, log=self.log)
+            self.store, None if self.rules else options.get("briefing_provider") or self.provider,
+            enabled=False if self.rules else options.get("briefing_enabled", False), clock=self.clock, log=self.log,
+            off_reason=REGLAS_BRIEFING_REASON if self.rules else None)
 
     def _problem_once(self, key, message):
         if self._problems.get(key) != message:
@@ -963,8 +1005,8 @@ class NewsService:
                 break
 
     # -- cards (S7)
-    def _card_row(self, item_hash_, status, now, card=None, strength_value=None, questions=()):
-        row = {"item_hash": item_hash_, "card_version": CARD_VERSION, "status": status, "written_at": now}
+    def _card_row(self, item_hash_, status, now, card=None, strength_value=None, questions=(), version=CARD_VERSION):
+        row = {"item_hash": item_hash_, "card_version": version, "status": status, "written_at": now}
         if card is not None:
             row.update({key: card[key] for key in ("event_type", "scope", "direction", "strength", "strength_model",
                                                    "already_happened", "amount_usd", "rules")})
@@ -1063,15 +1105,38 @@ class NewsService:
             elif state == "down":
                 break
 
+    # -- rules engine (S10)
+    def _catalogue(self, result):
+        """The card of every stored item that has none of version 3, by the rules and with no model. An item whose
+        rules fail gets a ``failed`` card (it is not retried every poll) and the others go on."""
+        for row in self.store.unresolved_rule_cards(CARD_VERSION_REGLAS):
+            hash_ = row[1]
+            try:
+                card = reglas.classify(row[2], row[3], row[6], lexicon=self.lexicon)
+            except Exception as error:
+                self.log("rules card failed {}: {}".format(hash_[:12], error))
+                self.store.append_card(self._card_row(hash_, "failed", self.clock(), version=CARD_VERSION_REGLAS))
+                continue
+            self.store.append_card({
+                "item_hash": hash_, "card_version": CARD_VERSION_REGLAS, "status": "done", "written_at": self.clock(),
+                "event_type": card["event_type"], "scope": None, "direction": card["direction"],
+                "strength": card["strength"], "strength_model": card["strength_base"], "strength_value": None,
+                "already_happened": None, "amount_usd": card["amount_usd"], "rules": card["rules"],
+                "questions": ["engine:reglas", "lexicon:" + card["lexicon_version"]],
+            })
+            result["cards"] += 1
+
     def poll(self):
         """Ingests the due feeds and analyzes the pending items; returns counts and never raises."""
         result = {"ingested": 0, "duplicates": 0, "failed_sources": [], "analyzed": 0, "skipped_stale": 0,
                   "pending": 0}
-        if self.cards:
+        if self.cards or self.rules:
             result["cards"] = 0
         try:
             now = self.clock()
             self._ingest(now, result)
+            if self.rules:
+                self._catalogue(result)
             self._analyze(self.clock(), result)
             self._analyze_cards(self.clock(), result)
         except sqlite3.Error as error:
@@ -1117,7 +1182,8 @@ def _build_news_parser():
     parser.add_argument("--sources-file", help="default: config/news-sources.json (plus NEWS_EXTRA_RSS_FEEDS)")
     parser.add_argument("--once", action="store_true", help="poll every source once, analyze, and exit")
     parser.add_argument("--analyze", action="store_true",
-                        help="ask the local llama-server the news questions (also NEWS_ANALYSIS=1); ingest never needs it")
+                        help="ask the local llama-server the news questions (also NEWS_ANALYSIS=1); ingest never needs it. "
+                             "Ignored with the rules engine (NEWS_ENGINE=reglas, the default): no model is ever asked")
     parser.add_argument("--cards", action="store_true",
                         help="also ask the four news-card questions (event type, strength 0-3, direction, scope and "
                              "already happened) with the fixed rules on top (also NEWS_CARDS=1); needs --analyze")
@@ -1180,10 +1246,12 @@ def _run_service_loop(service, store, args, sources, interval, provider, log):
         service.briefing.drain()
         print(_summary(outcome))
         return 0
+    analysis = ("rules engine {} (no model)".format(service.lexicon.version) if service.rules else
+                "on ({})".format(", ".join(sorted(service.questions) + (
+                    ["card:" + ",".join(service.card_order)] if service.cards else []))) if provider is not None
+                else "off")
     log("news writing to {} (config {}); {} source(s), every {} s; analysis {}".format(
-        args.news_db, store.config_hash[:12], len(sources), int(interval),
-        "on ({})".format(", ".join(sorted(service.questions) + (
-            ["card:" + ",".join(service.card_order)] if service.cards else []))) if provider is not None else "off"))
+        args.news_db, store.config_hash[:12], len(sources), int(interval), analysis))
     while True:
         outcome = service.poll()
         if outcome["ingested"] or outcome["analyzed"] or outcome["skipped_stale"] or outcome.get("cards"):
@@ -1207,7 +1275,11 @@ def main(argv=None, provider=None, fetcher=None):
     store = None
     try:
         sources = configured_sources(args.sources_file, env)
-        provider, questions, calibration, template, mode = _resolve_analysis_options(args, env, provider)
+        engine = news_engine(env)
+        if engine == "reglas":
+            provider, questions, calibration, template, mode = None, None, None, None, None
+        else:
+            provider, questions, calibration, template, mode = _resolve_analysis_options(args, env, provider)
         cards = provider is not None and (args.cards or _env_flag(env.get("NEWS_CARDS")))
         card_questions = load_questions(args.questions_file, scope="news_card") if cards else None
         legacy_questions = not args.no_legacy_questions and _env_default_on(env.get("NEWS_LEGACY_QUESTIONS"))
@@ -1225,7 +1297,7 @@ def main(argv=None, provider=None, fetcher=None):
             retry_window_ms=int(args.retry_window_minutes * MINUTE_MS),
             max_published_age_ms=int(args.max_published_age_hours * HOUR_MS),
             max_analyses_per_poll=args.max_analyses_per_poll, cards=cards, card_questions=card_questions,
-            legacy_questions=legacy_questions, card_scope=card_scope,
+            legacy_questions=legacy_questions, card_scope=card_scope, engine=engine,
             briefing_enabled=provider is not None and not args.no_briefing,
             briefing_provider=_briefing_provider(provider, briefing_timeout))
     except (OSError, ValueError) as error:

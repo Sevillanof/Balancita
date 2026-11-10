@@ -45,9 +45,17 @@ export type NewsEventType =
 export type NewsScope = 'eth' | 'crypto' | 'macro'
 export type NewsStrength = 0 | 1 | 2 | 3
 
-/** Qwen's one-letter answers about an item plus the fixed rules on top (`apply_card_rules`). */
+/** `card_version` of the cards the rules engine writes (no model, S10); every lower version is Qwen's. */
+const RULES_CARD_VERSION = 3
+
+/**
+ * The card of an item: either Qwen's one-letter answers plus the fixed rules on top (`apply_card_rules`, versions
+ * 1-2) or, from version 3, what the rules engine decided from the text alone (`futures_news_reglas`, no model).
+ */
 export interface NewsCard {
   readonly version: number
+  /** Who made the card: `reglas` (version 3, fixed rules, no model) or `qwen`. */
+  readonly engine: 'reglas' | 'qwen'
   readonly event_type: NewsEventType
   /** `null` when the item was a price recap (the other questions are not asked). */
   readonly scope: NewsScope | null
@@ -75,10 +83,11 @@ export interface NewsItem {
   readonly direction: NewsDirection | null
   readonly analysis_status: AnalysisStatus
   /**
-   * Where `relevance`/`direction` come from: the two old questions, or (card-only configuration, when the item has
-   * no answer of them) the card's strength and direction. `null` when there is no analysis («sin dato»).
+   * Where `relevance`/`direction` come from: the two old questions, or (when the item has no answer of them) the
+   * card's strength and direction: `card` for a Qwen card, `reglas` for a card of the rules engine (no model).
+   * `null` when there is no analysis («sin dato»).
    */
-  readonly analysis_source: 'questions' | 'card' | null
+  readonly analysis_source: 'questions' | 'card' | 'reglas' | null
   readonly analysis_version: number | null
   readonly relevance_at_ms: number | null
   readonly direction_at_ms: number | null
@@ -190,6 +199,7 @@ function cardOf(row: Row): NewsCard | null {
     return null
   return {
     version,
+    engine: version >= RULES_CARD_VERSION ? 'reglas' : 'qwen',
     event_type: row.event_type as NewsEventType,
     scope: row.scope === null ? null : (row.scope as NewsScope),
     direction,
@@ -465,7 +475,8 @@ function briefingSources(
   })
 }
 
-const KNOWN_PROMPT_VERSIONS = [1, 2, 3]
+// 4: the shorter prompt of the briefing writer since 2026-11-07 (`PROMPT_VERSION` in futures_news_briefing.py).
+const KNOWN_PROMPT_VERSIONS = [1, 2, 3, 4]
 
 const BRIEFING_COLUMNS = `briefing_version,product,status,started_at_ms,known_at_ms,expires_at_ms,
   input_hash,inputs_json,model_ref,model_info_json,prompt_hash,prompt_version,text,response_json,reason`
@@ -776,7 +787,9 @@ export function createNewsItems(options: {
               : null,
           analysis_status: state,
           analysis_source: fromCard
-            ? 'card'
+            ? fromCard.engine === 'reglas'
+              ? 'reglas'
+              : 'card'
             : state === 'done' || state === 'partial'
               ? 'questions'
               : null,

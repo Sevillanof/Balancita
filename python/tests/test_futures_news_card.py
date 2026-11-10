@@ -8,6 +8,7 @@ import os
 import sqlite3
 import time
 import unittest
+from unittest import mock
 
 from balancita_engine import futures_llm_decisions as q
 from balancita_engine import futures_news as n
@@ -460,7 +461,9 @@ class CardCliTests(TempDirTest):
 
     def run_main(self, *argv):
         out = io.StringIO()
-        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(out):
+        # The model path is what these tests are about: the default engine is the rules one (S10).
+        with mock.patch.dict(os.environ, {"NEWS_ENGINE": "qwen"}), contextlib.redirect_stdout(out), \
+                contextlib.redirect_stderr(out):
             code = n.main(list(argv))
         return code, out.getvalue()
 

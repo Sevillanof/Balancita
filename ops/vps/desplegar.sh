@@ -16,7 +16,8 @@
 #      También copia el chequeo de salud (ops/vps/balancita-healthcheck.sh) a /usr/local/bin si difiere del instalado
 #      (`install -m 755`); no hace falta reiniciar nada: el timer lo vuelve a ejecutar cada 5 min.
 #   7. Reinicia `balancita` solo entre los minutos :16 y :27 UTC (espera la ventana).
-#   8. Chequeos: servicio activo, llama-server con VmLck > 0 y `-t 5`, sin integridad corriendo
+#   8. Chequeos: servicio activo, llama-server con VmLck > 0 y `-t 5` (o, con DECISIONS_ENABLED=0 en el servicio, sin
+#      proceso llama-server), sin integridad corriendo
 #      justo después del arranque, sin errores nuevos en qwen-live y sin Traceback en el journal.
 #
 # Opciones:
@@ -372,17 +373,29 @@ chequeos_posteriores() {
   activo="$(vps "systemctl is-active balancita; true")"
   if [ "$activo" = "active" ]; then bien "balancita está active."; else falla "balancita no está active (is-active dice '${activo:-nada}')."; fi
 
+  # Con DECISIONS_ENABLED=0 en el servicio (ops/vps/systemd/balancita.service.d/sin-llama.conf, T19 de noticias-y-auditor)
+  # llama-server NO debe correr: se exige que no haya proceso, en vez de mlock e hilos.
+  apagada="$(vps "systemctl show balancita -p Environment | grep -cE '(^|[= ])DECISIONS_ENABLED=0( |\$)'; true")"
+  apagada="${apagada//[^0-9]/}"
+
   # llama-server tarda en aparecer mientras carga el modelo: se reintenta hasta LLAMA_SEG.
   inicio="$(date +%s)"
   while :; do
     llama="$(vps "pid=\$(ps -eo pid=,comm= | awk '\$2==\"llama-server\"{print \$1; exit}'); if [ -z \"\$pid\" ]; then echo sin-proceso; else lck=\$(awk '/VmLck/{print \$2}' /proc/\$pid/status); if tr '\\0' ' ' </proc/\$pid/cmdline | grep -qE -- '(^| )-t 5( |\$)'; then h=si; else h=no; fi; echo \"pid=\$pid vmlck_kb=\${lck:-0} hilos5=\$h\"; fi; true")"
+    [ "$apagada" = "0" ] || [ -z "$apagada" ] || break
     [ "$llama" = "sin-proceso" ] || break
     ahora="$(date +%s)"
     [ $((ahora - inicio)) -lt "$LLAMA_SEG" ] || break
     info "llama-server todavía no está corriendo; espero 15 s."
     sleep 15
   done
-  if [ "$llama" = "sin-proceso" ] || [ -z "$llama" ]; then
+  if [ "${apagada:-0}" != "0" ]; then
+    if [ "$llama" = "sin-proceso" ]; then
+      bien "llama-server apagado a propósito (DECISIONS_ENABLED=0): no hay proceso, no se exige mlock ni -t 5."
+    else
+      falla "DECISIONS_ENABLED=0 pero llama-server sigue corriendo: $llama"
+    fi
+  elif [ "$llama" = "sin-proceso" ] || [ -z "$llama" ]; then
     falla "no hay proceso llama-server después de $LLAMA_SEG s."
   else
     if [[ "$llama" =~ vmlck_kb=([0-9]+) ]] && [ "${BASH_REMATCH[1]}" -gt 0 ]; then

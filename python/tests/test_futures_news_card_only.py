@@ -180,7 +180,9 @@ class CardOnlyCliTests(TempDirTest):
 
     def run_main(self, *argv, env=None):
         out = io.StringIO()
-        with mock.patch.dict(os.environ, env or {}), contextlib.redirect_stdout(out), contextlib.redirect_stderr(out):
+        # The model path is what these tests are about: the default engine is the rules one (S10).
+        with mock.patch.dict(os.environ, dict({"NEWS_ENGINE": "qwen"}, **(env or {}))), contextlib.redirect_stdout(out), \
+                contextlib.redirect_stderr(out):
             for name in ("NEWS_CARDS", "NEWS_LEGACY_QUESTIONS", "NEWS_CARD_SCOPE", "NEWS_ANALYSIS"):
                 if name not in (env or {}):
                     os.environ.pop(name, None)

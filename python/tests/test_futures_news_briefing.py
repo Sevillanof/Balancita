@@ -444,7 +444,7 @@ class BriefingTests(unittest.TestCase):
                 writer.chat_script = lambda body: completion()
                 fetcher = FakeFetcher({SRC_A["url"]: rss([fresh_item(1, now=NOW, title="Ethereum protocol update")])})
                 options = {"briefing_provider": writer} if given else {}
-                service = news.NewsService(store, [SRC_A], fetcher, provider=classifier, clock=self.clock,
+                service = news.NewsService(store, [SRC_A], fetcher, provider=classifier, clock=self.clock, engine="qwen",
                                            log=self.logs.append, briefing_enabled=True, **options)
                 self.addCleanup(service.close)
                 self.assertEqual(service.poll()["analyzed"], 2)
@@ -466,7 +466,7 @@ class BriefingTests(unittest.TestCase):
         fetcher = FakeFetcher({SRC_A["url"]: rss([fresh_item(1, now=NOW, title="Ethereum protocol update")])})
         service = news.NewsService(
             self.store, [SRC_A], fetcher, provider=self.provider, clock=self.clock,
-            log=self.logs.append, briefing_enabled=True,
+            log=self.logs.append, briefing_enabled=True, engine="qwen",
         )
         self.addCleanup(service.close)
         try:

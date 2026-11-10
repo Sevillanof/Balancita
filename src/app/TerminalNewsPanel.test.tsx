@@ -204,6 +204,170 @@ describe('TerminalNewsPanel', () => {
     ).toHaveTextContent('Pendiente')
     expect(screen.getByText(/Todavía no hay una síntesis/)).toBeTruthy()
   })
+
+  describe('rules engine: the panorama is the most important news of the last hours, with no Qwen', () => {
+    const NOW = Date.UTC(2026, 10, 10, 12, 0)
+    const rulesBriefing: TerminalNewsBriefing = {
+      status: 'off',
+      product: 'PF_ETHUSD',
+      text: null,
+      knownAtMs: NOW,
+      checkedAtMs: NOW,
+      expiresAtMs: NOW + 900_000,
+      sourceCount: 0,
+      sources: [],
+      reason: 'news_engine_reglas',
+    }
+    const at = (minutesAgo: number) => NOW - minutesAgo * 60_000
+    const item = (
+      id: string,
+      title: string,
+      relevance: TerminalNewsItem['relevance'],
+      direction: TerminalNewsItem['direction'],
+      minutesAgo: number,
+    ): TerminalNewsItem => ({
+      id,
+      source: 'CoinDesk',
+      url: `https://coindesk.com/${id}`,
+      title,
+      publishedAtMs: at(minutesAgo),
+      receivedAtMs: at(minutesAgo - 1),
+      relevance,
+      relevanceValue: null,
+      direction,
+      analysisStatus: 'done',
+    })
+    const news = [
+      item('a', 'Minor adoption item', 'low', 'neutral', 10),
+      item('b', 'Exchange hacked for $300 million', 'medium', 'bearish', 90),
+      item('c', 'Fed cuts rates in emergency move', 'high', 'bullish', 200),
+      item('d', 'Routine noise', 'none', 'neutral', 5),
+      item('e', 'Old big hack outside the window', 'high', 'bearish', 400),
+      item('f', 'Exchange hacked for $300 million', 'medium', 'bearish', 30),
+      item('g', 'Another minor thing', 'low', 'bullish', 60),
+      item('h', 'Medium macro item', 'medium', 'bearish', 120),
+    ]
+
+    function panorama() {
+      return screen.getByRole('region', {
+        name: 'Lo más importante de las últimas 6 horas',
+      })
+    }
+
+    it('lists the 3 most important items of the last 6 hours by importance then recency, each with its direction', () => {
+      render(
+        <TerminalNewsPanel
+          viewport
+          items={news}
+          briefing={rulesBriefing}
+          nowMs={NOW}
+        />,
+      )
+      const rows = within(panorama()).getAllByRole('listitem')
+      expect(
+        rows.map((row) => within(row).getByRole('link').textContent),
+      ).toEqual([
+        'Fed cuts rates in emergency move',
+        'Exchange hacked for $300 million',
+        'Medium macro item',
+      ])
+      expect(
+        within(rows[0]!).getByRole('img', { name: 'alcista' }),
+      ).toBeTruthy()
+      expect(
+        within(rows[1]!).getByRole('img', { name: 'bajista' }),
+      ).toBeTruthy()
+    })
+
+    it('mentions no Qwen anywhere: not the card, not the label, not the pending text', () => {
+      render(
+        <TerminalNewsPanel
+          viewport
+          items={news}
+          briefing={rulesBriefing}
+          nowMs={NOW}
+        />,
+      )
+      expect(
+        screen.queryByRole('region', { name: 'Qwen, resumen de noticias' }),
+      ).toBeNull()
+      expect(document.body.textContent).not.toMatch(/Qwen/)
+    })
+
+    it('says so when nothing important arrived in the window, and never invents a line', () => {
+      render(
+        <TerminalNewsPanel
+          viewport
+          items={[news[3]!, news[4]!]}
+          briefing={rulesBriefing}
+          nowMs={NOW}
+        />,
+      )
+      expect(panorama()).toHaveTextContent(
+        'Sin noticias importantes en las últimas 6 horas.',
+      )
+      expect(within(panorama()).queryAllByRole('listitem')).toHaveLength(0)
+    })
+
+    it('does not present the list as current while the news source cannot be confirmed or without a clock', () => {
+      const { rerender } = render(
+        <TerminalNewsPanel
+          viewport
+          items={news}
+          briefing={rulesBriefing}
+          nowMs={NOW}
+          source={{ state: 'error', reason: 'Disconnected' }}
+        />,
+      )
+      expect(panorama()).toHaveTextContent('Sin confirmar')
+      rerender(
+        <TerminalNewsPanel viewport items={news} briefing={rulesBriefing} />,
+      )
+      expect(panorama()).toHaveTextContent('Sin confirmar')
+      expect(within(panorama()).queryAllByRole('listitem')).toHaveLength(0)
+    })
+
+    it('opens a detail with the top 8 and their source, importance and a link, and closes it', () => {
+      render(
+        <TerminalNewsPanel
+          viewport
+          items={news}
+          briefing={rulesBriefing}
+          nowMs={NOW}
+        />,
+      )
+      fireEvent.click(
+        screen.getByRole('button', {
+          name: 'Ver lo más importante y su detalle',
+        }),
+      )
+      const dialog = screen.getByRole('dialog')
+      expect(within(dialog).getAllByRole('link').length).toBeGreaterThan(3)
+      expect(dialog).toHaveTextContent('Importancia alta')
+      expect(dialog).toHaveTextContent('CoinDesk')
+      expect(dialog).not.toHaveTextContent('Old big hack outside the window')
+    })
+
+    it('keeps the Qwen card for any other briefing, as before', () => {
+      render(
+        <TerminalNewsPanel
+          viewport
+          items={news}
+          briefing={{ ...rulesBriefing, reason: 'briefing_disabled' }}
+          nowMs={NOW}
+        />,
+      )
+      expect(
+        screen.getByRole('region', { name: 'Qwen, resumen de noticias' }),
+      ).toBeTruthy()
+      expect(
+        screen.queryByRole('region', {
+          name: 'Lo más importante de las últimas 6 horas',
+        }),
+      ).toBeNull()
+    })
+  })
+
   it('shows only Baja, Media and Alta in the approved side card, preserving processing visibility', () => {
     render(
       <TerminalNewsPanel
