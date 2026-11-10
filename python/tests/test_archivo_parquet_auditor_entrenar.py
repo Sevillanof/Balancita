@@ -51,6 +51,15 @@ class ConfigTests(unittest.TestCase):
             con.execute("CREATE TABLE tabla_nueva_sin_decidir(x INTEGER)")
             self.assertEqual(nocturno._tablas_sin_cubrir(con, "qwen-live__auditor"), ["tabla_nueva_sin_decidir"])
 
+    def test_las_duraciones_del_auditor_se_excluyen_a_proposito_con_su_motivo_y_ninguna_otra_tabla_nueva_queda_sin_archivar(self):
+        excluidas = nocturno.TABLAS_EXCLUIDAS["qwen-live__auditor"]
+        self.assertEqual(sorted(excluidas), ["duraciones_auditor", "meta"])
+        self.assertIn("diagnostico", excluidas["duraciones_auditor"])
+        self.assertNotIn("duraciones_auditor", {c.sqlite for c in TABLAS.values()})
+        with contextlib.closing(sqlite3.connect(self.ruta)) as con:
+            tablas = {r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        self.assertIn("duraciones_auditor", tablas)
+
     def test_solo_lo_que_el_auditor_completa_despues_declara_cuando_una_fila_ya_no_cambia(self):
         self.assertEqual(TABLAS["auditor_operaciones"].inmutable_sql, '"resuelto_ms" IS NOT NULL')
         self.assertEqual(TABLAS["auditor_propuestas"].inmutable_sql, '"resuelto_ms" IS NOT NULL')

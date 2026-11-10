@@ -433,6 +433,9 @@ DDL.update({
         values_json TEXT NOT NULL, response_sha256 TEXT NOT NULL,
         PRIMARY KEY(product_id, metric, interval_ms, bucket_start, revision_hash)) STRICT""",
 })
+# La tabla del auditor que NO se archiva (diagnostico de duraciones, ver ``nocturno.TABLAS_EXCLUIDAS``); solo la lleva ``crear_copia_auditor``.
+DDL_AUDITOR_DURACIONES = """CREATE TABLE duraciones_auditor(id INTEGER PRIMARY KEY, product TEXT NOT NULL, t_ms INTEGER, origen TEXT NOT NULL,
+    total_ms REAL NOT NULL, pasos_json TEXT NOT NULL, registrada_ms INTEGER NOT NULL, version TEXT NOT NULL)"""
 # Tablas de qwen-live y del auditor que NO se archivan (estado vivo, o fuera de lo util); se crean en la copia sintetica para probar la exclusion.
 DDL_QWEN_EXCLUIDAS = {
     "meta": "CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT NOT NULL)",
@@ -546,6 +549,7 @@ def crear_copia_auditor(ruta: str, dia0_ms: int, con_excluidas: bool = True, con
         if con_excluidas:
             con.execute(DDL_QWEN_EXCLUIDAS["meta"])
             con.execute("INSERT INTO meta VALUES('schema', 'balancita-auditor.v1')")
+            con.execute(DDL_AUDITOR_DURACIONES)
         if con_sombra:
             con.execute(DDL["auditor_sombra"])
         for d in range(3):

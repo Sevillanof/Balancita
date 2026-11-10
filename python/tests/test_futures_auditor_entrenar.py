@@ -27,7 +27,8 @@ from test_futures_auditor import (BAR, CFG, COST, HOUR, MIN, PRODUCT, STRONG, T0
 from test_futures_qwen_live import Policy, make
 
 DAY = qt.DAY_MS
-NEW_TABLES = ("hechos_mirada", "propuestas", "mirada_operaciones", "resultados_operacion", "reentrenos", "sombra_maker", "miradas_perdidas")
+NEW_TABLES = ("hechos_mirada", "propuestas", "mirada_operaciones", "resultados_operacion", "reentrenos", "sombra_maker", "miradas_perdidas",
+              "duraciones_auditor")
 
 
 def facts(seed=0.1):
@@ -867,15 +868,47 @@ class LiveTrainingTests(unittest.TestCase):
         self.assertTrue(all(e["place"] == "auditor_entrenar" for e in broken.rows("SELECT place FROM errors")))
         self.assertFalse(broken.op.failed_cycle)
 
-    def test_a_slow_recorder_is_logged_as_a_warning_and_changes_nothing(self):
+    def test_a_slow_recorder_is_a_log_line_never_a_row_in_errors_and_changes_nothing(self):
         clean = self.run_live()
         slow = self.run_live(slow=True)
         self.assertEqual(self.decisions(slow), self.decisions(clean))
         self.assertEqual(self.rows(slow, "SELECT * FROM propuestas ORDER BY t_ms"), self.rows(clean, "SELECT * FROM propuestas ORDER BY t_ms"))
-        errors = slow.rows("SELECT place, kind FROM errors")
-        self.assertTrue(errors and all(e["place"] == "auditor_entrenar_lento" for e in errors))
+        self.assertEqual(slow.rows("SELECT * FROM errors"), [])                                  # la lentitud no es un error: desplegar.sh no la cuenta
+        self.assertEqual(slow.rows("SELECT * FROM meta WHERE key='last_error_ms'"), [])
         self.assertFalse(slow.op.failed_cycle)
-        self.assertTrue(any("lento" in line for line in slow.logs))
+        self.assertTrue(any("tardó" in line for line in slow.logs))
+
+    def test_every_look_leaves_one_row_of_durations_with_each_step_and_the_total(self):
+        env = self.run_live()
+        rows = self.rows(env, "SELECT * FROM duraciones_auditor ORDER BY id")
+        self.assertEqual([c[1] for c in sqlite3.connect(os.path.join(env.tmp, "auditor.sqlite")).execute(
+            "PRAGMA table_info(duraciones_auditor)")], ["id", "product", "t_ms", "origen", "total_ms", "pasos_json", "registrada_ms", "version"])
+        looks = {r["t_ms"] for r in self.rows(env, "SELECT t_ms FROM hechos_mirada")}
+        self.assertEqual(looks, {r["t_ms"] for r in rows if r["origen"] == "mirada"})            # una fila por mirada con registro
+        self.assertEqual(len(rows), len(looks))
+        record = {"registro_abrir", "registro_hechos", "registro_propuesta", "registro_posiciones", "registro_commit"}
+        resolve = {"resolve_veredictos", "resolve_direcciones", "resolve_operaciones", "resolve_propuestas", "resolve_resultados"}
+        for row in rows:
+            steps = json.loads(row["pasos_json"])
+            self.assertTrue(record <= set(steps), steps)
+            self.assertTrue(all(isinstance(v, (int, float)) and v >= 0 for v in steps.values()), steps)
+            if "snapshot" in steps:
+                self.assertTrue(resolve <= set(steps), steps)
+            self.assertGreaterEqual(row["total_ms"], max(steps.values()))
+            self.assertEqual((row["product"], row["version"]), (PRODUCT, aud.VERSION))
+        self.assertTrue(any("snapshot" in json.loads(r["pasos_json"]) for r in rows))
+        self.assertEqual(env.rows("SELECT * FROM errors"), [])
+
+    def test_a_failing_durations_write_is_a_log_line_and_changes_nothing(self):
+        clean = self.run_live()
+        with mock.patch.object(live.auditor, "record_durations", side_effect=RuntimeError("duraciones rotas")):
+            broken = self.run_live()
+        self.assertEqual(self.decisions(broken), self.decisions(clean))
+        self.assertEqual(self.rows(broken, "SELECT * FROM hechos_mirada ORDER BY t_ms"), self.rows(clean, "SELECT * FROM hechos_mirada ORDER BY t_ms"))
+        self.assertEqual(self.rows(broken, "SELECT * FROM duraciones_auditor"), [])
+        self.assertEqual(broken.rows("SELECT * FROM errors"), [])
+        self.assertFalse(broken.op.failed_cycle)
+        self.assertTrue(any("duraciones" in line for line in broken.logs))
 
     def test_the_trader_note_is_plain_read_only_data_with_the_same_keys_in_every_look(self):
         notes = []
@@ -884,6 +917,173 @@ class LiveTrainingTests(unittest.TestCase):
         self.assertEqual(notes.count(full), 7)                                              # las 7 miradas con decisión
         self.assertTrue(notes and all(n in (full, ["skip", "t_ms"]) for n in notes))        # el resto, solo la marca del enfriamiento
         self.assertIn(["skip", "t_ms"], notes)
+
+
+# --------------------------------------------------------------------------- one commit per look, per-step durations
+
+
+class OneCommitPerLookTests(TrainingCase):
+    def spy_open(self):
+        statements = []
+        real = aud._open
+
+        def spy(*args, **kwargs):
+            db = real(*args, **kwargs)
+            db.set_trace_callback(statements.append)
+            return db
+
+        return mock.patch.object(aud, "_open", spy), statements
+
+    def full_look(self, **kwargs):
+        trader = LookTrader()
+        trader.positions = [Pos(7, "LONG", T0 - 3 * HOUR)]
+        return self.record(trader=trader, marks={7: {"net_bp": 1.0}}, veredicto=2,
+                           look={"open_ids": [7], "exits": {}, "prev_entry_side": 0}, **kwargs)
+
+    def test_a_look_is_one_transaction_one_commit_with_the_same_three_rows(self):
+        patcher, statements = self.spy_open()
+        with patcher:
+            out = self.full_look()
+        self.assertEqual([s for s in statements if s.strip().upper().startswith("COMMIT")], ["COMMIT"])
+        self.assertEqual((out["hechos"], out["propuesta"], out["posiciones"]), (True, "bloqueada", 1))
+        self.assertEqual((len(self.table("hechos_mirada")), len(self.table("propuestas")), len(self.table("mirada_operaciones"))), (1, 1, 1))
+
+    def test_a_step_that_fails_after_writing_rolls_back_only_itself(self):
+        real = aud._record_proposal
+
+        def broken(*args, **kwargs):
+            real(*args, **kwargs)
+            raise RuntimeError("roto después de escribir")
+
+        with mock.patch.object(aud, "_record_proposal", broken):
+            out = self.full_look(warnings=True)
+        self.assertEqual(self.table("propuestas"), [])                                           # lo que escribió el paso roto se deshizo
+        self.assertEqual((len(self.table("hechos_mirada")), len(self.table("mirada_operaciones"))), (1, 1))
+        self.assertEqual((out["hechos"], out["propuesta"], out["posiciones"]), (True, None, 1))
+        self.assertEqual(len(out["avisos"]), 1)
+        self.assertIn("propuesta: RuntimeError", out["avisos"][0])
+
+    def test_a_failed_commit_leaves_nothing_and_says_so(self):
+        real_open = aud._open
+
+        class Db:                                                                                    # la conexión real, con un COMMIT que falla
+            def __init__(self, db):
+                self.db = db
+
+            def commit(self):
+                self.db.rollback()
+                raise sqlite3.OperationalError("disk I/O error")
+
+            def __getattr__(self, name):
+                return getattr(self.db, name)
+
+        with mock.patch.object(aud, "_open", lambda *a, **k: Db(real_open(*a, **k))):
+            out = self.full_look(warnings=True)
+        self.assertEqual((out["hechos"], out["propuesta"], out["posiciones"]), (False, None, 0))
+        self.assertTrue(any("disk I/O error" in a for a in out["avisos"]), out["avisos"])
+        self.assertEqual([self.table(t) for t in ("hechos_mirada", "propuestas", "mirada_operaciones")], [[], [], []])
+
+    def test_the_look_still_waits_at_most_the_training_lock_timeout_on_a_busy_database(self):
+        self.snap(event())
+        blocker = sqlite3.connect(aud.auditor_path(self.path), isolation_level=None)
+        self.addCleanup(blocker.close)
+        blocker.execute("BEGIN EXCLUSIVE")
+        with mock.patch.object(aud, "TRAINING_LOCK_TIMEOUT_S", 0.05):
+            started = time.monotonic()
+            out = self.full_look(warnings=True)
+            self.assertLess(time.monotonic() - started, 5)
+        blocker.execute("ROLLBACK")
+        self.assertEqual((out["hechos"], out["propuesta"], out["posiciones"]), (False, None, 0))
+        self.assertTrue(out["avisos"] and "locked" in out["avisos"][0])
+
+
+class DurationTests(TrainingCase):
+    def test_record_look_reports_the_time_of_each_step(self):
+        trader = LookTrader()
+        out = self.record(trader=trader, veredicto=2)
+        self.assertEqual(list(out["pasos_ms"]), ["abrir", "hechos", "propuesta", "posiciones", "commit"])
+        self.assertTrue(all(isinstance(v, float) and v >= 0 for v in out["pasos_ms"].values()))
+        self.assertGreaterEqual(out["ms"], max(out["pasos_ms"].values()))
+
+    def test_resolve_reports_the_time_of_each_step(self):
+        result = self.resolve(step_prices([(0, 100.0)]), T0 + HOUR)
+        self.assertEqual(list(result["pasos_ms"]), ["veredictos", "direcciones", "operaciones", "propuestas", "resultados", "sombra"])
+        self.assertTrue(all(isinstance(v, float) and v >= 0 for v in result["pasos_ms"].values()))
+
+    def test_record_durations_appends_a_row_each_time_and_never_raises(self):
+        self.assertEqual(aud.record_durations(self.path, PRODUCT, T0, "mirada", 12.5, {"snapshot": 1.0, "registro_commit": 2.0}, T0 + MIN), [])
+        self.assertEqual(aud.record_durations(self.path, PRODUCT, None, "sombra", 3.0, {"sombra": 3.0}, T0 + 2 * MIN), [])
+        first, second = self.table("duraciones_auditor", order="id")
+        self.assertEqual((first["product"], first["t_ms"], first["origen"], first["total_ms"], first["registrada_ms"], first["version"]),
+                         (PRODUCT, T0, "mirada", 12.5, T0 + MIN, aud.VERSION))
+        self.assertEqual(json.loads(first["pasos_json"]), {"snapshot": 1.0, "registro_commit": 2.0})
+        self.assertEqual((second["t_ms"], second["origen"], second["id"] > first["id"]), (None, "sombra", True))
+        blocker = sqlite3.connect(aud.auditor_path(self.path), isolation_level=None)
+        self.addCleanup(blocker.close)
+        blocker.execute("BEGIN EXCLUSIVE")
+        with mock.patch.object(aud, "TRAINING_LOCK_TIMEOUT_S", 0.05):
+            avisos = aud.record_durations(self.path, PRODUCT, T0, "mirada", 1.0, {}, T0)
+        blocker.execute("ROLLBACK")
+        self.assertTrue(avisos and "locked" in avisos[0])
+        self.assertEqual(len(self.table("duraciones_auditor")), 2)                                   # la que falló no dejó nada
+        self.assertTrue(aud.record_durations(self.path, PRODUCT, T0, "mirada", 1.0, {"x": object()}, T0))      # lo que no se puede escribir es un aviso, no una excepción
+
+    def test_the_durations_table_is_one_more_additive_table(self):
+        self.assertIn("duraciones_auditor", NEW_TABLES)
+
+
+# --------------------------------------------------------------------------- the slow-training warning is a log line
+
+
+class SlowWarningTests(unittest.TestCase):
+    def setUp(self):
+        cfg = copy.deepcopy(CFG)
+        cfg["products"] = [PRODUCT]
+        cfg["runtime"].pop("pending_config", None)
+        self.env = make(self, cfg=cfg, formula=True)
+
+    def look(self):
+        trader = LookTrader()
+        trader.look_audit = {"t_ms": T0, "readings": readings(2)}
+        return trader
+
+    def audit_with(self, ms, avisos=()):
+        trader = self.look()
+        with mock.patch.object(live.auditor, "record_look", return_value={"avisos": list(avisos), "ms": ms, "pasos_ms": {}}):
+            self.env.op._trained.clear()
+            self.env.op._audit_training(PRODUCT, trader, [], T0 + MIN, {})
+
+    def test_the_threshold_is_2000_ms_and_can_be_set_by_environment(self):
+        name = "FUTURES_AUDIT_TRAINING_SLOW_MS"
+        self.assertEqual(live.AUDIT_TRAINING_SLOW_MS, 2000)
+        self.assertEqual(aud._int_env(name, 2000, {}), 2000)
+        self.assertEqual(aud._int_env(name, 2000, {name: "750"}), 750)
+        self.assertEqual(aud._int_env(name, 2000, {name: "mucho"}), 2000)
+
+    def test_900_and_1900_ms_write_nothing_to_errors_and_say_nothing(self):
+        for ms in (900.0, 1900.0):
+            self.audit_with(ms)
+        self.assertEqual(self.env.rows("SELECT * FROM errors"), [])
+        self.assertFalse([line for line in self.env.logs if "tardó" in line])
+
+    def test_2100_ms_logs_a_warning_line_and_still_writes_nothing_to_errors(self):
+        self.audit_with(2100.0)
+        self.assertEqual(self.env.rows("SELECT * FROM errors"), [])
+        lines = [line for line in self.env.logs if "tardó" in line]
+        self.assertEqual(len(lines), 1)
+        self.assertIn("2100", lines[0])
+        self.assertIn("2000", lines[0])
+        self.assertFalse(self.env.op.failed_cycle)
+
+    def test_a_raised_exception_of_the_auditor_still_goes_to_errors(self):
+        trader = self.look()
+        with mock.patch.object(live.auditor, "record_look", side_effect=RuntimeError("registro roto")):
+            self.env.op._audit_training(PRODUCT, trader, [], T0 + MIN, {})
+        self.assertEqual(self.env.rows("SELECT place, kind FROM errors"), [{"place": "auditor_entrenar", "kind": "RuntimeError"}])
+
+    def test_a_step_that_failed_inside_the_look_still_goes_to_errors_even_when_it_was_also_slow(self):
+        self.audit_with(2500.0, avisos=["propuesta: RuntimeError: roto"])
+        self.assertEqual([r["place"] for r in self.env.rows("SELECT place FROM errors")], ["auditor_entrenar"])
 
 
 if __name__ == "__main__":
