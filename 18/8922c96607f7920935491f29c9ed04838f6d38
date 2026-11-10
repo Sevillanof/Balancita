@@ -1,0 +1,20 @@
+odd/tasks/operacion-mejoras.md
+  h_92dd6654ceb221 61
+ops/vps/README.md
+  h_92dd6654ceb221 35
+ops/vps/desplegar.sh
+  h_92dd6654ceb221 318-331,446
+scripts/desplegar.node-test.mjs
+  h_92dd6654ceb221 70,543-580
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "188922c96607f7920935491f29c9ed04838f6d38",
+  "prompts": {},
+  "humans": {
+    "h_92dd6654ceb221": {
+      "author": "Franco Sevillano <79455847+Sevillanof@users.noreply.github.com>"
+    }
+  }
+}
