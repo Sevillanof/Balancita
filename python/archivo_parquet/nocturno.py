@@ -91,7 +91,10 @@ TABLAS_EXCLUIDAS = {
         "rebotes": "intentos del experto de rebote; " + _FUERA_DE_LO_UTIL,
         "errors": "errores del trader en vivo: " + _DIAGNOSTICO,
     },
-    "qwen-live__auditor": {"meta": _ESTADO_VIVO},
+    "qwen-live__auditor": {
+        "meta": _ESTADO_VIVO,
+        "duraciones_auditor": "duraciones de cada paso del auditor por mirada (odd/tasks/operacion-mejoras.md T9): " + _DIAGNOSTICO,
+    },
 }
 # Huecos del reporte de exportar que dejan el archivo incompleto (los periodos aun abiertos no lo son).
 HUECOS_DEL_REPORTE = ("omitidos_por_retencion", "reemplazos_omitidos", "avisos", "tablas_ausentes")

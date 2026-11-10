@@ -49,11 +49,14 @@ anterior cambia y el trader no cambia ninguna decisión: lo único que expone es
 * ``sombra_maker`` (``odd/tasks/maker-sombra.md``, ``docs/maker-sombra.md``): una fila por tramo OFICIAL (entrada o salida, a mercado) con lo que habría pasado
   con una orden límite en el mejor precio sobre la cinta real capturada por el servidor (solo lectura): tipo de llenado (``maker`` /
   ``maker_mercado`` / ``sin_datos``), precio y hora, comisiones de cada punta y la diferencia contra el oficial en US$ y pb. La calcula ``resolve``
-  (``market_db``) solo con 15 min de cinta ya capturada; acotada (8 tramos y 1,5 s por llamada); nunca adivina (sin libro o cinta, ``sin_datos``).
+  (``market_db``) solo con 15 min de cinta ya capturada; acotada (3 tramos por pasada, configurable, y 1,5 s por llamada; el proceso en vivo la corre solo en un
+  sondeo tranquilo, ``resolve_shadow``); nunca adivina (sin libro o cinta, ``sin_datos``).
 * ``miradas_perdidas`` (``odd/tasks/operacion-mejoras.md`` S2, ``docs/terminal-ciclo-de-vida.md``): una fila por mirada programada que la Terminal no hizo
   (``record_missed``): hora, motivo (``proceso_detenido``), si había posición y lo que la fórmula habría dicho con las velas de esa mirada (hipotético: nunca operó).
 * ``record_look`` y ``record_missed`` (en vivo) y los pasos nuevos de ``resolve`` NUNCA propagan una excepción: lo que falla queda en ``avisos`` y el proceso en
   vivo lo anota en su tabla ``errors``. Migración: ``_open`` crea las tablas (``CREATE TABLE IF NOT EXISTS``); se deshace con ``DROP TABLE``.
+* ``duraciones_auditor`` (``odd/tasks/operacion-mejoras.md`` T9, ``docs/auditor-para-entrenar.md``): solo-agregar, una fila por mirada (y por pasada de la sombra) con lo que
+  tardó cada paso en milisegundos y el total (``record_durations``). Es un diagnóstico de la operación: no entra en ningún archivo ni en ninguna decisión.
 
 Acciones (``accion``)
 
@@ -219,6 +222,9 @@ CREATE TABLE IF NOT EXISTS sombra_maker(
   comision_sombra_usd REAL, comision_sombra_tipo TEXT, delta_usd REAL, delta_pb REAL,
   modelo TEXT NOT NULL, costos_id TEXT, resuelto_ms INTEGER, version TEXT NOT NULL,
   PRIMARY KEY(product, trade_no, leg));
+CREATE TABLE IF NOT EXISTS duraciones_auditor(
+  id INTEGER PRIMARY KEY, product TEXT NOT NULL, t_ms INTEGER, origen TEXT NOT NULL,
+  total_ms REAL NOT NULL, pasos_json TEXT NOT NULL, registrada_ms INTEGER NOT NULL, version TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS miradas_perdidas(
   product TEXT NOT NULL, bucket_ms INTEGER NOT NULL, t_ms INTEGER NOT NULL,
   motivo TEXT NOT NULL, detalle TEXT, despertar_json TEXT, estado TEXT NOT NULL,
@@ -229,6 +235,16 @@ CREATE TABLE IF NOT EXISTS miradas_perdidas(
 
 BLOCK_REASONS = ("lugares_ocupados", "mismo_episodio", "enfriamiento", "cierre_en_la_mirada", "otro")
 RESOLVE_LIMIT = 300                           # propuestas que ``resolve`` etiqueta por llamada (acota el CPU dentro del proceso en vivo)
+def _int_env(name, default, env=None):
+    """Un entero positivo del entorno (``env`` por defecto ``os.environ``); vacío, no numérico o ``<= 0`` deja ``default`` (un valor roto no apaga nada)."""
+    env = os.environ if env is None else env
+    try:
+        value = int(str(env.get(name) or "").strip())
+    except ValueError:
+        return default
+    return value if value > 0 else default
+
+
 TRAINING_LOCK_TIMEOUT_S = 2.0                # lo nuevo no espera más que esto una base ocupada (por otro proceso): falla con aviso, no detiene el sondeo
 GIVE_UP_MS = 12 * HOUR_MS                     # pasado el tope de la operación más esto sin precios, la etiqueta queda ``sin_datos`` (no traba el archivo)
 
@@ -877,7 +893,7 @@ def _judged(hit, cost, rule, text, value):
     return {"acerto": bool(hit), "costo_error_pb": round(cost, 2), "regla": rule, "texto": text, "valor_pb": round(value, 2)}
 
 
-def resolve(live_db_path, product, closes, cfg, now_ms, cost_bp, ranges=None, market_db=None):
+def resolve(live_db_path, product, closes, cfg, now_ms, cost_bp, ranges=None, market_db=None, shadow=True):
     """Completa lo que ya se puede saber de cada mirada sin resolver: ``despues_json`` (movimientos, MFE/MAE, operaciones
     simuladas) y los veredictos a 12, 24 y 36 h cuando el horizonte ya pasó (12 h = provisorio; 36 h = definitivo, escribe
     ``resuelto_ms``). Después, la dirección a 4, 12 y 24 h de cada mirada y la dirección y el MAE/MFE de cada operación (aparte, sin
@@ -890,13 +906,27 @@ def resolve(live_db_path, product, closes, cfg, now_ms, cost_bp, ranges=None, ma
 
     Sombra maker (``odd/tasks/maker-sombra.md``): con ``market_db`` (la base de captura, solo lectura) calcula además ``sombra_maker`` de los tramos
     oficiales que ya tienen 15 min de cinta; ``sombra`` = filas escritas y ``sombra_estado`` = ``ok`` / ``sin_captura`` (hay tramos por
-    calcular y el archivo no existe) / ``apagada`` (sin ``market_db``). Sin ``market_db`` no hace nada (como antes)."""
+    calcular y el archivo no existe) / ``apagada`` (sin ``market_db``). Sin ``market_db`` no hace nada (como antes).
+    Con ``shadow=False`` la sombra se deja para otro momento (``resolve_shadow``; ``sombra_estado`` = ``diferida``): así el proceso en vivo no la corre en el
+    sondeo de una mirada.
+
+    ``pasos_ms`` = lo que tardó cada paso (``veredictos``, ``direcciones``, ``operaciones``, ``propuestas``, ``resultados`` y ``sombra``)."""
+    steps = {}
+    began = time.monotonic()
     result = _resolve_verdicts(live_db_path, product, closes, cfg, now_ms, cost_bp)
+    steps["veredictos"] = (time.monotonic() - began) * 1000.0
     prices = _Prices(closes)
     with contextlib.closing(_open(live_db_path)) as db:
+        began = time.monotonic()
         result["direcciones"] = _resolve_look_directions(db, product, prices, now_ms)
+        steps["direcciones"] = (time.monotonic() - began) * 1000.0
+        began = time.monotonic()
         result["operaciones"] = _resolve_operations(live_db_path, db, product, prices, now_ms)
-    result.update(_resolve_training(live_db_path, product, prices, ranges, cfg, now_ms, cost_bp, market_db))
+        steps["operaciones"] = (time.monotonic() - began) * 1000.0
+    training = _resolve_training(live_db_path, product, prices, ranges, cfg, now_ms, cost_bp, market_db, shadow)
+    steps.update(training.pop("pasos_ms"))
+    result.update(training)
+    result["pasos_ms"] = steps
     return result
 
 
@@ -1137,22 +1167,23 @@ def _opened_trade(events, t_ms):
 
 
 def _record_facts(db, live_db_path, product, trader, readings_, t_ms, config_hash):
-    """G1 + G4: los hechos aplanados del maestro, su puntaje y veredicto, lo del portero y la identidad del proponente."""
+    """G1 + G4: los hechos aplanados del maestro, su puntaje y veredicto, lo del portero y la identidad del proponente. Escribe dentro de la
+    transacción de ``record_look`` (no confirma)."""
     who = _identity(live_db_path, trader, t_ms, readings_, config_hash)
-    with db:
-        cursor = db.execute(
-            "INSERT OR IGNORE INTO hechos_mirada(product, bucket_ms, t_ms, hechos_json, puntaje, veredicto, portero_json, maestro_hash, "
-            "portero_hash, config_hash, config_version, costos_id, version) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            (product, t_ms - BUCKET_MS, t_ms, _dumps(readings_["hechos"]), _num(readings_.get("puntaje")),
-             readings_["veredicto"] if isinstance(readings_.get("veredicto"), int) else None,
-             _dumps(_keeper_inputs(trader, t_ms, readings_)), who["maestro_hash"], who["portero_hash"], who["config_hash"],
-             who["config_version"], who["costos_id"], VERSION))
+    cursor = db.execute(
+        "INSERT OR IGNORE INTO hechos_mirada(product, bucket_ms, t_ms, hechos_json, puntaje, veredicto, portero_json, maestro_hash, "
+        "portero_hash, config_hash, config_version, costos_id, version) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        (product, t_ms - BUCKET_MS, t_ms, _dumps(readings_["hechos"]), _num(readings_.get("puntaje")),
+         readings_["veredicto"] if isinstance(readings_.get("veredicto"), int) else None,
+         _dumps(_keeper_inputs(trader, t_ms, readings_)), who["maestro_hash"], who["portero_hash"], who["config_hash"],
+         who["config_version"], who["costos_id"], VERSION))
     return cursor.rowcount == 1
 
 
 def _record_proposal(db, product, trader, look, readings_, events, t_ms):
     """G2: la propuesta de entrada de la mirada (el maestro fuerte con el portero a favor), abierta o bloqueada, con su motivo. Sin etiqueta:
-    ``resolve`` la calcula después. Devuelve ``"abierta"`` / ``"bloqueada"`` o ``None`` si no hubo señal."""
+    ``resolve`` la calcula después. Devuelve ``"abierta"`` / ``"bloqueada"`` o ``None`` si no hubo señal. Escribe dentro de la transacción de
+    ``record_look`` (no confirma)."""
     side = _entry_side(trader, readings_)
     if not side:
         return None
@@ -1163,19 +1194,19 @@ def _record_proposal(db, product, trader, look, readings_, events, t_ms):
     opened = _opened_trade(events, t_ms)
     reason, detail = (None, None) if opened is not None else _block_reason(look, events)
     index = _safe(_index_of, trader, t_ms)
-    with db:
-        db.execute(
-            "INSERT OR IGNORE INTO propuestas(product, bucket_ms, t_ms, lado, inicio_episodio, estado, motivo_bloqueo, detalle_bloqueo, "
-            "trade_no, maestro, puntaje, portero_p, precio, version) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            (product, t_ms - BUCKET_MS, t_ms, side, int(previous != side), "abierta" if opened is not None else "bloqueada", reason, detail,
-             opened, readings_["veredicto"], _num(readings_.get("puntaje")), _num(readings_.get("portero_p")),
-             None if index is None else _num(trader.c[index]), VERSION))
+    db.execute(
+        "INSERT OR IGNORE INTO propuestas(product, bucket_ms, t_ms, lado, inicio_episodio, estado, motivo_bloqueo, detalle_bloqueo, "
+        "trade_no, maestro, puntaje, portero_p, precio, version) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        (product, t_ms - BUCKET_MS, t_ms, side, int(previous != side), "abierta" if opened is not None else "bloqueada", reason, detail,
+         opened, readings_["veredicto"], _num(readings_.get("puntaje")), _num(readings_.get("portero_p")),
+         None if index is None else _num(trader.c[index]), VERSION))
     return "abierta" if opened is not None else "bloqueada"
 
 
 def _record_positions(db, product, trader, look, readings_, events, marks, t_ms):
     """G3: una fila por posición abierta en la mirada (las que había al empezar, la que cerró en ella y la que abrió): lado, entrada, horas,
-    neto ahora, el puntaje del maestro contra el lado y lo que dice la regla de salida. Devuelve cuántas filas escribió."""
+    neto ahora, el puntaje del maestro contra el lado y lo que dice la regla de salida. Devuelve cuántas filas escribió. Escribe dentro de la
+    transacción de ``record_look`` (no confirma)."""
     closed = {e["trade"]["trade_no"]: e["trade"] for e in events if e.get("type") == "trade" and isinstance(e.get("trade"), dict)}
     held = {p.trade_no: p for p in trader.positions}
     opened = _opened_trade(events, t_ms)
@@ -1183,31 +1214,30 @@ def _record_positions(db, product, trader, look, readings_, events, marks, t_ms)
     ids = list(dict.fromkeys(list(look.get("open_ids") or []) + ([] if opened is None else [opened])))
     score, verdict = _num(readings_.get("puntaje")), readings_.get("veredicto")
     written = 0
-    with db:
-        for number in ids:
-            if number in closed:
-                trade = closed[number]
-                side, entry_ms, entry_px = _side_of(trade.get("side")), trade.get("entry_ms"), _num(trade.get("entry_px"))
-                event, net, origin = "cierra", _num(trade.get("net_bp")), trade.get("entry_reason")
-            elif number in held:
-                position = held[number]
-                side, entry_ms, entry_px = _side_of(position.side), position.entry_ms, _num(position.entry_px)
-                event, origin = "abre" if number == opened else "mantiene", position.entry_reason
-                net = _num(((marks or {}).get(number) or {}).get("net_bp"))
-            else:
-                continue
-            if not side:
-                continue
-            says = "CERRAR" if number in exits or event == "cierra" else (None if event == "abre" else "MANTENER")
-            db.execute(
-                "INSERT OR IGNORE INTO mirada_operaciones(product, bucket_ms, trade_no, t_ms, lado, evento, origen, entry_ms, entry_px, horas, "
-                "neto_ahora_pb, puntaje, maestro, puntaje_lado, maestro_lado, salida_dice, salida_motivo, version) "
-                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                (product, t_ms - BUCKET_MS, number, t_ms, side, event, origin, entry_ms, entry_px,
-                 None if entry_ms is None else (t_ms - entry_ms) / HOUR_MS, net, score, verdict,
-                 None if score is None else side * score, side * verdict if isinstance(verdict, int) else None, says,
-                 exits.get(number), VERSION))
-            written += 1
+    for number in ids:
+        if number in closed:
+            trade = closed[number]
+            side, entry_ms, entry_px = _side_of(trade.get("side")), trade.get("entry_ms"), _num(trade.get("entry_px"))
+            event, net, origin = "cierra", _num(trade.get("net_bp")), trade.get("entry_reason")
+        elif number in held:
+            position = held[number]
+            side, entry_ms, entry_px = _side_of(position.side), position.entry_ms, _num(position.entry_px)
+            event, origin = "abre" if number == opened else "mantiene", position.entry_reason
+            net = _num(((marks or {}).get(number) or {}).get("net_bp"))
+        else:
+            continue
+        if not side:
+            continue
+        says = "CERRAR" if number in exits or event == "cierra" else (None if event == "abre" else "MANTENER")
+        db.execute(
+            "INSERT OR IGNORE INTO mirada_operaciones(product, bucket_ms, trade_no, t_ms, lado, evento, origen, entry_ms, entry_px, horas, "
+            "neto_ahora_pb, puntaje, maestro, puntaje_lado, maestro_lado, salida_dice, salida_motivo, version) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (product, t_ms - BUCKET_MS, number, t_ms, side, event, origin, entry_ms, entry_px,
+             None if entry_ms is None else (t_ms - entry_ms) / HOUR_MS, net, score, verdict,
+             None if score is None else side * score, side * verdict if isinstance(verdict, int) else None, says,
+             exits.get(number), VERSION))
+        written += 1
     return written
 
 
@@ -1216,18 +1246,18 @@ def record_look(live_db_path, product, trader, events, now_ms, marks=None, confi
     la propuesta de entrada con su motivo de bloqueo y el estado de cada posición abierta. Lee solo lo que el trader dejó en
     ``trader.look_audit`` (o, en una mirada de enfriamiento, lo calcula con ``corta.readings``) y no hace ninguna llamada de red.
 
+    Una sola transacción y un solo ``COMMIT`` por mirada (``odd/tasks/operacion-mejoras.md`` T9: cada confirmación son varios ``fsync``), con un
+    ``SAVEPOINT`` por paso: un paso que falla deshace solo lo suyo y los otros quedan. Las filas son las mismas que con un ``COMMIT`` por paso.
+
     NUNCA propaga una excepción ni cambia nada del trader: cada pedazo va protegido y lo que falle queda en ``avisos`` (el proceso en vivo
     lo anota en su tabla ``errors``). ``marks``: ``{trade_no: valuación}`` que el proceso ya calculó. Devuelve
-    ``{"hechos", "propuesta", "posiciones", "avisos", "ms"}``."""
+    ``{"hechos", "propuesta", "posiciones", "avisos", "ms", "pasos_ms"}``; ``pasos_ms`` = lo que tardó cada paso (``abrir``, ``hechos``,
+    ``propuesta``, ``posiciones`` y ``commit``)."""
     started = time.monotonic()
-    out = {"hechos": False, "propuesta": None, "posiciones": 0, "avisos": [], "ms": 0.0}
+    out = {"hechos": False, "propuesta": None, "posiciones": 0, "avisos": [], "ms": 0.0, "pasos_ms": {}}
 
-    def guarded(name, function, *args):
-        try:
-            return function(*args)
-        except Exception as error:                                     # noqa: BLE001 - el registro nuevo nunca rompe la operación
-            out["avisos"].append("{}: {}: {}".format(name, type(error).__name__, error))
-            return None
+    def lap(name, since):
+        out["pasos_ms"][name] = (time.monotonic() - since) * 1000.0
 
     try:
         look = getattr(trader, "look_audit", None)
@@ -1238,14 +1268,53 @@ def record_look(live_db_path, product, trader, events, now_ms, marks=None, confi
                 readings_ = _safe(corta.readings, trader, t_ms)          # el trader no miró (enfriamiento, cierre): la mirada igual existía
             if readings_ is not None:
                 events = list(events or ())
+                step = time.monotonic()
                 with contextlib.closing(_open(live_db_path, TRAINING_LOCK_TIMEOUT_S)) as db:
-                    out["hechos"] = bool(guarded("hechos", _record_facts, db, live_db_path, product, trader, readings_, t_ms, config_hash))
-                    out["propuesta"] = guarded("propuesta", _record_proposal, db, product, trader, look, readings_, events, t_ms)
-                    out["posiciones"] = guarded("posiciones", _record_positions, db, product, trader, look, readings_, events, marks, t_ms) or 0
+                    lap("abrir", step)
+
+                    def guarded(name, function, *args):
+                        began = time.monotonic()
+                        db.execute("SAVEPOINT paso")
+                        try:
+                            result = function(db, *args)
+                        except Exception as error:                     # noqa: BLE001 - el registro nuevo nunca rompe la operación
+                            db.execute("ROLLBACK TO paso")             # solo lo de este paso
+                            out["avisos"].append("{}: {}: {}".format(name, type(error).__name__, error))
+                            result = None
+                        db.execute("RELEASE paso")
+                        lap(name, began)
+                        return result
+
+                    db.execute("BEGIN IMMEDIATE")                       # espera a lo sumo TRAINING_LOCK_TIMEOUT_S una base ocupada, como antes
+                    out["hechos"] = bool(guarded("hechos", _record_facts, live_db_path, product, trader, readings_, t_ms, config_hash))
+                    out["propuesta"] = guarded("propuesta", _record_proposal, product, trader, look, readings_, events, t_ms)
+                    out["posiciones"] = guarded("posiciones", _record_positions, product, trader, look, readings_, events, marks, t_ms) or 0
+                    step = time.monotonic()
+                    try:
+                        db.commit()
+                    except Exception as error:                         # noqa: BLE001 - sin confirmar no queda nada de la mirada
+                        out.update(hechos=False, propuesta=None, posiciones=0)
+                        out["avisos"].append("registro: {}: {}".format(type(error).__name__, error))
+                    lap("commit", step)
     except Exception as error:                                         # noqa: BLE001
         out["avisos"].append("registro: {}: {}".format(type(error).__name__, error))
     out["ms"] = (time.monotonic() - started) * 1000.0
     return out
+
+
+def record_durations(live_db_path, product, t_ms, origen, total_ms, pasos, now_ms):
+    """Una fila en ``duraciones_auditor`` (solo-agregar): ``origen`` = ``mirada`` (lo que tardó el auditor después de la decisión de la mirada
+    ``t_ms``) o ``sombra`` (una pasada de la sombra maker en un sondeo tranquilo), ``total_ms`` y ``pasos`` = ``{paso: ms}``. Un solo ``INSERT`` y un
+    ``COMMIT``. NUNCA propaga una excepción: devuelve la lista de avisos (vacía si se escribió)."""
+    try:
+        body = _dumps({str(name): round(float(value), 3) for name, value in dict(pasos).items()})
+        with contextlib.closing(_open(live_db_path, TRAINING_LOCK_TIMEOUT_S)) as db:
+            with db:
+                db.execute("INSERT INTO duraciones_auditor(product, t_ms, origen, total_ms, pasos_json, registrada_ms, version) VALUES(?,?,?,?,?,?,?)",
+                           (product, None if t_ms is None else int(t_ms), str(origen), round(float(total_ms), 3), body, int(now_ms), VERSION))
+        return []
+    except Exception as error:                                         # noqa: BLE001 - un diagnóstico nunca rompe la operación
+        return ["duraciones: {}: {}".format(type(error).__name__, error)]
 
 
 def record_missed(live_db_path, product, trader, event, now_ms):
@@ -1422,33 +1491,61 @@ def _resolve_trade_results(live_db_path, db, product, prices, ranges, now_ms):
     return written
 
 
-def _resolve_training(live_db_path, product, prices, ranges, cfg, now_ms, cost_bp, market_db=None):
+def _resolve_training(live_db_path, product, prices, ranges, cfg, now_ms, cost_bp, market_db=None, shadow=True):
     """Los pasos nuevos de ``resolve`` (etiquetas contrafactuales, resultados reales y, al final, la sombra maker), cada uno protegido: un fallo
-    queda en ``avisos`` y no toca lo demás. ``ms`` = lo que tardaron las etiquetas y los resultados; ``sombra_ms`` = lo que tardó la sombra."""
+    queda en ``avisos`` y no toca lo demás. ``ms`` = lo que tardaron las etiquetas y los resultados; ``sombra_ms`` = lo que tardó la sombra (0 si no
+    corrió); ``pasos_ms`` = ``{propuestas, resultados, sombra}``. Con ``shadow=False`` la sombra no corre (``sombra_estado`` = ``diferida``)."""
     started = time.monotonic()
-    out = {"propuestas": 0, "resultados": 0, "sombra": 0, "sombra_estado": "apagada" if not market_db else "ok", "avisos": []}
-    shadow_started = None
+    state = "apagada" if not market_db else ("ok" if shadow else "diferida")
+    out = {"propuestas": 0, "resultados": 0, "sombra": 0, "sombra_estado": state, "avisos": [], "pasos_ms": {"propuestas": 0.0, "resultados": 0.0, "sombra": 0.0}}
+    shadow_ms = 0.0
     try:
         with contextlib.closing(_open(live_db_path, TRAINING_LOCK_TIMEOUT_S)) as db:
             for key, step in (("propuestas", lambda: _resolve_proposals(db, product, prices, cfg, now_ms, float(cost_bp))),
                               ("resultados", lambda: _resolve_trade_results(live_db_path, db, product, prices, ranges, now_ms))):
+                began = time.monotonic()
                 try:
                     out[key] = step()
                 except Exception as error:                              # noqa: BLE001 - lo nuevo nunca cambia lo que ya se resolvió
                     out["avisos"].append("{}: {}: {}".format(key, type(error).__name__, error))
+                out["pasos_ms"][key] = (time.monotonic() - began) * 1000.0
             out["ms"] = (time.monotonic() - started) * 1000.0
-            if market_db:
-                shadow_started = time.monotonic()
-                try:
-                    state = {}
-                    out["sombra"] = _resolve_shadow(live_db_path, db, product, now_ms, market_db, out["avisos"], state)
-                    out["sombra_estado"] = state.get("estado", "ok")
-                except Exception as error:                              # noqa: BLE001 - la sombra solo observa: si falla, un aviso y nada más
-                    out["avisos"].append("sombra: {}: {}".format(type(error).__name__, error))
+            if market_db and shadow:
+                shadow_ms = _shadow_step(live_db_path, db, product, now_ms, market_db, out)
     except Exception as error:                                          # noqa: BLE001
         out["avisos"].append("abrir: {}: {}".format(type(error).__name__, error))
     out.setdefault("ms", (time.monotonic() - started) * 1000.0)
-    out["sombra_ms"] = 0.0 if shadow_started is None else (time.monotonic() - shadow_started) * 1000.0
+    out["sombra_ms"] = out["pasos_ms"]["sombra"] = shadow_ms
+    return out
+
+
+def _shadow_step(live_db_path, db, product, now_ms, market_db, out):
+    """La sombra maker con su protección (``_resolve_shadow``): llena ``sombra``, ``sombra_estado``, ``sombra_pendientes`` y ``avisos`` de ``out``. Devuelve lo que
+    tardó, en ms."""
+    began = time.monotonic()
+    try:
+        state = {}
+        out["sombra"] = _resolve_shadow(live_db_path, db, product, now_ms, market_db, out["avisos"], state)
+        out["sombra_estado"] = state.get("estado", "ok")
+        out["sombra_pendientes"] = state.get("pendientes", 0)
+    except Exception as error:                                          # noqa: BLE001 - la sombra solo observa: si falla, un aviso y nada más
+        out["avisos"].append("sombra: {}: {}".format(type(error).__name__, error))
+    return (time.monotonic() - began) * 1000.0
+
+
+def resolve_shadow(live_db_path, product, now_ms, market_db):
+    """Solo la sombra maker (lo que ``resolve(..., shadow=False)`` deja): el proceso en vivo la corre en un sondeo tranquilo, nunca en el de una
+    mirada. A lo sumo ``SHADOW_LEGS_PER_PASS`` tramos y ``SHADOW_BUDGET_S`` por llamada. NUNCA propaga una excepción. Devuelve
+    ``{"sombra", "sombra_estado", "sombra_pendientes", "avisos", "sombra_ms"}``: ``sombra`` = filas escritas y ``sombra_pendientes`` = tramos maduros por calcular al
+    empezar (los que no entraron en esta pasada siguen en la próxima). Sin ``market_db``: ``apagada`` y no hace nada."""
+    out = {"sombra": 0, "sombra_estado": "apagada" if not market_db else "ok", "sombra_pendientes": 0, "avisos": [], "sombra_ms": 0.0}
+    if not market_db:
+        return out
+    try:
+        with contextlib.closing(_open(live_db_path, TRAINING_LOCK_TIMEOUT_S)) as db:
+            out["sombra_ms"] = _shadow_step(live_db_path, db, product, now_ms, market_db, out)
+    except Exception as error:                                          # noqa: BLE001
+        out["avisos"].append("abrir: {}: {}".format(type(error).__name__, error))
     return out
 
 
@@ -1464,7 +1561,7 @@ SHADOW_MODEL = "sombra-maker.v1"
 SHADOW_WINDOW_MS = 15 * MINUTE_MS                 # cuánto espera la orden antes de cruzar
 SHADOW_BOOK_AGE_MS = 20_000                       # la foto del libro no puede ser más vieja que esto respecto de la hora oficial
 SHADOW_SETTLE_MS = 60_000                         # margen después de los 15 min para que la captura haya escrito la cinta
-SHADOW_LEGS_PER_PASS = 8                          # tramos que ``resolve`` calcula por llamada (acota el CPU dentro del proceso en vivo)
+SHADOW_LEGS_PER_PASS = _int_env("FUTURES_AUDITOR_SHADOW_LEGS_PER_PASS", 3)   # tramos que la sombra calcula por pasada (acota lo que dura un sondeo del proceso en vivo; 0,2-1 s cada uno)
 SHADOW_BUDGET_S = 1.5                             # tiempo total de la captura por llamada; pasado esto se corta con un aviso y sigue en la próxima
 SHADOW_CAPTURE_TIMEOUT_S = 1.0                    # espera máxima por una base de captura ocupada
 SHADOW_TAPE_GAP_MS = 5 * MINUTE_MS                # más que esto sin ninguna operación = la captura estuvo caída (ETH opera ~1 por segundo)
@@ -1678,10 +1775,12 @@ _SHADOW_COLUMNS = ("product", "trade_no", "leg", "motivo_salida", "lado", "orden
 
 def _resolve_shadow(live_db_path, db, product, now_ms, market_db, avisos, state):
     """Calcula y guarda (una sola vez, ``INSERT OR IGNORE``) la sombra de los tramos oficiales ya maduros, a lo sumo ``SHADOW_LEGS_PER_PASS`` por
-    llamada y dentro de ``SHADOW_BUDGET_S``. Lo que falla en un tramo queda en ``avisos`` y el tramo se reintenta en la próxima pasada. Con tramos
+    llamada y dentro de ``SHADOW_BUDGET_S`` (``state["pendientes"]`` = cuántos estaban maduros por calcular). Lo que falla en un tramo queda en ``avisos`` y el tramo se reintenta en la próxima pasada. Con tramos
     por calcular pero sin el archivo de captura no escribe nada y deja ``state["estado"] = "sin_captura"`` (la ruta es de esta máquina, no un fallo).
     Devuelve cuántas filas escribió."""
-    legs = _shadow_pending(live_db_path, db, product, now_ms)[:SHADOW_LEGS_PER_PASS]
+    pending = _shadow_pending(live_db_path, db, product, now_ms)
+    state["pendientes"] = len(pending)
+    legs = pending[:SHADOW_LEGS_PER_PASS]
     if not legs:
         return 0
     if not os.path.isfile(market_db):                                      # no es un fallo de la sombra: no hay captura en esta máquina (o la ruta no es esa)

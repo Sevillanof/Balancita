@@ -68,7 +68,9 @@ OPEN_POSITION_QUERY = "SELECT 1 FROM trader_state WHERE position_json IS NOT NUL
 BAR_MS = qt.BAR_MS
 BUCKET_MS = 15 * MINUTE_MS                      # one wake per product and bucket
 ENTRY_FILL_MAX_LAG_MS = 2 * BAR_MS              # the fill of an entry happens at most this long after the look that dated it
-AUDIT_TRAINING_SLOW_MS = 500                    # the auditor's record for training (facts, proposals, positions) taking longer than this is warned about
+AUDIT_TRAINING_SLOW_MS = auditor._int_env("FUTURES_AUDIT_TRAINING_SLOW_MS", 2000)   # the auditor's record for training taking longer than this is a log line (never a row in ``errors``)
+SHADOW_IDLE_RECHECK_MS = 30_000                 # a quiet poll that found no shadow leg waiting does not look again before this
+SHADOW_RETRY_MS = 60_000                        # after a shadow pass that failed, or found no capture file, the next try waits this long
 DB_ENV = "QWEN_LIVE_DB"
 DEFAULT_DIR = os.path.join(qt.ROOT, "data", "qwen-live")
 DEFAULT_DB = os.path.join(DEFAULT_DIR, "live.sqlite")
@@ -903,6 +905,9 @@ class LiveOperator:
         # the auditor's maker shadow reads the capture's trades and book samples (read-only) after the fact: where that file is
         self.market_db_path = cfg.get("market_db") or auditor.market_db_path()
         self._shadow_seen = {}                            # product -> last state of the shadow said in the log
+        self._shadow_next = {}                            # product -> not before this time the shadow looks for legs again (quiet polls only)
+        self._busy = set()                                # products whose candle was processed in this poll: not a quiet poll
+        self._timing = None                               # step durations of the auditor in the look being recorded (``_record``)
         self.news = None
         self.news_checked_ms = 0
         self._context_warned = set()
@@ -1023,6 +1028,7 @@ class LiveOperator:
         (what was not written is asked again; what was written is never asked twice)."""
         now = self.now_ms()
         self.failed_cycle = False
+        self._busy.clear()
         self._try_pending_config()
         if self.next_config is not None:
             self._heartbeat()
@@ -1045,12 +1051,16 @@ class LiveOperator:
                 except qt.TraderError as error:
                     self._failure("arranque", product, error)
                 continue
+            polled = False
             try:
                 self._poll_product(product, now)
                 self._recovered("ciclo", product)
+                polled = True
             except Exception as error:                    # noqa: BLE001 - the process must stay alive
                 self.traders.pop(product, None)           # in-memory state may be ahead of the database: rebuild it
                 self._failure("ciclo", product, error)
+            if polled and product not in self._busy:      # no candle of this product was recorded in this poll: a quiet one
+                self._audit_shadow(product)
         self._try_pending_config()
         self._heartbeat()
 
@@ -1410,6 +1420,7 @@ class LiveOperator:
             trader.notional = self.store.available_balance_usd(excluding_product=product)
 
     def _record(self, product, trader, t_ms, events, now, *, observed=True):
+        self._busy.add(product)
         meta = {"prompt_version": self.cfg["prompt"]["version"], "model": self.model, "config_hash": self.config_hash}
         marks, mark_error = {}, None
         if trader.position is not None and observed:
@@ -1459,10 +1470,15 @@ class LiveOperator:
                 self._lost_look(product, trader, event, now)
         if events and self.cfg.get("decide_by") == "formula" and qt.candle_opinions_enabled(self.cfg):
             self._resolve_examples(product, trader, now)
-        if events and self.cfg.get("decide_by") == "formula":          # el auditor no necesita la opinión de Qwen
-            self._audit(product, trader, events, now)
         if self.cfg.get("decide_by") == "formula":
-            self._audit_training(product, trader, events, now, marks)
+            self._timing, began = {}, time.monotonic()
+            try:
+                if events:                                                 # el auditor no necesita la opinión de Qwen
+                    self._audit(product, trader, events, now)
+                self._audit_training(product, trader, events, now, marks)
+                self._store_timing(product, t_ms, (time.monotonic() - began) * 1000.0, self._timing)
+            finally:
+                self._timing = None
 
     def _lost_look(self, product, trader, event, now):
         """A scheduled look that was not made because the process was off or too late: counted for the catch-up look and kept for the
@@ -1544,13 +1560,20 @@ class LiveOperator:
         operación sigue igual (no cuenta como ciclo fallido: no frena el sondeo)."""
         failed = self.failed_cycle
         try:
-            for event in events:
-                if event["type"] in ("decision", "guardrail"):
-                    auditor.snapshot(self.store.path, product, trader, event, now)
+            began = time.monotonic()
+            snapshots = [event for event in events if event["type"] in ("decision", "guardrail")]
+            for event in snapshots:
+                auditor.snapshot(self.store.path, product, trader, event, now)
+            if snapshots:
+                self._lap("snapshot", began)
             closes = {int(t) + BAR_MS: float(c) for t, c in zip(trader.t, trader.c)}
             ranges = {int(t) + BAR_MS: (float(h), float(l)) for t, h, l in zip(trader.t, trader.h, trader.l)}
+            # the maker shadow is not run here (this poll just made a look): a quiet poll does it, see ``_audit_shadow``
             result = auditor.resolve(self.store.path, product, closes, dict(self.cfg, products=[product]), now,
-                                     float(round_trip_cost_bps(product)), ranges=ranges, market_db=self.market_db_path)
+                                     float(round_trip_cost_bps(product)), ranges=ranges, market_db=self.market_db_path, shadow=False)
+            for name, ms in (result.get("pasos_ms") or {}).items():
+                if name != "sombra":
+                    self._lap("resolve_" + name, None, ms)
             self._recovered("auditor", product)
         except Exception as error:                        # noqa: BLE001 - el auditor nunca bloquea la operación en vivo
             self._failure("auditor", product, error)
@@ -1576,8 +1599,8 @@ class LiveOperator:
     def _audit_training(self, product, trader, events, now, marks):
         """What the auditor keeps to train later (facts of the maestro, entry proposals with their block reason, state of every open
         position): written AFTER the decision is made and stored, only in ``auditor.sqlite``, reading only what the trader left in
-        ``trader.look_audit``. Whatever fails or is slow is noted as a warning (table ``errors``) and nothing else changes: not a
-        decision, not a trade, not an old auditor row, not the polling."""
+        ``trader.look_audit``. Whatever fails is noted as a warning (table ``errors``) and nothing else changes: not a decision, not a trade,
+        not an old auditor row, not the polling. Whatever is only slow is one line in the log (``_warn_training``)."""
         look = getattr(trader, "look_audit", None)
         if not look or self._trained.get(product) == look.get("t_ms"):
             return
@@ -1589,20 +1612,70 @@ class LiveOperator:
             self._failure("auditor_entrenar", product, error)
             self.failed_cycle = failed
             return
+        for name, ms in (out.get("pasos_ms") or {}).items():
+            self._lap("registro_" + name, None, ms)
         self._warn_training(product, out.get("avisos"), out.get("ms"), failed)
 
+    def _lap(self, name, began, ms=None):
+        """Keeps the duration of one auditor step of the look being recorded (``self._timing``); outside a look it does nothing."""
+        if self._timing is not None:
+            self._timing[name] = round((time.monotonic() - began) * 1000.0 if ms is None else float(ms), 3)
+
+    def _store_timing(self, product, t_ms, total_ms, steps, origin="mirada"):
+        """One row in ``duraciones_auditor`` with every step and the total (for a look: what the auditor kept the poll busy after the decision).
+        Diagnostic only: if it cannot be written it is a line in the log, never an error row or a failed cycle."""
+        if not steps:
+            return
+        try:
+            problems = auditor.record_durations(self.store.path, product, t_ms, origin, total_ms, steps, self.now_ms())
+        except Exception as error:                        # noqa: BLE001 - un diagnóstico nunca frena el sondeo
+            problems = ["duraciones: {}: {}".format(type(error).__name__, error)]
+        if problems:
+            self.log("Qwen en vivo: no se pudieron anotar las duraciones del auditor ({}).".format("; ".join(problems)))
+
+    def _audit_shadow(self, product):
+        """The auditor's maker shadow, only in a quiet poll (no candle of this product was recorded in it): its legs cost 0.2-1 s each and a look
+        must not wait for them. A few legs per pass (``SHADOW_LEGS_PER_PASS``); the rest are done in the next quiet polls, so nothing is lost.
+        Looks again at once only while a pass is still making progress; with nothing waiting, not before ``SHADOW_IDLE_RECHECK_MS``; after a failure or
+        without a capture file, not before ``SHADOW_RETRY_MS``. Never raises and never changes a decision or the cycle."""
+        if self.cfg.get("decide_by") != "formula" or not self.market_db_path:
+            return
+        failed = self.failed_cycle
+        try:
+            now = self.now_ms()
+            if now < self._shadow_next.get(product, 0):
+                return
+            result = auditor.resolve_shadow(self.store.path, product, now, self.market_db_path)
+            waiting, done = result.get("sombra_pendientes", 0), result.get("sombra", 0)
+            if result["avisos"] or result["sombra_estado"] == "sin_captura":
+                wait = SHADOW_RETRY_MS
+            elif done and waiting > done:
+                wait = 0
+            else:
+                wait = SHADOW_IDLE_RECHECK_MS
+            self._shadow_next[product] = now + wait
+            self._say_shadow(product, result["sombra_estado"])
+            if result["avisos"]:
+                self._failure("auditor_entrenar", product, RuntimeError("; ".join(result["avisos"])))
+            if waiting:
+                self._store_timing(product, None, result["sombra_ms"], {"sombra": result["sombra_ms"], "tramos": done, "pendientes": waiting}, "sombra")
+        except Exception as error:                        # noqa: BLE001 - la sombra nunca bloquea la operación en vivo
+            self._failure("auditor", product, error)
+        finally:
+            self.failed_cycle = failed
+
     def _warn_training(self, product, problems, ms, failed):
-        """Warnings of the training record: what failed (``avisos``) and a record or label step slower than ``AUDIT_TRAINING_SLOW_MS``."""
+        """Warnings of the training record: what failed (``avisos``) goes to ``errors`` (``_failure``). A record or label step slower than
+        ``AUDIT_TRAINING_SLOW_MS`` is only one line in the log: slowness is not an error, and ``desplegar.sh`` counts every new row of ``errors``
+        as a failed deploy."""
         try:
             if problems:
                 self._failure("auditor_entrenar", product, RuntimeError("; ".join(problems)))
             else:
                 self._recovered("auditor_entrenar", product)
             if isinstance(ms, (int, float)) and ms > AUDIT_TRAINING_SLOW_MS:
-                self._failure("auditor_entrenar_lento", product, TimeoutError(
-                    "el registro para entrenar tardó {:.0f} ms (aviso desde {} ms)".format(ms, AUDIT_TRAINING_SLOW_MS)))
-            else:
-                self._recovered("auditor_entrenar_lento", product)
+                self.log("Qwen en vivo: AVISO, el registro del auditor para entrenar de {} tardó {:.0f} ms (aviso desde {} ms); es solo una advertencia, "
+                         "no se anota como error.".format(product, ms, AUDIT_TRAINING_SLOW_MS))
         finally:
             self.failed_cycle = failed
 

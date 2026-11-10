@@ -111,7 +111,7 @@ Toda tabla o base con copia que **no** se archiva está en una lista explícita 
 | qwen-live__live         | `examples`, `rebotes`, `skipped`, `errors`                                                                                                            | fuera de lo útil para mejorar al maestro y al portero; diagnóstico; derivados                              |
 | qwen-live__auditor      | `meta`                                                                                                                                                | estado vivo                                                                                                |
 
-Bases con copia que no se archivan: `qwen-live_cache__*` (caché de velas que se reconstruye sola), `forward__*`, `maker-costs__*` y `futures-strategies` (bases chicas que quedan en SQLite y en las copias diarias). Una clave de `BASES_EXCLUIDAS` que termina en `__` es un prefijo; el resto, un nombre exacto (`futures-strategies-extra` **no** está excluida). Los motivos completos están en el código.
+Bases con copia que no se archivan: `qwen-live_cache__*` (caché de velas que se reconstruye sola), `forward__*`, `maker-costs__*` y `futures-strategies` (bases chicas que quedan en SQLite y en las copias diarias). Una clave de `BASES_EXCLUIDAS` que termina en `__` es un prefijo; el resto, un nombre exacto (`futures-strategies-extra` **no** está excluida). Los motivos completos están en el código. Dentro de `qwen-live__auditor`, la tabla `duraciones_auditor` (duración de cada paso del auditor, solo diagnóstico) queda en SQLite y no se archiva.
 
 ## Exportación nocturna automática (fase 3, parte A)
 
