@@ -260,8 +260,11 @@ class VivoBase(unittest.TestCase):
         return eventos
 
     def crear_vivo(self, eventos, nombre="qwen-live__live-{}.sqlite".format(SELLO), activada_ms=ACTIVADA_MS, cambiar=None, omitidos=(),
-                   saldo="1000", tamano=1.0):
-        """``saldo``: el ``cash_usd`` de la activación; ``tamano``: factor del nocional/qty/importes que registra el vivo (1 = el mismo)."""
+                   saldo="1000", tamano=1.0, entrada_en_la_mirada=False):
+        """``saldo``: el ``cash_usd`` de la activación; ``tamano``: factor del nocional/qty/importes que registra el vivo (1 = el mismo).
+        ``entrada_en_la_mirada``: como desde operacion-mejoras T2 la entrada se fecha con la mirada (la hora de la vela); por defecto el vivo
+        antiguo, que la fechaba con el llenado, 4 s después. La salida siempre se fecha con el llenado (3 s después)."""
+        retraso_entrada = 0 if entrada_en_la_mirada else 4_000
         ruta = os.path.join(self.carpeta, nombre)
         db = sqlite3.connect(ruta)
         db.executescript("""
@@ -293,12 +296,12 @@ CREATE TABLE config_versions(id INTEGER PRIMARY KEY AUTOINCREMENT, previous_hash
                 t = e["trade"]
                 if t["closed_by"] == "fin_examen":               # el replay la cierra al final de los datos; en vivo sigue abierta
                     db.execute("INSERT INTO trades VALUES('PF_ETHUSD',?,'open',?,?,NULL,NULL,NULL,NULL,'formula',?,?,?,?,NULL,NULL,NULL)",
-                               (n, t["side"], t["entry_ms"] + 4_000, self.snapshot["config_hash"], t["entry_px"],
+                               (n, t["side"], t["entry_ms"] + retraso_entrada, self.snapshot["config_hash"], t["entry_px"],
                                 str(float(t["qty"]) * tamano), str(float(t["notional_usd"]) * tamano)))
                     continue
                 nocional = float(t["notional_usd"]) * tamano
                 db.execute("INSERT INTO trades VALUES('PF_ETHUSD',?,'closed',?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                           (n, t["side"], t["entry_ms"] + 4_000, t["exit_ms"] + 3_000, t["net_bp"] + 1.5, t["closed_by"], t["exit_reason"],
+                           (n, t["side"], t["entry_ms"] + retraso_entrada, t["exit_ms"] + 3_000, t["net_bp"] + 1.5, t["closed_by"], t["exit_reason"],
                             "formula", self.snapshot["config_hash"], t["entry_px"], str(float(t["qty"]) * tamano), str(nocional),
                             str(float(t["fees_usd"]) * tamano), str(float(t["funding_usd"]) * tamano),
                             str(float(t["net_usd"]) * tamano + 1.5 / 1e4 * nocional)))
@@ -386,6 +389,43 @@ class CompararConVivoTests(VivoBase):
         d = informe["decisiones"]
         self.assertEqual((d["difieren"], d["coinciden"] + 1), (1, d["vivas"]))
         self.assertEqual((d["diferencias"][0]["t_ms"], d["diferencias"][0]["vivo"]["action"]), (t, "LARGO"))
+
+    def cierre_y_mirada_del_enfriamiento(self, eventos):
+        """Un cierre del replay cuyo enfriamiento termina justo en una mirada con decisión (y ningún otro cierre lo cubre): ``(cierre, t)``."""
+        cooldown = self.cfg["guardrails"]["cooldown_min"] * MIN
+        miradas = {e["t_ms"] for e in eventos if e["type"] == "decision"}
+        cierres = [e["trade"] for e in eventos if e["type"] == "trade" and e["trade"]["closed_by"] != "fin_examen"]
+        for cierre in cierres:
+            t = cierre["exit_ms"] + cooldown
+            if t in miradas and not any(0 <= t - otro["exit_ms"] < cooldown and otro is not cierre
+                                         and otro["exit_ms"] != cierre["exit_ms"] for otro in cierres):
+                return cierre, t
+        self.fail("los datos de prueba no tienen un cierre con una mirada justo al terminar su enfriamiento")
+
+    def vivo_sin_la_mirada(self, eventos, t, **kw):
+        ruta = self.crear_vivo(eventos, **kw)
+        db = sqlite3.connect(ruta)
+        db.execute("DELETE FROM decisions WHERE t_ms=?", (t,))                  # el vivo no la hizo y tampoco la omitió
+        db.commit()
+        db.close()
+        return ruta
+
+    def test_with_the_entry_dated_at_the_look_the_cooldown_counts_from_the_look_of_the_close_so_the_first_free_look_is_not_explained(self):
+        eventos = self.replay_directo()
+        cierre, t = self.cierre_y_mirada_del_enfriamiento(eventos)
+        informe = self.comparar(self.vivo_sin_la_mirada(eventos, t, entrada_en_la_mirada=True))
+        d = informe["decisiones"]
+        fila = next(x for x in d["lista_solo_replay"] if x["t_ms"] == t)
+        # El vivo cierra a las X:00:03 (llenado) pero cuenta los 15 min desde la mirada de las X:00:00: a la hora t ya estaba libre.
+        self.assertIsNone(fila["explicacion"])
+        self.assertEqual(d["solo_replay_sin_explicar"], 1)
+
+    def test_with_the_entry_dated_at_the_fill_the_cooldown_still_counts_from_the_fill_of_the_close(self):
+        eventos = self.replay_directo()
+        cierre, t = self.cierre_y_mirada_del_enfriamiento(eventos)
+        informe = self.comparar(self.vivo_sin_la_mirada(eventos, t))
+        fila = next(x for x in informe["decisiones"]["lista_solo_replay"] if x["t_ms"] == t)
+        self.assertIn("enfriamiento", fila["explicacion"])
 
     def test_a_look_the_live_skipped_is_a_replay_only_decision_explained_by_the_live_skip(self):
         eventos = self.replay_directo()

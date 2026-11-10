@@ -294,10 +294,26 @@ test('clicking the EJEC. marker on the canvas opens the facts of its fill, apart
   await expect(detail.locator('[data-field="order_id"]')).toContainText(
     sale.orderId,
   )
-  // Original event time, in UTC (to the millisecond).
-  await expect(detail.locator('[data-field="time"]')).toContainText(
-    new Date(sale.timeMs).toISOString().replace('T', ' ').replace('Z', ' UTC'),
+  // Original event time, in Madrid time (to the millisecond), with no UTC label.
+  const madrid = Object.fromEntries(
+    new Intl.DateTimeFormat('en-GB', {
+      timeZone: 'Europe/Madrid',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hourCycle: 'h23',
+    })
+      .formatToParts(new Date(sale.timeMs))
+      .map((part) => [part.type, part.value]),
   )
+  const millis = String(sale.timeMs % 1000).padStart(3, '0')
+  await expect(detail.locator('[data-field="time"]')).toContainText(
+    `${madrid.year}-${madrid.month}-${madrid.day} ${madrid.hour}:${madrid.minute}:${madrid.second}.${millis}`,
+  )
+  await expect(detail.locator('[data-field="time"]')).not.toContainText('UTC')
   await expect(detail.locator('[data-field="quantity"]')).toContainText(/ETH/)
   await expect(detail.locator('[data-field="side"]')).toContainText(
     'LONG (compra)',

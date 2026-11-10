@@ -86,6 +86,74 @@ describe('qwenTrades', () => {
     }
   })
 
+  describe('an entry dated with the look, filled later (operacion-mejoras T2)', () => {
+    const FILL = 1_800_000_005_400
+    const entryReceipt = {
+      receipt_id: 'a'.repeat(64),
+      cost_model_hash: 'b'.repeat(64),
+      fee_kind: 'taker',
+      price: '2111.1',
+      quantity: '0.04',
+      fee_usd: '0.04',
+      fee_rate: '0.0005',
+      source:
+        'https://futures.kraken.com/derivatives/api/v3/orderbook?symbol=PF_ETHUSD',
+      signal_at_ms: 1_800_000_000_000,
+      decision_at_ms: 1_800_000_004_900,
+      requested_at_ms: 1_800_000_004_900,
+      received_at_ms: 1_800_000_005_200,
+      server_at_ms: 1_800_000_005_100,
+      executed_at_ms: FILL,
+    }
+    // Live trade #21 on the VPS: entry 08:00:00.000, fill +5,4 s.
+    const trade = (entryMs: number) =>
+      row({
+        product: 'PF_ETHUSD',
+        trade_no: 21,
+        status: 'open',
+        entry_ms: entryMs,
+        exit_ms: null,
+        entry_price: '2111.1',
+        net_usd: null,
+        execution: {
+          model: 'kraken-futures-book.v1',
+          entry: entryReceipt,
+          exit: null,
+          mark: null,
+          funding_receipt_id: null,
+          error: null,
+          exit_plan: null,
+        },
+      })
+
+    it('keeps the trade: the entry is the look and the receipt the fill seconds later', () => {
+      const out = qwenTrades({
+        status: 'ok',
+        trades: [trade(1_800_000_000_000)],
+      })
+      expect(out).toHaveLength(1)
+      expect(out[0]).toMatchObject({
+        tradeNo: 21,
+        entryMs: 1_800_000_000_000,
+        execution: { entry: { executedMs: FILL } },
+      })
+    })
+
+    it('keeps the trade of a catch-up look, filled up to two candles (10 min) later: the live rule', () => {
+      for (const lag of [60_000, 9 * 60_000, 10 * 60_000])
+        expect(
+          qwenTrades({ status: 'ok', trades: [trade(FILL - lag)] }),
+        ).toHaveLength(1)
+    })
+
+    it('leaves out a receipt from before the entry or from more than 10 min after it', () => {
+      for (const entryMs of [FILL + 1, FILL - 10 * 60_000 - 1])
+        expect(qwenTrades({ status: 'ok', trades: [trade(entryMs)] })).toEqual(
+          [],
+        )
+    })
+  })
+
   it('reads the resting exit order and a maker receipt, and rejects a broken plan', () => {
     const phase = {
       receipt_id: 'a'.repeat(64),

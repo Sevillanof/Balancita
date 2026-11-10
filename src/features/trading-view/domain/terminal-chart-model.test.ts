@@ -292,7 +292,7 @@ describe('executed-operation and WAIT markers', () => {
     ])
   })
 
-  it('lists only the facts the fill records, in UTC, and says what is missing', () => {
+  it('lists only the facts the fill records, in Madrid time, and says what is missing', () => {
     const rows = (value: unknown) =>
       Object.fromEntries(
         fillDetailRows(value, {
@@ -303,7 +303,7 @@ describe('executed-operation and WAIT markers', () => {
     expect(rows(fill({ event_time_ms: 1_800_000_000_007 }))).toEqual({
       fill_id: 'fill:11',
       order_id: 'o1',
-      time: '2027-01-15 08:00:00.007 UTC',
+      time: '2027-01-15 09:00:00.007',
       quantity: '0.5 BTC',
       side: 'LONG (compra)',
       price: '100000 USD',

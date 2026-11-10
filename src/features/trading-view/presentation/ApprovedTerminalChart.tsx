@@ -1,14 +1,21 @@
 import { useEffect, useRef, useState } from 'react'
-import { currency as formatCurrency } from '../../../shared/finance/format.ts'
+import {
+  currency as formatCurrency,
+  madridDateTime,
+} from '../../../shared/finance/format.ts'
 import { TERMINAL_BUTTON } from '../../../shared/design-system/terminal-styles.ts'
 import {
   CandlestickSeries,
   ColorType,
   HistogramSeries,
   LineSeries,
-  createChart,
+  createChartEx,
   createSeriesMarkers,
+  defaultHorzScaleBehavior,
   type IChartApi,
+  type IHorzScaleBehavior,
+  type TickMarkFormatter,
+  type TimeScaleOptions,
   type ISeriesPrimitive,
   type ISeriesApi,
   type SeriesMarker,
@@ -28,11 +35,39 @@ import {
   lookDecisionsAt,
   type LookDecisions,
 } from '../../../app/terminal-lifecycle.ts'
+import {
+  fillMadridWeights,
+  madridTickLabel,
+} from '../domain/madrid-time-scale.ts'
 import TerminalTradeOverlay from './TerminalTradeOverlay.tsx'
 import {
   EMPTY_TRADE_FRAME,
   TerminalTradePrimitive,
 } from './TerminalTradePrimitive.ts'
+
+/**
+ * The library's time scale with the weights of the Madrid calendar: the day, month
+ * and hour marks fall on Madrid midnight and Madrid hours (see madrid-time-scale).
+ */
+const MadridHorzScale = class extends defaultHorzScaleBehavior() {
+  override fillWeightsForPoints(
+    ...[points, startIndex]: Parameters<
+      InstanceType<
+        ReturnType<typeof defaultHorzScaleBehavior>
+      >['fillWeightsForPoints']
+    >
+  ) {
+    fillMadridWeights(points, startIndex)
+  }
+}
+
+// The time-scale type of the shared options leaves this one out, the time scale reads it.
+const MADRID_TICK_LABELS = {
+  tickMarkFormatter: ((time, type) =>
+    typeof time === 'number'
+      ? madridTickLabel(time, type)
+      : null) satisfies TickMarkFormatter,
+} satisfies Pick<TimeScaleOptions, 'tickMarkFormatter'>
 
 export type ApprovedTerminalCandle = {
   time: number
@@ -338,61 +373,71 @@ export default function ApprovedTerminalChart({
       info: cssColor('--color-chart-info', '#79a9bd'),
     }
     const overlays = overlaySeries.current
-    const chart = createChart(node, {
-      autoSize: true,
-      layout: {
-        background: { type: ColorType.Solid, color: colors.background },
-        textColor: colors.text,
-        fontFamily: 'IBM Plex Mono, monospace',
-        ...(initialViewport === 'approved-terminal' ? { fontSize: 11 } : {}),
-        attributionLogo: true,
-      },
-      ...(initialViewport === 'approved-terminal'
-        ? { localization: { locale: 'es-ES' } }
-        : {}),
-      grid: {
-        vertLines: {
-          color: colors.grid,
-          ...(initialViewport === 'approved-terminal'
-            ? { style: 2 as const }
-            : {}),
+    const chart = createChartEx<Time, IHorzScaleBehavior<Time>>(
+      node,
+      new MadridHorzScale(),
+      {
+        autoSize: true,
+        layout: {
+          background: { type: ColorType.Solid, color: colors.background },
+          textColor: colors.text,
+          fontFamily: 'IBM Plex Mono, monospace',
+          ...(initialViewport === 'approved-terminal' ? { fontSize: 11 } : {}),
+          attributionLogo: true,
         },
-        horzLines: {
-          color: colors.grid,
+        // The axis and the crosshair read Europe/Madrid, whatever the browser's zone.
+        localization: {
           ...(initialViewport === 'approved-terminal'
-            ? { style: 2 as const }
+            ? { locale: 'es-ES' }
             : {}),
+          timeFormatter: (time: Time) =>
+            typeof time === 'number' ? madridDateTime(time * 1000) : '',
         },
-      },
-      ...(initialViewport === 'approved-terminal'
-        ? {
-            crosshair: {
-              vertLine: {
-                color: colors.info,
-                labelBackgroundColor: colors.grid,
+        grid: {
+          vertLines: {
+            color: colors.grid,
+            ...(initialViewport === 'approved-terminal'
+              ? { style: 2 as const }
+              : {}),
+          },
+          horzLines: {
+            color: colors.grid,
+            ...(initialViewport === 'approved-terminal'
+              ? { style: 2 as const }
+              : {}),
+          },
+        },
+        ...(initialViewport === 'approved-terminal'
+          ? {
+              crosshair: {
+                vertLine: {
+                  color: colors.info,
+                  labelBackgroundColor: colors.grid,
+                },
+                horzLine: {
+                  color: colors.info,
+                  labelBackgroundColor: colors.grid,
+                },
               },
-              horzLine: {
-                color: colors.info,
-                labelBackgroundColor: colors.grid,
-              },
-            },
-          }
-        : {}),
-      rightPriceScale: {
-        borderColor: colors.grid,
-        scaleMargins: BASE_SCALE_MARGINS,
+            }
+          : {}),
+        rightPriceScale: {
+          borderColor: colors.grid,
+          scaleMargins: BASE_SCALE_MARGINS,
+        },
+        timeScale: {
+          borderColor: colors.grid,
+          timeVisible: true,
+          secondsVisible: false,
+          ...MADRID_TICK_LABELS,
+          rightOffset: 8,
+          ...(tradeMode ? { minBarSpacing: 0.1 } : {}),
+          ...(initialViewport === 'approved-terminal' ? { barSpacing: 8 } : {}),
+        },
+        handleScroll: true,
+        handleScale: true,
       },
-      timeScale: {
-        borderColor: colors.grid,
-        timeVisible: true,
-        secondsVisible: false,
-        rightOffset: 8,
-        ...(tradeMode ? { minBarSpacing: 0.1 } : {}),
-        ...(initialViewport === 'approved-terminal' ? { barSpacing: 8 } : {}),
-      },
-      handleScroll: true,
-      handleScale: true,
-    })
+    )
     const series = chart.addSeries(CandlestickSeries, {
       upColor: colors.up,
       downColor: colors.down,

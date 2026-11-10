@@ -325,6 +325,11 @@ describe('Estrategias: the Terminal laboratory', () => {
     ).toHaveAttribute('aria-pressed', 'true')
     let filas = within(dialogo).getAllByRole('row').slice(1)
     expect(filas).toHaveLength(4)
+    // Hours are Madrid's: 4 feb 00:00 UTC is 01:00 CET; 4 abr 00:00 UTC is 02:00 CEST.
+    expect(dialogo).toHaveTextContent('horas de Madrid')
+    expect(dialogo.textContent).not.toMatch(/UTC/)
+    expect(filas[0]).toHaveTextContent('4 feb 01:00')
+    expect(filas[3]).toHaveTextContent('4 abr 02:00')
     expect(filas[1]).toHaveTextContent('−15,00')
     expect(filas[1]).toHaveTextContent('Tope de horas')
     await user.click(within(dialogo).getByRole('button', { name: 'Oficial' }))

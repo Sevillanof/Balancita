@@ -292,8 +292,8 @@ LIMITES_VIVO = [
     "libro público: el vivo llena contra el libro (precio, tamaño y hora del fill); el replay entra al cierre de la vela con el modelo de costos, "
     "así que el neto por operación difiere unos puntos básicos aunque la decisión sea la misma",
     "noticias: el replay no las evalúa; una entrada o un cierre por noticia del vivo aparece como diferencia",
-    "enfriamiento y esperas: el vivo cuenta los 15 min desde la hora real del fill y el replay desde la vela, y el vivo omite las miradas "
-    "con el proceso detenido o la vela tarde; esas miradas salen como «solo replay»",
+    "esperas: el vivo omite las miradas con el proceso detenido o la vela tarde; esas miradas salen como «solo replay» (hasta 2026-11-09 el "
+    "vivo además contaba el enfriamiento de 15 min desde la hora real del fill del cierre y el replay desde la vela; ahora los dos desde la mirada)",
     "las decisiones se comparan una a una: una diferencia cambia las posiciones abiertas y arrastra las siguientes; por eso también se "
     "compara la señal (maestro y portero), que no depende de las posiciones",
 ]
@@ -354,13 +354,22 @@ def _hora(ms):
     return datetime.datetime.fromtimestamp(ms / 1000, datetime.timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
 
 
+def inicios_de_enfriamiento(operaciones):
+    """El instante desde el que el vivo cuenta el enfriamiento de cada operación cerrada. Desde operacion-mejoras T2 la entrada se fecha con la
+    mirada (``entry_ms`` es la hora de una vela, múltiplo de 5 min) y el enfriamiento corre desde la mirada que decidió el cierre: la vela en
+    que se llenó la salida (segundos después). Las operaciones anteriores fechaban la entrada con el llenado (milisegundos sueltos) y el
+    enfriamiento corría desde el llenado de la salida."""
+    return [o["exit_ms"] // qt.BAR_MS * qt.BAR_MS if o["entry_ms"] % qt.BAR_MS == 0 else o["exit_ms"]
+            for o in operaciones if o["exit_ms"] is not None]
+
+
 def comparar_decisiones(vivas, replay, *, cooldown_ms=0, omitidos_vivos=None, salidas_vivas=()):
     """Decisión por decisión (una por mirada de 15 min, clave ``t_ms``) entre el vivo y el replay.
 
     Cada decisión es ``{t_ms, kind, action, maestro, puntaje, portero, motivo}``. ``coinciden``: misma acción; ``difieren``: otra acción
     (se listan con las dos); ``solo_vivo`` / ``solo_replay``: la mirada existe en un solo lado. Una mirada «solo replay» se explica,
-    cuando se puede, por una omisión del vivo (``omitidos_vivos`` ``{t_ms: motivo}``) o por el enfriamiento contado desde la hora real
-    del fill de un cierre en vivo (``salidas_vivas``, ``cooldown_ms``). ``senal_coincide``: en cuántas miradas comunes el maestro y el
+    cuando se puede, por una omisión del vivo (``omitidos_vivos`` ``{t_ms: motivo}``) o por el enfriamiento contado desde el instante en
+    que el vivo empieza a contarlo tras un cierre (``salidas_vivas``, ``cooldown_ms``: ver ``inicios_de_enfriamiento``). ``senal_coincide``: en cuántas miradas comunes el maestro y el
     portero dicen lo mismo, sin importar las posiciones; ``puntaje_dif_max``: la mayor diferencia del puntaje del maestro."""
     omitidos_vivos = omitidos_vivos or {}
     por_vivo = {d["t_ms"]: d for d in vivas}
@@ -386,8 +395,7 @@ def comparar_decisiones(vivas, replay, *, cooldown_ms=0, omitidos_vivos=None, sa
         else:
             cierre = next((c for c in sorted(salidas_vivas) if 0 <= t - c < cooldown_ms), None)
             if cierre is not None:
-                explicacion = ("enfriamiento: el vivo cerró a las {} (hora real del fill) y cuenta los {} min desde ahí; el replay, "
-                               "desde la vela".format(_hora(cierre), cooldown_ms // qt.MINUTE_MS))
+                explicacion = "enfriamiento: el vivo cerró a las {} y cuenta los {} min desde ahí".format(_hora(cierre), cooldown_ms // qt.MINUTE_MS)
         solo_replay.append(dict(_resumen_decision(por_replay[t]), t_ms=t, hora=_hora(t), explicacion=explicacion))
     return {"vivas": len(por_vivo), "replay": len(por_replay), "comunes": len(comunes), "coinciden": coinciden,
             "difieren": len(diferencias), "solo_vivo": len(solo_vivo), "solo_replay": len(solo_replay),
@@ -571,7 +579,7 @@ def comparar_con_vivo(desde=None, hasta=None, *, live_db, datos=None, snapshot=N
         raise ComparacionError("La ventana {} → {} no contiene decisiones del vivo de esta config (hay de {} a {}).".format(
             desde, hasta, _hora(primera), _hora(ultima)))
     cooldown_ms = int(config["guardrails"].get("cooldown_min") or 0) * qt.MINUTE_MS
-    salidas = [o["exit_ms"] for o in vivo["operaciones"] if o["exit_ms"] is not None]
+    salidas = inicios_de_enfriamiento(vivo["operaciones"])
     decisiones = comparar_decisiones(vivas, decisiones_replay, cooldown_ms=cooldown_ms, omitidos_vivos=vivo["omitidos"], salidas_vivas=salidas)
     operaciones = comparar_operaciones(operaciones_vivas, operaciones_replay)
     cobertura, avisos = {}, []

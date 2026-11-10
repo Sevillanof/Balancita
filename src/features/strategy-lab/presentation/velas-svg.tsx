@@ -1,10 +1,10 @@
 import {
-  HORA_MS,
   pasoEjeHoras,
   ticksDePrecio,
+  ticksEjeMadrid,
   type Vela,
 } from '../domain/estrategias-velas.ts'
-import { diaDeInstante, numero } from '../domain/estrategias-format.ts'
+import { numero } from '../domain/estrategias-format.ts'
 import { ALTO_PILDORA, COLOR, anchoPildora } from './velas-geometria.ts'
 
 /** Pieces both views of the trade chart share: an SVG drawn in pixels, with the tokens of the project as CSS variables. */
@@ -74,10 +74,11 @@ export function Ejes({
   x: (ms: number) => number
   cadaHoras?: number
 }) {
-  const paso = (cadaHoras ?? pasoEjeHoras(hastaMs - desdeMs)) * HORA_MS
-  const instantes: number[] = []
-  for (let t = Math.ceil(desdeMs / paso) * paso; t <= hastaMs; t += paso)
-    instantes.push(t)
+  const ticks = ticksEjeMadrid(
+    desdeMs,
+    hastaMs,
+    cadaHoras ?? pasoEjeHoras(hastaMs - desdeMs),
+  )
   return (
     <g aria-hidden="true" className="font-mono" fontSize={11}>
       {ticksDePrecio(lo, hi).map((precio) => (
@@ -94,24 +95,17 @@ export function Ejes({
           </text>
         </g>
       ))}
-      {instantes.map((t) => {
-        const hora = new Date(t).getUTCHours()
-        const etiqueta =
-          paso >= 24 * HORA_MS || hora === 0
-            ? diaDeInstante(t)
-            : `${String(hora).padStart(2, '0')}:00`
-        return (
-          <text
-            key={t}
-            x={Math.min(ancho - 14, Math.max(14, x(t)))}
-            y={yAxisTiempo}
-            textAnchor="middle"
-            fill={COLOR.texto}
-          >
-            {etiqueta}
-          </text>
-        )
-      })}
+      {ticks.map(({ ms, etiqueta }) => (
+        <text
+          key={ms}
+          x={Math.min(ancho - 14, Math.max(14, x(ms)))}
+          y={yAxisTiempo}
+          textAnchor="middle"
+          fill={COLOR.texto}
+        >
+          {etiqueta}
+        </text>
+      ))}
     </g>
   )
 }

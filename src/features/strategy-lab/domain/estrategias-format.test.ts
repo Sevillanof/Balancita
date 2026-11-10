@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import {
+  diaDeInstante,
+  horaDeInstante,
+  instanteCorto,
   agruparPerillas,
   armarCambios,
   cambiosDeEntradas,
@@ -169,5 +172,27 @@ describe('knob helpers', () => {
     expect(firmado(null)).toBe('—')
     expect(usd(97.7)).toBe('+97,70 US$')
     expect(usd(-44.07)).toBe('−44,07 US$')
+  })
+})
+
+describe('instants in Madrid time', () => {
+  it('writes day and hour of Madrid in winter (UTC+1) and summer (UTC+2)', () => {
+    expect(instanteCorto(Date.UTC(2026, 1, 3, 14, 5))).toBe('3 feb 15:05')
+    expect(instanteCorto(Date.UTC(2026, 6, 1, 14, 5))).toBe('1 jul 16:05')
+    expect(horaDeInstante(Date.UTC(2026, 1, 3, 14, 5))).toBe('15:05')
+    expect(diaDeInstante(Date.UTC(2026, 1, 3, 14, 5))).toBe('3 feb')
+  })
+
+  it('moves to the next Madrid day before UTC does', () => {
+    expect(instanteCorto(Date.UTC(2026, 9, 30, 23, 45))).toBe('31 oct 00:45')
+    expect(diaDeInstante(Date.UTC(2026, 2, 28, 23, 30))).toBe('29 mar')
+    expect(horaDeInstante(Date.UTC(2026, 6, 14, 22, 0))).toBe('00:00')
+  })
+
+  it('follows both changes of hour', () => {
+    expect(horaDeInstante(Date.UTC(2026, 2, 29, 0, 59))).toBe('01:59')
+    expect(horaDeInstante(Date.UTC(2026, 2, 29, 1, 0))).toBe('03:00')
+    expect(horaDeInstante(Date.UTC(2026, 9, 25, 0, 30))).toBe('02:30')
+    expect(horaDeInstante(Date.UTC(2026, 9, 25, 1, 30))).toBe('02:30')
   })
 })

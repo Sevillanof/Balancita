@@ -1,3 +1,5 @@
+import { madridWallMs } from './madrid-time.ts'
+
 // Intl formatters are expensive to build; the chart axis alone formats on every frame.
 const formatters = new Map<string, Intl.NumberFormat>()
 
@@ -21,16 +23,6 @@ const money = (code: string, digits: number) =>
 
 const number = (digits: number) =>
   formatter({ minimumFractionDigits: digits, maximumFractionDigits: digits })
-
-const utcDate = new Intl.DateTimeFormat('es-ES', {
-  timeZone: 'UTC',
-  year: 'numeric',
-  month: 'numeric',
-  day: 'numeric',
-  hour: 'numeric',
-  minute: '2-digit',
-  second: '2-digit',
-})
 
 const madridDate = new Intl.DateTimeFormat('es-ES', {
   timeZone: 'Europe/Madrid',
@@ -103,11 +95,6 @@ export function usdFromString(value: unknown, digits = 2): string | null {
   }).format(Number(value))
 }
 
-/** `7/10/2026, 12:39:00 UTC` from epoch milliseconds. */
-export function utcDateTime(ms: number): string {
-  return `${utcDate.format(ms)} UTC`
-}
-
 /** `2 nov, 14:05` in Europe/Madrid (CET/CEST) from epoch milliseconds. */
 export function madridDateTime(ms: number): string {
   return madridDate.format(ms)
@@ -128,4 +115,12 @@ export function madridDayTime(ms: number, nowMs: number): string {
 /** `9/11/2026, 23:15:02` in Europe/Madrid, to the second (receipts and records). */
 export function madridDateTimeSeconds(ms: number): string {
   return madridFull.format(ms)
+}
+
+const two = (value: number) => String(value).padStart(2, '0')
+
+/** `2027-01-15 08:58:30.123` in Europe/Madrid, to the millisecond (fills and records). */
+export function madridDateTimeMs(ms: number): string {
+  const wall = new Date(madridWallMs(ms))
+  return `${wall.getUTCFullYear()}-${two(wall.getUTCMonth() + 1)}-${two(wall.getUTCDate())} ${two(wall.getUTCHours())}:${two(wall.getUTCMinutes())}:${two(wall.getUTCSeconds())}.${String(wall.getUTCMilliseconds()).padStart(3, '0')}`
 }
