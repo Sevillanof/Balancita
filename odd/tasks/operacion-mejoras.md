@@ -19,14 +19,15 @@ Mejoras de la operatoria pedidas por el usuario después de la sombra maker. Con
 
 ## Tasks
 
-| ID  | Specs | Ruta                                                                                               | Estado                         | Commit |
-| --- | ----- | -------------------------------------------------------------------------------------------------- | ------------------------------ | ------ |
-| T1  | S1    | worker captura: libro de ETH cada 10 s                                                             | hecha                          | —      |
-| T2  | S2-S3 | worker trader: mirada de recuperación, perdidas, fecha de entrada                                  | hecha                          | —      |
-| T3  | S4    | worker operatoria: script de despliegue, cuenta gh, test inestable                                 | hecha                          | —      |
-| T4  | S5    | alarma: latido del operador, miradas perdidas, posición sin valorar, reloj (healthcheck de la VPS) | hecha                          | —      |
-| T5  | S6    | marcador de la revisión en el desplegable del saldo (maqueta en gentle-design primero)             | hecha                          | —      |
-| T6  | S7    | pendientes del informe: #547 a main, opción 4, 6a, 7                                               | opción 4a hecha; quedan 6a y 7 | —      |
+| ID  | Specs  | Ruta                                                                                                                                      | Estado                         | Commit |
+| --- | ------ | ----------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------ | ------ |
+| T1  | S1     | worker captura: libro de ETH cada 10 s                                                                                                    | hecha                          | —      |
+| T2  | S2-S3  | worker trader: mirada de recuperación, perdidas, fecha de entrada                                                                         | hecha                          | —      |
+| T3  | S4     | worker operatoria: script de despliegue, cuenta gh, test inestable                                                                        | hecha                          | —      |
+| T4  | S5     | alarma: latido del operador, miradas perdidas, posición sin valorar, reloj (healthcheck de la VPS)                                        | hecha                          | —      |
+| T5  | S6     | marcador de la revisión en el desplegable del saldo (maqueta en gentle-design primero)                                                    | hecha                          | —      |
+| T6  | S7     | pendientes del informe: #547 a main, opción 4, 6a, 7                                                                                      | opción 4a hecha; quedan 6a y 7 | —      |
+| T7  | S3, S7 | eje del gráfico y tarjeta de vela en hora de Madrid; revisar todo lo que usa la hora de entrada (cambio de T2) para que nada más se rompa | en curso                       | —      |
 
 ## Log
 
@@ -55,3 +56,4 @@ Mejoras de la operatoria pedidas por el usuario después de la sombra maker. Con
 - **L23** (usuario, comentario en 04 sobre «F+ · Anillo, rango y reglas»): «Implementa este» → implementar juntas: fila de pasos de `01-minimo` (solo los que deciden), tarjeta de noticia de `02-con-etiqueta`, y la tarjeta de la operación F+ con rango de `04-tarjeta-operacion` (elegida; las demás quedan como alternativas). Horas en Madrid. Capturas reales de antes y después antes de mergear.
 - **L24** (evidencia 4a): fila SALIR con los pasos que existen en los datos y deciden (gira el maestro, 24 h sin fuerza, tope 36 h, auditor; los que no aplican se ven apagados con tooltip); tarjeta de noticia con borde por fuerza y «fuente · hora»; tarjeta de la operación F+ (anillo de horas contra 36 h con marca de 24 h, neto y %, entrada → ahora, rango peor/mejor desde `mfe_bp`/`mae_bp` × nocional, 3 íconos de reglas con tooltip; «sin dato» si falta); horas en Madrid en tarjeta, noticias, fila, ficha y franja de operaciones. `/api/qwen/trades` suma `mfe_bp`/`mae_bp`. 703 tests web, 351 gateway, e2e 87 OK (2 fallas previas: puerto 8789 ocupado por el gateway local y `integracion-gateway` que ya fallaba en HEAD). Nota: enfriamiento y tamaño no son pasos de salida en los datos, no se inventaron.
 - **L25** (usuario): «Desplega en la VPS, pero hay algo que no esta bien en la VPS, no muestra las operaciones cerradas ni en curso. Hay algo que esta mal» → causa: `/api/qwen/trades` respondía 400 `execution_projection_invalid` porque exigía que el recibo de entrada tuviera la misma hora que `entry_ms`; desde T2 la entrada se fecha con la mirada y el llenado queda unos segundos después (operación #21 en la VPS: +5,4 s). Arreglo: aceptar 0 ≤ llenado − entrada ≤ 2 min (la misma regla que usa el vivo), con test RED/GREEN y casos que siguen rechazados. El test de T2 no lo detectó porque el gateway no tenía un caso con entrada fechada antes del llenado.
+- **L26** (usuario): «Si y confirma que no se rompa nada mas con el cambio de hora y que funcione todo bien.» → T7.
