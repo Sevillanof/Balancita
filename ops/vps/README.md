@@ -2,16 +2,17 @@
 
 Copia versionada de lo que corre en el VPS (antes vivía solo allá). Si se cambia algo acá, hay que instalarlo en el VPS.
 
-| Archivo                                     | Instalado en                               | Qué hace                                                                                                                                                                                                                                                             |
-| ------------------------------------------- | ------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `balancita-respaldo.sh`                     | `/usr/local/bin/`                          | 04:30 Madrid: copia cada base de `server/data/dev-live` con `VACUUM INTO` + `integrity_check` a `/home/balancita/backups/AAAA-MM-DD` (7 días), después corre `archivo_parquet nocturno` sobre esas copias hacia `/home/balancita/parquet`, y avisa a healthchecks.io |
-| `balancita-respaldo.service` / `.timer`     | `/etc/systemd/system/`                     | Programa el respaldo; lee `/etc/balancita/alert.env`                                                                                                                                                                                                                 |
-| `balancita-healthcheck.sh`                  | `/usr/local/bin/`                          | Cada 5 min: servicio, última vela, disco, RAM y, del operador, latido, miradas perdidas, posición sin valorar y reloj → `HC_PING_URL` (ver «Chequeo de salud» abajo). `desplegar.sh` lo instala solo                                                                 |
-| `balancita-healthcheck.service` / `.timer`  | `/etc/systemd/system/`                     | Programa el chequeo                                                                                                                                                                                                                                                  |
-| `systemd/balancita.service.d/llama.conf`    | `/etc/systemd/system/balancita.service.d/` | **Aplicado el 2026-11-07.** Drop-in de llama-server: 5 hilos (`LLAMA_THREADS`), `mlock` (`LLAMA_ARG_LOAD_MODE=mmap+mlock`) y `LimitMEMLOCK=infinity`                                                                                                                 |
-| `desplegar.sh`                              | se corre desde el Mac, no se instala       | Despliegue único develop → main → VPS con verificaciones (ver «Desplegar» abajo)                                                                                                                                                                                     |
-| `swap-2g.sh`                                | `/usr/local/bin/`                          | **Aplicado el 2026-11-07.** Swap de 2 GB en `/swapfile` y `vm.swappiness=10`; se puede correr más de una vez                                                                                                                                                         |
-| `systemd/balancita.service.d/noticias.conf` | `/etc/systemd/system/balancita.service.d/` | **Preparado, sin aplicar.** Drop-in de noticias en modo solo-ficha: `NEWS_CARDS=1`, `NEWS_LEGACY_QUESTIONS=0`, `NEWS_CARD_SCOPE=0`                                                                                                                                   |
+| Archivo                                      | Instalado en                               | Qué hace                                                                                                                                                                                                                                                             |
+| -------------------------------------------- | ------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `balancita-respaldo.sh`                      | `/usr/local/bin/`                          | 04:30 Madrid: copia cada base de `server/data/dev-live` con `VACUUM INTO` + `integrity_check` a `/home/balancita/backups/AAAA-MM-DD` (7 días), después corre `archivo_parquet nocturno` sobre esas copias hacia `/home/balancita/parquet`, y avisa a healthchecks.io |
+| `balancita-respaldo.service` / `.timer`      | `/etc/systemd/system/`                     | Programa el respaldo; lee `/etc/balancita/alert.env`                                                                                                                                                                                                                 |
+| `balancita-healthcheck.sh`                   | `/usr/local/bin/`                          | Cada 5 min: servicio, última vela, disco, RAM y, del operador, latido, miradas perdidas, posición sin valorar y reloj → `HC_PING_URL` (ver «Chequeo de salud» abajo). `desplegar.sh` lo instala solo                                                                 |
+| `balancita-healthcheck.service` / `.timer`   | `/etc/systemd/system/`                     | Programa el chequeo                                                                                                                                                                                                                                                  |
+| `systemd/balancita.service.d/llama.conf`     | `/etc/systemd/system/balancita.service.d/` | **Aplicado el 2026-11-07.** Drop-in de llama-server: 5 hilos (`LLAMA_THREADS`), `mlock` (`LLAMA_ARG_LOAD_MODE=mmap+mlock`) y `LimitMEMLOCK=infinity`                                                                                                                 |
+| `desplegar.sh`                               | se corre desde el Mac, no se instala       | Despliegue único develop → main → VPS con verificaciones (ver «Desplegar» abajo)                                                                                                                                                                                     |
+| `swap-2g.sh`                                 | `/usr/local/bin/`                          | **Aplicado el 2026-11-07.** Swap de 2 GB en `/swapfile` y `vm.swappiness=10`; se puede correr más de una vez                                                                                                                                                         |
+| `systemd/balancita.service.d/noticias.conf`  | `/etc/systemd/system/balancita.service.d/` | **Preparado, sin aplicar.** Drop-in de noticias SIN IA: `NEWS_ENGINE=reglas` (el motor de reglas del backend; el modo solo-ficha de Qwen queda comentado para volver)                                                                                                |
+| `systemd/balancita.service.d/sin-llama.conf` | `/etc/systemd/system/balancita.service.d/` | **Preparado, sin aplicar.** `DECISIONS_ENABLED=0`: el lanzador no arranca llama-server (ni `q` ni C31). Solo después de `noticias.conf`                                                                                                                              |
 
 ## Desplegar (`ops/vps/desplegar.sh`, S4 de `odd/tasks/operacion-mejoras.md`)
 
@@ -168,7 +169,79 @@ Calcular tokens/s de entrada por hora (mediana y p90) en las 6 h anteriores y en
 - `iostat -x 5` (lecturas/s de `sda`) y `/proc/pressure/io` (`full avg10`; hoy 35 %);
 - `health.jsonl` y `retention.jsonl` de `server/data/dev-live`: la retención debe volver a terminar sus ciclos y la integridad ya no debe aparecer cortada.
 
-## Noticias: ficha de Qwen en modo solo-ficha (T14 de `odd/tasks/noticias-y-auditor.md`, S7)
+## Noticias sin IA y llama-server apagado (T18 y T19 de `odd/tasks/noticias-y-auditor.md`, S10)
+
+Decisión del usuario (L26): «tenemos que hacerlo sin una IA, solo BE que catalogue cada noticia entre alcista, bajista e importante». El proceso de noticias cataloga con reglas fijas (`python/balancita_engine/futures_news_reglas.py`, léxico en `config/noticias-reglas.json`): sin Qwen, sin Haiku, sin ningún modelo, sin llama-server. Detalle del léxico, de las reglas y de cómo se mide: `docs/medir-noticias.md`. **Esto está PREPARADO y SIN APLICAR: nada de esta sección se corrió en la VPS.**
+
+Son dos pasos, en este orden y con un reinicio cada uno (`systemctl restart balancita` reinicia TODO el stack: ver «Cuándo reiniciar» arriba; o `ops/vps/desplegar.sh --dropin NOMBRE.conf`, que lo hace en la ventana segura y con chequeos).
+
+### Paso 1: motor de reglas (`noticias.conf`)
+
+El motor de reglas es el valor por defecto del código (`NEWS_ENGINE` vacío = `reglas`) y el lanzador deja de pasar `--analyze` al proceso de noticias aunque llama-server esté encendido. Por eso el código nuevo ya cambia el motor al desplegarse; `noticias.conf` solo lo deja explícito y documenta cómo volver.
+
+```
+cd /home/balancita/Balancita/ops/vps
+install -D -m 644 systemd/balancita.service.d/noticias.conf /etc/systemd/system/balancita.service.d/noticias.conf
+systemctl daemon-reload
+systemctl show balancita -p Environment | tr ' ' '\n' | grep NEWS_    # NEWS_ENGINE=reglas
+systemctl restart balancita
+```
+
+Después del reinicio (la base no se toca; las fichas nuevas son `card_version` 3 y las de Qwen, versión 1, quedan intactas):
+
+```
+journalctl -u balancita --since "10 min ago" | grep -E "news writing|news: ingested"     # «analysis rules engine noticias-reglas.v1 (no model)» y «cards N»
+sqlite3 -readonly server/data/dev-live/futures-news.sqlite \
+  "SELECT card_version, status, count(*) FROM paper_futures_news_cards GROUP BY 1,2"       # la versión 3 cubre todas las noticias
+sqlite3 -readonly server/data/dev-live/futures-news.sqlite \
+  "SELECT count(*) FROM paper_futures_news_items i WHERE NOT EXISTS (SELECT 1 FROM paper_futures_news_cards c WHERE c.item_hash=i.item_hash AND c.card_version=3)"   # 0
+sqlite3 -readonly server/data/dev-live/futures-news.sqlite \
+  "SELECT status, reason FROM paper_futures_news_briefings ORDER BY briefing_id DESC LIMIT 1"   # off|news_engine_reglas
+```
+
+En la Terminal, la tarjeta de noticias muestra el panorama «Lo más importante · 6 h» (las 3 de mayor importancia de las últimas 6 h, con su flecha de dirección) en lugar del resumen de Qwen.
+
+**Deshacer el paso 1** (volver al motor de Qwen): como el motor de reglas es el valor por defecto, borrar el drop-in NO basta. Hay que pedir Qwen y tener llama-server encendido (sin `sin-llama.conf`):
+
+```
+printf '[Service]\nEnvironment=NEWS_ENGINE=qwen\nEnvironment=NEWS_CARDS=1\nEnvironment=NEWS_LEGACY_QUESTIONS=0\nEnvironment=NEWS_CARD_SCOPE=0\n' > /etc/systemd/system/balancita.service.d/noticias.conf
+systemctl daemon-reload && systemctl restart balancita
+```
+
+Las fichas de reglas ya escritas quedan (solo-agregar) y los lectores toman siempre la versión más nueva de cada noticia: con Qwen de vuelta, las noticias que ya tienen ficha 3 siguen mostrando la de reglas; solo las nuevas reciben la de Qwen en la versión 1, que queda **debajo** de la 3 para las ya catalogadas. Si hace falta que Qwen mande otra vez, es una decisión aparte (otra `card_version`).
+
+### Paso 2: apagar llama-server (`sin-llama.conf`, T19)
+
+Solo cuando el paso 1 lleve un rato catalogando bien (consultas de arriba). Con `DECISIONS_ENABLED=0` el lanzador (`resolveLlamaServer`) no devuelve comando de llama-server, así que no arrancan `llm`, `q` (motor D, ya retirado) ni `qwenexit` (C31, ya apagada por su bloque `off`). Siguen: captura, gateway, noticias (reglas) y `qwenlive`.
+
+**Qué de lo que opera depende de llama-server: nada** (comprobado en el código y en `scripts/dev.node-test.mjs`): el trader de la Terminal decide por fórmula (`decide_by: formula`: maestro y portero) y tiene la opinión del modelo apagada (`opinion_enabled: false` y `runtime.opinion_enabled: false` en `config/qwen-live.json` y en la config activa `config/terminal-activa.json`); con eso `qwenlive` ni siquiera pregunta `/health` (`_check_model` vuelve antes) y arranca aunque no haya llm (`readQwenNewsOnly`). `priority_v2`, la única vía noticia → operación, lee las respuestas viejas (`news_relevance_btc` y `news_direction` v2), que ya no se escriben desde T14: sigue inerte y no lee las fichas, ni las de Qwen ni las de reglas. El chequeo de salud (`balancita-healthcheck.sh`) ya solo anota `llama=caido` sin fallar el ping.
+
+```
+cd /home/balancita/Balancita/ops/vps
+install -D -m 644 systemd/balancita.service.d/sin-llama.conf /etc/systemd/system/balancita.service.d/sin-llama.conf
+systemctl daemon-reload
+systemctl show balancita -p Environment | tr ' ' '\n' | grep DECISIONS_ENABLED    # DECISIONS_ENABLED=0
+systemctl restart balancita        # en la ventana :16-:28 (ver «Cuándo reiniciar»)
+```
+
+`ops/vps/desplegar.sh` entiende este estado: con `DECISIONS_ENABLED=0` en el servicio exige que NO haya proceso llama-server (en vez de `VmLck` y `-t 5`). Medir después (nada de `curl` a llama-server):
+
+```
+pgrep -x llama-server || echo "apagado"                      # apagado
+free -m                                                      # ~6 GB más de memoria libre que con llama-server (RSS de 6,2-6,5 GB, 4,17 GB con mlock)
+systemctl is-active balancita                                # active
+journalctl -u balancita --since "30 min ago" | grep -c Traceback    # 0
+tail -3 ~/health.log                                         # OK (llama=caido es lo esperado)
+sqlite3 -readonly server/data/dev-live/qwen-live/live.sqlite "SELECT count(*), max(at_ms) FROM errors WHERE at_ms > strftime('%s','now','-1 hour')*1000"
+```
+
+Y comprobar que las miradas del trader siguen cada 15 min y las noticias nuevas reciben su ficha 3.
+
+**Deshacer el paso 2:** `rm /etc/systemd/system/balancita.service.d/sin-llama.conf && systemctl daemon-reload && systemctl restart balancita`. llama-server vuelve a arrancar (`llama.conf` sigue aplicado: 5 hilos y mlock). Con el modelo en el disco no hay nada que reinstalar. Cuando el paso 2 esté confirmado se pueden sacar `llama.conf` y `swap-2g.sh` (decisión aparte).
+
+## Noticias con Qwen: ficha en modo solo-ficha (T14 de `odd/tasks/noticias-y-auditor.md`, S7) — reemplazado por las reglas
+
+> Desde S10 esto solo corre con `NEWS_ENGINE=qwen` (ver arriba): el motor por defecto es el de reglas, sin modelo. Se conserva para poder volver. Con `NEWS_ENGINE=qwen`, `NEWS_CARDS` y las otras dos variables funcionan como se describe aquí.
 
 Autorizado por el usuario en L17 («Si, pasala a la VPS»). Detalle de las preguntas, de quién lee qué y de lo que cambia: `docs/medir-noticias.md`. Son tres variables del proceso de noticias, que el lanzador hereda del servicio:
 
@@ -209,11 +282,4 @@ Deben aparecer solo `news_card_type`, `news_card_strength` y `news_card_directio
 
 ### Deshacer
 
-Borrar el drop-in y reiniciar; las filas escritas quedan como historia (solo-agregar) y nada se migra:
-
-```
-rm /etc/systemd/system/balancita.service.d/noticias.conf
-systemctl daemon-reload && systemctl restart balancita
-```
-
-Para volver a las dos preguntas viejas conservando la ficha, dejar solo `Environment=NEWS_CARDS=1`; para apagar también la ficha, sacar las tres líneas. Las noticias que quedaron sin las dos preguntas viejas durante el modo solo-ficha no se las preguntan después de deshacer (fuera de la ventana de reintento se marcan `skipped_stale`), y `priority_v2` solo vuelve a ver noticias nuevas.
+Con `NEWS_ENGINE=qwen`: quitar `NEWS_LEGACY_QUESTIONS`/`NEWS_CARD_SCOPE`/`NEWS_CARDS` del drop-in y reiniciar; las filas escritas quedan como historia (solo-agregar) y nada se migra. Para volver a las dos preguntas viejas conservando la ficha, dejar solo `Environment=NEWS_CARDS=1`; para apagar también la ficha, sacar las tres líneas. Las noticias que quedaron sin las dos preguntas viejas durante el modo solo-ficha no se las preguntan después de deshacer (fuera de la ventana de reintento se marcan `skipped_stale`), y `priority_v2` solo vuelve a ver noticias nuevas.

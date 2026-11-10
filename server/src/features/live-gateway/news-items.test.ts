@@ -309,6 +309,108 @@ describe('createNewsItems', () => {
       })
     })
 
+    describe('rules cards (version 3, no model: S10)', () => {
+      const RULES = `'["engine:reglas","lexicon:noticias-reglas.v1"]'`
+
+      it('reads them as analysis_source «reglas» with strength as importance and says which engine made the card', () => {
+        const path = cardOnlyDb(`
+          (1, 'h1', 3, 'done', 1300, 'hack', NULL, 'bearish', 3, 3, NULL, NULL, 6300000000.0, '["hack_100m","hack_1b"]', ${RULES}),
+          (2, 'h2', 3, 'done', 2300, 'macro_fed', NULL, 'neutral', 1, 1, NULL, NULL, NULL, '[]', ${RULES}),
+          (3, 'h3', 3, 'done', 3300, 'price_recap', NULL, 'neutral', 0, 0, NULL, NULL, NULL, '["recap"]', ${RULES})`)
+        expect(createNewsItems({ newsDbPath: path }).list(10)).toMatchObject({
+          status: 'ok',
+          items: [
+            {
+              id: 'h3',
+              relevance: 'none',
+              relevance_value: null,
+              direction: 'neutral',
+              analysis_status: 'done',
+              analysis_source: 'reglas',
+              known_at_ms: 3300,
+              card: {
+                version: 3,
+                engine: 'reglas',
+                strength: 0,
+                rules: ['recap'],
+              },
+            },
+            {
+              id: 'h2',
+              relevance: 'low',
+              analysis_source: 'reglas',
+              card: { engine: 'reglas', event_type: 'macro_fed' },
+            },
+            {
+              id: 'h1',
+              relevance: 'high',
+              relevance_value: null,
+              direction: 'bearish',
+              analysis_status: 'done',
+              analysis_source: 'reglas',
+              analysis_version: null,
+              known_at_ms: 1300,
+              card: {
+                version: 3,
+                engine: 'reglas',
+                strength: 3,
+                strength_model: 3,
+                amount_usd: 6300000000,
+                rules: ['hack_100m', 'hack_1b'],
+              },
+            },
+          ],
+        })
+      })
+
+      it('keeps saying «card» and engine qwen for the Qwen cards, and the newest version wins', () => {
+        const path = cardOnlyDb(`
+          (1, 'h1', 1, 'done', 1300, 'other', 'crypto', 'neutral', 1, 1, 0.9, 1, NULL, '[]', '["news_card_type@1"]'),
+          (2, 'h2', 1, 'done', 2300, 'other', 'crypto', 'neutral', 1, 1, 0.9, 1, NULL, '[]', '["news_card_type@1"]'),
+          (3, 'h2', 3, 'done', 2400, 'hack', NULL, 'bearish', 2, 2, NULL, NULL, NULL, '[]', ${RULES})`)
+        expect(createNewsItems({ newsDbPath: path }).list(10)).toMatchObject({
+          status: 'ok',
+          items: [
+            { id: 'h3' },
+            {
+              id: 'h2',
+              analysis_source: 'reglas',
+              relevance: 'medium',
+              direction: 'bearish',
+              known_at_ms: 2400,
+              card: { version: 3, engine: 'reglas' },
+            },
+            {
+              id: 'h1',
+              analysis_source: 'card',
+              card: { version: 1, engine: 'qwen' },
+            },
+          ],
+        })
+      })
+
+      it('lets the answers of the two old questions win over a rules card, as they do over any card', () => {
+        const path = seedNewsDb()
+        const db = new DatabaseSync(path)
+        db.exec(`${CARDS_TABLE}
+          INSERT INTO paper_futures_news_cards VALUES
+          (1, 'h2', 3, 'done', 2300, 'hack', NULL, 'bearish', 3, 3, NULL, NULL, NULL, '[]', ${RULES})`)
+        db.close()
+        expect(createNewsItems({ newsDbPath: path }).list(10)).toMatchObject({
+          status: 'ok',
+          items: [
+            { id: 'h3' },
+            {
+              id: 'h2',
+              analysis_source: 'questions',
+              card: { engine: 'reglas', strength: 3 },
+            },
+            { id: 'h1', analysis_source: 'questions', card: null },
+          ],
+        })
+      })
+    })
+
     it('shows «sin dato» (nulls and the real state) for items without a usable card', () => {
       const path = cardOnlyDb(`
         (1, 'h1', 1, 'skipped_stale', 1300, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL),
@@ -546,7 +648,7 @@ describe('createNewsItems', () => {
       })
     })
 
-    it.each([1, 2, 3])(
+    it.each([1, 2, 3, 4])(
       'reads known prompt version %s without relaxing summary validation',
       (prompt_version) => {
         const path = seedNewsDb()
@@ -579,6 +681,39 @@ describe('createNewsItems', () => {
         })
       },
     )
+
+    it('shows the briefing as off with the reason when the rules engine replaced it, and invents no text', () => {
+      const path = seedNewsDb()
+      seedBriefing(path)
+      seedBriefing(path, {
+        status: 'off',
+        inputs_json: '[]',
+        input_hash: createHash('sha256').update('[]').digest('hex'),
+        text: null,
+        model_ref: null,
+        model_info_json: null,
+        response_json: null,
+        prompt_version: 4,
+        reason: 'news_engine_reglas',
+        known_at_ms: BRIEFING_NOW + 10,
+        started_at_ms: BRIEFING_NOW + 10,
+        expires_at_ms: BRIEFING_NOW + 900000,
+      })
+      expect(
+        createNewsItems({
+          newsDbPath: path,
+          clock: () => BRIEFING_NOW + 20,
+        }).list(),
+      ).toMatchObject({
+        status: 'ok',
+        briefing: {
+          status: 'off',
+          text: null,
+          source_count: 0,
+          reason: 'news_engine_reglas',
+        },
+      })
+    })
 
     it('reports legacy or empty tables as pending without fabricating Qwen text', () => {
       const path = seedNewsDb()
@@ -716,7 +851,7 @@ describe('createNewsItems', () => {
       { text: 'Compra Ethereum ahora.' },
       { response_json: '{}' },
       { model_ref: 'another-model.gguf' },
-      { prompt_version: 4 },
+      { prompt_version: 5 },
     ])(
       'isolates malformed briefing rows from the existing news list: %j',
       (changes) => {

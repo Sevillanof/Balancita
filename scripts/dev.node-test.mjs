@@ -1,6 +1,8 @@
 import { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 import { delimiter } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import {
   checkDevPorts,
   describeChildExit,
@@ -16,6 +18,7 @@ import {
   findQwenModel,
   llamaPort,
   loadDevEnv,
+  newsEngine,
   loraMismatchWarning,
   planStartup,
   resolveLlamaModel,
@@ -1001,16 +1004,17 @@ describe('optional news child (n)', () => {
   })
 
   it('analyses with the local model only when the llm child is enabled, on the same port', () => {
+    const qwen = { ...local, NEWS_ENGINE: 'qwen' }
     const on = byName(
-      devChildSpecs({ ...base, env: { ...local, LLAMA_PORT: '9001' }, llm }),
+      devChildSpecs({ ...base, env: { ...qwen, LLAMA_PORT: '9001' }, llm }),
     )
     assert.ok(on.news.args.includes('--analyze'))
     assert.equal(on.news.env.LLAMA_PORT, '9001')
     // no local model, no llama-server binary, or DECISIONS_ENABLED off: ingest only
     for (const options of [
-      { env: {}, llm },
-      { env: local, llm: null },
-      { env: local, llm: undefined },
+      { env: { NEWS_ENGINE: 'qwen' }, llm },
+      { env: qwen, llm: null },
+      { env: qwen, llm: undefined },
     ])
       assert.ok(
         !byName(devChildSpecs({ ...base, ...options })).news.args.includes(
@@ -1020,7 +1024,61 @@ describe('optional news child (n)', () => {
     // llm absent because resolveLlamaServer found DECISIONS_ENABLED=0
     assert.ok(
       !byName(
-        devChildSpecs({ ...base, env: { ...local, DECISIONS_ENABLED: '0' } }),
+        devChildSpecs({ ...base, env: { ...qwen, DECISIONS_ENABLED: '0' } }),
+      ).news.args.includes('--analyze'),
+    )
+  })
+
+  it('newsEngine is reglas by default and qwen only when NEWS_ENGINE says so', () => {
+    assert.equal(newsEngine({}), 'reglas')
+    assert.equal(newsEngine({ NEWS_ENGINE: '' }), 'reglas')
+    assert.equal(newsEngine({ NEWS_ENGINE: ' reglas ' }), 'reglas')
+    assert.equal(newsEngine({ NEWS_ENGINE: 'gpt' }), 'reglas')
+    assert.equal(newsEngine({ NEWS_ENGINE: 'Qwen' }), 'qwen')
+    assert.equal(newsEngine(), 'reglas')
+  })
+
+  it('with the rules engine (the default) news never asks the model, even with llama-server on', () => {
+    for (const env of [
+      local,
+      { ...local, NEWS_ENGINE: 'reglas' },
+      { ...local, NEWS_ENGINE: 'Reglas' },
+    ]) {
+      const { news } = byName(devChildSpecs({ ...base, env, llm }))
+      assert.ok(!news.args.includes('--analyze'))
+      assert.equal(news.env.LLAMA_PORT, undefined)
+    }
+  })
+
+  it('news starts and catalogues in every llama state: llm on, off, absent, without a model, DECISIONS_ENABLED=0', () => {
+    for (const options of [
+      { env: local, llm },
+      { env: local, llm: null },
+      { env: {}, llm },
+      { env: { ...local, DECISIONS_ENABLED: '0' }, llm: null },
+      { env: { ...local, DECISIONS_ENABLED: '0' }, llm },
+    ]) {
+      const specs = devChildSpecs({ ...base, ...options })
+      const { news } = byName(specs)
+      assert.ok(news, JSON.stringify(options))
+      assert.deepEqual(news.args.slice(0, 2), [
+        '-m',
+        'balancita_engine.futures_news',
+      ])
+      assert.ok(!news.args.includes('--analyze'))
+    }
+  })
+
+  it('NEWS_ENGINE=qwen keeps the Qwen cascade, and still needs llama-server on', () => {
+    const qwen = { ...local, NEWS_ENGINE: 'qwen' }
+    assert.ok(
+      byName(devChildSpecs({ ...base, env: qwen, llm })).news.args.includes(
+        '--analyze',
+      ),
+    )
+    assert.ok(
+      !byName(
+        devChildSpecs({ ...base, env: qwen, llm: null }),
       ).news.args.includes('--analyze'),
     )
   })
@@ -1683,8 +1741,8 @@ describe('engine D switch (datos-utiles S7): verdict, scores and q', () => {
       'llm',
       'qwenlive',
     ])
-    // llama-server is what news and the briefing use; qwenlive is the live trader.
-    assert.ok(byName(specs).news.args.includes('--analyze'))
+    // news catalogues by rules (no model); llama-server is left for qwenlive and the Qwen engine of news.
+    assert.ok(!byName(specs).news.args.includes('--analyze'))
     assert.equal(byName(specs).qwenlive.env.LLAMA_PORT, '8088')
   })
 
@@ -1945,5 +2003,58 @@ describe('forward switch: forward paper books of C25-C31 and Kronos', () => {
     assert.match(forwardNotice({}), /Kronos/)
     assert.match(forwardNotice({}), /FORWARD_ENABLED=1/)
     assert.equal(forwardNotice({ FORWARD_ENABLED: '1' }), '')
+  })
+})
+
+describe('llama-server off in the VPS (DECISIONS_ENABLED=0): nothing that trades or catalogues needs it (S10, T19 preparation)', () => {
+  const repoRoot = fileURLToPath(new URL('..', import.meta.url)).replace(
+    /\/$/,
+    '',
+  )
+  const readJson = (path) => JSON.parse(readFileSync(`${repoRoot}/${path}`))
+  const base = {
+    root: repoRoot,
+    allowedFlags: new Set(),
+    python: { command: 'python3', prefixArgs: [] },
+    exists: () => false,
+  }
+  const names = (specs) => specs.map((s) => s.name)
+
+  it('the shipped trader configs decide by formula with the model opinion off, so no decision reads the model', () => {
+    const live = readJson('config/qwen-live.json')
+    assert.equal(live.decide_by, 'formula')
+    assert.equal(live.runtime.opinion_enabled, false)
+    const active = readJson('config/terminal-activa.json').config
+    assert.equal(active.decide_by, 'formula')
+    assert.equal(active.opinion_enabled, false)
+    assert.equal(active.runtime.opinion_enabled, false)
+    assert.equal(readQwenNewsOnly(repoRoot), true)
+  })
+
+  it('DECISIONS_ENABLED=0 leaves no llama-server command: llm, q and C31 do not start', () => {
+    const llama = resolveLlamaServer({
+      env: { DECISIONS_ENABLED: '0' },
+      run: () => assert.fail('the binary must not even be probed'),
+    })
+    assert.equal(llama.command, undefined)
+    const specs = devChildSpecs({
+      ...base,
+      env: { DECISIONS_ENABLED: '0', LLAMA_MODEL_PATH: '/models/q.gguf' },
+      llm: llama,
+    })
+    for (const gone of ['llm', 'q', 'qwenexit'])
+      assert.ok(!names(specs).includes(gone), gone)
+  })
+
+  it('the live trader, the news process, the capture and the gateway keep running without it', () => {
+    const specs = devChildSpecs({
+      ...base,
+      env: { DECISIONS_ENABLED: '0', LLAMA_MODEL_PATH: '/models/q.gguf' },
+      llm: null,
+    })
+    for (const kept of ['capture', 'live', 'qwenlive', 'news', 'vite'])
+      assert.ok(names(specs).includes(kept), kept)
+    const news = specs.find((s) => s.name === 'news')
+    assert.ok(!news.args.includes('--analyze'))
   })
 })
