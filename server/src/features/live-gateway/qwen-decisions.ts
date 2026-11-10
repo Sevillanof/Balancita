@@ -9,6 +9,19 @@ import {
   type QwenTradeAudit,
 } from './auditor-verdicts.ts'
 
+/** Since operacion-mejoras T2 a book entry is dated with the look that decided it and its receipt keeps the
+ * fill, a few seconds later; the live trader links them when 0 ≤ fill − entry ≤ 2 one-minute candles
+ * (futures_qwen_live.py). Older trades have both equal, which still matches. */
+const ENTRY_FILL_MAX_LAG_MS = 2 * 60_000
+function entryFillMatches(
+  executedAtMs: number,
+  entryMs: number | null,
+): boolean {
+  if (entryMs === null) return false
+  const lag = executedAtMs - entryMs
+  return lag >= 0 && lag <= ENTRY_FILL_MAX_LAG_MS
+}
+
 export type {
   QwenAfter,
   QwenAuditoria,
@@ -428,7 +441,7 @@ function executionOf(db: DatabaseSync, trade: Row): QwenExecution | null {
       !sameDecimal(out.quantity, trade.qty) ||
       (purpose === 'entry' &&
         (!sameDecimal(out.price, trade.entry_px) ||
-          out.executed_at_ms !== num(trade.entry_ms))) ||
+          !entryFillMatches(out.executed_at_ms, num(trade.entry_ms)))) ||
       (purpose === 'exit' &&
         (!sameDecimal(out.price, trade.exit_px) ||
           out.executed_at_ms !== num(trade.exit_ms)))
