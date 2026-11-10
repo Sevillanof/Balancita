@@ -235,7 +235,8 @@ class ExitShadowTests(ShadowCase):
                 self.cap.trades([(at + 30_000, 2300.2 if side == "LONG" else 2299.9)])
                 self.cap.steady(at + 40_000, at + W, 2300.05)
                 self.trade(number, side=side, entry=(2250.0, at - 2 * HOUR), exit=(2300.0, at), **fields)
-        self.resolve_shadow(X + 20 * HOUR)
+        with mock.patch.object(aud, "SHADOW_LEGS_PER_PASS", 100):                                           # (este caso es de los motivos, no del tope por pasada)
+            self.resolve_shadow(X + 20 * HOUR)
         rows = {r["trade_no"]: r for r in shadow_rows(self.path, "leg='exit'")}
         self.assertEqual({n: r["motivo_salida"] for n, r in rows.items()}, {1: "vuelta", 2: "agotado", 3: "tiempo", 4: "rebote"})
         for number, row in rows.items():
@@ -408,6 +409,44 @@ class BoundedAndSafeTests(ShadowCase):
             self.assertEqual(self.resolve_shadow(E + 10 * HOUR)["sombra"], 1)
         self.assertEqual([r["trade_no"] for r in shadow_rows(self.path)], [1, 2, 3])
 
+    def test_three_legs_per_pass_by_default_and_the_number_comes_from_the_environment(self):
+        name = "FUTURES_AUDITOR_SHADOW_LEGS_PER_PASS"
+        self.assertEqual(aud.SHADOW_LEGS_PER_PASS, 3)
+        self.assertEqual(aud._int_env(name, 3, {}), 3)
+        self.assertEqual(aud._int_env(name, 3, {name: "5"}), 5)
+        for bad in ("0", "-2", "tres", "", "2.5"):
+            self.assertEqual(aud._int_env(name, 3, {name: bad}), 3, bad)                                   # un valor inválido no apaga nada: queda el de siempre
+
+    def test_resolve_can_leave_the_shadow_for_a_quiet_poll_and_changes_nothing_else(self):
+        self.build(3)
+        result = aud.resolve(self.path, PRODUCT, {}, CFG, E + 10 * HOUR, COST, market_db=self.market, shadow=False)
+        self.assertEqual((result["sombra"], result["sombra_estado"], result["avisos"], result["sombra_ms"]), (0, "diferida", [], 0.0))
+        self.assertEqual(shadow_rows(self.path), [])
+        self.assertEqual(self.resolve_shadow(E + 10 * HOUR)["sombra"], 3)                                  # y por defecto sigue calculándola
+
+    def test_resolve_shadow_alone_does_only_the_shadow_and_says_how_many_legs_were_waiting(self):
+        self.build(3)
+        with mock.patch.object(aud, "SHADOW_LEGS_PER_PASS", 2):
+            first = aud.resolve_shadow(self.path, PRODUCT, E + 10 * HOUR, self.market)
+            second = aud.resolve_shadow(self.path, PRODUCT, E + 10 * HOUR, self.market)
+        self.assertEqual((first["sombra"], first["sombra_pendientes"], first["sombra_estado"], first["avisos"]), (2, 3, "ok", []))
+        self.assertEqual((second["sombra"], second["sombra_pendientes"]), (1, 1))
+        self.assertEqual([r["trade_no"] for r in shadow_rows(self.path)], [1, 2, 3])
+        self.assertGreaterEqual(first["sombra_ms"], 0.0)
+        self.assertEqual((aud.resolve_shadow(self.path, PRODUCT, E + 10 * HOUR, None)["sombra_estado"]), "apagada")
+
+    def test_resolve_shadow_never_raises_a_busy_database_is_a_warning(self):
+        self.build(1)
+        aud._open(self.path).close()
+        blocker = sqlite3.connect(aud.auditor_path(self.path), isolation_level=None)
+        self.addCleanup(blocker.close)
+        blocker.execute("BEGIN EXCLUSIVE")
+        with mock.patch.object(aud, "TRAINING_LOCK_TIMEOUT_S", 0.05):
+            result = aud.resolve_shadow(self.path, PRODUCT, E + 10 * HOUR, self.market)
+        self.assertEqual(result["sombra"], 0)
+        self.assertTrue(result["avisos"])
+        blocker.execute("ROLLBACK")
+
     def test_the_time_budget_stops_the_work_with_a_warning_and_writes_nothing_half_done(self):
         self.build(1)
         with mock.patch.object(aud, "SHADOW_BUDGET_S", -1.0):
@@ -546,7 +585,7 @@ class LiveShadowTests(unittest.TestCase):
         finally:
             con.close()
 
-    def run_live(self, *, market=None, shadow_fails=False, minutes=180):
+    def run_live(self, *, market=None, shadow_fails=False, minutes=180, quiet=True):
         cfg = copy.deepcopy(CFG)
         cfg["products"] = [PRODUCT]
         cfg["runtime"].pop("pending_config", None)
@@ -570,7 +609,7 @@ class LiveShadowTests(unittest.TestCase):
             for patch in patches:
                 stack.enter_context(patch)
             env.op.start()
-            env.advance(minutes)
+            env.advance(minutes, quiet=quiet)
         return env
 
     def capture_for(self, trades):
@@ -622,11 +661,51 @@ class LiveShadowTests(unittest.TestCase):
         self.assertEqual(with_shadow.rows("SELECT * FROM errors"), [])
         # la sombra rota: ninguna fila, un aviso y el sondeo sigue (no es un ciclo fallido)
         self.assertEqual(self.rows(broken, "SELECT * FROM sombra_maker"), [])
-        errors = broken.rows("SELECT place, kind FROM errors WHERE place<>'auditor_entrenar_lento'")             # (el aviso de lentitud es del reloj, no de la sombra)
+        errors = broken.rows("SELECT place, kind FROM errors")
         self.assertTrue(errors and all(e == {"place": "auditor_entrenar", "kind": "RuntimeError"} for e in errors), errors)
         self.assertFalse(broken.op.failed_cycle)
         # y solo cambia ``errors`` (y la tabla nueva)
         self.assertNotEqual(self.official(broken)["errors"], off["errors"])
+
+    def quiet_poll(self, env):
+        env.now[0] += 5_000
+        env.op.poll()
+        return len(self.rows(env, "SELECT * FROM sombra_maker"))
+
+    def test_the_look_poll_never_runs_the_shadow_and_pending_legs_are_resolved_three_per_later_quiet_poll(self):
+        base = self.run_live()
+        market = self.capture_for(self.legs_of(base))
+        everything = len(self.rows(self.run_live(market=market), "SELECT * FROM sombra_maker"))             # lo que da la sombra con sondeos tranquilos
+        self.assertGreater(everything, 3)
+        calls = []
+        real = aud._resolve_shadow
+        with mock.patch.object(aud, "_resolve_shadow", lambda *args, **kwargs: calls.append(1) or real(*args, **kwargs)):
+            env = self.run_live(market=market, quiet=False)                                                  # solo sondeos con vela nueva (las miradas)
+            self.assertEqual((calls, self.rows(env, "SELECT * FROM sombra_maker")), ([], []))                # ninguno corrió la sombra
+            counts = [self.quiet_poll(env) for _ in range(everything // 3 + 1)]
+        self.assertEqual(counts, [min(3 * (k + 1), everything) for k in range(len(counts))])                 # tres tramos por sondeo tranquilo, los más viejos primero
+        self.assertEqual(counts[-1], everything)                                                             # y al final se resolvieron todos
+        self.assertEqual(env.rows("SELECT * FROM errors"), [])
+        without_clock = lambda rows: [{k: v for k, v in r.items() if k != "resuelto_ms"} for r in rows]          # (cuándo se calculó cambia; lo calculado no)
+        self.assertEqual(without_clock(self.rows(env, "SELECT * FROM sombra_maker ORDER BY t_oficial_ms, leg")),
+                         without_clock(self.rows(self.run_live(market=market), "SELECT * FROM sombra_maker ORDER BY t_oficial_ms, leg")))
+
+    def test_a_quiet_poll_with_nothing_pending_does_not_look_again_for_30_seconds(self):
+        base = self.run_live()
+        env = self.run_live(market=self.capture_for(self.legs_of(base)))
+        for _ in range(6):
+            self.quiet_poll(env)                                                                              # se vacía lo que quedaba
+        with mock.patch.object(aud, "_shadow_pending", wraps=aud._shadow_pending) as spy:
+            env.now[0] += 30_000
+            env.op.poll()
+            looked = spy.call_count
+            self.assertEqual(looked, 1)                                                                       # mira y no hay nada
+            for _ in range(5):
+                self.quiet_poll(env)
+            self.assertEqual(spy.call_count, looked)                                                          # 25 s después: sigue sin mirar
+            env.now[0] += 30_000
+            env.op.poll()
+            self.assertEqual(spy.call_count, looked + 1)
 
     def test_the_live_poll_with_the_shadow_stays_fast(self):
         base = self.run_live()

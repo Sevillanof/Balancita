@@ -32,9 +32,11 @@ Una fila por tramo oficial: clave `(product, trade_no, leg)` con `leg` = `entry`
 
 ## Cuándo se calcula, y cuánto cuesta
 
-- Solo en `resolve` (como las etiquetas de `propuestas`), nunca en la mirada en vivo, y solo cuando el tramo tiene **15 min + 60 s** y la captura ya vio el minuto 15 (`MAX(received_at)`).
+- Después, nunca en la mirada en vivo: el proceso en vivo la corre **solo en un sondeo tranquilo** (uno en el que no se registró ninguna vela del producto, o sea casi todos: el sondeo es cada 5 s y una vela cierra cada 5 min), con `resolve_shadow`; el sondeo de una mirada llama a `resolve(..., shadow=False)` y no la toca. Los tramos pendientes se resuelven en los sondeos tranquilos siguientes, así que no se pierde ninguno. La línea de comandos (`--resolve`) sigue calculándola dentro de `resolve`.
+- Solo cuando el tramo tiene **15 min + 60 s** y la captura ya vio el minuto 15 (`MAX(received_at)`).
+- Con tramos esperando, el sondeo siguiente vuelve a mirar enseguida mientras la pasada anterior haya avanzado; sin nada por calcular no vuelve a mirar antes de 30 s, y tras un fallo o sin archivo de captura espera 60 s (`SHADOW_IDLE_RECHECK_MS`, `SHADOW_RETRY_MS`).
 - Lee la captura (`FUTURES_MARKET_DB_PATH`, o `--market-db`, o `server/data/dev-live/futures-market.sqlite`) **solo lectura** (`mode=ro`, `query_only`), con consultas por el índice `paper_futures_market_received(product_id, received_at, seq)` o por clave primaria (hay una prueba con `EXPLAIN QUERY PLAN`).
-- Acotado: a lo sumo **8 tramos por llamada** (los más viejos primero) y **1,5 s** en total; pasado el plazo se corta con un aviso y sigue en la próxima pasada. Lo que ya se escribió queda.
+- Acotado: a lo sumo **3 tramos por pasada** (los más viejos primero; `FUTURES_AUDITOR_SHADOW_LEGS_PER_PASS`, por defecto 3; antes 8, que con 0,2-1 s por tramo no cabían en el plazo) y **1,5 s** en total; pasado el plazo se corta con un aviso y sigue en la próxima pasada. Lo que ya se escribió queda. Cada pasada con tramos por calcular deja una fila `origen = 'sombra'` en `duraciones_auditor` (`docs/auditor-para-entrenar.md`).
 - Sin el archivo de captura (otra máquina, otra ruta) no escribe nada, no avisa como fallo y deja una línea en el log (`sombra_estado = sin_captura`); cuando aparece, se pone al día solo.
 - Si algo falla, queda en `avisos` (`sombra: …`) y el proceso en vivo lo anota en `errors` (`auditor_entrenar`); no cambia ninguna decisión, orden, cuenta ni fila del auditor (hay pruebas y una corrida guionada contra el commit base).
 
