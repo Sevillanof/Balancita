@@ -19,16 +19,17 @@ Mejoras de la operatoria pedidas por el usuario después de la sombra maker. Con
 
 ## Tasks
 
-| ID  | Specs  | Ruta                                                                                                                                      | Estado                         | Commit |
-| --- | ------ | ----------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------ | ------ |
-| T1  | S1     | worker captura: libro de ETH cada 10 s                                                                                                    | hecha                          | —      |
-| T2  | S2-S3  | worker trader: mirada de recuperación, perdidas, fecha de entrada                                                                         | hecha                          | —      |
-| T3  | S4     | worker operatoria: script de despliegue, cuenta gh, test inestable                                                                        | hecha                          | —      |
-| T4  | S5     | alarma: latido del operador, miradas perdidas, posición sin valorar, reloj (healthcheck de la VPS)                                        | hecha                          | —      |
-| T5  | S6     | marcador de la revisión en el desplegable del saldo (maqueta en gentle-design primero)                                                    | hecha                          | —      |
-| T6  | S7     | pendientes del informe: #547 a main, opción 4, 6a, 7                                                                                      | opción 4a hecha; quedan 6a y 7 | —      |
-| T7  | S3, S7 | eje del gráfico y tarjeta de vela en hora de Madrid; revisar todo lo que usa la hora de entrada (cambio de T2) para que nada más se rompa | hecha                          | —      |
-| T8  | S5     | analizar el aviso «auditor para entrenar tardó 524 ms» tras el reinicio (L29)                                                             | hecha (análisis)               | —      |
+| ID  | Specs  | Ruta                                                                                                                                            | Estado                         | Commit |
+| --- | ------ | ----------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------ | ------ |
+| T1  | S1     | worker captura: libro de ETH cada 10 s                                                                                                          | hecha                          | —      |
+| T2  | S2-S3  | worker trader: mirada de recuperación, perdidas, fecha de entrada                                                                               | hecha                          | —      |
+| T3  | S4     | worker operatoria: script de despliegue, cuenta gh, test inestable                                                                              | hecha                          | —      |
+| T4  | S5     | alarma: latido del operador, miradas perdidas, posición sin valorar, reloj (healthcheck de la VPS)                                              | hecha                          | —      |
+| T5  | S6     | marcador de la revisión en el desplegable del saldo (maqueta en gentle-design primero)                                                          | hecha                          | —      |
+| T6  | S7     | pendientes del informe: #547 a main, opción 4, 6a, 7                                                                                            | opción 4a hecha; quedan 6a y 7 | —      |
+| T7  | S3, S7 | eje del gráfico y tarjeta de vela en hora de Madrid; revisar todo lo que usa la hora de entrada (cambio de T2) para que nada más se rompa       | hecha                          | —      |
+| T8  | S5     | analizar el aviso «auditor para entrenar tardó 524 ms» tras el reinicio (L29)                                                                   | hecha (análisis)               | —      |
+| T9  | S5     | arreglos del aviso del auditor: umbral 2 s como log (no error), duración por paso, un commit por mirada, sombra en poll tranquilo con 2-3 patas | en curso                       | —      |
 
 ## Log
 
@@ -62,3 +63,4 @@ Mejoras de la operatoria pedidas por el usuario después de la sombra maker. Con
 - **L28** (usuario): «La vps esta arreglada?» → la API sí, pero la web no: la VPS sirve `vite preview` desde `dist/`, que era del 4-nov, y ningún despliegue corría `pnpm build`. Se reconstruyó a mano (09:24 UTC) y se verificó con una captura real por túnel SSH (operaciones #21 y #22, tarjeta F+, noticias y horas en Madrid). `desplegar.sh` ahora reconstruye la web cuando `dist/` es más viejo que el último commit (2 tests nuevos, 53 OK).
 - **L29** (usuario): «Analiza esto: Aviso menor: auditor para entrenar tardó 524 ms tras el reinicio. Ademas quiero que en paralelo analices un clasificador de noticias. La idea es sacar a Qwen.» → T8 aquí; el clasificador va en `odd/tasks/noticias-y-auditor.md` T17.
 - **L30** (evidencia T8, `analisis/auditor-lento/informe.md`): aviso mal calibrado, no afecta a la Terminal (la decisión se guarda antes del auditor; demora mediana 4,4 s, máx. 10,8 s de 15). 8 avisos en 62 miradas (524-1988 ms), no solo tras reinicios; lo lento es `record_look` esperando disco/locks (inferido). Problema real: cada aviso entra a `errors` y `desplegar.sh` toma cualquier fila nueva ahí como despliegue fallido. Arreglos propuestos: registrar duración por paso; umbral 2000 ms y aviso como log, no error; un solo commit por mirada; sombra en un poll tranquilo y 2-3 patas por pasada.
+- **L31** (usuario): «Si, hacelo los 4» → T9.
