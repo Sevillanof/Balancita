@@ -67,6 +67,7 @@ echo "@{*:1:$#-1}" >> "$d/ssh.opts"
 case "$cmd" in
   true) ;;
   *"git pull"*) [ -z "@{STUB_PULL_FALLA:-}" ] || { echo "fatal: Not possible to fast-forward" ; exit 1; }; printf 'Updating a..b\nFast-forward\n' ;;
+  *"pnpm build"*) [ -z "@{STUB_BUILD_FALLA:-}" ] || { echo "build roto" >&2; exit 1; }; echo "@{STUB_BUILD:-construida}" ;;
   *balancita-healthcheck.sh*) [ -z "@{STUB_HC_FALLA:-}" ] || { echo "install: cannot create" >&2; exit 1; }; echo "@{STUB_HC:-igual}" ;;
   *"cmp -s"*) printf '%b' "@{STUB_DROPINS:-llama.conf distinto\n}" ;;
   install\ -D*) ;;
@@ -537,6 +538,44 @@ describe('desplegar', { concurrency: 8 }, () => {
       assert.match(r.err + r.out, /--dropin NOMBRE.*--omitir NOMBRE/)
       assert.doesNotMatch(r.ssh, /install -D/)
       assert.doesNotMatch(r.ssh, /systemctl restart/)
+    })
+
+    it('reconstruye la web de la VPS (vite preview sirve dist/) cuando dist es más viejo que el último commit', async () => {
+      const r = await correr([], {
+        env: { STUB_PR_ABIERTO: '1', STUB_CI_SEQ: '2 0 0' },
+      })
+      assert.equal(r.status, 0, r.todo)
+      assert.match(r.ssh, /sudo -u balancita[^\n]*pnpm build/)
+      assert.match(r.out, /Web: reconstruida/)
+      const orden = ['git pull', 'pnpm build', 'systemctl restart'].map((x) =>
+        r.ssh.indexOf(x),
+      )
+      assert.deepEqual(
+        [...orden].sort((a, b) => a - b),
+        orden,
+        'pull → build → reinicio',
+      )
+    })
+
+    it('si dist ya está al día no reconstruye; si el build falla frena con código 5 sin reiniciar', async () => {
+      const al = await correr([], {
+        env: {
+          STUB_PR_ABIERTO: '1',
+          STUB_CI_SEQ: '2 0 0',
+          STUB_BUILD: 'al_dia',
+        },
+      })
+      assert.equal(al.status, 0, al.todo)
+      assert.match(al.out, /Web: al día/)
+      const roto = await correr([], {
+        env: {
+          STUB_PR_ABIERTO: '1',
+          STUB_CI_SEQ: '2 0 0',
+          STUB_BUILD_FALLA: '1',
+        },
+      })
+      assert.equal(roto.status, 5, roto.todo)
+      assert.doesNotMatch(roto.ssh, /systemctl restart/)
     })
 
     it('lee el último commit en la VPS como balancita (root ve el repo como «dubious ownership» y daba 0)', async () => {

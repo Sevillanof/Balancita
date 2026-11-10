@@ -315,6 +315,20 @@ vps_healthcheck() {
   esac
 }
 
+# La web de la VPS la sirve `vite preview` desde dist/: sin `pnpm build` los cambios de pantalla no llegan
+# (pasó el 2026-11-10: la VPS seguía con un dist del 4-nov). Se reconstruye cuando dist/index.html es más viejo
+# que el último commit, como balancita y con prioridad baja, antes del reinicio.
+vps_build_web() {
+  local estado
+  estado="$(vps "cd $VPS_DIR && commit=\$(sudo -u balancita git log -1 --format=%ct) && dist=\$(stat -c %Y dist/index.html 2>/dev/null || echo 0) && if [ \"\$dist\" -ge \"\$commit\" ]; then echo al_dia; else sudo -u balancita bash -lc 'cd $VPS_DIR && nice -n 10 corepack pnpm build >/tmp/balancita-build.log 2>&1 || nice -n 10 pnpm build >/tmp/balancita-build.log 2>&1' && echo construida; fi # pnpm build")" ||
+    fallar 5 "falló el build de la web en la VPS (ver /tmp/balancita-build.log); no reinicio."
+  case "$estado" in
+    al_dia) info "Web: al día (dist/ es posterior al último commit)." ;;
+    construida) info "Web: reconstruida (pnpm build)." ;;
+    *) fallar 5 "respuesta inesperada del build de la web: '$estado'." ;;
+  esac
+}
+
 # Imprime "si" o "no": el servicio necesita reiniciarse si arrancó antes del último commit o drop-in.
 vps_necesita_reinicio() {
   vps "inicio=\$(date -d \"\$(systemctl show balancita -p ActiveEnterTimestamp --value)\" +%s 2>/dev/null || echo 0); commit=\$(sudo -u balancita git -C $VPS_DIR log -1 --format=%ct 2>/dev/null); [ -n \"\$commit\" ] || { echo error; exit 0; }; dropin=\$(stat -c %Y $DROPINS_DESTINO/*.conf 2>/dev/null | sort -n | tail -1); dropin=\${dropin:-0}; mayor=\$commit; [ \"\$dropin\" -gt \"\$mayor\" ] && mayor=\$dropin; if [ \"\$inicio\" -lt \"\$mayor\" ]; then echo si; else echo no; fi" ||
@@ -429,6 +443,7 @@ main() {
   vps_pull
   vps_dropins
   vps_healthcheck
+  vps_build_web
   necesita="$(vps_necesita_reinicio)"
   case "$necesita" in
     si | no) ;;
