@@ -1,0 +1,92 @@
+docs/terminal-ciclo-de-vida.md
+  h_92dd6654ceb221 60-79
+e2e/terminal-ahora-sync.pw.ts
+  h_92dd6654ceb221 297-312,314,316
+e2e/terminal-lifecycle.pw.ts
+  h_92dd6654ceb221 942-944
+odd/tasks/operacion-mejoras.md
+  h_92dd6654ceb221 30,60
+python/balancita_engine/futures_estrategias_backtest.py
+  h_92dd6654ceb221 295-296,357-365,371-372,398,582
+python/tests/test_futures_estrategias_vivo.py
+  h_92dd6654ceb221 263-267,299,304,393-429
+server/src/features/live-gateway/qwen-decisions.test.ts
+  h_92dd6654ceb221 88-96,193-194
+server/src/features/live-gateway/qwen-decisions.ts
+  h_92dd6654ceb221 13-19
+src/app/FuturesTerminal.test.tsx
+  h_92dd6654ceb221 85-86,307-308,1017,1024,1041
+src/app/FuturesTerminal.tsx
+  h_92dd6654ceb221 6,354,358,428
+src/app/terminal-lifecycle.test.ts
+  h_92dd6654ceb221 269-288
+src/app/terminal-lifecycle.ts
+  h_92dd6654ceb221 1097-1098,1101
+src/app/useQwenTrades.test.ts
+  h_92dd6654ceb221 89-156
+src/app/useQwenTrades.ts
+  h_92dd6654ceb221 302-310,328
+src/features/observability/presentation/HealthIndicator.tsx
+  h_92dd6654ceb221 10,80,154
+src/features/observability/presentation/ObserverPanel.tsx
+  h_92dd6654ceb221 18,180,198,221
+src/features/observability/presentation/format.test.ts
+  h_92dd6654ceb221 1-16
+src/features/observability/presentation/format.ts
+  h_92dd6654ceb221 1,16,22
+src/features/strategy-lab/domain/estrategias-format.test.ts
+  h_92dd6654ceb221 3-5,177-198
+src/features/strategy-lab/domain/estrategias-format.ts
+  h_92dd6654ceb221 1-4,298,310,312-313,316,318-319,322,324-325
+src/features/strategy-lab/domain/estrategias-velas.test.ts
+  h_92dd6654ceb221 17,617-712
+src/features/strategy-lab/domain/estrategias-velas.ts
+  h_92dd6654ceb221 5-9,534-573
+src/features/strategy-lab/presentation/EstrategiasPage.test.tsx
+  h_92dd6654ceb221 328-332
+src/features/strategy-lab/presentation/OperacionesModal.tsx
+  h_92dd6654ceb221 48-49
+src/features/strategy-lab/presentation/VelasConOperaciones.test.tsx
+  h_92dd6654ceb221 79
+src/features/strategy-lab/presentation/velas-svg.tsx
+  h_92dd6654ceb221 4,7,77-81,98-108
+src/features/trading-view/domain/madrid-time-scale.test.ts
+  h_92dd6654ceb221 1-146
+src/features/trading-view/domain/madrid-time-scale.ts
+  h_92dd6654ceb221 1-86
+src/features/trading-view/domain/terminal-chart-model.test.ts
+  h_92dd6654ceb221 295,306
+src/features/trading-view/domain/terminal-chart-model.ts
+  h_92dd6654ceb221 6,121
+src/features/trading-view/presentation/ApprovedTerminalChart.test.tsx
+  h_92dd6654ceb221 55-62,72-73,113-143,156,158,177,224,226
+src/features/trading-view/presentation/ApprovedTerminalChart.tsx
+  h_92dd6654ceb221 2-5,12,14,16-18,38-41,48-71,376-386,388-389,391,393-394,396-420,422-438,440
+src/features/trading-view/presentation/CandleHoverCard.test.tsx
+  h_92dd6654ceb221 1-44
+src/features/trading-view/presentation/CandleHoverCard.tsx
+  h_92dd6654ceb221 1,139
+src/shared/finance/format.test.ts
+  h_92dd6654ceb221 8,24,71-95
+src/shared/finance/format.ts
+  h_92dd6654ceb221 1-2,119-126
+src/shared/finance/madrid-time.test.ts
+  h_92dd6654ceb221 1-70
+src/shared/finance/madrid-time.ts
+  h_92dd6654ceb221 1-78
+src/shared/mission-control/DataProvenance.tsx
+  h_92dd6654ceb221 1,26
+src/shared/mission-control/mission-control.test.tsx
+  h_92dd6654ceb221 145
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "13f85d241344c84dcfbcf6b5ce1899e2acfd46f3",
+  "prompts": {},
+  "humans": {
+    "h_92dd6654ceb221": {
+      "author": "Franco Sevillano <79455847+Sevillanof@users.noreply.github.com>"
+    }
+  }
+}
