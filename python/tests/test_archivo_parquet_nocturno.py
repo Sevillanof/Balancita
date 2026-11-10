@@ -308,7 +308,7 @@ EXCLUIDAS_VPS = {
     "futures-news": ("paper_futures_news_briefings", "paper_futures_news_errors", "paper_futures_news_meta", "paper_futures_news_polls",
                      "paper_futures_news_source_sets"),
     "qwen-live__live": ("meta", "account", "examples", "skipped", "rebotes", "errors", "trader_state"),
-    "qwen-live__auditor": ("meta",),
+    "qwen-live__auditor": ("meta", "duraciones_auditor"),
 }
 BASES_EXCLUIDAS_VPS = ("forward__forward", "futures-strategies", "maker-costs__eth-costs-20261031", "qwen-live_cache__candles-PF_ETHUSD",
                        "qwen-live_cache__candles-PF_SOLUSD")

@@ -124,10 +124,15 @@ class Env:
         self.op = self.build()
         return self.op
 
-    def advance(self, minutes):
-        for _ in range(minutes // 5):
-            self.now[0] += 5 * MIN
+    def advance(self, minutes, quiet=False):
+        """One poll per candle, at the same times with or without ``quiet``. With ``quiet`` a second poll follows each one 5 s later, when no new
+        candle exists: the quiet poll of the live loop (the next candle's poll then comes 5 s sooner, so the clock does not drift)."""
+        for step in range(minutes // 5):
+            self.now[0] += 5 * MIN - (5_000 if quiet and step else 0)
             self.op.poll()
+            if quiet:
+                self.now[0] += 5_000
+                self.op.poll()
 
     def rows(self, sql, *args):
         con = sqlite3.connect(self.db_path)
