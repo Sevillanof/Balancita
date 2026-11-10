@@ -1,0 +1,14 @@
+odd/tasks/operacion-mejoras.md
+  h_92dd6654ceb221 22-32,66
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "4189804fc5b67e5529b03d5577ce4489c70643c3",
+  "prompts": {},
+  "humans": {
+    "h_92dd6654ceb221": {
+      "author": "Franco Sevillano <79455847+Sevillanof@users.noreply.github.com>"
+    }
+  }
+}
