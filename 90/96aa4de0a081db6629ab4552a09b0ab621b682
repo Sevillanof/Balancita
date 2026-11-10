@@ -1,0 +1,18 @@
+odd/tasks/operacion-mejoras.md
+  h_92dd6654ceb221 57
+server/src/features/live-gateway/qwen-decisions.test.ts
+  h_92dd6654ceb221 65-71,77-86,90,99,184-194
+server/src/features/live-gateway/qwen-decisions.ts
+  h_92dd6654ceb221 12-24,444
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.6",
+  "base_commit_sha": "9096aa4de0a081db6629ab4552a09b0ab621b682",
+  "prompts": {},
+  "humans": {
+    "h_92dd6654ceb221": {
+      "author": "Franco Sevillano <79455847+Sevillanof@users.noreply.github.com>"
+    }
+  }
+}
