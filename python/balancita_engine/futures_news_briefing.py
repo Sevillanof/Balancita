@@ -300,8 +300,10 @@ def _input_expiry(inputs):
 
 
 class BriefingService:
-    def __init__(self, store, provider, enabled, clock, log):
+    def __init__(self, store, provider, enabled, clock, log, off_reason=None):
         self.db, self.provider, self.enabled = store.db, provider, enabled
+        # Why an ``off`` row is off when the briefing is disabled on purpose (the rules engine, S10); default as always.
+        self.off_reason = off_reason or "briefing_disabled"
         self.clock, self.log = clock, log
         self._future, self._executor, self._pending = None, None, None
 
@@ -387,7 +389,7 @@ class BriefingService:
         base = self._base(inputs, now)
         if not self.enabled or self.provider is None or not inputs:
             status = "off" if not self.enabled or self.provider is None else "no_news"
-            reason = "briefing_disabled" if status == "off" else "no_recent_analyzed_news"
+            reason = self.off_reason if status == "off" else "no_recent_analyzed_news"
             if (latest is None or latest["status"] != status
                     or latest["expires_at_ms"] is None or now >= latest["expires_at_ms"]):
                 self._append(dict(base, status=status, reason=reason))

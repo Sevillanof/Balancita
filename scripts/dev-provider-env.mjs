@@ -172,6 +172,18 @@ function optionalFlag(flag, value) {
   return text ? [flag, text] : []
 }
 
+/**
+ * Which engine catalogues the news (S10, T18 of odd/tasks/noticias-y-auditor.md): `reglas` (default) is the rules
+ * engine of the Python news process, instant and with no model of any kind; `qwen` is the old cascade through
+ * llama-server. Only an explicit `NEWS_ENGINE=qwen` selects Qwen; the news process itself refuses an unknown value
+ * (configuration error), so here anything else just means "do not hand it the model".
+ */
+export function newsEngine(env = {}) {
+  return (env.NEWS_ENGINE ?? '').trim().toLowerCase() === 'qwen'
+    ? 'qwen'
+    : 'reglas'
+}
+
 /** Port of the optional `llama-server` child (`LLAMA_PORT`, default 8088). */
 export function llamaPort(env) {
   const port = Number(env.LLAMA_PORT)
@@ -588,10 +600,12 @@ const POSITIONING_ARGS = [
  * - forward (only with FORWARD_ENABLED=1): Python forward paper books of the registered strategies (market DB read-only
  *   -> its own forward DB and summary, sole writer of both),
  * - news (optional): Python news process N (public RSS -> news DB, sole writer
- *   of the latter; its own `command` instead of node). Ingest needs no model;
- *   it analyses with the local model (`--analyze`) only when llm is enabled,
- *   under the same DECISIONS_ENABLED and model rules. `NEWS_ENABLED=0` turns
- *   it off,
+ *   of the latter; its own `command` instead of node). It starts whether or not
+ *   llama-server runs: by default (`NEWS_ENGINE=reglas`) it catalogues every item
+ *   with fixed rules and no model, so it is never given `--analyze`. Only
+ *   `NEWS_ENGINE=qwen` brings back the Qwen cascade (`--analyze`), and then only
+ *   when llm is enabled, under the same DECISIONS_ENABLED and model rules.
+ *   `NEWS_ENABLED=0` turns it off,
  * - llm (optional): `llama-server` on loopback, only with a resolved binary,
  * - q (optional, engine D, only with ENGINE_D_ENABLED=1): Python LLM decisions Q (market + verdicts
  *   DBs read-only -> decisions DB, sole writer of the latter), started together with llm.
@@ -794,6 +808,8 @@ export function devChildSpecs({
     Boolean(python?.command && llm?.command) &&
     (env.DECISIONS_ENABLED ?? '').trim() !== '0' &&
     Boolean(resolveLlamaModel({ env, findModel }).args)
+  // The news process asks the local model only with the Qwen engine and llm on; the rules engine never does.
+  const newsAnalyzes = llmOn && newsEngine(env) === 'qwen'
   return [
     ...common,
     {
@@ -897,11 +913,11 @@ export function devChildSpecs({
           '--news-db',
           newsDb,
           // The news is only ever sent to the local model, on the same port as q.
-          ...(llmOn ? ['--analyze'] : []),
+          ...(newsAnalyzes ? ['--analyze'] : []),
         ],
         env: {
           ...env,
-          ...(llmOn ? { LLAMA_PORT: String(llamaPort(env)) } : {}),
+          ...(newsAnalyzes ? { LLAMA_PORT: String(llamaPort(env)) } : {}),
           PYTHONPATH: [`${root}/python`, env.PYTHONPATH]
             .filter(Boolean)
             .join(delimiter),

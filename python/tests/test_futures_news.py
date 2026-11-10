@@ -10,6 +10,7 @@ import threading
 import time
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from unittest import mock
 
 from balancita_engine import futures_llm_decisions as q
 from balancita_engine import futures_news as n
@@ -125,7 +126,8 @@ class ServiceBase(TempDirTest):
     def service(self, provider=None, sources=None, **overrides):
         store = n.NewsStore(self.path, n.NEWS_CONFIG)
         self.addCleanup(store.close)
-        options = dict(provider=provider, log=self.logs.append, clock=self.clock)
+        # The questions to the model are what these tests are about: the default engine is the rules one (S10).
+        options = dict(provider=provider, log=self.logs.append, clock=self.clock, engine="qwen")
         options.update(overrides)
         service = n.NewsService(store, sources or [SRC_A], self.fetcher, **options)
         self.addCleanup(service.close)
@@ -1119,7 +1121,9 @@ class CliTests(TempDirTest):
 
     def run_main(self, *argv, **kwargs):
         out = io.StringIO()
-        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(out):
+        # The model path is what these tests are about: the default engine is the rules one (S10).
+        with mock.patch.dict(os.environ, {"NEWS_ENGINE": "qwen"}), contextlib.redirect_stdout(out), \
+                contextlib.redirect_stderr(out):
             code = n.main(list(argv), **kwargs)
         return code, out.getvalue()
 

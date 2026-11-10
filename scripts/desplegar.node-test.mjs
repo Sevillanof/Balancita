@@ -75,6 +75,7 @@ case "$cmd" in
   *ActiveEnterTimestamp*) echo "@{STUB_NECESITA:-si}" ;;
   *"systemctl restart"*) date -u +%H:%M > "$d/reinicio.at" ;;
   *"systemctl is-active"*) echo "@{STUB_ACTIVO:-active}" ;;
+  *"-p Environment"*) echo "@{STUB_LLAMA_APAGADA:-0}" ;;
   *llama-server*) echo "@{STUB_LLAMA:-pid=123 vmlck_kb=4300000 hilos5=si}" ;;
   *health-child*) printf '%s' "@{STUB_INTEGRIDAD:-}" ;;
   *sqlite3*) printf '%s' "@{STUB_ERRORES:-}" ;;
@@ -811,6 +812,41 @@ describe('desplegar', { concurrency: 8 }, () => {
       assert.equal(r.status, 4, r.todo)
       assert.match(r.err, /no hay proceso llama-server después de 45 s/)
       assert.match(r.out, /llama-server todavía no está corriendo/)
+    })
+
+    it('con DECISIONS_ENABLED=0 en el servicio, llama-server apagado es lo esperado y no se exige mlock ni hilos', async () => {
+      const r = await correr([], {
+        env: { ...base, STUB_LLAMA_APAGADA: '1', STUB_LLAMA: 'sin-proceso' },
+      })
+      assert.equal(r.status, 0, r.todo)
+      assert.match(
+        r.out,
+        /llama-server apagado a propósito \(DECISIONS_ENABLED=0\)/,
+      )
+      assert.doesNotMatch(r.out, /llama-server todavía no está corriendo/)
+      assert.doesNotMatch(r.err, /llama-server/)
+    })
+
+    it('con DECISIONS_ENABLED=0 un llama-server que sigue corriendo es una falla', async () => {
+      const r = await correr([], { env: { ...base, STUB_LLAMA_APAGADA: '1' } })
+      assert.equal(r.status, 4, r.todo)
+      assert.match(
+        r.err,
+        /DECISIONS_ENABLED=0 pero llama-server sigue corriendo/,
+      )
+    })
+
+    it('sin DECISIONS_ENABLED=0 se sigue exigiendo llama-server (la consulta del entorno no cambia nada)', async () => {
+      const r = await correr([], {
+        env: {
+          ...base,
+          STUB_LLAMA_APAGADA: '0',
+          STUB_LLAMA: 'sin-proceso',
+          DESPLIEGUE_LLAMA_SEG: '15',
+        },
+      })
+      assert.equal(r.status, 4, r.todo)
+      assert.match(r.err, /no hay proceso llama-server después de 15 s/)
     })
 
     it('el comando de procesos no se encuentra a sí mismo (patrón [d]b-health-child y comm exacto)', async () => {

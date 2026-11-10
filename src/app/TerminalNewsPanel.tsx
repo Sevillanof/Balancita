@@ -60,6 +60,53 @@ function matchesNewsQuery(item: TerminalNewsItem, needle: string): boolean {
     .every((part) => haystack.includes(part))
 }
 
+/**
+ * With the rules engine (no model, S10) the backend writes the briefing as `off` with this reason, and the panorama is
+ * computed here from the cards the list already has: the most important news of the last hours, by importance then
+ * recency, each with its direction. No text is generated.
+ */
+const RULES_BRIEFING_REASON = 'news_engine_reglas'
+const PANORAMA_WINDOW_MS = 6 * 60 * 60_000
+const PANORAMA_TOP = 3
+const PANORAMA_DETAIL_TOP = 8
+const IMPORTANCE: Record<NewsRelevance, number> = {
+  none: 0,
+  low: 1,
+  medium: 2,
+  high: 3,
+}
+
+function topByImportance(
+  items: readonly TerminalNewsItem[],
+  nowMs: number | undefined,
+  limit: number,
+): TerminalNewsItem[] {
+  if (nowMs === undefined) return []
+  const when = (item: TerminalNewsItem) =>
+    item.publishedAtMs ?? item.receivedAtMs
+  const seen = new Set<string>()
+  return items
+    .filter(
+      (item) =>
+        item.relevance !== null &&
+        IMPORTANCE[item.relevance] > 0 &&
+        when(item) <= nowMs &&
+        when(item) > nowMs - PANORAMA_WINDOW_MS,
+    )
+    .sort(
+      (a, b) =>
+        IMPORTANCE[b.relevance!] - IMPORTANCE[a.relevance!] ||
+        when(b) - when(a),
+    )
+    .filter((item) => {
+      const key = item.title.trim().toLowerCase()
+      if (seen.has(key)) return false
+      seen.add(key)
+      return true
+    })
+    .slice(0, limit)
+}
+
 function lifecycleLabel(
   item: TerminalNewsItem,
   nowMs: number | undefined,
@@ -378,6 +425,16 @@ export default function TerminalNewsPanel({
       : null,
   ].filter((issue): issue is string => issue !== null)
   const summaryState = briefingLabel(briefing, source, nowMs)
+  const rulesMode = briefing?.reason === RULES_BRIEFING_REASON
+  const panoramaUnconfirmed =
+    source?.state === 'error' || source?.state === 'off' || nowMs === undefined
+  const important = useMemo(
+    () =>
+      rulesMode && !panoramaUnconfirmed
+        ? topByImportance(items, nowMs, PANORAMA_DETAIL_TOP)
+        : [],
+    [rulesMode, panoramaUnconfirmed, items, nowMs],
+  )
 
   if (viewport)
     return (
@@ -387,38 +444,106 @@ export default function TerminalNewsPanel({
         data-testid="terminal-news-panel"
         data-layout="viewport"
       >
-        <section
-          className="flex-none rounded-sm border border-solid border-info/25 bg-info/5 px-2 py-1.5"
-          aria-label="Qwen, resumen de noticias"
-          data-testid="qwen-news-briefing"
-        >
-          <button
-            type="button"
-            onClick={() => setDetail('briefing')}
-            className="flex w-full cursor-pointer items-center justify-between gap-1 border-0 bg-transparent p-0 text-left text-label text-info"
-            aria-label="Ver resumen y fuentes de Qwen"
+        {rulesMode ? (
+          <section
+            className="flex-none rounded-sm border border-solid border-info/25 bg-info/5 px-2 py-1.5"
+            aria-label="Lo más importante de las últimas 6 horas"
+            data-testid="rules-news-panorama"
           >
-            <b>Qwen · panorama ETH</b>
-            <small
-              className={
-                summaryState === BRIEFING_LABEL.ok ? 'text-ink-2' : 'text-warn'
-              }
+            <button
+              type="button"
+              onClick={() => setDetail('briefing')}
+              className="flex w-full cursor-pointer items-center justify-between gap-1 border-0 bg-transparent p-0 text-left text-label text-info"
+              aria-label="Ver lo más importante y su detalle"
             >
-              {summaryState === BRIEFING_LABEL.ok && briefing?.knownAtMs != null
-                ? `${formatShortDateTime(briefing.knownAtMs).display.slice(-5)}`
-                : summaryState}
-            </small>
-          </button>
-          <p
-            className="m-0 mt-1 line-clamp-2 text-label leading-4 text-ink"
-            title={briefing?.text ?? briefing?.reason ?? undefined}
+              <b>Lo más importante · 6 h</b>
+              <small
+                className={panoramaUnconfirmed ? 'text-warn' : 'text-ink-2'}
+              >
+                {panoramaUnconfirmed ? 'Sin confirmar' : 'por importancia'}
+              </small>
+            </button>
+            {panoramaUnconfirmed ? (
+              <p className="m-0 mt-1 text-label leading-4 text-ink-2">
+                Sin confirmar: no se puede asegurar qué noticias están vigentes.
+              </p>
+            ) : important.length === 0 ? (
+              <p className="m-0 mt-1 text-label leading-4 text-ink-2">
+                Sin noticias importantes en las últimas 6 horas.
+              </p>
+            ) : (
+              <ul className="m-0 mt-1 grid list-none gap-0.5 p-0">
+                {important.slice(0, PANORAMA_TOP).map((item) => (
+                  <li
+                    key={item.id}
+                    className="flex items-start justify-between gap-2 text-label leading-4"
+                  >
+                    <a
+                      href={item.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="line-clamp-1 min-w-0 flex-1 text-ink no-underline hover:underline"
+                      title={item.title}
+                    >
+                      {item.title}
+                    </a>
+                    {item.direction && (
+                      <span
+                        role="img"
+                        aria-label={DIRECTION_WORD[item.direction]}
+                        className={`flex-none ${
+                          item.direction === 'bullish'
+                            ? 'text-long'
+                            : item.direction === 'bearish'
+                              ? 'text-short'
+                              : 'text-ink-2'
+                        }`}
+                      >
+                        {DIRECTION_ARROW[item.direction]}
+                      </span>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </section>
+        ) : (
+          <section
+            className="flex-none rounded-sm border border-solid border-info/25 bg-info/5 px-2 py-1.5"
+            aria-label="Qwen, resumen de noticias"
+            data-testid="qwen-news-briefing"
           >
-            {briefing?.text ??
-              (briefing?.status === 'no_news'
-                ? 'No hay noticias recientes suficientes para un resumen.'
-                : 'Todavía no hay una síntesis reciente de Qwen.')}
-          </p>
-        </section>
+            <button
+              type="button"
+              onClick={() => setDetail('briefing')}
+              className="flex w-full cursor-pointer items-center justify-between gap-1 border-0 bg-transparent p-0 text-left text-label text-info"
+              aria-label="Ver resumen y fuentes de Qwen"
+            >
+              <b>Qwen · panorama ETH</b>
+              <small
+                className={
+                  summaryState === BRIEFING_LABEL.ok
+                    ? 'text-ink-2'
+                    : 'text-warn'
+                }
+              >
+                {summaryState === BRIEFING_LABEL.ok &&
+                briefing?.knownAtMs != null
+                  ? `${formatShortDateTime(briefing.knownAtMs).display.slice(-5)}`
+                  : summaryState}
+              </small>
+            </button>
+            <p
+              className="m-0 mt-1 line-clamp-2 text-label leading-4 text-ink"
+              title={briefing?.text ?? briefing?.reason ?? undefined}
+            >
+              {briefing?.text ??
+                (briefing?.status === 'no_news'
+                  ? 'No hay noticias recientes suficientes para un resumen.'
+                  : 'Todavía no hay una síntesis reciente de Qwen.')}
+            </p>
+          </section>
+        )}
         <div
           ref={spaceRef}
           className="relative min-h-0 flex-1"
@@ -536,7 +661,9 @@ export default function TerminalNewsPanel({
                 ? detail === 'search'
                   ? 'Buscar noticias'
                   : detail === 'briefing'
-                    ? 'Resumen y fuentes de Qwen'
+                    ? rulesMode
+                      ? 'Lo más importante de las últimas horas'
+                      : 'Resumen y fuentes de Qwen'
                     : 'Estado de noticias'
                 : 'Procedencia y vigencia de la noticia'
             }
@@ -571,6 +698,37 @@ export default function TerminalNewsPanel({
                 >
                   Limpiar búsqueda
                 </button>
+              </>
+            ) : detail === 'briefing' && rulesMode ? (
+              <>
+                <h2>Lo más importante de las últimas 6 horas</h2>
+                <p>
+                  Ordenado por importancia y, a igual importancia, por hora. Lo
+                  clasifican reglas fijas del servidor, sin inteligencia
+                  artificial. Importancia no es probabilidad de ganar.
+                </p>
+                {important.length === 0 && (
+                  <p>Sin noticias importantes en las últimas 6 horas.</p>
+                )}
+                <ul>
+                  {important.map((item) => (
+                    <li key={item.id}>
+                      <a
+                        href={item.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                      >
+                        {item.title}
+                      </a>{' '}
+                      · {item.source} · Importancia{' '}
+                      {RELEVANCE_LABEL[item.relevance!].toLowerCase()}
+                      {item.direction
+                        ? ` · ${DIRECTION_WORD[item.direction]}`
+                        : ''}{' '}
+                      · {newsTime(item, nowMs)}
+                    </li>
+                  ))}
+                </ul>
               </>
             ) : detail === 'briefing' ? (
               <>
