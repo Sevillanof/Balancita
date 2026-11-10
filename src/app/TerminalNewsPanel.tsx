@@ -1,6 +1,8 @@
 import { useLayoutEffect, useMemo, useRef, useState } from 'react'
 import ModalFrame from '../features/strategy-lab/presentation/ModalFrame.tsx'
 import { formatShortDateTime } from './terminal-date.ts'
+import { madridDateTime, madridDayTime } from '../shared/finance/format.ts'
+import Tip from '../features/trading-view/presentation/Tip.tsx'
 import { paginateNewsHeights } from './terminal-news-layout.ts'
 import type {
   NewsDirection,
@@ -85,25 +87,57 @@ function newsTimeline(item: TerminalNewsItem): string {
   return [
     item.publishedAtMs == null
       ? 'Publicación sin fecha'
-      : `Publicada ${formatShortDateTime(item.publishedAtMs).display} UTC`,
-    `Recibida ${formatShortDateTime(item.receivedAtMs).display} UTC`,
+      : `Publicada ${formatShortDateTime(item.publishedAtMs).display}`,
+    `Recibida ${formatShortDateTime(item.receivedAtMs).display}`,
     item.knownAtMs == null
       ? 'Análisis sin completar'
-      : `Análisis completo ${formatShortDateTime(item.knownAtMs).display} UTC`,
+      : `Análisis completo ${formatShortDateTime(item.knownAtMs).display}`,
     item.expiresAtMs == null
       ? 'Vencimiento sin confirmar'
-      : `Vence ${formatShortDateTime(item.expiresAtMs).display} UTC`,
+      : `Vence ${formatShortDateTime(item.expiresAtMs).display}`,
     item.eligibilityReason,
+    'hora de Madrid',
   ]
     .filter(Boolean)
     .join(' · ')
 }
 
+/** The strength of a news item as the colour of the card's left edge. */
+const STRENGTH_EDGE: Record<NewsRelevance, string> = {
+  high: 'border-l-warn',
+  medium: 'border-l-info',
+  low: 'border-l-ink-2',
+  none: 'border-l-line-strong',
+}
+
+const DIRECTION_ARROW: Record<NewsDirection, string> = {
+  bullish: '▲',
+  bearish: '▼',
+  neutral: '•',
+}
+
+const DIRECTION_WORD: Record<NewsDirection, string> = {
+  bullish: 'alcista',
+  bearish: 'bajista',
+  neutral: 'neutral',
+}
+
+/** `21:14` for today (Madrid), `9 nov, 21:14` for older news. */
+function newsTime(item: TerminalNewsItem, nowMs: number | undefined): string {
+  const at = item.publishedAtMs ?? item.receivedAtMs
+  return nowMs === undefined ? madridDateTime(at) : madridDayTime(at, nowMs)
+}
+
+/**
+ * One news card: the strength as the colour of its left edge, the title, the
+ * direction as an arrow on the right and one muted line «fuente · hora»
+ * (Madrid). Whether it is expired or its licence unverified is not repeated on
+ * the card: it lives in the tooltip of that line, which also opens the detail.
+ */
 function NewsRow({
   item,
   nowMs,
   source,
-  compact = false,
   tight = false,
   minHeight,
   onDetails,
@@ -111,12 +145,10 @@ function NewsRow({
   item: TerminalNewsItem
   nowMs?: number
   source?: NewsSource
-  compact?: boolean
   tight?: boolean
   minHeight?: number
   onDetails: (item: TerminalNewsItem) => void
 }) {
-  const dt = formatShortDateTime(item.publishedAtMs ?? item.receivedAtMs)
   const unconfirmed = source?.state === 'error' || source?.state === 'off'
   const expired =
     item.expiresAtMs != null && nowMs !== undefined && nowMs >= item.expiresAtMs
@@ -132,62 +164,72 @@ function NewsRow({
     item.licenseStatus &&
     !['licensed', 'public_domain'].includes(item.licenseStatus)
   const lifecycle = unconfirmed ? 'Sin confirmar' : lifecycleLabel(item, nowMs)
+  const strength = item.relevance ?? 'none'
   return (
     <li
       data-news-id={item.id}
-      className={
-        compact
-          ? `flex min-w-0 flex-col justify-center gap-0.5 rounded-sm border border-solid border-line bg-surface-2 px-2 ${tight ? 'py-0.5' : 'py-1.5'}`
-          : 'border-t border-t-solid border-t-line py-1'
-      }
+      data-relevance={strength}
+      className={`flex min-w-0 flex-col justify-center gap-0.5 rounded-sm border border-l-4 border-solid border-line bg-surface-2 px-2 ${STRENGTH_EDGE[strength]} ${tight ? 'py-0.5' : 'py-1.5'}`}
       style={minHeight === undefined ? undefined : { minHeight }}
     >
-      <div
-        className={`flex items-center justify-between gap-1 ${compact ? 'text-label' : 'flex-wrap gap-1.5 text-hint'}`}
-      >
-        <span className="inline-flex min-w-0 items-center gap-1">
-          <span
-            className={`flex-none rounded-sm px-1.5 py-0.5 font-semibold ${item.relevance ? RELEVANCE_STYLE[item.relevance] : RELEVANCE_STYLE.none}`}
-            title="Importancia estimada para Ethereum; no es una probabilidad de ganar."
-          >
+      <div className="flex items-start justify-between gap-2">
+        <a
+          href={item.url}
+          target="_blank"
+          rel="noopener noreferrer"
+          className={`min-w-0 flex-1 text-label leading-4 ${tight ? 'line-clamp-1' : 'line-clamp-2'} text-ink no-underline hover:underline`}
+          title={item.title}
+        >
+          <span className="sr-only">
+            Importancia{' '}
             {item.relevance
-              ? `${compact ? '' : 'Relevancia '}${RELEVANCE_LABEL[item.relevance]}`
-              : 'Sin clasificar'}
+              ? RELEVANCE_LABEL[item.relevance]
+              : 'sin clasificar'}
+            .{' '}
           </span>
-          {item.direction && (
-            <small className={`whitespace-nowrap ${directionTone}`}>
-              {DIRECTION_LABEL[item.direction]}
-            </small>
-          )}
-        </span>
-        <small className="flex-none text-ink-2">
-          {!compact && `${item.source} · `}
-          <time>{dt.display}</time> UTC
-        </small>
+          {item.title}
+        </a>
+        {item.direction && (
+          <span
+            role="img"
+            aria-label={DIRECTION_WORD[item.direction]}
+            className={`flex-none text-body leading-4 ${directionTone}`}
+          >
+            {DIRECTION_ARROW[item.direction]}
+          </span>
+        )}
       </div>
-      <a
-        href={item.url}
-        target="_blank"
-        rel="noopener noreferrer"
-        className={`${compact ? 'text-label leading-4' : 'mt-1 text-hint'} ${tight ? 'line-clamp-1' : 'line-clamp-2'} text-ink no-underline hover:underline`}
-        title={item.title}
+      <Tip
+        align="start"
+        content={
+          <>
+            <b className="block">
+              {item.relevance
+                ? `Importancia ${RELEVANCE_LABEL[item.relevance].toLowerCase()}`
+                : 'Sin clasificar'}
+              {item.direction ? ` · ${DIRECTION_WORD[item.direction]}` : ''}
+            </b>
+            <span className="block">
+              {lifecycle}
+              {permissionUnknown ? ' · Permiso sin verificar' : ''}
+            </span>
+            <span className="mt-1 block text-ink-2">{newsTimeline(item)}</span>
+            <span className="mt-1 block text-ink-2">
+              Clic: procedencia y vigencia.
+            </span>
+          </>
+        }
+        className="min-w-0"
       >
-        {item.title}
-      </a>
-      <button
-        type="button"
-        onClick={() => onDetails(item)}
-        aria-label={`Ver procedencia y vigencia de ${item.title}`}
-        className={`cursor-pointer border-0 bg-transparent p-0 text-left ${compact ? 'flex min-w-0 items-center justify-between gap-1 text-label leading-4' : 'block text-label'} text-ink-2`}
-        title={`${newsTimeline(item)}${permissionUnknown ? ' · Permiso sin verificar' : ''}`}
-      >
-        {compact && <span className="min-w-0 truncate">{item.source}</span>}
-        <span className={compact ? 'min-w-0 truncate' : undefined}>
-          {lifecycle}
-          {permissionUnknown ? ' · Permiso sin verificar' : ''}
-          {compact ? ' ↗' : ''}
-        </span>
-      </button>
+        <button
+          type="button"
+          onClick={() => onDetails(item)}
+          aria-label={`Ver procedencia y vigencia de ${item.title}`}
+          className="min-w-0 cursor-pointer truncate border-0 bg-transparent p-0 text-left text-label leading-4 text-ink-2"
+        >
+          {item.source} · <time>{newsTime(item, nowMs)}</time>
+        </button>
+      </Tip>
     </li>
   )
 }
@@ -363,7 +405,7 @@ export default function TerminalNewsPanel({
               }
             >
               {summaryState === BRIEFING_LABEL.ok && briefing?.knownAtMs != null
-                ? `${formatShortDateTime(briefing.knownAtMs).display.slice(-5)} UTC`
+                ? `${formatShortDateTime(briefing.knownAtMs).display.slice(-5)}`
                 : summaryState}
             </small>
           </button>
@@ -394,7 +436,6 @@ export default function TerminalNewsPanel({
                   item={item}
                   nowMs={nowMs}
                   source={source}
-                  compact
                   tight={tight}
                   onDetails={setDetail}
                 />
@@ -429,7 +470,6 @@ export default function TerminalNewsPanel({
                   item={item}
                   nowMs={nowMs}
                   source={source}
-                  compact
                   tight={tight}
                   minHeight={
                     (measure.heights[range!.start + index] ?? 0) + extra
@@ -550,13 +590,12 @@ export default function TerminalNewsPanel({
                 <p>
                   {briefing?.knownAtMs == null
                     ? 'Análisis sin completar'
-                    : `Analizado ${formatShortDateTime(briefing.knownAtMs).display} UTC`}{' '}
+                    : `Analizado ${formatShortDateTime(briefing.knownAtMs).display}`}{' '}
                   · {briefing?.sourceCount ?? 0} fuentes
                 </p>
                 {briefing?.expiresAtMs != null && (
                   <p>
-                    Vence {formatShortDateTime(briefing.expiresAtMs).display}{' '}
-                    UTC
+                    Vence {formatShortDateTime(briefing.expiresAtMs).display}
                   </p>
                 )}
                 <ul>
@@ -572,9 +611,9 @@ export default function TerminalNewsPanel({
                       ·{' '}
                       {item.publishedAtMs == null
                         ? 'Publicación sin fecha'
-                        : `Publicada ${formatShortDateTime(item.publishedAtMs).display} UTC`}{' '}
+                        : `Publicada ${formatShortDateTime(item.publishedAtMs).display}`}{' '}
                       · Recibida{' '}
-                      {formatShortDateTime(item.receivedAtMs).display} UTC ·
+                      {formatShortDateTime(item.receivedAtMs).display} ·
                       Permiso: {item.licenseStatus}
                     </li>
                   ))}
@@ -725,14 +764,15 @@ export default function TerminalNewsPanel({
               const timeline = [
                 item.publishedAtMs == null
                   ? 'Publicación sin fecha'
-                  : `Publicada ${formatShortDateTime(item.publishedAtMs).display} UTC`,
-                `Recibida ${formatShortDateTime(item.receivedAtMs).display} UTC`,
+                  : `Publicada ${formatShortDateTime(item.publishedAtMs).display}`,
+                `Recibida ${formatShortDateTime(item.receivedAtMs).display}`,
                 item.knownAtMs == null
                   ? 'Análisis sin completar'
-                  : `Análisis completo ${formatShortDateTime(item.knownAtMs).display} UTC`,
+                  : `Análisis completo ${formatShortDateTime(item.knownAtMs).display}`,
                 item.expiresAtMs == null
                   ? 'Vencimiento sin confirmar'
-                  : `Vence ${formatShortDateTime(item.expiresAtMs).display} UTC`,
+                  : `Vence ${formatShortDateTime(item.expiresAtMs).display}`,
+                'hora de Madrid',
               ].join(' · ')
               return (
                 <li
@@ -756,7 +796,7 @@ export default function TerminalNewsPanel({
                       )}
                     </span>
                     <small className="text-ink-2">
-                      {item.source} · <time>{dt.display}</time> UTC
+                      {item.source} · <time>{dt.display}</time>
                     </small>
                   </div>
                   <a

@@ -546,7 +546,11 @@ test('without an open operation the strip shows the entry steps', async ({
     'title',
     /A 30 min: [+−]\d+ pb · (acertó|falló) \(hasta que el auditor resuelva a las 12 h\)/,
   )
-  await expect(master).toContainText(
+  // The legend is three words with a dot each; the how-it-is-judged sentence is in a tooltip.
+  await expect(master).toContainText('acertó')
+  await expect(master).toContainText('aún no')
+  await master.getByRole('img', { name: 'Cómo se juzga' }).hover()
+  await expect(page.getByRole('tooltip')).toContainText(
     'A los 30 min mide el precio; a las 12, 24 y 36 h el auditor pone el veredicto real',
   )
   await expect(master.getByRole('button')).toHaveCount(5)
@@ -602,23 +606,45 @@ test('with an open operation the strip shows the exit steps', async ({
     name: 'Pasos para salir de la operación',
   })
   await expect(strip).toBeVisible()
-  await expect(strip.getByRole('button')).toHaveCount(7)
+  // Only the steps that decide are in the row: the news, maker and emergency steps and the rebound expert are out.
+  await expect(strip.getByRole('button')).toHaveCount(4)
+  await expect(strip.getByRole('button').nth(0)).toHaveAccessibleName(
+    /^Maestro gira:/,
+  )
   await expect(strip.getByRole('button').nth(-2)).toHaveAccessibleName(
-    /^Auditor:/,
+    /^Tope 36 h:/,
   )
   await expect(strip.getByRole('button').last()).toHaveAccessibleName(
-    /^Emergencia:/,
+    /^Auditor:/,
   )
+  await expect(
+    strip.getByRole('button', {
+      name: /^(Noticia 12 h|Salida maker|Experto rebotes|Emergencia)/,
+    }),
+  ).toHaveCount(0)
+  // The 24 h check does not rule yet (5 h open): it is dimmed, the others are not.
+  await expect(
+    strip.getByRole('button', { name: /^24 h sin fuerza/ }),
+  ).toHaveAttribute('data-tone', 'na')
+  await expect(
+    strip.getByRole('button', { name: /^24 h sin fuerza/ }),
+  ).toHaveClass(/opacity-50/)
+  await expect(
+    strip.getByRole('button', { name: /^Maestro gira/ }),
+  ).not.toHaveClass(/opacity-50/)
   if (SHOTS)
     await strip.screenshot({
       path: `${SHOTS}/cinta-salida-${test.info().project.name}.png`,
     })
-  await strip.getByRole('button', { name: /^Salida maker/ }).click()
+  // What and why live in a tooltip, not in a paragraph.
+  await strip.getByRole('button', { name: /^24 h sin fuerza/ }).hover()
+  await expect(page.getByRole('tooltip')).toContainText('Rige en')
+  await strip.getByRole('button', { name: /^Tope 36 h/ }).click()
   const detail = page.getByRole('dialog', {
-    name: /Salida maker: última evaluación/,
+    name: /Tope 36 h: última evaluación/,
   })
-  await expect(detail).toContainText('Orden esperando al mejor precio')
-  await expect(detail).toContainText('sigue al mejor precio')
+  await expect(detail).toContainText('Faltan')
+  await expect(detail).not.toContainText('UTC')
   if (SHOTS)
     await page.screenshot({
       path: `${SHOTS}/salida-${test.info().project.name}.png`,
@@ -686,9 +712,7 @@ test('the Auditor step shows one card per judged operation and a click goes to t
     'title',
     /Auditor a 12 h \(provisorio\): quedaba: −41 pb · falló/,
   )
-  await expect(detail).toContainText(
-    'Arriba la entrada, abajo la salida: verde acertó, rojo falló, gris todavía no. Clic en una ficha lleva a esa operación. Barra hueca: veredicto provisorio (12 o 24 h).',
-  )
+  await expect(detail).toContainText('↑ entrada · ↓ salida · hueca: provisorio')
   // The cards fit the popover: nothing spills out of it.
   const box = await detail.boundingBox()
   const last = await fichas.nth(2).boundingBox()
@@ -778,7 +802,7 @@ function reboundLooks() {
   ]
 }
 
-test('with several places the strip has the rebound step and the card says which place it holds', async ({
+test('with several places the exit row leaves the rebound step out and the card says which place it holds', async ({
   page,
 }) => {
   const first = { ...openTrade(240, false), trade_no: 5 }
@@ -798,16 +822,10 @@ test('with several places the strip has the rebound step and the card says which
     name: 'Pasos para salir de la operación',
   })
   await expect(strip).toBeVisible()
-  const step = strip.getByRole('button', { name: /^Experto rebotes/ })
-  await expect(step).toBeVisible()
-  await step.click()
-  const detail = page.getByRole('dialog', {
-    name: /Experto rebotes: última evaluación/,
-  })
-  await expect(detail).toContainText('Caída desde el máximo')
-  await expect(detail).toContainText('5,4 %')
-  await expect(detail).toContainText('2/3')
-  await expect(detail).toContainText('Sale a las')
+  // The rebound expert is not one of the steps that decide an exit: it is out of the row.
+  await expect(
+    strip.getByRole('button', { name: /^Experto rebotes/ }),
+  ).toHaveCount(0)
   if (SHOTS)
     await page.screenshot({
       path: `${SHOTS}/terminal-experto-rebotes-${test.info().project.name}.png`,

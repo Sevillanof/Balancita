@@ -41,6 +41,31 @@ const madridDate = new Intl.DateTimeFormat('es-ES', {
   hourCycle: 'h23',
 })
 
+const madridClock = new Intl.DateTimeFormat('es-ES', {
+  timeZone: 'Europe/Madrid',
+  hour: '2-digit',
+  minute: '2-digit',
+  hourCycle: 'h23',
+})
+
+const madridFull = new Intl.DateTimeFormat('es-ES', {
+  timeZone: 'Europe/Madrid',
+  year: 'numeric',
+  month: 'numeric',
+  day: 'numeric',
+  hour: '2-digit',
+  minute: '2-digit',
+  second: '2-digit',
+  hourCycle: 'h23',
+})
+
+const madridDay = new Intl.DateTimeFormat('es-ES', {
+  timeZone: 'Europe/Madrid',
+  year: 'numeric',
+  month: 'numeric',
+  day: 'numeric',
+})
+
 /** `1.234,50 US$` for a number; `—` when absent. */
 export function usd(value: number | null | undefined, digits = 2): string {
   return value == null ? '—' : money('USD', digits).format(value)
@@ -86,4 +111,21 @@ export function utcDateTime(ms: number): string {
 /** `2 nov, 14:05` in Europe/Madrid (CET/CEST) from epoch milliseconds. */
 export function madridDateTime(ms: number): string {
   return madridDate.format(ms)
+}
+
+/** `14:05` in Europe/Madrid (CET/CEST, 24 h clock) from epoch milliseconds. */
+export function madridTime(ms: number): string {
+  return madridClock.format(ms)
+}
+
+/** `14:05` when `ms` falls on the same Madrid day as `nowMs`, otherwise `2 nov, 14:05`. */
+export function madridDayTime(ms: number, nowMs: number): string {
+  return madridDay.format(ms) === madridDay.format(nowMs)
+    ? madridTime(ms)
+    : madridDateTime(ms)
+}
+
+/** `9/11/2026, 23:15:02` in Europe/Madrid, to the second (receipts and records). */
+export function madridDateTimeSeconds(ms: number): string {
+  return madridFull.format(ms)
 }

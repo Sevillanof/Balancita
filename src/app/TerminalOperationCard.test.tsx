@@ -163,7 +163,8 @@ describe('Terminal operation card', () => {
     expect(screen.getByText(/SHORT/)).toHaveClass('text-short')
     expect(screen.getByTestId('operation-net')).toHaveClass('text-long')
     expect(screen.getByTestId('operation-entry')).toHaveTextContent('2241,66')
-    expect(screen.getByText(/Marca UTC/)).toBeTruthy()
+    expect(screen.getByText('◉ Marca (Madrid)')).toBeTruthy()
+    expect(screen.queryByText(/UTC/)).toBeNull()
     fireEvent.click(screen.getByRole('button', { name: 'Centrar operación' }))
     expect(focus).toHaveBeenCalledOnce()
   })
@@ -207,7 +208,7 @@ describe('Terminal operation card', () => {
         onFocus={() => undefined}
       />,
     )
-    expect(screen.getByText(/2\/3 · rebote/)).toBeTruthy()
+    expect(screen.getByText('rebote')).toBeTruthy()
     expect(screen.getByTestId('operation-places').textContent).toContain(
       'Abiertas 2 de 3',
     )

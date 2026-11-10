@@ -9,6 +9,19 @@ import {
   type QwenTradeAudit,
 } from './auditor-verdicts.ts'
 
+/** Since operacion-mejoras T2 a book entry is dated with the look that decided it and its receipt keeps the
+ * fill, a few seconds later; the live trader links them when 0 ≤ fill − entry ≤ 2 one-minute candles
+ * (futures_qwen_live.py). Older trades have both equal, which still matches. */
+const ENTRY_FILL_MAX_LAG_MS = 2 * 60_000
+function entryFillMatches(
+  executedAtMs: number,
+  entryMs: number | null,
+): boolean {
+  if (entryMs === null) return false
+  const lag = executedAtMs - entryMs
+  return lag >= 0 && lag <= ENTRY_FILL_MAX_LAG_MS
+}
+
 export type {
   QwenAfter,
   QwenAuditoria,
@@ -180,6 +193,9 @@ export interface QwenTrade {
   readonly entry_reason?: string | null
   /** The longest it may stay open, in ms (the rebound expert's own exit); null when the general cap applies. */
   readonly max_hold_ms?: number | null
+  /** Best / worst the price went for the operation since its entry, in basis points of the entry price (>= 0 / <= 0), before costs; null on a base that does not keep them. */
+  readonly mfe_bp?: number | null
+  readonly mae_bp?: number | null
   readonly hold_min: number | null
   readonly mark_price: number | null
   readonly mark_ms: number | null
@@ -425,7 +441,7 @@ function executionOf(db: DatabaseSync, trade: Row): QwenExecution | null {
       !sameDecimal(out.quantity, trade.qty) ||
       (purpose === 'entry' &&
         (!sameDecimal(out.price, trade.entry_px) ||
-          out.executed_at_ms !== num(trade.entry_ms))) ||
+          !entryFillMatches(out.executed_at_ms, num(trade.entry_ms)))) ||
       (purpose === 'exit' &&
         (!sameDecimal(out.price, trade.exit_px) ||
           out.executed_at_ms !== num(trade.exit_ms)))
@@ -789,6 +805,8 @@ export function createQwenDecisions(options: {
           exit_reason: text(row.exit_reason),
           entry_reason: text(row.entry_reason),
           max_hold_ms: num(row.max_hold_ms),
+          mfe_bp: num(row.mfe_bp),
+          mae_bp: num(row.mae_bp),
           hold_min: num(row.hold_min),
           mark_price: open ? num(row.mark_px) : null,
           mark_ms: open ? num(row.mark_ms) : null,

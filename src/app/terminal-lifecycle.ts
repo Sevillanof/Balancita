@@ -1,4 +1,5 @@
 import { record } from '../shared/wire/decode.ts'
+import { madridTime } from '../shared/finance/format.ts'
 import { tradeIdentity } from '../features/trading-view/domain/terminal-trade-model.ts'
 import { decisionView, masterGlyph } from './terminal-decision-view.ts'
 import type {
@@ -119,16 +120,7 @@ const CHECK_MS = 30 * 60_000
 /** What a round trip costs (taker both ways, 0,05 % each), in basis points: a move smaller than this pays nothing. */
 const COST_BP = 10
 
-const clock = new Intl.DateTimeFormat('es-ES', {
-  timeZone: 'Europe/Madrid',
-  hour: '2-digit',
-  minute: '2-digit',
-  hour12: false,
-})
-
-export function madridTime(ms: number): string {
-  return clock.format(new Date(ms))
-}
+export { madridTime }
 
 function hours(ms: number): string {
   return `${(ms / HOUR_MS).toFixed(1).replace('.', ',')} h`
@@ -765,6 +757,25 @@ function auditorStepOf(
 /** «1,5 %»: a percentage with a comma. */
 const percent = (value: number): string =>
   `${value.toFixed(1).replace('.', ',')} %`
+
+/** What the latest look read of the maestro: the score and the -2..2 verdict, when it was taken. */
+export interface MasterReading {
+  /** The maestro's score (positive favours a long); null when the look has none. */
+  score: number | null
+  /** The maestro's verdict, -2 (short, strong) to 2 (long, strong); null when the look has none. */
+  master: number | null
+  atMs: number
+}
+
+/** The maestro as the latest look read it; null before Qwen has looked. */
+export function latestMasterReading(
+  analyses: readonly unknown[],
+): MasterReading | null {
+  const latest = qwenLooks(analyses).at(-1)
+  if (!latest) return null
+  const { score, master } = read(latest)
+  return { score, master, atMs: Number(latest.decision_time_ms) }
+}
 
 /** The places the shared account has (`formula.posiciones`): open now, the most allowed, and the money they hold. */
 export interface PositionsReading {

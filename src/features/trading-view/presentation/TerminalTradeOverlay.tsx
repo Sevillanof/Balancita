@@ -1,5 +1,5 @@
 import { signedUsd } from '../../../app/qwen-trades-text.ts'
-import { usd, utcDateTime } from '../../../shared/finance/format.ts'
+import { madridDateTimeSeconds, usd } from '../../../shared/finance/format.ts'
 import { usePhoneChart } from './phone-chart-context.ts'
 import TradeFicha from './TradeFicha.tsx'
 import { FICHA_HEIGHT, FICHA_WIDTH } from './trade-ficha-model.ts'
@@ -161,7 +161,7 @@ function TradeBadges({
       : signedUsd(item.trade.netUsd)
   const netTitle =
     item.trade.open && item.trade.markMs != null
-      ? `Neto a la marca ${utcDateTime(item.trade.markMs)}`
+      ? `Neto a la marca ${madridDateTimeSeconds(item.trade.markMs)}`
       : 'Neto registrado al cierre'
   const provisional = tone === 'provisional' ? ' *' : ''
   return (
@@ -179,7 +179,7 @@ function TradeBadges({
           data-result-tone={tone}
           aria-pressed={selected}
           aria-label={`${item.entryVisible ? 'Entrada' : 'Entrada anterior'} ${item.trade.side} operación ${item.trade.tradeNo}: ${net}${tone === 'provisional' ? ', provisional' : ''}`}
-          title={`${item.trade.side} · entrada ${usd(item.trade.entryPrice)} · ${utcDateTime(item.startMs)} · ${netTitle}`}
+          title={`${item.trade.side} · entrada ${usd(item.trade.entryPrice)} · ${madridDateTimeSeconds(item.startMs)} · ${netTitle}`}
           onClick={() => onSelect(item.id)}
         >
           <span className="flex items-baseline gap-1.5 font-bold">

@@ -62,16 +62,32 @@ function seed(
 
 describe('immutable execution evidence', () => {
   it.each([
-    { name: 'plain decimals', qty: '1', px: '101', receiptQty: '1' },
+    {
+      name: 'plain decimals',
+      qty: '1',
+      px: '101',
+      receiptQty: '1',
+      entryMs: 1300,
+    },
     {
       name: 'trailing zeros in the stored trade',
       qty: '0.2181388559496190556100323750',
       px: '2291.60',
       receiptQty: '0.218138855949619055610032375',
+      entryMs: 1300,
+    },
+    {
+      // Since operacion-mejoras T2 the entry is dated with the look that decided it and the
+      // receipt keeps the fill a few seconds later (live trade #21 on the VPS: +5,4 s).
+      name: 'entry dated at the look, fill later',
+      qty: '1',
+      px: '101',
+      receiptQty: '1',
+      entryMs: 1000,
     },
   ])(
     'serves recorded fees and timing only after verifying the receipt hash ($name)',
-    ({ qty, px, receiptQty }) => {
+    ({ qty, px, receiptQty, entryMs }) => {
       const path = seed(
         [],
         [
@@ -80,7 +96,7 @@ describe('immutable execution evidence', () => {
             trade_no: 1,
             status: 'open',
             side: 'LONG',
-            entry_ms: 1300,
+            entry_ms: entryMs,
             entry_px: px,
             qty,
             notional_usd: '101',
@@ -165,6 +181,17 @@ describe('immutable execution evidence', () => {
           },
         },
       })
+      // A fill before the look, or more than two minutes after it, is not this entry.
+      for (const bad of [1301, 1300 - 120_001]) {
+        const db2 = new DatabaseSync(path)
+        db2.prepare('UPDATE trades SET entry_ms=?').run(bad)
+        db2.close()
+        const wrong = reader.trades('PF_ETHUSD')
+        expect(wrong.status).not.toBe('ok')
+      }
+      const back = new DatabaseSync(path)
+      back.prepare('UPDATE trades SET entry_ms=?').run(entryMs)
+      back.close()
       const corrupt = new DatabaseSync(path)
       corrupt.prepare("UPDATE execution_receipts SET evidence_json='{}'").run()
       corrupt.close()
@@ -707,6 +734,26 @@ describe('createQwenDecisions: trades', () => {
       entry_reason: 'rebote',
       max_hold_ms: 14_400_000,
     })
+  })
+
+  it('serves the best and worst the price went since entry (mfe_bp / mae_bp), null when the base lacks them', () => {
+    const open = { ...base, trade_no: 9, status: 'open', entry_ms: 1_000 }
+    const path = seed([], [open])
+    const without = createQwenDecisions({ liveDbPath: path }).trades(
+      'PF_XBTUSD',
+    )
+    expect(without.status).toBe('ok')
+    if (without.status !== 'ok') return
+    expect(without.trades[0]).toMatchObject({ mfe_bp: null, mae_bp: null })
+    const db = new DatabaseSync(path)
+    db.exec(
+      'ALTER TABLE trades ADD COLUMN mfe_bp REAL; ALTER TABLE trades ADD COLUMN mae_bp REAL; UPDATE trades SET mfe_bp=293.75, mae_bp=-41.9',
+    )
+    db.close()
+    const result = createQwenDecisions({ liveDbPath: path }).trades('PF_XBTUSD')
+    expect(result.status).toBe('ok')
+    if (result.status !== 'ok') return
+    expect(result.trades[0]).toMatchObject({ mfe_bp: 293.75, mae_bp: -41.9 })
   })
 
   it('says off when the base has no trades table yet', () => {

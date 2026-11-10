@@ -1,6 +1,10 @@
 import { record } from '../shared/wire/decode.ts'
 import { reasonLabel as baseReasonLabel } from './terminal-copy.ts'
-import { usdFromString, utcDateTime } from '../shared/finance/format.ts'
+import {
+  madridDateTime,
+  madridTime,
+  usdFromString,
+} from '../shared/finance/format.ts'
 
 export function reasonLabel(value: unknown): string {
   if (value === 'entries_paused')
@@ -18,9 +22,10 @@ export function quantity(value: unknown, base = 'BTC'): string {
   return `${value} ${base}`
 }
 
-export function utcTime(value: unknown): string {
+/** `2 nov, 14:05`, Madrid time. */
+export function madridStamp(value: unknown): string {
   if (!Number.isSafeInteger(value)) return 'Hora no disponible'
-  return utcDateTime(Number(value))
+  return madridDateTime(Number(value))
 }
 
 export function analysisAction(value: unknown): string {
@@ -82,7 +87,7 @@ export function analysesNotice(
 
 export function shortTime(value: unknown): string {
   if (!Number.isSafeInteger(value)) return '--:--'
-  return new Date(Number(value)).toISOString().slice(11, 16)
+  return madridTime(Number(value))
 }
 
 export function marketStatusLabel(value: unknown): string {

@@ -6,7 +6,7 @@ import {
   TONE_TEXT,
 } from '../features/trading-view/presentation/step-tones.ts'
 import { tradeIdentity } from '../features/trading-view/domain/terminal-trade-model.ts'
-import { usd } from '../shared/finance/format.ts'
+import { madridTime, usd } from '../shared/finance/format.ts'
 import { formatBalance } from './account-balance.ts'
 import { qwenTradesNotice } from './qwen-trades-text.ts'
 import { money } from './terminal-labels.ts'
@@ -264,9 +264,7 @@ function NewsTab({
               >
                 {item.title}
               </a>
-              <span className="text-ink-2 tabular-nums">
-                {new Date(at).toISOString().slice(11, 16)}
-              </span>
+              <span className="text-ink-2 tabular-nums">{madridTime(at)}</span>
               <b className={mark.tone}>{mark.glyph}</b>
             </li>
           )

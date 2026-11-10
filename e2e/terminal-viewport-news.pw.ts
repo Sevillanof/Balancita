@@ -259,7 +259,6 @@ async function assertViewport(page: Page) {
       card.querySelector('strong')!,
       card.querySelector('[data-testid="operation-net"]')!,
       card.querySelector('[data-testid="operation-entry"]')!,
-      card.querySelector('button')!,
     ].map((element) => element.getBoundingClientRect())
     return {
       overflowX: root.scrollWidth - innerWidth,
@@ -267,9 +266,10 @@ async function assertViewport(page: Page) {
       chartHeight: surface.getBoundingClientRect().height,
       chartPaneHeight:
         surface.querySelector('canvas')?.getBoundingClientRect().height ?? 0,
+      // The side tag sits above the net, and the net does not run into the prices at its right.
       cardCollisions:
         fields[0]!.bottom > fields[1]!.top ||
-        fields[1]!.bottom > fields[3]!.top,
+        fields[1]!.right > fields[2]!.left + 1,
       clipped: Array.from(
         document.querySelectorAll(
           '[data-testid="terminal-operation-card"], [data-testid="terminal-news-panel"], [data-testid="activity-panel"]',
