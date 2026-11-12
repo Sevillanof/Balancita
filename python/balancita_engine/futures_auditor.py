@@ -118,6 +118,7 @@ from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+from . import futures_auditor_flujo as flujo
 from . import futures_maker_exit as maker_exit
 from . import futures_qwen_corta as corta
 from . import futures_qwen_ficha as ficha
@@ -230,6 +231,17 @@ CREATE TABLE IF NOT EXISTS miradas_perdidas(
   motivo TEXT NOT NULL, detalle TEXT, despertar_json TEXT, estado TEXT NOT NULL,
   maestro INTEGER, puntaje REAL, entrada_dice TEXT, salida_dice TEXT, formula_json TEXT,
   registrada_ms INTEGER NOT NULL, version TEXT NOT NULL,
+  PRIMARY KEY(product, bucket_ms));
+-- Flujo de mercado de cada mirada (solo auditoría, ``futures_auditor_flujo``): compras/ventas agresoras (CVD), liquidaciones e interés
+-- abierto en ventanas de 30 min, 1 h y 4 h que terminan en ``fin_ms`` (<= t_ms). NULL = sin dato (nunca 0); ``hueco`` = 1 explica por qué.
+CREATE TABLE IF NOT EXISTS flujo_mirada(
+  product TEXT NOT NULL, bucket_ms INTEGER NOT NULL, t_ms INTEGER NOT NULL, fin_ms INTEGER,
+  oi REAL,
+  comprador_30m REAL, vendedor_30m REAL, delta_30m REAL, liquidaciones_30m REAL, oi_cambio_30m REAL, oi_pct_30m REAL,
+  comprador_1h REAL, vendedor_1h REAL, delta_1h REAL, liquidaciones_1h REAL, oi_cambio_1h REAL, oi_pct_1h REAL,
+  comprador_4h REAL, vendedor_4h REAL, delta_4h REAL, liquidaciones_4h REAL, oi_cambio_4h REAL, oi_pct_4h REAL,
+  fuente TEXT, hueco INTEGER NOT NULL, motivo_hueco TEXT, cobertura_json TEXT,
+  version TEXT NOT NULL,
   PRIMARY KEY(product, bucket_ms));
 """
 
@@ -1241,7 +1253,26 @@ def _record_positions(db, product, trader, look, readings_, events, marks, t_ms)
     return written
 
 
-def record_look(live_db_path, product, trader, events, now_ms, marks=None, config_hash=None):
+def _flow_row(product, t_ms, now_ms, market_db):
+    """La fila de ``flujo_mirada`` de la mirada (ver ``futures_auditor_flujo``): solo lectura de datos públicos. Si no se pudo calcular nada
+    queda igual, con ``hueco = 1`` y el motivo. Se calcula ANTES de abrir la transacción del auditor (el respaldo por red no la retiene)."""
+    try:
+        row = flujo.calcular(product, t_ms, market_db=market_db or market_db_path(), now_ms=now_ms)
+    except Exception as error:                         # noqa: BLE001 - lo que falle queda como hueco, la mirada sigue
+        row = {name: None for name in flujo.COLUMNS}
+        row.update(hueco=1, motivo_hueco="error:{}".format(type(error).__name__))
+    row.update(product=product, bucket_ms=t_ms - BUCKET_MS, t_ms=t_ms, version=flujo.FLUJO_VERSION)
+    return row
+
+
+def _record_flow(db, row):
+    """Escribe la fila de ``_flow_row`` (``INSERT OR IGNORE`` por producto y balde: idempotente). Dentro de la transacción de ``record_look``."""
+    cursor = db.execute("INSERT OR IGNORE INTO flujo_mirada({}) VALUES({})".format(
+        ", ".join(flujo.COLUMNS), ", ".join("?" * len(flujo.COLUMNS))), tuple(row[c] for c in flujo.COLUMNS))
+    return cursor.rowcount == 1
+
+
+def record_look(live_db_path, product, trader, events, now_ms, marks=None, config_hash=None, market_db=None):
     """Lo que el auditor guarda además de la mirada, para entrenar más adelante (S8): los hechos del maestro y la identidad del proponente,
     la propuesta de entrada con su motivo de bloqueo y el estado de cada posición abierta. Lee solo lo que el trader dejó en
     ``trader.look_audit`` (o, en una mirada de enfriamiento, lo calcula con ``corta.readings``) y no hace ninguna llamada de red.
@@ -1251,10 +1282,10 @@ def record_look(live_db_path, product, trader, events, now_ms, marks=None, confi
 
     NUNCA propaga una excepción ni cambia nada del trader: cada pedazo va protegido y lo que falle queda en ``avisos`` (el proceso en vivo
     lo anota en su tabla ``errors``). ``marks``: ``{trade_no: valuación}`` que el proceso ya calculó. Devuelve
-    ``{"hechos", "propuesta", "posiciones", "avisos", "ms", "pasos_ms"}``; ``pasos_ms`` = lo que tardó cada paso (``abrir``, ``hechos``,
-    ``propuesta``, ``posiciones`` y ``commit``)."""
+    ``{"hechos", "propuesta", "posiciones", "flujo", "avisos", "ms", "pasos_ms"}``; ``pasos_ms`` = lo que tardó cada paso (``abrir``, ``hechos``,
+    ``propuesta``, ``posiciones``, ``flujo`` y ``commit``). ``market_db``: la captura de donde sale el flujo (por defecto ``market_db_path()``)."""
     started = time.monotonic()
-    out = {"hechos": False, "propuesta": None, "posiciones": 0, "avisos": [], "ms": 0.0, "pasos_ms": {}}
+    out = {"hechos": False, "propuesta": None, "posiciones": 0, "flujo": False, "avisos": [], "ms": 0.0, "pasos_ms": {}}
 
     def lap(name, since):
         out["pasos_ms"][name] = (time.monotonic() - since) * 1000.0
@@ -1268,6 +1299,9 @@ def record_look(live_db_path, product, trader, events, now_ms, marks=None, confi
                 readings_ = _safe(corta.readings, trader, t_ms)          # el trader no miró (enfriamiento, cierre): la mirada igual existía
             if readings_ is not None:
                 events = list(events or ())
+                step = time.monotonic()
+                flow = _flow_row(product, t_ms, now_ms, market_db)
+                lap("flujo_leer", step)
                 step = time.monotonic()
                 with contextlib.closing(_open(live_db_path, TRAINING_LOCK_TIMEOUT_S)) as db:
                     lap("abrir", step)
@@ -1289,11 +1323,12 @@ def record_look(live_db_path, product, trader, events, now_ms, marks=None, confi
                     out["hechos"] = bool(guarded("hechos", _record_facts, live_db_path, product, trader, readings_, t_ms, config_hash))
                     out["propuesta"] = guarded("propuesta", _record_proposal, product, trader, look, readings_, events, t_ms)
                     out["posiciones"] = guarded("posiciones", _record_positions, product, trader, look, readings_, events, marks, t_ms) or 0
+                    out["flujo"] = bool(guarded("flujo", _record_flow, flow))
                     step = time.monotonic()
                     try:
                         db.commit()
                     except Exception as error:                         # noqa: BLE001 - sin confirmar no queda nada de la mirada
-                        out.update(hechos=False, propuesta=None, posiciones=0)
+                        out.update(hechos=False, propuesta=None, posiciones=0, flujo=False)
                         out["avisos"].append("registro: {}: {}".format(type(error).__name__, error))
                     lap("commit", step)
     except Exception as error:                                         # noqa: BLE001

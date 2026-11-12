@@ -20,7 +20,8 @@ HORA = 3_600_000
 # tabla del archivo -> tabla de SQLite que crea el auditor
 NUEVAS = {"auditor_operaciones": "operaciones", "auditor_hechos": "hechos_mirada", "auditor_propuestas": "propuestas",
           "auditor_mirada_operaciones": "mirada_operaciones", "auditor_resultados": "resultados_operacion", "auditor_reentrenos": "reentrenos",
-          "auditor_sombra": "sombra_maker", "auditor_perdidas": "miradas_perdidas"}
+          "auditor_sombra": "sombra_maker", "auditor_perdidas": "miradas_perdidas",
+          "auditor_flujo": "flujo_mirada"}
 
 
 def auditor_db(carpeta):
@@ -64,7 +65,7 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(TABLAS["auditor_operaciones"].inmutable_sql, '"resuelto_ms" IS NOT NULL')
         self.assertEqual(TABLAS["auditor_propuestas"].inmutable_sql, '"resuelto_ms" IS NOT NULL')
         self.assertEqual(TABLAS["auditor_resultados"].inmutable_sql, '"resultado_ms" IS NOT NULL')
-        for nombre in ("auditor_hechos", "auditor_mirada_operaciones", "auditor_reentrenos", "auditor_sombra", "auditor_perdidas"):
+        for nombre in ("auditor_hechos", "auditor_mirada_operaciones", "auditor_reentrenos", "auditor_sombra", "auditor_perdidas", "auditor_flujo"):
             self.assertIsNone(TABLAS[nombre].inmutable_sql, nombre)            # sombra_maker, miradas_perdidas: una fila se escribe una sola vez y ya no cambia
 
     def test_el_tiempo_de_cada_periodo_es_una_columna_que_ya_no_cambia(self):
