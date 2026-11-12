@@ -48,7 +48,7 @@ type Props = { api: EstrategiasApi; informe: Informe }
 export default function Repeticion({ api, informe }: Props) {
   const [intervalo, setIntervalo] = useState<IntervaloVelas>(INTERVALO_INICIAL)
   return (
-    <figure className="m-0 flex min-h-96 min-w-0 flex-1 flex-col gap-2 rounded-control border border-solid border-line px-4 pt-2.5 pb-2">
+    <figure className="m-0 flex min-w-0 flex-1 flex-col gap-2 rounded-control border border-solid border-line px-4 pt-2.5 pb-2">
       {/* Another interval is another list of candles: the player starts over, paused. */}
       <Reproductor
         key={intervalo}
