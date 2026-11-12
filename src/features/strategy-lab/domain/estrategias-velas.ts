@@ -20,13 +20,14 @@ export const INTERVALOS_VELAS: ReadonlyArray<{
   id: IntervaloVelas
   segundos: number
 }> = [
+  { id: '5m', segundos: 5 * 60 },
   { id: '15m', segundos: 15 * 60 },
   { id: '1h', segundos: 3600 },
   { id: '4h', segundos: 4 * 3600 },
   { id: '1d', segundos: 86_400 },
 ]
 
-export const INTERVALO_INICIAL: IntervaloVelas = '1h'
+export const INTERVALO_INICIAL: IntervaloVelas = '5m'
 
 export const HORA_MS = 3_600_000
 /** The most candles the server sends in one answer. */

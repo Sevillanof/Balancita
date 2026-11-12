@@ -37,7 +37,7 @@ CAMPOS_COMPARAR = ("desde", "hasta")
 MAX_NOMBRE, MAX_DESCRIPCION = 80, 500
 MAX_TRABAJOS = 20
 MAX_VELAS = 5000
-INTERVALOS = {"15m": 15 * 60_000, "1h": 3_600_000, "4h": 4 * 3_600_000, "1d": 86_400_000}
+INTERVALOS = {"5m": 5 * 60_000, "15m": 15 * 60_000, "1h": 3_600_000, "4h": 4 * 3_600_000, "1d": 86_400_000}
 PRODUCTO_RE = re.compile(r"^PF_[A-Z0-9]{2,20}$")
 TIPOS = {"int": "entero", "int5": "entero", "float": "decimal", "float?": "decimal", "enum": "opcion", "onoff": "opcion"}
 

@@ -9,7 +9,7 @@ import type {
 } from '../infrastructure/estrategias-api.ts'
 import { BOTON, EYEBROW, TEXTO_TONO } from './estrategias-styles.ts'
 import OperacionesModal from './OperacionesModal.tsx'
-import VelasConOperaciones from './VelasConOperaciones.tsx'
+import Repeticion from './Repeticion.tsx'
 
 type Props = {
   api: EstrategiasApi
@@ -276,7 +276,7 @@ export default function ResultadoComparacion({
           largo={largoVariante}
         />
       </div>
-      <VelasConOperaciones
+      <Repeticion
         key={`${informe.estrategia.id}|${informe.variante.config_hash}`}
         api={api}
         informe={informe}

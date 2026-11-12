@@ -363,7 +363,7 @@ class VelasTests(Servidor):
                                             "c": 100.0 + 575 + 1, "v": 12.0})
 
     def test_every_interval_buckets_on_utc_boundaries(self):
-        for intervalo, paso in (("15m", 15 * 60_000), ("1h", HORA), ("4h", 4 * HORA), ("1d", DIA)):
+        for intervalo, paso in (("5m", 5 * 60_000), ("15m", 15 * 60_000), ("1h", HORA), ("4h", 4 * HORA), ("1d", DIA)):
             status, out = self.velas(intervalo, limite=2)
             self.assertEqual(status, 200, intervalo)
             self.assertEqual(len(out["velas"]), 2, intervalo)

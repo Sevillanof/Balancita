@@ -135,8 +135,12 @@ describe('Estrategias: the Terminal laboratory', () => {
     expect(
       await within(detalle).findByRole('img', { name: /Velas de ETH/ }),
     ).toBeVisible()
-    expect(within(detalle).getByText(/^Operación \d+ de \d+$/)).toBeVisible()
-    expect(within(detalle).getByRole('group', { name: 'Zoom' })).toBeVisible()
+    expect(
+      within(detalle).getByRole('button', { name: 'Reproducir' }),
+    ).toBeVisible()
+    expect(
+      within(detalle).getByRole('group', { name: 'Velocidad' }),
+    ).toBeVisible()
 
     const neto = within(detalle).getByRole('group', {
       name: 'Neto por operación (ponderado por tamaño)',
