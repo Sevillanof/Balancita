@@ -32,6 +32,14 @@ const PERILLAS = [
     tipo: 'opcion',
     opciones: ['apagado', 'suave', 'fuerte'],
   }),
+  perilla('reglas_maestro.no_vender_subida_30d', 'apagado', {
+    tipo: 'opcion',
+    opciones: ['apagado', 'prendido'],
+  }),
+  perilla('reglas_maestro.sumar_lugares_60min', 'apagado', {
+    tipo: 'opcion',
+    opciones: ['apagado', 'prendido'],
+  }),
 ]
 
 const fila = (id: string, nombre: string, cambios: object) => ({

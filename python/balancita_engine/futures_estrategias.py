@@ -21,6 +21,7 @@ import re
 from . import futures_qwen_analista as analista
 from . import futures_qwen_live as live
 from . import futures_qwen_posiciones as posiciones
+from . import futures_qwen_reglas as reglas
 from . import futures_qwen_trader as qt
 
 SNAPSHOT_SCHEMA = "balancita-terminal-activa.v1"
@@ -43,6 +44,8 @@ PERILLAS_PERMITIDAS = {
     "rebotes.ventana_min": ("int", 5, 1440),
     "rebotes.salida_min": ("int", 5, 2880),
     "rebotes.enfriamiento_min": ("int", 0, 2880),
+    "reglas_maestro.no_vender_subida_30d": ("onoff", None, None),   # regla A: sin ventas si ETH subió 10 % o más en 30 días (valores fijos)
+    "reglas_maestro.sumar_lugares_60min": ("onoff", None, None),    # regla B: 2.º y 3.er lugar con la señal fuerte, a 60 min del anterior
 }
 # Reglas de inversión FIJAS (usuario, 2026-11-06: «El backtest debe invertir igual que la Terminal, esas reglas no cambian»): cuánto se
 # invierte por posición (``posiciones.fraccion`` del saldo actual), cuántas a la vez (``posiciones.max``), la espera entre entradas, el
@@ -111,7 +114,10 @@ def _numero(valor):
 def _validar_valor(clave, valor, id):
     tipo, low, high = PERILLAS_PERMITIDAS[clave]
     malo = None
-    if tipo in ("int", "int5"):
+    if tipo == "onoff":
+        if valor not in reglas.ESTADOS:
+            malo = "tiene que ser {}".format(" o ".join(reglas.ESTADOS))
+    elif tipo in ("int", "int5"):
         if isinstance(valor, bool) or not isinstance(valor, int):
             malo = "tiene que ser un número entero"
         elif not low <= valor <= high:
@@ -144,6 +150,7 @@ def _validar_config(cfg, id):
         posiciones.settings(cfg)
         posiciones.rebotes_of(cfg)
         analista.mode((cfg.get("analista") or {}).get("modo"), "analista.modo")
+        reglas.settings(cfg)
     except ValueError as error:
         raise EstrategiaError("Estrategia '{}': {}.".format(id, str(error).rstrip("."))) from error
 

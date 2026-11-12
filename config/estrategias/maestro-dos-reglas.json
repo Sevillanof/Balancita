@@ -1,0 +1,12 @@
+{
+ "id": "maestro-dos-reglas",
+ "nombre": "Maestro: las dos reglas",
+ "descripcion": "La Terminal activa con las dos reglas de entrada del maestro (12-nov): no vender si ETH subió 10 % en 30 días y sumar el 2.º y 3.er lugar a 60 min. En la práctica 2024-abr 2026: -109 -> +1.028 USD (medido con el arnés de análisis).",
+ "base_config_hash": "37f572a841d35a7b7a8d01569378c508c6bcd9c8a4a6a2adb96e5d1097eade07",
+ "cambios": {
+  "reglas_maestro": {
+   "no_vender_subida_30d": "prendido",
+   "sumar_lugares_60min": "prendido"
+  }
+ }
+}

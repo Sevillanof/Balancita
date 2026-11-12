@@ -121,7 +121,7 @@ class EstrategiasTests(unittest.TestCase):
         for clave in est.PERILLAS_PERMITIDAS:
             self.assertFalse(clave.startswith(("posiciones.", "analista.")), clave)
             self.assertNotIn(clave, est.REGLAS_DE_INVERSION_FIJAS)
-        self.assertEqual(sorted({clave.split(".")[0] for clave in est.PERILLAS_PERMITIDAS}), ["guardrails", "rebotes", "wake"])
+        self.assertEqual(sorted({clave.split(".")[0] for clave in est.PERILLAS_PERMITIDAS}), ["guardrails", "rebotes", "reglas_maestro", "wake"])
 
     def test_the_variant_config_sizes_exactly_like_the_snapshot(self):
         cfg = self.load(self.overlay({"guardrails": {"max_hold_min": 1800}, "rebotes": {"caida_pct": 4.0}}))

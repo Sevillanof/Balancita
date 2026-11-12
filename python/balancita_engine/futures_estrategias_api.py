@@ -28,6 +28,7 @@ import unicodedata
 
 from . import futures_estrategias as est
 from . import futures_qwen_analista as analista
+from . import futures_qwen_reglas as reglas
 from . import futures_estrategias_backtest as bt
 from . import futures_qwen_trader as qt
 
@@ -38,7 +39,7 @@ MAX_TRABAJOS = 20
 MAX_VELAS = 5000
 INTERVALOS = {"15m": 15 * 60_000, "1h": 3_600_000, "4h": 4 * 3_600_000, "1d": 86_400_000}
 PRODUCTO_RE = re.compile(r"^PF_[A-Z0-9]{2,20}$")
-TIPOS = {"int": "entero", "int5": "entero", "float": "decimal", "float?": "decimal", "enum": "opcion"}
+TIPOS = {"int": "entero", "int5": "entero", "float": "decimal", "float?": "decimal", "enum": "opcion", "onoff": "opcion"}
 
 
 class EstrategiasApiError(Exception):
@@ -85,6 +86,8 @@ def _valor_actual(config, clave):
     nodo = config
     for parte in clave.split("."):
         nodo = nodo.get(parte) if isinstance(nodo, dict) else None
+    if nodo is None and clave.startswith("reglas_maestro."):
+        return "apagado"                         # sin la clave, la regla está apagada
     return nodo
 
 
@@ -93,6 +96,8 @@ def _perilla(clave, config):
     out = {"clave": clave, "tipo": TIPOS[tipo], "valor_actual": _valor_actual(config, clave), "admite_null": tipo == "float?"}
     if tipo == "enum":
         out["opciones"] = list(analista.MODES)
+    elif tipo == "onoff":
+        out["opciones"] = list(reglas.ESTADOS)
     else:
         out.update(minimo=minimo, maximo=maximo, minimo_exclusivo=tipo in ("float", "float?"), paso=5 if tipo == "int5" else None)
     return out
