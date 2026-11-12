@@ -98,6 +98,8 @@ SKIP_TEXT = {
     "cierre_en_la_mirada": "se cerró otra posición en esta misma mirada",
     "una_entrada_por_mirada": "ya se abrió otra posición en esta misma mirada",
     "mismo_episodio": "la señal sigue en el mismo episodio",
+    "subida_30d": "ETH subió 10 % o más en 30 días: no se abren ventas",
+    "separacion_60min": "el lugar anterior de ese lado entró hace menos de 60 minutos",
 }
 
 
@@ -1988,7 +1990,7 @@ def pending_config(cfg, spec) -> dict:
         raise qt.TraderError("Traspaso: la configuración de origen no coincide.")
     changes = overlay.get("changes")
     allowed = {"note", "corta", "noticias", "funding_model", "opinion_enabled", "live", "decide_by", "mirror", "execution",
-               "posiciones", "rebotes"}
+               "posiciones", "rebotes", "reglas_maestro"}
     if not isinstance(changes, dict) or not changes or set(changes) - allowed:
         raise qt.TraderError("Traspaso: cambios inválidos; no se redefine la cuenta ni su capital.")
     target = copy.deepcopy(cfg)

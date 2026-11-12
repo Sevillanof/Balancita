@@ -16,7 +16,7 @@ class PendingOverlayTest(unittest.TestCase):
     def setUp(self):
         with open(os.path.join(CONFIG_DIR, "qwen-live.json"), encoding="utf-8") as handle:
             self.cfg = json.load(handle)
-        self.spec = self.cfg["runtime"]["pending_config"]
+        self.spec = {"path": "qwen-live-posiciones.json", "sha256": "f7f64f5c99974b8a0997133d74c27e349eaeb90781f0a35961b942ba7860d67e"}
         self.path = os.path.join(CONFIG_DIR, self.spec["path"])
         with open(self.path, "rb") as handle:
             self.raw = handle.read()
@@ -39,6 +39,21 @@ class PendingOverlayTest(unittest.TestCase):
         self.assertIn("rebotes", target)
         self.assertNotIn("pending_config", target["runtime"])
         self.assertEqual(target["runtime"]["activation_request_sha256"], self.spec["sha256"])
+
+    def test_the_rules_overlay_is_the_pending_request_and_turns_on_both_rules(self):
+        """Mac (develop): the request in ``qwen-live.json`` is the maestro rules overlay; it applies on the active Terminal config."""
+        spec = self.cfg["runtime"]["pending_config"]
+        self.assertEqual(spec["path"], "qwen-live-reglas.json")
+        with open(os.path.join(CONFIG_DIR, spec["path"]), "rb") as handle:
+            raw = handle.read()
+        self.assertEqual(hashlib.sha256(raw).hexdigest(), spec["sha256"])
+        with open(os.path.join(CONFIG_DIR, "terminal-activa.json"), encoding="utf-8") as handle:
+            active = json.load(handle)
+        self.assertEqual(json.loads(raw)["base_config_hash"], active["config_hash"])
+        target = live.pending_config(copy.deepcopy(active["config"]), spec)
+        self.assertEqual(target["reglas_maestro"], {"no_vender_subida_30d": "prendido", "sumar_lugares_60min": "prendido"})
+        self.assertEqual(target["posiciones"], active["config"]["posiciones"])
+        qt.Trader(target, "PF_ETHUSD", None, entry_threshold=0.5)          # the target config builds
 
     def test_the_old_overlay_stays_consumed_and_is_not_requested(self):
         self.assertNotEqual(self.spec["path"], "qwen-live-next.json")

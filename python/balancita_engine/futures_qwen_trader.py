@@ -59,6 +59,7 @@ from . import futures_funding_cache
 from . import futures_llm_decisions as llm
 from . import futures_qwen_funding as exact_funding
 from . import futures_qwen_posiciones as posiciones
+from . import futures_qwen_reglas as reglas
 from . import futures_book_execution as book_execution
 from . import futures_maker_exit as maker_exit
 from .futures_costs import COST_MODEL_VERSION, entry_fill, exit_fill, fee_rate, round_trip_cost_bps, side_impact_bps
@@ -666,6 +667,15 @@ class Trader:
             raise TraderError("Varias posiciones solo existen cuando decide la fórmula (decide_by: formula).")
         if self.rebotes is not None and self.max_positions == 1:
             raise TraderError("El experto rebotes comparte cupos con el maestro: necesita posiciones.max mayor que 1.")
+        try:
+            self.reglas = reglas.settings(cfg)
+        except ValueError as error:
+            raise TraderError(str(error)) from error
+        if (self.reglas["A"] or self.reglas["B"]) and self.max_positions == 1:
+            raise TraderError("reglas_maestro: las reglas de entrada del maestro necesitan varias posiciones (posiciones.max mayor que 1).")
+        from . import futures_qwen_analista as analista
+        if self.reglas["A"] and analista.sizes_of(cfg) is None:
+            raise TraderError("reglas_maestro.no_vender_subida_30d: lee los 30 días de historia del analista de movimiento (analista.modo no puede ser apagado).")
         self.rebote_last_ms = None        # last episode of the rebound expert (its 4 h rest counts from here)
         self.rebote_retry_ms = None       # edge of an episode whose buy failed for a passing reason: retried while the drop lasts
         self.prev_entry_side = 0          # side of the maestro's entry signal at the previous look (+1 / -1 / 0): episode edge
@@ -1563,6 +1573,18 @@ class Trader:
             return [event] + self._close(t_ms, self.c[-1], "strategy_exit", "formula", reason)
         return [event]
 
+    def _rise_veto(self, entry_side):
+        """Regla A (``reglas_maestro``): ``(texto, motivo)`` cuando la señal es de VENTA y ETH subió 10 % o más en 30 días; si no, ``None``.
+        Compara el cierre de la última vela cerrada con el cierre de la vela que cerró 30 días antes (sin esa historia no bloquea)."""
+        if not self.reglas["A"] or entry_side >= 0 or not self.t:
+            return None
+        end_ms = self.t[-1] + BAR_MS
+        past = self.movement.close_at(end_ms - reglas.SUBIDA_DIAS * DAY_MS) if self.movement is not None else None
+        rise = reglas.subida_30d(self.c[-1], past)
+        if not reglas.vende_bloqueada(rise):
+            return None
+        return "ETH subió {:.1f} % en {} días".format(rise * 100, reglas.SUBIDA_DIAS), reglas.KIND_SUBIDA
+
     def _decide_formula_multi(self, t_ms, event, state, question):
         """Several places. Every open position of the maestro leaves by its own rule (the maestro turned, 24 h without the maestro
         in favour, the 36 h limit; news positions: the 12 h watch and their own 24 h). A new one opens only on a signal EPISODE (the
@@ -1595,11 +1617,21 @@ class Trader:
         entry_side = 1 if entry == "LARGO" else -1 if entry == "CORTO" else 0
         waiting = "MANTENER" if self.positions else "ESPERAR"
         blocked, open_ids = None, [position.trade_no for position in self.maestro_positions()]
+        veto = self._rise_veto(entry_side)                           # regla A: la venta vetada no cuenta como señal de entrada en la mirada
+        if veto is not None:
+            entry_side = 0
         if closes:
             action, why = "CERRAR", closes[0][1]
+        elif veto is not None:
+            blocked = veto
+            action, why = waiting, "{} (hay señal de entrada, pero {})".format(hold or entry_why, blocked[0])
+            event["override"] = blocked[1]
         elif entry_side:
             blocked = self.entry_block(t_ms, "LONG" if entry_side > 0 else "SHORT")
-            if blocked is None and self.maestro_positions() and entry_side == self.prev_entry_side:
+            if blocked is None and self.reglas["B"]:
+                if reglas.lugar_reciente(self.maestro_positions(), "LONG" if entry_side > 0 else "SHORT", t_ms):
+                    blocked = ("el lugar anterior de ese lado entró hace menos de {} minutos".format(reglas.SEPARACION_MIN), reglas.KIND_SEPARACION)
+            elif blocked is None and self.maestro_positions() and entry_side == self.prev_entry_side:
                 blocked = ("la señal sigue en el mismo episodio", "mismo_episodio")
             if blocked is None:
                 action, why = entry, entry_why

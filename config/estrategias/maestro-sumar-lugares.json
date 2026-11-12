@@ -1,0 +1,11 @@
+{
+ "id": "maestro-sumar-lugares",
+ "nombre": "Maestro: sumar lugares",
+ "descripcion": "La Terminal activa sumando el 2.º y el 3.er lugar cuando la señal sigue fuerte y pasaron 60 min del lugar anterior (regla B, 12-nov).",
+ "base_config_hash": "37f572a841d35a7b7a8d01569378c508c6bcd9c8a4a6a2adb96e5d1097eade07",
+ "cambios": {
+  "reglas_maestro": {
+   "sumar_lugares_60min": "prendido"
+  }
+ }
+}

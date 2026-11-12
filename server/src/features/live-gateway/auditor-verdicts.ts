@@ -71,7 +71,7 @@ export interface QwenProposal {
   readonly inicio_episodio: boolean | null
   /** `abierta` (it opened a position) or `bloqueada`. */
   readonly estado: string | null
-  /** Why it did not open: lugares_ocupados, mismo_episodio, enfriamiento, cierre_en_la_mirada or otro. */
+  /** Why it did not open: lugares_ocupados, mismo_episodio, subida_30d, separacion_60min, enfriamiento, cierre_en_la_mirada or otro. */
   readonly motivo_bloqueo: string | null
   /** The trader's raw reason when `motivo_bloqueo` is `otro`. */
   readonly detalle_bloqueo: string | null

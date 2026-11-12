@@ -1,0 +1,11 @@
+{
+ "id": "maestro-no-vender-en-subida",
+ "nombre": "Maestro: no vender en subida",
+ "descripcion": "La Terminal activa sin abrir ventas cuando ETH subió 10 % o más en 30 días (regla A, 12-nov). No toca compras ni salidas.",
+ "base_config_hash": "37f572a841d35a7b7a8d01569378c508c6bcd9c8a4a6a2adb96e5d1097eade07",
+ "cambios": {
+  "reglas_maestro": {
+   "no_vender_subida_30d": "prendido"
+  }
+ }
+}

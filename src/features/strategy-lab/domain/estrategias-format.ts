@@ -78,6 +78,14 @@ const META: Record<string, Meta> = {
     etiqueta: 'Tamaño según volatilidad',
     grupo: 'Posiciones',
   },
+  'reglas_maestro.no_vender_subida_30d': {
+    etiqueta: 'No vender si ETH subió 10 % en 30 días',
+    grupo: 'Entradas',
+  },
+  'reglas_maestro.sumar_lugares_60min': {
+    etiqueta: 'Sumar 2.º y 3.er lugar si la señal sigue fuerte (60 min)',
+    grupo: 'Entradas',
+  },
   'rebotes.caida_pct': {
     etiqueta: 'Caída que dispara',
     grupo: 'Rebotes',
@@ -100,10 +108,18 @@ const META: Record<string, Meta> = {
   },
 }
 
-const GRUPOS = ['Salidas', 'Ritmo', 'Posiciones', 'Rebotes', 'Otras']
+const GRUPOS = [
+  'Salidas',
+  'Ritmo',
+  'Posiciones',
+  'Entradas',
+  'Rebotes',
+  'Otras',
+]
 
 const OPCIONES: Record<string, string> = {
   apagado: 'Apagado',
+  prendido: 'Prendido',
   suave: 'Suave',
   fuerte: 'Fuerte',
 }

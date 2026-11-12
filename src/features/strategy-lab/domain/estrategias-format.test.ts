@@ -48,6 +48,20 @@ describe('knob helpers', () => {
     expect(valorTexto('posiciones.max', 3)).toBe('3') // a legacy file still reads
   })
 
+  it('offers the two maestro entry rules as off/on options in their own group', () => {
+    const regla = por('reglas_maestro.no_vender_subida_30d')
+    expect(valorTexto(regla.clave, 'prendido')).toBe('Prendido')
+    expect(entradaInicial(regla)).toBe('apagado')
+    expect(leerEntrada(regla, 'prendido')).toEqual({
+      ok: true,
+      valor: 'prendido',
+    })
+    expect(leerEntrada(regla, 'tal vez').ok).toBe(false)
+    expect(
+      cambiosDeEntradas([regla], { [regla.clave]: 'prendido' }).cambios,
+    ).toEqual({ reglas_maestro: { no_vender_subida_30d: 'prendido' } })
+  })
+
   it('prefills an input with today value in the displayed unit', () => {
     expect(entradaInicial(por('guardrails.max_hold_min'))).toBe('36')
     expect(entradaInicial(por('posiciones.fraccion'))).toBe('33')
@@ -154,6 +168,7 @@ describe('knob helpers', () => {
     expect(grupos.map((g) => g.grupo)).toEqual([
       'Salidas',
       'Ritmo',
+      'Entradas',
       'Rebotes',
       'Otras',
     ])

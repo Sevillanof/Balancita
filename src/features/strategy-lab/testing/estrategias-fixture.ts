@@ -76,6 +76,20 @@ export const PERILLAS: Perilla[] = [
     minimo_exclusivo: true,
     paso: null,
   },
+  {
+    clave: 'reglas_maestro.no_vender_subida_30d',
+    tipo: 'opcion',
+    valor_actual: 'apagado',
+    admite_null: false,
+    opciones: ['apagado', 'prendido'],
+  },
+  {
+    clave: 'reglas_maestro.sumar_lugares_60min',
+    tipo: 'opcion',
+    valor_actual: 'apagado',
+    admite_null: false,
+    opciones: ['apagado', 'prendido'],
+  },
 ]
 
 /** What a server from before the sizing rules became fixed still lists: the form must not offer them. */

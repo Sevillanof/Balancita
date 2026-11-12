@@ -39,7 +39,7 @@ anterior cambia y el trader no cambia ninguna decisión: lo único que expone es
   su puntaje y veredicto, lo que hace falta para recalcular el voto del portero y la identidad del proponente (hash del maestro y del
   portero, hash y versión de la config, modelo de costos). ``version`` sigue siendo la del auditor.
 * ``propuestas`` (G2): cada señal de entrada (maestro fuerte con el portero a favor), abierta o bloqueada, con el motivo del bloqueo
-  (``lugares_ocupados``, ``mismo_episodio``, ``enfriamiento``, ``cierre_en_la_mirada``, ``otro``). La etiqueta contrafactual (neto con costos,
+  (``lugares_ocupados``, ``mismo_episodio``, ``subida_30d`` y ``separacion_60min`` de las reglas del maestro, ``enfriamiento``, ``cierre_en_la_mirada``, ``otro``). La etiqueta contrafactual (neto con costos,
   motivo de salida y horas con las reglas oficiales: ``corta.formula_action`` y el tope de tiempo) la calcula DESPUÉS ``resolve``.
 * ``mirada_operaciones`` (G3): una fila por posición abierta y mirada con lado, horas, neto ahora, puntaje del maestro contra el lado y lo que
   dice la regla de salida.
@@ -233,7 +233,7 @@ CREATE TABLE IF NOT EXISTS miradas_perdidas(
   PRIMARY KEY(product, bucket_ms));
 """
 
-BLOCK_REASONS = ("lugares_ocupados", "mismo_episodio", "enfriamiento", "cierre_en_la_mirada", "otro")
+BLOCK_REASONS = ("lugares_ocupados", "mismo_episodio", "subida_30d", "separacion_60min", "enfriamiento", "cierre_en_la_mirada", "otro")
 RESOLVE_LIMIT = 300                           # propuestas que ``resolve`` etiqueta por llamada (acota el CPU dentro del proceso en vivo)
 def _int_env(name, default, env=None):
     """Un entero positivo del entorno (``env`` por defecto ``os.environ``); vacío, no numérico o ``<= 0`` deja ``default`` (un valor roto no apaga nada)."""
@@ -1148,7 +1148,7 @@ def _block_reason(look, events):
     if look.get("closed_here"):
         return "cierre_en_la_mirada", None
     kind = look.get("blocked")
-    if kind in ("lugares_ocupados", "mismo_episodio", "cierre_en_la_mirada"):
+    if kind in ("lugares_ocupados", "mismo_episodio", "cierre_en_la_mirada", "subida_30d", "separacion_60min"):
         return kind, None
     if kind:
         return "otro", str(kind)

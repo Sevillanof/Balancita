@@ -521,12 +521,16 @@ describe('New variant', () => {
       within(form).getByRole('heading', { name: 'Nueva variante' }),
     ).toBeVisible()
     expect(within(form).getAllByRole('textbox')).toHaveLength(1 + 6)
-    expect(within(form).queryAllByRole('combobox')).toHaveLength(0)
+    // the two maestro entry rules are off/on options in the existing form
+    expect(within(form).getAllByRole('combobox')).toHaveLength(2)
+    expect(
+      within(form).getByLabelText('No vender si ETH subió 10 % en 30 días'),
+    ).toHaveValue('apagado')
     const tope = within(form).getByLabelText('Tope de horas')
     expect(tope).toHaveValue('36')
     expect(tope).toHaveAccessibleDescription('hoy 36 h')
     expect(within(form).getByText('hoy sin stop')).toBeVisible()
-    for (const grupo of ['Salidas', 'Ritmo', 'Rebotes'])
+    for (const grupo of ['Salidas', 'Ritmo', 'Entradas', 'Rebotes'])
       expect(within(form).getByText(grupo)).toBeVisible()
     expect(form).toHaveTextContent('maestro y portero no se tocan')
     expect(form.textContent ?? '').not.toMatch(

@@ -90,6 +90,7 @@ class Movement:
 
     def __init__(self, bars=()):
         self.by_hour = {}
+        self.closes = {}                  # fin de la vela de 5 min -> cierre (solo velas observadas): la regla A mira el cierre de hace 30 días
         self._prev = None
         self.first_hour = None
         self.last_hour = None
@@ -109,6 +110,7 @@ class Movement:
         close = float(bar["close"])
         bucket = int(bar["bucket_start"])
         self._closed_hour = (bucket + BAR_MS) // HOUR_MS - 1
+        self.closes[bucket + BAR_MS] = close
         if self._prev is not None and self._prev > 0 and close > 0:
             hour = bucket // HOUR_MS
             self.by_hour[hour] = self.by_hour.get(hour, 0.0) + math.log(close / self._prev) ** 2
@@ -138,6 +140,10 @@ class Movement:
                 below = bisect.bisect_left(self._window, rv)
                 equal = bisect.bisect_right(self._window, rv) - below
                 self.percentile[hour] = (below + (equal + 1) / 2.0) / len(self._window)
+
+    def close_at(self, end_ms):
+        """El cierre de la vela de 5 min que terminó en ``end_ms`` (``None`` si no se vio)."""
+        return self.closes.get(end_ms)
 
     def at(self, t_ms):
         """El percentil de la última hora completa antes de ``t_ms`` (``None`` sin historia)."""
