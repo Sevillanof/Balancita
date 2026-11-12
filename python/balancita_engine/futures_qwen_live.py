@@ -1609,7 +1609,8 @@ class LiveOperator:
         self._trained[product] = look.get("t_ms")
         failed = self.failed_cycle
         try:
-            out = auditor.record_look(self.store.path, product, trader, events, now, marks, config_hash=self.config_hash)
+            out = auditor.record_look(self.store.path, product, trader, events, now, marks, config_hash=self.config_hash,
+                                  market_db=self.market_db_path)
         except Exception as error:                        # noqa: BLE001 - lo que se guarda para entrenar nunca bloquea la operación en vivo
             self._failure("auditor_entrenar", product, error)
             self.failed_cycle = failed

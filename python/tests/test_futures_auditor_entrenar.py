@@ -28,7 +28,7 @@ from test_futures_qwen_live import Policy, make
 
 DAY = qt.DAY_MS
 NEW_TABLES = ("hechos_mirada", "propuestas", "mirada_operaciones", "resultados_operacion", "reentrenos", "sombra_maker", "miradas_perdidas",
-              "duraciones_auditor")
+              "duraciones_auditor", "flujo_mirada")
 
 
 def facts(seed=0.1):
@@ -1001,7 +1001,7 @@ class DurationTests(TrainingCase):
     def test_record_look_reports_the_time_of_each_step(self):
         trader = LookTrader()
         out = self.record(trader=trader, veredicto=2)
-        self.assertEqual(list(out["pasos_ms"]), ["abrir", "hechos", "propuesta", "posiciones", "commit"])
+        self.assertEqual(list(out["pasos_ms"]), ["flujo_leer", "abrir", "hechos", "propuesta", "posiciones", "flujo", "commit"])
         self.assertTrue(all(isinstance(v, float) and v >= 0 for v in out["pasos_ms"].values()))
         self.assertGreaterEqual(out["ms"], max(out["pasos_ms"].values()))
 

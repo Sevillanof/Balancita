@@ -416,6 +416,13 @@ DDL.update({
         maestro INTEGER, puntaje REAL, entrada_dice TEXT, salida_dice TEXT, formula_json TEXT,
         registrada_ms INTEGER NOT NULL, version TEXT NOT NULL,
         PRIMARY KEY(product, bucket_ms))""",
+    "auditor_flujo": """CREATE TABLE flujo_mirada(
+        product TEXT NOT NULL, bucket_ms INTEGER NOT NULL, t_ms INTEGER NOT NULL, fin_ms INTEGER, oi REAL,
+        comprador_30m REAL, vendedor_30m REAL, delta_30m REAL, liquidaciones_30m REAL, oi_cambio_30m REAL, oi_pct_30m REAL,
+        comprador_1h REAL, vendedor_1h REAL, delta_1h REAL, liquidaciones_1h REAL, oi_cambio_1h REAL, oi_pct_1h REAL,
+        comprador_4h REAL, vendedor_4h REAL, delta_4h REAL, liquidaciones_4h REAL, oi_cambio_4h REAL, oi_pct_4h REAL,
+        fuente TEXT, hueco INTEGER NOT NULL, motivo_hueco TEXT, cobertura_json TEXT, version TEXT NOT NULL,
+        PRIMARY KEY(product, bucket_ms))""",
     "official_candles": """CREATE TABLE paper_futures_official_candles(
         product_id TEXT NOT NULL, interval_ms INTEGER NOT NULL, bucket_start INTEGER NOT NULL,
         revision_hash TEXT NOT NULL, known_at INTEGER NOT NULL, open_price TEXT NOT NULL,

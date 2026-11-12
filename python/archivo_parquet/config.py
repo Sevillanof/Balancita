@@ -401,6 +401,17 @@ TABLAS.update({
                        dicc=("product", "motivo", "estado", "entrada_dice", "salida_dice", "version"),
                        sin_stats=("detalle", "despertar_json", "formula_json")),
         filtro_tipico="motivo", grupo_por=("product",)),
+    # flujo_mirada (flujo de mercado por mirada, futures_auditor_flujo): una fila por mirada, escrita UNA vez (INSERT OR IGNORE; nunca se actualiza):
+    # sin ``inmutable_sql``. Tiempo = t_ms.
+    "auditor_flujo": TablaConfig(
+        nombre="auditor_flujo", sqlite="flujo_mirada", tiempo="t_ms", clave=("product", "t_ms", "bucket_ms"), producto="product",
+        columnas=_cols("product:text bucket_ms:int t_ms:int fin_ms:int? oi:real? comprador_30m:real? vendedor_30m:real? delta_30m:real? "
+                       "liquidaciones_30m:real? oi_cambio_30m:real? oi_pct_30m:real? comprador_1h:real? vendedor_1h:real? delta_1h:real? "
+                       "liquidaciones_1h:real? oi_cambio_1h:real? oi_pct_1h:real? comprador_4h:real? vendedor_4h:real? delta_4h:real? "
+                       "liquidaciones_4h:real? oi_cambio_4h:real? oi_pct_4h:real? fuente:text? hueco:int motivo_hueco:text? cobertura_json:text? "
+                       "version:text",
+                       dicc=("product", "fuente", "version"), sin_stats=("motivo_hueco", "cobertura_json")),
+        filtro_tipico="fuente", grupo_por=("product",)),
     # reentrenos (G8): registro solo-agregar (triggers). Pocas filas: un archivo por mes. Sin producto. Tiempo = creado_ms.
     "auditor_reentrenos": TablaConfig(
         nombre="auditor_reentrenos", sqlite="reentrenos", tiempo="creado_ms", clave=("creado_ms", "id"), producto=None, granularidad="mes",
