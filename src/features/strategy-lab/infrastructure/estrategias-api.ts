@@ -154,7 +154,7 @@ export type NuevaEstrategia = {
 
 export type Ventana = { desde?: string; hasta?: string }
 
-export type IntervaloVelas = '15m' | '1h' | '4h' | '1d'
+export type IntervaloVelas = '5m' | '15m' | '1h' | '4h' | '1d'
 
 /** One page of candles of the tested window (`GET estrategias/velas/…`); `t` is the open instant in ms. */
 export type RespuestaVelas = {

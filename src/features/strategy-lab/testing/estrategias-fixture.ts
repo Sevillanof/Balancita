@@ -311,6 +311,7 @@ export const trabajoListo = (patch: Partial<Trabajo> = {}) =>
   })
 
 const PASO_VELAS: Record<ConsultaVelas['intervalo'], number> = {
+  '5m': 300_000,
   '15m': 900_000,
   '1h': 3_600_000,
   '4h': 14_400_000,
