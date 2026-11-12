@@ -586,6 +586,37 @@ test('without an open operation the strip shows the entry steps', async ({
   ).toContainText('en espera')
 })
 
+test('the Entrada step shows the two maestro rules and the 30-day rise', async ({
+  page,
+}) => {
+  const rules = {
+    no_vender_subida_30d: true,
+    sumar_lugares_60min: true,
+    subida_30d_pct: 11.2,
+    umbral_pct: 10,
+    separacion_min: 60,
+  }
+  const looks = entryLooks().map((entry) => ({
+    ...entry,
+    formula: { ...entry.formula, reglas: rules },
+  }))
+  await openFixture(page, { decisions: withAuditor(looks), trades: [] })
+  const strip = page.getByRole('group', {
+    name: 'Pasos para entrar a una operación',
+  })
+  await strip.getByRole('button', { name: /^Entrada/ }).click()
+  const detail = page.getByRole('dialog', {
+    name: /Entrada: última evaluación/,
+  })
+  await expect(detail).toContainText('No vender en subida')
+  await expect(detail).toContainText('bloquea ventas')
+  await expect(detail).toContainText('Sumar lugares')
+  if (SHOTS)
+    await page.screenshot({
+      path: `${SHOTS}/entrada-reglas-${test.info().project.name}.png`,
+    })
+})
+
 test('with an open operation the strip shows the exit steps', async ({
   page,
 }) => {

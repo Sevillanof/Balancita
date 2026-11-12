@@ -1573,17 +1573,31 @@ class Trader:
             return [event] + self._close(t_ms, self.c[-1], "strategy_exit", "formula", reason)
         return [event]
 
+    def _rise_30d(self):
+        """La subida de ETH en 30 días (cierre de la última vela cerrada / cierre de hace 30 días - 1), o ``None`` sin esa historia."""
+        if not self.t or self.movement is None:
+            return None
+        past = self.movement.close_at(self.t[-1] + BAR_MS - reglas.SUBIDA_DIAS * DAY_MS)
+        return reglas.subida_30d(self.c[-1], past)
+
     def _rise_veto(self, entry_side):
         """Regla A (``reglas_maestro``): ``(texto, motivo)`` cuando la señal es de VENTA y ETH subió 10 % o más en 30 días; si no, ``None``.
-        Compara el cierre de la última vela cerrada con el cierre de la vela que cerró 30 días antes (sin esa historia no bloquea)."""
-        if not self.reglas["A"] or entry_side >= 0 or not self.t:
+        Sin esa historia no bloquea."""
+        if not self.reglas["A"] or entry_side >= 0:
             return None
-        end_ms = self.t[-1] + BAR_MS
-        past = self.movement.close_at(end_ms - reglas.SUBIDA_DIAS * DAY_MS) if self.movement is not None else None
-        rise = reglas.subida_30d(self.c[-1], past)
+        rise = self._rise_30d()
         if not reglas.vende_bloqueada(rise):
             return None
         return "ETH subió {:.1f} % en {} días".format(rise * 100, reglas.SUBIDA_DIAS), reglas.KIND_SUBIDA
+
+    def _reglas_reading(self):
+        """Lo que la Terminal muestra de las reglas del maestro (solo si alguna está prendida): estado de cada una y la subida de 30 días."""
+        if not (self.reglas["A"] or self.reglas["B"]):
+            return None
+        rise = self._rise_30d() if self.reglas["A"] else None
+        return {"no_vender_subida_30d": self.reglas["A"], "sumar_lugares_60min": self.reglas["B"],
+                "subida_30d_pct": None if rise is None else round(rise * 100, 2), "umbral_pct": reglas.SUBIDA_MIN * 100,
+                "separacion_min": reglas.SEPARACION_MIN}
 
     def _decide_formula_multi(self, t_ms, event, state, question):
         """Several places. Every open position of the maestro leaves by its own rule (the maestro turned, 24 h without the maestro
@@ -1647,6 +1661,8 @@ class Trader:
         event.update(formula_action=action, formula=corta.formula_json(readings, why), action=action)
         event["formula"]["opinion_enabled"] = candle_opinions_enabled(self.cfg)
         event["formula"]["posiciones"] = self.positions_summary()
+        if self.reglas["A"] or self.reglas["B"]:
+            event["formula"]["reglas"] = self._reglas_reading()
         if self.rebotes is not None:
             event["formula"]["rebote"] = self.rebote_reading(t_ms)
         if candle_opinions_enabled(self.cfg):
