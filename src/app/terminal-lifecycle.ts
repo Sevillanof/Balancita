@@ -160,6 +160,34 @@ function read(analysis: Record<string, unknown>): Read {
   }
 }
 
+/**
+ * The two maestro entry rules inside the «Entrada» step (no new panel): which are on, and how far ETH is from the 10 % rise
+ * that stops the sales. Nothing when the looks carry no `reglas` (rules off, or older looks).
+ */
+function masterRulesRows(
+  analysis: Record<string, unknown>,
+): Array<{ label: string; value: string }> {
+  const rules = record(record(analysis.formula).reglas)
+  const rows: Array<{ label: string; value: string }> = []
+  if (rules.no_vender_subida_30d === true) {
+    const rise = num(rules.subida_30d_pct)
+    const limit = num(rules.umbral_pct) ?? 10
+    rows.push({
+      label: '▲ No vender en subida',
+      value:
+        rise === null
+          ? 'prendida · sin 30 días de datos'
+          : `${rise >= limit ? 'bloquea ventas' : 'permite'} · ETH ${rise > 0 ? '+' : ''}${comma(rise)} % en 30 d (tope ${limit} %)`,
+    })
+  }
+  if (rules.sumar_lugares_60min === true)
+    rows.push({
+      label: '＋ Sumar lugares',
+      value: `prendida · 2.º y 3.º a ${num(rules.separacion_min) ?? 60} min del anterior`,
+    })
+  return rows
+}
+
 function entryStepsOf(analysis: Record<string, unknown>): LifecycleStep[] {
   const r = read(analysis)
   const view = decisionView(analysis)
@@ -314,6 +342,7 @@ function entryStepsOf(analysis: Record<string, unknown>): LifecycleStep[] {
       headline: entered ? view.label : 'Espera: no hay entrada',
       rows: [
         ...(r.motivo ? [{ label: 'Motivo', value: r.motivo }] : []),
+        ...masterRulesRows(analysis),
         { label: 'Cómo entra', value: 'a mercado, saldo disponible' },
       ],
       meter: null,

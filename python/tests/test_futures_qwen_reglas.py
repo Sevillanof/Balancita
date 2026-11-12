@@ -88,6 +88,17 @@ class RuleATests(unittest.TestCase):
         self.assertEqual(len([e for e in out if e["type"] == "trade"]), 1)
 
 
+class TerminalReadingTests(unittest.TestCase):
+    def test_the_look_carries_the_rules_only_when_one_is_on(self):
+        m = market(reglas_config("prendido", "prendido"), past=90.0)
+        out = m.looks(1, verdict=0)
+        rules = decisions(out)[0]["formula"]["reglas"]
+        self.assertEqual((rules["no_vender_subida_30d"], rules["sumar_lugares_60min"]), (True, True))
+        self.assertAlmostEqual(rules["subida_30d_pct"], 11.11, places=1)
+        out = market(reglas_config(), past=90.0).looks(1, verdict=0)
+        self.assertNotIn("reglas", decisions(out)[0]["formula"])
+
+
 class RuleBTests(unittest.TestCase):
     def test_off_the_signal_must_turn_off_and_on_again(self):
         m = market(reglas_config())

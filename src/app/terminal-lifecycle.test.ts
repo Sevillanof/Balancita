@@ -645,6 +645,41 @@ describe('lifecycleView · paso Auditor', () => {
     expect(step.tone).toBe('na')
   })
 
+  describe('Reglas del maestro', () => {
+    const rowsOf = (formula: Record<string, unknown>) => {
+      const view = lifecycleView({
+        analyses: [look(NOW, 'ESPERAR', { maestro: -2, ...formula })],
+        openTrade: null,
+        nowMs: NOW,
+      })!
+      const step = view.steps.find((s) => s.id === 'enter')!
+      return Object.fromEntries(step.rows.map((r) => [r.label, r.value]))
+    }
+
+    it('shows both rules inside the Entrada step, with the 30-day rise', () => {
+      const rows = rowsOf({
+        reglas: {
+          no_vender_subida_30d: true,
+          sumar_lugares_60min: true,
+          subida_30d_pct: 11.2,
+          umbral_pct: 10,
+          separacion_min: 60,
+        },
+      })
+      expect(rows['▲ No vender en subida']).toBe(
+        'bloquea ventas · ETH +11,20 % en 30 d (tope 10 %)',
+      )
+      expect(rows['＋ Sumar lugares']).toBe(
+        'prendida · 2.º y 3.º a 60 min del anterior',
+      )
+    })
+
+    it('adds nothing when the looks carry no rules', () => {
+      const rows = rowsOf({})
+      expect(Object.keys(rows).filter((k) => /▲|＋/.test(k))).toEqual([])
+    })
+  })
+
   describe('Experto rebotes', () => {
     const rebound = (over: Record<string, unknown> = {}) => ({
       activo: true,
