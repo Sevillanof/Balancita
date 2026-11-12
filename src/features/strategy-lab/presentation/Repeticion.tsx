@@ -11,6 +11,7 @@ import {
   TICK_MS,
   VELOCIDADES,
   VELOCIDAD_INICIAL,
+  anchoVela,
   avanzar,
   tramoVisible,
   type Velocidad,
@@ -114,7 +115,7 @@ function Reproductor({
 
   const listo = !cargando && !error && velas.length > 1
   const alFinal = listo && actual >= ultima
-  const ranuras = Math.floor((ancho - 60) / 7)
+  const ranuras = Math.floor((ancho - 60) / anchoVela(ancho))
   const { desde } = tramoVisible(actual, velas.length, ranuras)
   const alternar = () => {
     if (alFinal) {
@@ -192,7 +193,7 @@ function Reproductor({
           No se pudieron leer las velas: {error}
         </p>
       )}
-      <div ref={caja} className="relative min-h-80 min-w-0 flex-1">
+      <div ref={caja} className="relative min-h-96 min-w-0 flex-1">
         {listo && (
           <GraficoRepeticion
             velas={velas}

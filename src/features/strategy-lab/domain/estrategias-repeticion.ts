@@ -103,3 +103,6 @@ export function resumenDePrecios(
   }
   return salida
 }
+
+/** Pixels per candle slot: narrower on a phone so that it still holds a few hours of 5 m candles. */
+export const anchoVela = (ancho: number) => (ancho < 520 ? 4 : 7)

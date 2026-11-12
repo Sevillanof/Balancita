@@ -2,6 +2,7 @@ import { useMemo } from 'react'
 import { precioEnInstante, type Vela } from '../domain/estrategias-velas.ts'
 import { diaDeInstante, horaDeInstante } from '../domain/estrategias-format.ts'
 import {
+  anchoVela,
   marcasHasta,
   tramoVisible,
   type MarcaOperacion,
@@ -11,7 +12,6 @@ import { COLOR, escalaDeTiempo } from './velas-geometria.ts'
 import { Ejes, Pildora, VelasSvg } from './velas-svg.tsx'
 
 const MARGEN = { derecha: 60, abajo: 22, arriba: 10 }
-const ANCHO_VELA_PX = 7
 /** How far under (LONG) or over (SHORT) the candle each mark sits; the variant's is the farther one so the two never overlap. */
 const DISTANCIA = { oficial: 16, variante: 30 }
 
@@ -44,7 +44,7 @@ export default function GraficoRepeticion({
   const { desde, hasta, ranuras } = tramoVisible(
     cursor,
     velas.length,
-    area / ANCHO_VELA_PX,
+    area / anchoVela(ancho),
   )
   const visibles = useMemo(
     () => velas.slice(desde, hasta + 1),
