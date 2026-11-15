@@ -1,4 +1,4 @@
-"""Linea de comandos: nocturno | exportar | verificar | buscar | medir | respaldar | restaurar-prueba. Salida JSON. Codigos: 0 ok, 1 hay dias/archivos sin confirmar, 2 uso o copia invalida, 3 (nocturno) no corrio a proposito."""
+"""Linea de comandos: nocturno | exportar | verificar | reproducir | buscar | medir | respaldar | restaurar-prueba. Salida JSON. Codigos: 0 ok, 1 hay dias/archivos sin confirmar, 2 uso o copia invalida, 3 (nocturno) no corrio a proposito."""
 from __future__ import annotations
 
 import argparse
@@ -7,6 +7,7 @@ import sys
 from typing import List, Optional
 
 from .config import TABLAS
+from .reproducir import CONJUNTOS
 from .util import ErrorArchivo, parse_tiempo
 
 NO_MAX = 1 << 62
@@ -39,6 +40,12 @@ def _parser() -> argparse.ArgumentParser:
     v.add_argument("--destino", required=True)
     v.add_argument("--base")
     v.add_argument("--tabla")
+    rp = sub.add_parser("reproducir", help="reconstruye desde el Parquet los conjuntos de las pruebas de entradas/salidas y los compara con una COPIA de SQLite")
+    rp.add_argument("--copia", required=True)
+    rp.add_argument("--base", required=True)
+    rp.add_argument("--destino", required=True)
+    rp.add_argument("--conjuntos", help="lista separada por comas; por defecto todos (%s)" % ",".join(CONJUNTOS))
+    rp.add_argument("--copia-confirmada", action="store_true", help="la ruta no esta en snapshots/ o backups/ pero ES una copia")
     b = sub.add_parser("buscar", help="busca filas: el catalogo elige los archivos y las estadisticas de grupo saltan bloques")
     b.add_argument("--destino", required=True)
     b.add_argument("--base", required=True)
@@ -106,6 +113,11 @@ def main(argv: Optional[List[str]] = None) -> int:
             rep = verificar(args.destino, args.base, args.tabla)
             _imprimir(rep)
             return 1 if rep["problemas"] else 0
+        if args.cmd == "reproducir":
+            from .reproducir import reproducir
+            rep = reproducir(args.copia, args.base, args.destino, _tablas(args.conjuntos), args.copia_confirmada, log=lambda m: print(m, file=sys.stderr))
+            _imprimir(rep)
+            return rep["codigo"]
         if args.cmd == "buscar":
             from .leer import buscar_archivo, consulta_duckdb
             donde = {}
