@@ -321,6 +321,22 @@ TABLAS.update({
         columnas=_cols("product:text event_id:text consumed_ms:int action:text evidence_json:text", dicc=("product", "action"),
                        sin_stats=("evidence_json",)),
         filtro_tipico="action", grupo_por=("product",)),
+    # skipped: despertares que el trader no pregunto (modelo caido, datos incompletos...), con el motivo. INSERT OR IGNORE por (product, bucket_ms):
+    # se escribe UNA vez y nunca se actualiza. Tiempo = t_ms (la hora de la mirada). Sirve para auditar entradas que NO ocurrieron y por que.
+    "qwen_skipped": TablaConfig(
+        nombre="qwen_skipped", sqlite="skipped", tiempo="t_ms", clave=("product", "t_ms", "bucket_ms"), producto="product",
+        columnas=_cols("product:text bucket_ms:int t_ms:int at_ms:int reason:text detail:text? wake_json:text?",
+                       dicc=("product", "reason"), sin_stats=("detail", "wake_json")),
+        filtro_tipico="reason", grupo_por=("product",)),
+    # rebotes: cada intento del experto de rebote (abierta / sin_cupo / reintento) con su motivo y, si compro, el numero de operacion. Una fila por vela
+    # (PRIMARY KEY (product, t_ms)); ``put_rebote`` hace INSERT OR REPLACE, pero solo se reescribe la MISMA vela si el trader reprocesa ese cierre
+    # tras un reinicio: el reintento de una vela posterior es OTRA fila. ``trade_no`` se escribe junto con la fila, no despues. Por eso no hay
+    # ``inmutable_sql``: basta el margen de cierre de 1 dia. Tiempo = t_ms.
+    "qwen_rebotes": TablaConfig(
+        nombre="qwen_rebotes", sqlite="rebotes", tiempo="t_ms", clave=("product", "t_ms"), producto="product",
+        columnas=_cols("product:text t_ms:int at_ms:int episodio_ms:int caida_pct:real umbral_pct:real action:text motivo:text? detalle:text? "
+                       "trade_no:int?", dicc=("product", "action", "motivo"), sin_stats=("detalle",)),
+        filtro_tipico="action", grupo_por=("product",)),
     # config_versions: solo-agregar (triggers). Pocas filas: un archivo por mes. Sin producto.
     "qwen_config_versions": TablaConfig(
         nombre="qwen_config_versions", sqlite="config_versions", tiempo="activated_ms", clave=("activated_ms", "id"), producto=None, granularidad="mes",
