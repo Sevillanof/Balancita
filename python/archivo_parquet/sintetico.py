@@ -357,6 +357,11 @@ def crear_copia_velas(ruta: str, dia0_ms: int, dias: int, productos: Sequence[st
 # futures_qwen_live.py (``_SCHEMA_SQL`` + ``_ADDED_COLUMNS``), futures_auditor.py y futures-market-store.ts, sin triggers salvo los de los recibos. ----
 BUCKET_15M = 15 * MINUTO
 DDL.update({
+    "qwen_skipped": """CREATE TABLE skipped(product TEXT NOT NULL, bucket_ms INTEGER NOT NULL, t_ms INTEGER NOT NULL, at_ms INTEGER NOT NULL,
+        reason TEXT NOT NULL, detail TEXT, wake_json TEXT, PRIMARY KEY(product, bucket_ms))""",
+    "qwen_rebotes": """CREATE TABLE rebotes(product TEXT NOT NULL, t_ms INTEGER NOT NULL, at_ms INTEGER NOT NULL, episodio_ms INTEGER NOT NULL,
+        caida_pct REAL NOT NULL, umbral_pct REAL NOT NULL, action TEXT NOT NULL, motivo TEXT, detalle TEXT, trade_no INTEGER,
+        PRIMARY KEY(product, t_ms))""",
     "qwen_decisions": """CREATE TABLE decisions(
         product TEXT NOT NULL, bucket_ms INTEGER NOT NULL, t_ms INTEGER NOT NULL, decided_at_ms INTEGER NOT NULL,
         kind TEXT NOT NULL, action TEXT NOT NULL, model_action TEXT, p_action REAL, confidence REAL, probs_json TEXT,
@@ -442,11 +447,6 @@ DDL_QWEN_EXCLUIDAS = {
     "account": "CREATE TABLE account(id INTEGER PRIMARY KEY CHECK(id=1), initial_usd TEXT NOT NULL, created_ms INTEGER NOT NULL)",
     "examples": """CREATE TABLE examples(product TEXT NOT NULL, bucket_ms INTEGER NOT NULL, t_ms INTEGER NOT NULL, kind TEXT NOT NULL,
         label TEXT NOT NULL, label_json TEXT NOT NULL, resolved_ms INTEGER NOT NULL, PRIMARY KEY(product, bucket_ms))""",
-    "skipped": """CREATE TABLE skipped(product TEXT NOT NULL, bucket_ms INTEGER NOT NULL, t_ms INTEGER NOT NULL, at_ms INTEGER NOT NULL,
-        reason TEXT NOT NULL, detail TEXT, wake_json TEXT, PRIMARY KEY(product, bucket_ms))""",
-    "rebotes": """CREATE TABLE rebotes(product TEXT NOT NULL, t_ms INTEGER NOT NULL, at_ms INTEGER NOT NULL, episodio_ms INTEGER NOT NULL,
-        caida_pct REAL NOT NULL, umbral_pct REAL NOT NULL, action TEXT NOT NULL, motivo TEXT, detalle TEXT, trade_no INTEGER,
-        PRIMARY KEY(product, t_ms))""",
     "errors": """CREATE TABLE errors(id INTEGER PRIMARY KEY AUTOINCREMENT, at_ms INTEGER NOT NULL, place TEXT NOT NULL, product TEXT,
         kind TEXT NOT NULL, detail TEXT)""",
     "trader_state": """CREATE TABLE trader_state(product TEXT PRIMARY KEY, last_fed_ms INTEGER, trade_seq INTEGER NOT NULL,
@@ -469,9 +469,11 @@ def crear_copia_qwen_live(ruta: str, dia0_ms: int, con_excluidas: bool = True) -
       (``partial``: el motor todavia la reconcilia); dia 2 una abierta (sin salida). Numero de operacion = 10 * dia + orden.
     - execution_receipts: por dia entry/exit/mark; ademas un recibo de funding con ``signal_ms`` del dia 0 grabado (``recorded_at_ms``) el dia 2.
     - news_actions: una por dia. config_versions: dos filas el dia 0.
+    - skipped: una por dia (despertar salteado). rebotes: dos por dia (un reintento sin compra y una compra con su ``trade_no``); se escriben una vez.
     Devuelve las filas por tabla del archivo."""
     con = sqlite3.connect(ruta)
-    n = {k: 0 for k in ("qwen_decisions", "qwen_trades", "qwen_execution_receipts", "qwen_news_actions", "qwen_config_versions")}
+    n = {k: 0 for k in ("qwen_decisions", "qwen_trades", "qwen_execution_receipts", "qwen_news_actions", "qwen_config_versions", "qwen_skipped",
+                        "qwen_rebotes")}
     try:
         for k in n:
             con.execute(DDL[k])
@@ -523,6 +525,16 @@ def crear_copia_qwen_live(ruta: str, dia0_ms: int, con_excluidas: bool = True) -
             _insertar(con, "news_actions", {"product": "PF_ETHUSD", "event_id": "n-%d" % d, "consumed_ms": base + 7_200_000, "action": "SALIR",
                                             "evidence_json": EVIDENCIA})
             n["qwen_news_actions"] += 1
+            t = base + 3 * 3_600_000
+            _insertar(con, "skipped", {"product": "PF_ETHUSD", "bucket_ms": t - BUCKET_15M, "t_ms": t, "at_ms": t + 900, "reason": "modelo_lento",
+                                       "detail": "sintetico", "wake_json": "{}"})
+            n["qwen_skipped"] += 1
+            for k, (accion, motivo) in enumerate((("reintento", "libro_no_disponible"), ("abierta", None))):
+                t = base + (8 + k) * 3_600_000 + 300_000
+                _insertar(con, "rebotes", {"product": "PF_ETHUSD", "t_ms": t, "at_ms": t + 700, "episodio_ms": base + 8 * 3_600_000 + 300_000,
+                                           "caida_pct": 5.25 + k, "umbral_pct": 5.0, "action": accion, "motivo": motivo,
+                                           "detalle": "sintetico" if motivo else None, "trade_no": 10 * d + 1 if accion == "abierta" else None})
+                n["qwen_rebotes"] += 1
         # recibo de funding de una operacion del dia 0, grabado el dia 2 (la conciliacion llega tarde): cae en el dia en que se GRABO
         _insertar(con, "execution_receipts", {
             "receipt_id": "r-funding-tarde", "product": "PF_ETHUSD", "trade_no": 1, "purpose": "funding", "signal_ms": dia0_ms + 5 * 3_600_000,
