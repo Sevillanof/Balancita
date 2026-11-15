@@ -120,7 +120,8 @@ class TablasNuevasTests(unittest.TestCase):
         self.assertEqual([e["tabla"] for e in leer_manifiesto(self.destino)], ["news_items"])
 
 
-QWEN = ("qwen_decisions", "qwen_trades", "qwen_execution_receipts", "qwen_news_actions", "qwen_config_versions")
+QWEN = ("qwen_decisions", "qwen_trades", "qwen_execution_receipts", "qwen_news_actions", "qwen_config_versions", "qwen_skipped",
+        "qwen_rebotes")
 MERCADO_UTIL = ("official_candles", "funding_periods", "analytics_points")
 
 
@@ -183,6 +184,8 @@ class DatosUtilesTests(unittest.TestCase):
         self.assertEqual(self.filas_por_dia("qwen_decisions"), {d0: 4, d1: 4, d2: 4})  # nunca se modifican: por su hora de decision
         self.assertEqual(self.filas_por_dia("qwen_news_actions"), {d0: 1, d1: 1, d2: 1})
         self.assertEqual(self.filas_por_dia("qwen_config_versions"), {"2023-11-01": 2})  # mensual
+        self.assertEqual(self.filas_por_dia("qwen_skipped"), {d0: 1, d1: 1, d2: 1})  # una vez escritas no cambian: por la hora de la mirada
+        self.assertEqual(self.filas_por_dia("qwen_rebotes"), {d0: 2, d1: 2, d2: 2})
         # trades: solo cerradas Y con funding completo, por la hora de cierre. El dia 1 tiene una cerrada con funding pendiente: el motor la
         # sigue actualizando, asi que ese dia NO se exporta; la abierta del dia 2 no es de ningun periodo.
         self.assertEqual(self.filas_por_dia("qwen_trades"), {d0: 2})
@@ -193,7 +196,8 @@ class DatosUtilesTests(unittest.TestCase):
         self.assertEqual(n["qwen_trades"], 5)
         self.assertEqual(verificar(self.destino)["problemas"], [])
         # ida y vuelta: lo archivado es igual, celda a celda, a lo que hay en SQLite
-        for tabla, sqlite_ in (("qwen_decisions", "decisions"), ("qwen_news_actions", "news_actions")):
+        for tabla, sqlite_ in (("qwen_decisions", "decisions"), ("qwen_news_actions", "news_actions"),
+                               ("qwen_skipped", "skipped"), ("qwen_rebotes", "rebotes")):
             cfg = TABLAS[tabla]
             orig = self.sqlite("SELECT %s FROM %s ORDER BY %s" % (", ".join(cfg.nombres), sqlite_, ", ".join(cfg.clave)))
             self.assertEqual(sorted(self.archivo("qwen-live__live", tabla), key=repr), sorted(orig, key=repr), tabla)

@@ -87,8 +87,6 @@ TABLAS_EXCLUIDAS = {
         "meta": _ESTADO_VIVO,
         "account": "una sola fila inmutable (capital inicial) que queda en SQLite y en las copias diarias",
         "examples": "ejemplos etiquetados para entrenar, derivados de decisions y las velas; " + _FUERA_DE_LO_UTIL,
-        "skipped": "despertares salteados (motivo y detalle): " + _DIAGNOSTICO,
-        "rebotes": "intentos del experto de rebote; " + _FUERA_DE_LO_UTIL,
         "errors": "errores del trader en vivo: " + _DIAGNOSTICO,
     },
     "qwen-live__auditor": {

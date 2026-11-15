@@ -307,7 +307,7 @@ EXCLUIDAS_VPS = {
     "positioning": ("collector_run",),
     "futures-news": ("paper_futures_news_briefings", "paper_futures_news_errors", "paper_futures_news_meta", "paper_futures_news_polls",
                      "paper_futures_news_source_sets"),
-    "qwen-live__live": ("meta", "account", "examples", "skipped", "rebotes", "errors", "trader_state"),
+    "qwen-live__live": ("meta", "account", "examples", "errors", "trader_state"),
     "qwen-live__auditor": ("meta", "duraciones_auditor"),
 }
 BASES_EXCLUIDAS_VPS = ("forward__forward", "futures-strategies", "maker-costs__eth-costs-20261031", "qwen-live_cache__candles-PF_ETHUSD",
@@ -364,6 +364,13 @@ class ListaDeExclusion(Base):
             self.assertEqual(res["bases"][base]["estado"], "ok", (base, res["bases"][base]))
             self.assertNotIn("tablas_sin_cubrir", res["bases"][base])
         self.assertEqual(res["sin_confirmar"], 0)
+
+    def test_rebotes_y_skipped_se_archivan_y_examples_y_errors_no(self):  # entradas: intentos del experto de rebote y miradas salteadas con su motivo
+        from archivo_parquet.config import TABLAS
+        archivadas = {c.sqlite for c in TABLAS.values()}
+        self.assertLessEqual({"rebotes", "skipped"}, archivadas)
+        self.assertTrue(archivadas.isdisjoint(nocturno.TABLAS_EXCLUIDAS["qwen-live__live"]))
+        self.assertLessEqual({"examples", "errors"}, set(nocturno.TABLAS_EXCLUIDAS["qwen-live__live"]))
 
     def test_cada_exclusion_tiene_motivo_y_ninguna_tabla_archivada_esta_excluida(self):  # S3
         from archivo_parquet.config import TABLAS
@@ -450,7 +457,8 @@ class QwenLiveCorridaCompleta(Base):
         vivo, auditor = res["bases"]["qwen-live__live"], res["bases"]["qwen-live__auditor"]
         self.assertEqual((vivo["estado"], auditor["estado"]), ("ok", "ok"))
         # decisions 3 dias + trades 1 dia (el dia 1 tiene una cerrada con funding pendiente) + recibos 3 + news_actions 3 + config 1 mes
-        self.assertEqual((vivo["exportados"], vivo["pendientes_por_abrir"]), (3 + 1 + 3 + 3 + 1, 1))
+        # + skipped 3 + rebotes 3
+        self.assertEqual((vivo["exportados"], vivo["pendientes_por_abrir"]), (3 + 1 + 3 + 3 + 1 + 3 + 3, 1))
         self.assertEqual((auditor["exportados"], auditor["pendientes_por_abrir"]), (1, 2))  # miradas: solo el dia 0, todo resuelto
         self.assertEqual(res["verificacion"]["problemas"], [])
         self.assertEqual(self.correr(bases=("qwen-live__live", "qwen-live__auditor"), ahora_s=ahora)["codigo"], 0)  # idempotente
