@@ -25,6 +25,15 @@ from .util import (ErrorArchivo, abrir_copia, desde_archivo, hash_fila, leer_man
 
 INTERVALOS_VELAS = (60_000, 300_000)
 
+# Tablas cuyas filas SQLite RECORTA por retencion mientras el Parquet las conserva (es justo para lo que sirve el archivo). tabla del archivo ->
+# (columna, valor) de las filas que se recortan. Una fila que solo esta en el Parquet, es de ese tipo y es MAS VIEJA que la fila mas vieja que la
+# copia aun conserva de ese tipo, no es una diferencia: se informa aparte en ``filas_recortadas_por_retencion``. Todo lo demas (una fila ausente
+# dentro del rango que SQLite aun tiene, o con otro valor) sigue contando.
+RETENCION_SQLITE: Dict[str, Tuple[str, int]] = {
+    "premium": ("interval_ms", 60_000),  # premium de 1 minuto: keep_days = 7
+    "premium_1m": ("interval_ms", 60_000),
+}
+
 # conjunto -> tablas del archivo que lo forman (cada una se busca en la copia por el nombre de su tabla SQLite)
 CONJUNTOS: Dict[str, Tuple[str, ...]] = {
     "velas_oficiales": ("official_candles",),
@@ -75,6 +84,10 @@ class _Mapa:
             self.ik = [nombres.index(c) for c in cfg.clave]
             self.orden = None
         self.datos: Dict[tuple, tuple] = {}
+        self.tiempos: Dict[tuple, int] = {}
+        self.i_tiempo = nombres.index(cfg.tiempo)
+        ret = RETENCION_SQLITE.get(cfg.nombre)
+        self.i_ret = (nombres.index(ret[0]), ret[1]) if ret else None
         self.repetidas = 0
         self.velas = velas
         self.it = nombres.index("interval_ms") if velas else None
@@ -93,6 +106,8 @@ class _Mapa:
         if k in self.datos:
             self.repetidas += 1
         self.datos[k] = h
+        if self.i_ret and fila[self.i_ret[0]] == self.i_ret[1]:
+            self.tiempos[k] = fila[self.i_tiempo]
 
     def valor(self, k):
         v = self.datos.get(k)
@@ -137,8 +152,15 @@ def _tabla(con, destino: str, base: str, nombre: str, entradas: List[dict], ahor
                 pq.agregar(f)
         except Exception as exc:  # noqa: BLE001 - un archivo ilegible es una falla del conjunto, no un error de uso
             problemas.append("%s: no se pudo leer %s: %s" % (dia, e["ruta"], exc))
+    recortadas = 0
+    if sq.i_ret and sq.tiempos:
+        corte = min(sq.tiempos.values())  # la fila mas vieja de ese tipo que la copia todavia conserva
+        viejas = [k for k, t in pq.tiempos.items() if t < corte and k not in sq.datos]
+        for k in viejas:
+            del pq.datos[k]
+        recortadas = len(viejas)
     distintas, ejemplos = _comparar(sq, pq)
-    return {"filas_sqlite": len(sq.datos), "filas_parquet": len(pq.datos), "filas_distintas": distintas, "ejemplos_claves_distintas": ejemplos,
+    return {"filas_recortadas_por_retencion": recortadas, "filas_sqlite": len(sq.datos), "filas_parquet": len(pq.datos), "filas_distintas": distintas, "ejemplos_claves_distintas": ejemplos,
             "dias_confirmados": len(en_manifiesto), "dias_faltantes": faltantes, "dias_pendientes": pendientes, "perdidos_aceptados": aceptados,
             "problemas": problemas}
 
