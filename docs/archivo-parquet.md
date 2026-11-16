@@ -268,6 +268,8 @@ Con `verdicts` el ahorro real sale de borrar de SQLite (el Parquet pesa ≈1/7).
 
 `reproducir --copia <copia> --base <base> --destino <archivo>` abre la copia en solo lectura (nunca la base viva) y, **solo sobre los períodos que el manifiesto confirma**, compara lo que sale del Parquet con lo que da SQLite, por valor: hash por fila de todas las columnas, el mismo del formato 2, emparejado por clave. Conjuntos (`--conjuntos`, por defecto todos; uno sin ninguna de sus tablas en la copia queda `no_aplica`):
 
+**Retención de SQLite:** `premium` de 1 minuto se recorta a 7 días en SQLite pero el archivo lo conserva a propósito. Las filas que solo están en el Parquet, son de 1 minuto y son más viejas que la más vieja que la copia aún tiene no cuentan como diferencia: se informan en `filas_recortadas_por_retencion` (`reproducir.RETENCION_SQLITE`). Una fila ausente o distinta dentro del rango que SQLite sí conserva sigue siendo diferencia.
+
 | Conjunto             | Tablas del archivo                                                                                                                                                                          |
 | -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `velas_oficiales`    | `official_candles`: serie final 1 m y 5 m por (producto, intervalo, `bucket_start`) = última revisión conocida (mayor `known_at`) entre los períodos confirmados («as-of»)                  |
