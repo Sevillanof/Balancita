@@ -47,6 +47,29 @@ class ReproducirTests(unittest.TestCase):
         con.commit()
         con.close()
 
+    def premium(self):
+        sintetico.crear_copia_fase2(self.copia, DIA0, 3, paso_ms=60_000, tablas=("positioning", "premium"))
+        r = exportar(self.copia, "positioning", self.destino, ["positioning", "premium", "premium_1m"], ahora_ms=AHORA)
+        self.assertEqual(r["no_confirmados"], [])
+
+    def test_premium_recortado_por_retencion_no_es_diferencia(self):
+        self.premium()
+        # la retencion de SQLite (7 dias) borra los minutos viejos; el Parquet los conserva a proposito
+        self.sql("DELETE FROM premium WHERE interval_ms = 60000 AND bucket_ms < ?", (DIA0 + 2 * DAY_MS,))
+        rep = self.repro("positioning", conjuntos=["posicionamiento"])
+        self.assertTrue(rep["ok"], json.dumps(rep, indent=1)[:2000])
+        t = rep["conjuntos"]["posicionamiento"]["tablas"]["premium"]
+        self.assertGreater(t["filas_recortadas_por_retencion"], 0)
+        self.assertEqual(t["filas_distintas"], 0)
+
+    def test_premium_fila_borrada_dentro_del_rango_retenido_falla(self):
+        self.premium()
+        self.sql("DELETE FROM premium WHERE interval_ms = 60000 AND bucket_ms < ?", (DIA0 + 2 * DAY_MS,))
+        self.sql("UPDATE premium SET premium_bp = premium_bp + 1 WHERE interval_ms = 60000 AND bucket_ms = "
+                 "(SELECT MAX(bucket_ms) FROM premium)")
+        rep = self.repro("positioning", conjuntos=["posicionamiento"])
+        self.assertFalse(rep["ok"])
+
     def test_caso_feliz_todo_igual(self):
         self.qwen()
         rep = self.repro()
