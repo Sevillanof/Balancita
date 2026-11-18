@@ -67,7 +67,7 @@ def _filas_sqlite(con, cfg, d0: int, d1: int):
 def _filas_parquet(destino: str, entrada: dict, cfg):
     ruta = os.path.join(destino, entrada["ruta"])
     legado = not entrada.get("formato_version")
-    for lote in formato.leer_filas(ruta, cfg, legado=legado):
+    for lote in formato.leer_filas(ruta, cfg, legado=legado, aceptar_prefijo=True):
         for f in lote:
             yield desde_archivo(cfg, f, legado=legado)
 
@@ -145,10 +145,13 @@ def _tabla(con, destino: str, base: str, nombre: str, entradas: List[dict], ahor
             faltantes.append(dia)
     for dia, e in sorted(en_manifiesto.items()):
         d0, d1 = rango_periodo(dt.date.fromisoformat(dia), cfg.granularidad)
-        for f in _filas_sqlite(con, cfg, d0, d1):
-            sq.agregar(f)
         try:
-            for f in _filas_parquet(destino, e, cfg):
+            filas_pq = list(_filas_parquet(destino, e, cfg))
+            # archivo viejo, escrito antes de que la tabla ganara columnas al final: se compara solo con las columnas que el archivo tiene
+            n_cols = len(filas_pq[0]) if filas_pq else None
+            for f in _filas_sqlite(con, cfg, d0, d1):
+                sq.agregar(f[:n_cols] if n_cols else f)
+            for f in filas_pq:
                 pq.agregar(f)
         except Exception as exc:  # noqa: BLE001 - un archivo ilegible es una falla del conjunto, no un error de uso
             problemas.append("%s: no se pudo leer %s: %s" % (dia, e["ruta"], exc))

@@ -272,7 +272,7 @@ class Resumen:
                 self.hashes += h
                 self.suma = (self.suma + int.from_bytes(h[:16], "big")) & M128
                 for i, nombre in self._no_nulas:
-                    if f[i] is None:
+                    if i < len(f) and f[i] is None:  # archivo viejo con menos columnas: las que no tiene no cuentan
                         self.nulos[nombre] = self.nulos.get(nombre, 0) + 1
 
     @property

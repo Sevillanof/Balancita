@@ -70,6 +70,41 @@ class ReproducirTests(unittest.TestCase):
         rep = self.repro("positioning", conjuntos=["posicionamiento"])
         self.assertFalse(rep["ok"])
 
+    def exportar_auditor_con_columnas_viejas(self):
+        """Exporta ``miradas`` con una configuracion SIN las ultimas dos columnas (como estaba antes de que se agregaran) y vuelve a la actual."""
+        import dataclasses
+        from archivo_parquet import config
+        sintetico.crear_copia_auditor(self.copia, DIA0)
+        actual = config.TABLAS["auditor_miradas"]
+        vieja = dataclasses.replace(actual, columnas=actual.columnas[:-2])
+        config.TABLAS["auditor_miradas"] = vieja
+        try:
+            r = exportar(self.copia, "qwen-live__auditor", self.destino, ["auditor_miradas"], ahora_ms=AHORA)
+        finally:
+            config.TABLAS["auditor_miradas"] = actual
+        self.assertEqual(r["no_confirmados"], [])
+        self.assertTrue(leer_manifiesto(self.destino))
+
+    def test_archivo_viejo_con_menos_columnas_se_verifica_y_se_reproduce(self):
+        from archivo_parquet.verificar import verificar
+        self.exportar_auditor_con_columnas_viejas()
+        self.assertEqual(verificar(self.destino)["problemas"], [])
+        rep = self.repro("qwen-live__auditor", conjuntos=["auditor"])
+        t = rep["conjuntos"]["auditor"]["tablas"]["auditor_miradas"]
+        self.assertEqual((t["filas_distintas"], t["dias_faltantes"], t["problemas"]), (0, [], []), json.dumps(rep, indent=1)[:1500])
+        self.assertGreater(t["filas_parquet"], 0)
+
+    def test_archivo_viejo_alterado_sigue_fallando(self):
+        from archivo_parquet.verificar import verificar
+        self.exportar_auditor_con_columnas_viejas()
+        self.sql("UPDATE miradas SET accion = accion || 'x'")
+        rep = self.repro("qwen-live__auditor", conjuntos=["auditor"])
+        self.assertEqual(rep["codigo"], 1)
+        e = next(e for e in leer_manifiesto(self.destino) if e["tabla"] == "auditor_miradas")
+        with open(os.path.join(self.destino, e["ruta"]), "ab") as fh:
+            fh.write(b"x")
+        self.assertTrue(verificar(self.destino)["problemas"])
+
     def test_caso_feliz_todo_igual(self):
         self.qwen()
         rep = self.repro()
