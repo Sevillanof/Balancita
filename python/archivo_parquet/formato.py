@@ -125,15 +125,26 @@ def escribir(ruta: str, cfg: TablaConfig, lotes: Iterator[List[tuple]], metadato
     return total
 
 
-def leer_filas(ruta: str, cfg: TablaConfig, legado: bool = False) -> Iterator[List[tuple]]:
+def _prefijo_valido(cfg: TablaConfig, propias: Sequence[str], esperado: Sequence[str]) -> bool:
+    """Archivo escrito ANTES de que la tabla ganara columnas al final: sus columnas son un prefijo de las de hoy. Solo en tablas sin ``tipo_*`` ni
+    ``j_*`` (las columnas se agregan siempre al final de ``columnas``) y con clave, tiempo y producto dentro de lo que el archivo tiene."""
+    if cfg.nombres_tipo or cfg.derivadas or not 0 < len(propias) < len(esperado) or tuple(propias) != tuple(esperado[:len(propias)]):
+        return False
+    return all(c in propias for c in cfg.clave + (cfg.tiempo,) + ((cfg.producto,) if cfg.producto else ()) + cfg.grupo_por)
+
+
+def leer_filas(ruta: str, cfg: TablaConfig, legado: bool = False, aceptar_prefijo: bool = False) -> Iterator[List[tuple]]:
     """Relee el archivo entero por lotes con verificacion de checksum de paginas. Lanza si algo no es integro.
+
+    ``aceptar_prefijo=True`` (verificar y reproducir, NUNCA al exportar): acepta un archivo viejo al que la tabla le agrego columnas despues; devuelve
+    las filas con las columnas que el archivo tiene (sus hashes de fila y los del manifiesto se calcularon con esas mismas).
 
     Devuelve filas del archivo (columnas de SQLite, ``tipo_*``, ``j_*``); ``legado=True`` para los archivos del formato 1 (solo las de SQLite).
     """
     _necesita()
     pf = pq.ParquetFile(ruta, page_checksum_verification=True)
     esperado = cfg.nombres if legado else cfg.nombres_archivo
-    if tuple(pf.schema_arrow.names) != esperado:
+    if tuple(pf.schema_arrow.names) != esperado and not (aceptar_prefijo and _prefijo_valido(cfg, pf.schema_arrow.names, esperado)):
         raise ValueError("columnas inesperadas en %s" % ruta)
     for lote in pf.iter_batches(batch_size=lote_de(cfg)):
         yield list(zip(*[col.to_pylist() for col in lote.columns]))
