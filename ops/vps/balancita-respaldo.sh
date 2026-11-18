@@ -4,7 +4,7 @@
 # Runs as user balancita (balancita-respaldo.timer, 04:30 Europe/Madrid). Low priority.
 # Versioned in the repo (ops/vps/); installed at /usr/local/bin/balancita-respaldo.sh (see ops/vps/README.md).
 set -u
-# Retention (days of daily copies kept). Fewer copies are safe only while the Parquet archive is healthy, so the cleanup runs AFTER the Parquet
+# Retention (number of daily copies kept). Fewer copies are safe only while the Parquet archive is healthy, so the cleanup runs AFTER the Parquet
 # export and only if it ended ok (exit 0 or 3). BALANCITA_RETENCION_DRY=1 only lists what would be removed (nothing is deleted).
 KEEP_DAYS=${BALANCITA_COPIAS_DIAS:-4}
 SRC=/home/balancita/Balancita/server/data/dev-live
@@ -47,14 +47,14 @@ else
   prc=99
 fi
 
-# retention: remove backup day folders older than $KEEP_DAYS days (only inside $ROOT), and only when the Parquet export of this run is good
+# retention: remove backup day folders beyond the newest $KEEP_DAYS days (only inside $ROOT), and only when the Parquet export of this run is good
 if (( prc == 0 || prc == 3 )); then
-  viejas=$(find "$ROOT" -mindepth 1 -maxdepth 1 -type d -name '20??-??-??' -mtime +"$KEEP_DAYS" | sort)
+  viejas=$(find "$ROOT" -mindepth 1 -maxdepth 1 -type d -name '20??-??-??' -mtime +"$((KEEP_DAYS - 1))" | sort)
   if [[ -n ${BALANCITA_RETENCION_DRY:-} ]]; then
     log "retencion (simulacro, no se borra nada), carpetas que se borrarian: ${viejas:-ninguna}"
   elif [[ -n $viejas ]]; then
     log "retencion: borro ${viejas//$'\n'/ }"
-    find "$ROOT" -mindepth 1 -maxdepth 1 -type d -name '20??-??-??' -mtime +"$KEEP_DAYS" -exec rm -rf {} + 2>>"$LOG"
+    find "$ROOT" -mindepth 1 -maxdepth 1 -type d -name '20??-??-??' -mtime +"$((KEEP_DAYS - 1))" -exec rm -rf {} + 2>>"$LOG"
   fi
 else
   log "aviso: el Parquet de hoy no quedo bien (exit=$prc); no se borran copias viejas"
