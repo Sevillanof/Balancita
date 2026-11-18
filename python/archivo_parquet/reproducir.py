@@ -187,6 +187,8 @@ def reproducir(copia: str, base: str, destino: str, conjuntos: Optional[List[str
         for nombre in pedidos:
             tablas: Dict[str, dict] = {}
             for t in CONJUNTOS[nombre]:
+                if t not in TABLAS:  # tabla que esta version del archivo todavia no conoce
+                    continue
                 if not _columnas_de(con, TABLAS[t].sqlite):
                     continue
                 log("reproducir %s / %s" % (nombre, t))
