@@ -21,7 +21,7 @@ def _revisar(e: dict, ruta: str, cfg, destino: str) -> List[str]:
         fallas.append("sha256 distinto")
     r = Resumen(cfg, legado=not nuevo)
     malas: List[str] = []
-    for lote in formato.leer_filas(ruta, cfg, legado=not nuevo):
+    for lote in formato.leer_filas(ruta, cfg, legado=not nuevo, aceptar_prefijo=True):
         originales = [desde_archivo(cfg, f, legado=not nuevo) for f in lote]
         if nuevo:
             for f, o in zip(lote, originales):
